@@ -63,7 +63,7 @@ Retention ───────────────► one-shot container (c
 ### Required External Services & API Keys
 - **OpenCode Zen API Key**: `OPENCODE_ZEN_API_KEY` from [opencode.ai](https://opencode.ai) (model: `muse-spark-1.2-contributor-free`).
 - **OpenCode Go API Key**: `OPENCODE_GO_API_KEY` (provider `opencode-go`, selectable per request in app Settings).
-- **Android App API Key**: `API_SERVER_KEY` (shared bearer key for all 3 chat tabs; generate with `openssl rand -hex 32`). Each tab uses its profile path (`/p/story|resumes|default`) + per-request provider (`opencode`|`opencode-go`|`deepinfra`) and model from app Settings. Provider keys live only in the VPS `.env`, never in git.
+- **Android App API Key**: `API_SERVER_KEY` (shared bearer key for all 3 chat tabs; generate with `openssl rand -hex 32`). Each tab uses its profile path (`/p/story|resumes|default`) + per-request provider (`opencode`|`opencode-go`) and model from app Settings. Provider keys live only in the VPS `.env`, never in git.
 - **MongoDB Cluster**: MongoDB connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`). (In dev mode, `HERMES_ENV=dev` provides an ephemeral local single-node replica set instead.)
 - **Health Sync Secret**: `HEALTH_SYNC_TOKEN` Bearer token matching the Android Health Gateway app. (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only.)
 - **Dashboard Web Credentials**: `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET` (32+ chars).

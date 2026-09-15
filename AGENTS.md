@@ -70,11 +70,11 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
    from the root `.env`; `docker_compose()` always passes `--env-file "$REPO/.env"`
    (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
    silently falls back empty/default).
-- LLM: direct to OpenCode Zen (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-contributor-free`) — no proxy container. OpenCode Go is enabled too (`OPENCODE_GO_API_KEY` in root `.env`, selectable per request as provider `opencode-go`); DeepInfra fallback (`deepseek-ai/DeepSeek-V4-Flash-0731`).
+- LLM: direct to OpenCode Zen (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-contributor-free`) — no proxy container. OpenCode Go is enabled too (`OPENCODE_GO_API_KEY` in root `.env`, selectable per request as provider `opencode-go`).
 - App API: Hermes built-in OpenAI-compatible server on the gateway
   (`gateway.api_server`, `:8642`, shared `API_SERVER_KEY`); one port, each app
   tab uses its profile path (`/p/story|resumes|default`) and sends per-request
-  provider (`opencode`|`opencode-go`|`deepinfra`) + model from app Settings. Provider keys
+  provider (`opencode`|`opencode-go`) + model from app Settings. Provider keys
   live only in the VPS `.env`, never in git.
 - Bot config source is `profiles/master/config.yaml.template` (gateway home,
   not a bot) and `profiles/master/profiles/<bot>/config.yaml.template` (the three

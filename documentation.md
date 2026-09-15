@@ -177,7 +177,7 @@ curl http://<host>:8642/p/story/v1/chat/completions \
 ```
 
 - One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
-- Provider (`opencode` | `opencode-go` | `deepinfra`) + model are picked per request in app Settings (blank model = gateway default). Provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
+- Provider (`opencode` | `opencode-go`) + model are picked per request in app Settings (blank model = gateway default). Provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
 - Config lives in `profiles/master/config.yaml.template` (`gateway.api_server`, key rendered from `API_SERVER_KEY`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
 
 ---
