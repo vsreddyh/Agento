@@ -2,6 +2,7 @@ package com.vishnu.healthgateway
 
 import kotlinx.serialization.Serializable
 
+/** Wire payload posted to health-api; nulls mean Health Connect had no data. */
 @Serializable
 data class HealthSyncPayload(
     val device: String = "Redmi Watch 5 Lite",
@@ -12,6 +13,7 @@ data class HealthSyncPayload(
     val workouts: List<WorkoutEntry> = emptyList(),
 )
 
+/** One sleep session; stages map Health Connect stage names to minutes. */
 @Serializable
 data class SleepEntry(
     val startIso: String,
@@ -20,6 +22,7 @@ data class SleepEntry(
     val stages: Map<String, Long> = emptyMap(),
 )
 
+/** One workout session; type follows Health Connect exercise types. */
 @Serializable
 data class WorkoutEntry(
     val startIso: String,
@@ -30,6 +33,7 @@ data class WorkoutEntry(
     val caloriesKcal: Double? = null,
 )
 
+/** Sync outcome surfaced in Settings; message is truncated before display. */
 @Serializable
 data class SyncResult(
     val success: Boolean,

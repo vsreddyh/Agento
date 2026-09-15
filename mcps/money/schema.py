@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Enum contracts shared with store.py; RETENTION_DAYS drives the TTL index.
 ACCOUNT_TYPES = ["cash", "bank", "card", "wallet", "other"]
 TX_TYPES = ["income", "expense", "transfer"]
 CATEGORIES = ["groceries", "eating out", "transport", "bills", "rent",
@@ -31,6 +32,7 @@ CATEGORIES = ["groceries", "eating out", "transport", "bills", "rent",
 RETENTION_DAYS = 90
 DEFAULT_ACCOUNT = os.environ.get("MONEY_DEFAULT_ACCOUNT", "Cash")
 
+# Strict validators: reject malformed docs at the DB layer (app validates first).
 ACCOUNTS_VALIDATOR = {
     "$jsonSchema": {
         "bsonType": "object",
@@ -74,6 +76,7 @@ TRANSACTIONS_VALIDATOR = {
 # in store.py instead: sending_to present iff type == transfer,
 # accountId != sending_to, both accounts exist and are unarchived.
 
+# Read-only aggregation views: monthly totals, expense breakdown, live balances.
 VIEWS = {
     "money_monthly_summary": [
         {"$group": {
@@ -102,6 +105,7 @@ VIEWS = {
 }
 
 
+# DB handle from the single root .env; exits early if MONGODB_URI is missing.
 def get_db():
     uri = os.environ.get("MONGODB_URI", "").strip()
     if not uri:
@@ -111,6 +115,7 @@ def get_db():
         os.environ.get("MONGODB_DB", "hermes").strip() or "hermes"]
 
 
+# Idempotent collection setup: collMod existing, create + strict validator if new.
 def ensure_collection(db, name, validator, dry_run, log):
     from pymongo.errors import CollectionInvalid
     if name in db.list_collection_names():
@@ -128,6 +133,7 @@ def ensure_collection(db, name, validator, dry_run, log):
                 pass  # raced — already exists
 
 
+# Indexes: unique account name, TTL on expiresAt, query paths for reads/deletes.
 def ensure_indexes(db, dry_run, log):
     specs = [
         ("money_accounts", [("name", 1)], {"unique": True, "name": "uniq_name"}),
@@ -147,6 +153,7 @@ def ensure_indexes(db, dry_run, log):
             db[col].create_index(keys, **kwargs)
 
 
+# Views are drop + recreate (no ALTER); safe to re-run.
 def ensure_views(db, dry_run, log):
     sources = {"money_monthly_summary": "money_transactions",
                "money_category_breakdown": "money_transactions",
@@ -159,6 +166,7 @@ def ensure_views(db, dry_run, log):
             db.create_collection(view, viewOn=sources[view], pipeline=pipeline)
 
 
+# Seed: guarantees a default cash account so inserts without account still resolve.
 def seed_default_account(db, dry_run, log):
     if db["money_accounts"].count_documents({"name": DEFAULT_ACCOUNT}, limit=1):
         log(f"seed: account '{DEFAULT_ACCOUNT}' already exists")
@@ -190,6 +198,7 @@ def migrate_renames(db, dry_run, log):
                 db[col].drop_index(old)
 
 
+# CLI entry: --apply mutates, --dry-run only logs; order matters (migrate before indexes).
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     g = ap.add_mutually_exclusive_group(required=True)

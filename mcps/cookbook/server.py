@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# MCP SDK compat: FastMCP (v1) was renamed MCPServer (v2) — accept either.
 try:
     from mcp.server.fastmcp import FastMCP
 
@@ -26,13 +27,16 @@ except ImportError:
 
 from cookbook.store import StoreError, from_env
 
+# Shared store handle (MongoDB); tools below are thin wrappers returning {ok, ...}.
 store = from_env()
 
 
+# Uniform error envelope so MCP clients always get {ok: False, error}.
 def _err(e: Exception) -> dict:
     return {"ok": False, "error": str(e)}
 
 
+# add_ingredient: unique name enforced in store; note truncated to 300.
 @mcp.tool()
 def add_ingredient(name: str, note: str = "") -> dict:
     """Add an ingredient name (optional note). Names are unique."""
@@ -42,6 +46,7 @@ def add_ingredient(name: str, note: str = "") -> dict:
         return _err(e)
 
 
+# list_ingredients: alphabetical read; empty search lists all (capped at 500).
 @mcp.tool()
 def list_ingredients(search: str = "") -> dict:
     """List ingredient names, optionally filtered by substring."""
@@ -52,6 +57,7 @@ def list_ingredients(search: str = "") -> dict:
         return _err(e)
 
 
+# delete_ingredient: refused when any recipe still references it (checked in store).
 @mcp.tool()
 def delete_ingredient(name_or_id: str) -> dict:
     """Delete an ingredient. Refused if any recipe still references it."""
@@ -61,6 +67,7 @@ def delete_ingredient(name_or_id: str) -> dict:
         return _err(e)
 
 
+# add_recipe: ingredient keys are name-or-id; per_serving requires all 5 macros.
 @mcp.tool()
 def add_recipe(name: str, ingredient_qtys: dict, per_serving: dict,
                servings: float = 1, note: str = "", tags: list = []) -> dict:
@@ -73,6 +80,7 @@ def add_recipe(name: str, ingredient_qtys: dict, per_serving: dict,
         return _err(e)
 
 
+# get_recipe: single lookup by dish name or id; None becomes unknown-recipe error.
 @mcp.tool()
 def get_recipe(name_or_id: str) -> dict:
     """Get one recipe by dish name or id."""
@@ -85,6 +93,7 @@ def get_recipe(name_or_id: str) -> dict:
         return _err(e)
 
 
+# list_recipes: optional name/tag/ingredient filters (empty means no filter).
 @mcp.tool()
 def list_recipes(search: str = "", tag: str = "", ingredient: str = "") -> dict:
     """List recipes, optionally filtered by name substring, tag, or ingredient name."""
@@ -95,6 +104,7 @@ def list_recipes(search: str = "", tag: str = "", ingredient: str = "") -> dict:
         return _err(e)
 
 
+# update_recipe: patch-only path; empty/zero args leave fields unchanged.
 @mcp.tool()
 def update_recipe(name_or_id: str, name: str = "", servings: float = 0,
                   per_serving: dict = {}, ingredient_qtys: dict = {},
@@ -123,6 +133,7 @@ def update_recipe(name_or_id: str, name: str = "", servings: float = 0,
         return _err(e)
 
 
+# delete_recipe: removes recipe plus its cook-log rows (counts returned).
 @mcp.tool()
 def delete_recipe(name_or_id: str) -> dict:
     """Delete a recipe plus its cook-log rows."""
@@ -132,6 +143,7 @@ def delete_recipe(name_or_id: str) -> dict:
         return _err(e)
 
 
+# scale_recipe: pure math read; qty strings are free text and returned as-is.
 @mcp.tool()
 def scale_recipe(name_or_id: str, servings: float) -> dict:
     """Scale macros to a target serving count. Pure math — no write.
@@ -142,6 +154,7 @@ def scale_recipe(name_or_id: str, servings: float) -> dict:
         return _err(e)
 
 
+# log_cook: appends a cook-log row; never mutates the recipe itself.
 @mcp.tool()
 def log_cook(recipe: str, cooking_note: str = "", aftertaste_note: str = "",
              date: str = "") -> dict:
@@ -153,6 +166,7 @@ def log_cook(recipe: str, cooking_note: str = "", aftertaste_note: str = "",
         return _err(e)
 
 
+# list_cooks: newest-first cook history, optionally scoped to one recipe.
 @mcp.tool()
 def list_cooks(recipe: str = "", limit: int = 50) -> dict:
     """List cook-log rows, optionally for one recipe (newest first)."""

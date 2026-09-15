@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
 
+/** Health-sync UI state; persisted fields live in SharedPreferences, rest is queried. */
 data class UiState(
     val serverUrl: String = "",
     val authToken: String = "",
@@ -19,6 +20,7 @@ data class UiState(
     val lastSyncAt: String = "",
 )
 
+/** Owns health-sync config and status; chat state lives in per-tab ChatViewModels. */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val client = SyncClient(app)
@@ -30,6 +32,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    /** Reloads prefs plus Health Connect availability; permission check runs async. */
     fun refresh() {
         val prefs = getApplication<Application>().getSharedPreferences("health_gateway", android.content.Context.MODE_PRIVATE)
         _state.value = _state.value.copy(
@@ -55,23 +58,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Updates draft server URL in memory; persisted only on saveConfig. */
     fun onServerUrl(v: String) {
         _state.value = _state.value.copy(serverUrl = v)
     }
 
+    /** Updates draft auth token in memory; persisted only on saveConfig. */
     fun onAuthToken(v: String) {
         _state.value = _state.value.copy(authToken = v)
     }
 
+    /** Surfaces permission/setup failures without starting a sync. */
     fun onSyncError(message: String) {
         _state.value = _state.value.copy(lastResult = "FAILED — $message")
     }
 
+    /** Persists server URL/token, then re-queries availability. */
     fun saveConfig() {
         client.setConfig(_state.value.serverUrl, _state.value.authToken)
         refresh()
     }
 
+    /** Guards re-entry, stamps last sync time only on success, then refreshes. */
     fun syncNow() {
         if (_state.value.syncing) return
         _state.value = _state.value.copy(syncing = true, lastResult = "syncing…")

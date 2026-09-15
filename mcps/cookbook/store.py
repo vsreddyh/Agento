@@ -22,9 +22,11 @@ from pymongo.errors import DuplicateKeyError
 from common.mongo import get_db
 from common.validate import StoreError, check_day, utcnow
 
+# Macro contract: every recipe stores all 5 per-serving macros (validated on write).
 RECIPE_MACROS = ("kcal", "protein_g", "carbs_g", "fat_g", "fiber_g")
 
 
+# _oid: strict id parse; StoreError steers callers to fall back to name lookup.
 def _oid(s: str) -> ObjectId:
     try:
         return ObjectId(s)
@@ -32,6 +34,7 @@ def _oid(s: str) -> ObjectId:
         raise StoreError(f"bad id '{s}'")
 
 
+# _doc_out: stringifies ObjectIds/dates so MCP JSON responses stay serializable.
 def _doc_out(d: dict) -> dict:
     d = dict(d)
     d["_id"] = str(d["_id"])
@@ -43,6 +46,7 @@ def _doc_out(d: dict) -> dict:
     return d
 
 
+# Store: binds the 3 cookbook collections + unique/name indexes on first use.
 class Store:
     def __init__(self, uri: str = "", db_name: str = ""):
         if uri:
@@ -58,6 +62,7 @@ class Store:
         self._log.create_index([("recipe_id", 1), ("date", 1)])
 
     # ── ingredients ──
+    # add_ingredient: unique name (index-backed); note truncated to 300.
     def add_ingredient(self, name: str, note: str = "") -> dict:
         name = (name or "").strip()
         if not name:
@@ -69,10 +74,12 @@ class Store:
             raise StoreError(f"ingredient '{name}' already exists")
         return _doc_out(doc)
 
+    # list_ingredients: case-insensitive substring search; empty search lists all.
     def list_ingredients(self, search: str = "") -> list[dict]:
         filt = {"name": {"$regex": re.escape(search.strip()), "$options": "i"}} if search.strip() else {}
         return [_doc_out(r) for r in self._ings.find(filt).sort("name", 1).limit(500)]
 
+    # delete_ingredient: id-or-name lookup; refused while any recipe references it.
     def delete_ingredient(self, name_or_id: str) -> bool:
         try:
             ing = self._ings.find_one({"_id": _oid(name_or_id)})
@@ -86,6 +93,7 @@ class Store:
         return self._ings.delete_one({"_id": ing["_id"]}).deleted_count > 0
 
     # ── recipes ──
+    # _resolve_ings: maps name-or-id qty keys to {ingredient_id, name, qty}; all must exist.
     def _resolve_ings(self, qtys: dict) -> list[dict]:
         out = []
         for key, qty in (qtys or {}).items():
@@ -100,6 +108,7 @@ class Store:
             raise StoreError("recipe needs at least one ingredient quantity")
         return out
 
+    # _check_macros: all 5 macros required, numeric, >= 0, rounded to 1 decimal.
     def _check_macros(self, per_serving: dict) -> dict:
         if not isinstance(per_serving, dict):
             raise StoreError("per_serving must be a dict")
@@ -116,6 +125,7 @@ class Store:
             out[k] = round(v, 1)
         return out
 
+    # add_recipe: validates servings/macros/ingredients; tags capped at 20x40 chars.
     def add_recipe(self, name: str, ingredient_qtys: dict, per_serving: dict,
                    servings: float = 1, note: str = "", tags: list | None = None,
                    source: str = "mcp") -> dict:
@@ -139,6 +149,7 @@ class Store:
             raise StoreError(f"recipe '{name}' already exists")
         return _doc_out(doc)
 
+    # get_recipe: id-or-name lookup; None when unknown (callers turn it into an error).
     def get_recipe(self, name_or_id: str) -> dict | None:
         try:
             r = self._recipes.find_one({"_id": _oid(name_or_id)})
@@ -146,6 +157,7 @@ class Store:
             r = self._recipes.find_one({"name": (name_or_id or "").strip()})
         return _doc_out(r) if r else None
 
+    # list_recipes: optional name/tag/ingredient filters combined with AND.
     def list_recipes(self, search: str = "", tag: str = "", ingredient: str = "") -> list[dict]:
         filt: dict = {}
         if search.strip():
@@ -156,6 +168,7 @@ class Store:
             filt["quantities.name"] = {"$regex": re.escape(ingredient.strip()), "$options": "i"}
         return [_doc_out(r) for r in self._recipes.find(filt).sort("name", 1).limit(200)]
 
+    # update_recipe: partial patch; only provided keys change, updatedAt always bumped.
     def update_recipe(self, name_or_id: str, **patch) -> dict | None:
         try:
             filt = {"_id": _oid(name_or_id)}
@@ -190,6 +203,7 @@ class Store:
             raise StoreError(f"recipe '{upd.get('name')}' already exists")
         return self.get_recipe(str(r["_id"]))
 
+    # delete_recipe: removes recipe + its cook-log rows so no orphan logs remain.
     def delete_recipe(self, name_or_id: str) -> dict:
         r = self.get_recipe(name_or_id)
         if not r:
@@ -199,6 +213,7 @@ class Store:
         self._recipes.delete_one({"_id": oid})
         return {"deleted": True, "cook_logs": logs}
 
+    # scale_recipe: pure math (factor = target/base); free-text qtys never scaled.
     def scale_recipe(self, name_or_id: str, servings: float) -> dict:
         r = self.get_recipe(name_or_id)
         if not r:
@@ -220,6 +235,7 @@ class Store:
                 "qty_note": "qty strings are free text (e.g. '2 spoons') — not scaled"}
 
     # ── cook log ──
+    # log_cook: appends an observation row; recipe itself is never modified here.
     def log_cook(self, recipe: str, cooking_note: str = "", aftertaste_note: str = "",
                  date: str = "") -> dict:
         import datetime as dti
@@ -234,6 +250,7 @@ class Store:
         doc["_id"] = self._log.insert_one(doc).inserted_id
         return _doc_out(doc)
 
+    # list_cooks: newest-first history; limit clamped to 1..200.
     def list_cooks(self, recipe: str = "", limit: int = 50) -> list[dict]:
         filt: dict = {}
         if (recipe or "").strip():
@@ -245,6 +262,7 @@ class Store:
         return [_doc_out(x) for x in rows]
 
 
+# from_env: builds Store from MONGODB_URI/MONGODB_DB (single root .env).
 def from_env() -> Store:
     return Store(os.environ.get("MONGODB_URI", ""),
                  os.environ.get("MONGODB_DB", "hermes"))

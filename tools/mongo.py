@@ -40,6 +40,7 @@ except ImportError:
     sys.exit(1)
 
 
+# get_db: connects from MONGODB_URI/MONGODB_DB; exits 2 when URI is missing.
 def get_db():
     uri = os.environ.get("MONGODB_URI", "").strip()
     if not uri:
@@ -50,6 +51,7 @@ def get_db():
     return client[db_name]
 
 
+# load_json: parses a CLI JSON arg; exits 3 on malformed input.
 def load_json(raw: str) -> dict:
     try:
         return json.loads(raw)
@@ -58,6 +60,7 @@ def load_json(raw: str) -> dict:
         sys.exit(3)
 
 
+# CLI dispatch: one collection + JSON args; ObjectIds stringified for shell-friendly output.
 def main() -> int:
     p = argparse.ArgumentParser(prog="mongo.py")
     p.add_argument("command", choices=[
@@ -70,6 +73,7 @@ def main() -> int:
     db = get_db()
     col = db[ns.collection]
 
+    # Reads: get lists docs (capped by MONGO_LIMIT), count returns only the number.
     if ns.command in ("get", "count"):
         filt = load_json(ns.args[0]) if ns.args else {}
         if ns.command == "count":
@@ -81,6 +85,7 @@ def main() -> int:
                 d["_id"] = str(d["_id"])
             print(json.dumps(docs, default=str))
 
+    # Writes: single/batch insert return the new id(s) for scripting.
     elif ns.command == "insert":
         if len(ns.args) < 1:
             p.error("insert requires a doc JSON")
@@ -96,6 +101,7 @@ def main() -> int:
         res = col.insert_many(docs)
         print(json.dumps({"inserted_ids": [str(i) for i in res.inserted_ids]}))
 
+    # Upsert: $set-only update so callers never need full update operators.
     elif ns.command == "upsert":
         if len(ns.args) < 2:
             p.error("upsert requires <filter-json> <update-json>")
@@ -103,6 +109,7 @@ def main() -> int:
         res = col.update_one(filt, {"$set": upd}, upsert=True)
         print(json.dumps({"matched": res.matched_count, "upserted": str(res.upserted_id)}))
 
+    # Destructive ops: delete_many by filter, drop for whole collections.
     elif ns.command == "delete":
         if len(ns.args) < 1:
             p.error("delete requires a filter JSON")
@@ -113,6 +120,7 @@ def main() -> int:
         col.drop()
         print(json.dumps({"dropped": ns.collection}))
 
+    # Aggregate: runs a raw pipeline JSON array for ad-hoc summaries/debugging.
     elif ns.command == "aggregate":
         if len(ns.args) < 1:
             p.error("aggregate requires a pipeline JSON array")

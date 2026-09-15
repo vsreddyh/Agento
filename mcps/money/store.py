@@ -25,6 +25,7 @@ import re
 
 from bson import ObjectId
 
+# Collection names + 90d retention window; DATE_RE enforces the YYYY-MM-DD contract.
 ACCOUNTS = "money_accounts"
 TRANSACTIONS = "money_transactions"
 RETENTION_DAYS = 90
@@ -34,10 +35,12 @@ ACCOUNT_TYPES = ["cash", "bank", "card", "wallet", "other"]
 TX_TYPES = ["income", "expense", "transfer"]
 
 
+# Domain error: caught by server.py and returned as {ok: False, error}.
 class StoreError(ValueError):
     pass
 
 
+# Time helpers: _expiry sets the TTL target (tx date + retention window).
 def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
@@ -48,6 +51,7 @@ def _expiry(day: str, days: int = RETENTION_DAYS) -> dt.datetime:
                        tzinfo=dt.timezone.utc) + dt.timedelta(days=days)
 
 
+# Delta map: income +amt, expense -amt, transfer -src/+dst (drives $inc updates).
 def _signed_deltas(doc: dict) -> dict[str, float]:
     """Map account-id (str) -> balance delta implied by a transaction doc."""
     amt = float(doc["amount"])
@@ -63,6 +67,7 @@ def _signed_deltas(doc: dict) -> dict[str, float]:
     return out
 
 
+# Store: MongoDB backend; all balance writes go through _transact for atomicity.
 class Store:
     def __init__(self, uri: str, db_name: str = "hermes"):
         uri = (uri or "").strip()
@@ -125,6 +130,7 @@ class Store:
                 raise
 
     # ── accounts ──────────────────────────────────────────
+    # create_account: unique name (index-backed); archived defaults to False.
     def create_account(self, name: str, type: str = "cash",
                        balance: float = 0) -> dict:
         from pymongo.errors import DuplicateKeyError
@@ -143,11 +149,13 @@ class Store:
         doc["_id"] = str(doc["_id"])
         return doc
 
+    # list_accounts: alphabetical read; archived hidden unless requested.
     def list_accounts(self, include_archived: bool = False) -> list[dict]:
         filt = {} if include_archived else {"archived": False}
         rows = list(self._accts.find(filt, {"_id": 0}).sort("name", 1))
         return rows
 
+    # archive_account: soft-delete; keeps history, blocks future writes via _resolve.
     def archive_account(self, name: str) -> bool:
         res = self._accts.update_one({"name": name}, {"$set": {"archived": True}})
         return res.matched_count > 0
@@ -166,12 +174,14 @@ class Store:
             raise StoreError(f"account '{acct['name']}' is archived")
         return acct
 
+    # get_balances: stored balances + total over active accounts only.
     def get_balances(self) -> dict:
         rows = list(self._accts.find({}, {"_id": 0}).sort("name", 1))
         total = sum(r.get("balance", 0) for r in rows if not r.get("archived"))
         return {"accounts": rows, "total": total}
 
     # ── transactions ──────────────────────────────────────
+    # insert: validates date/amount/type, then atomically writes doc + $inc deltas.
     def insert(self, *, date: str, amount: float, type: str, category: str,
                account: str = "", sending_to: str = "",
                note: str = "", source: str = "mcp") -> str:
@@ -234,6 +244,7 @@ class Store:
 
         return self._transact(_run)
 
+    # fix_last: adjusts newest tx by delta; scales each leg so transfers stay balanced.
     def fix_last(self, new_amount: float) -> bool:
         new_amount = float(new_amount)
         if new_amount <= 0:
@@ -259,6 +270,7 @@ class Store:
         return self._transact(_run)
 
     # ── reads (no txn needed) ─────────────────────────────
+    # query: date-range scan; account filter matches either side of transfers.
     def query(self, start: str, end: str, type: str | None = None,
               category: str | None = None, account: str | None = None) -> list[dict]:
         filt: dict = {"date": {"$gte": start, "$lte": end}}
@@ -280,6 +292,7 @@ class Store:
                 r["sending_to"] = str(r["sending_to"])
         return rows
 
+    # summarize: income/expense/net + expense-only per-category ranking.
     def summarize(self, start: str, end: str,
                   account: str | None = None) -> dict:
         rows = self.query(start, end, account=account)
@@ -305,6 +318,7 @@ class Store:
         return self._txns.delete_many(filt).deleted_count
 
     # ── helpers ───────────────────────────────────────────
+    # _oid_or_empty: lets name-or-id filters match _id without raising on plain names.
     @staticmethod
     def _oid_or_empty(s: str) -> list[dict]:
         try:
@@ -331,6 +345,7 @@ class Store:
         return out
 
 
+# from_env: builds Store from MONGODB_URI/MONGODB_DB (single root .env).
 def from_env() -> Store:
     return Store(uri=os.environ.get("MONGODB_URI", ""),
                  db_name=os.environ.get("MONGODB_DB", "hermes"))

@@ -22,6 +22,7 @@ from store import StoreError, from_env
 
 load_dotenv()
 
+# MCP SDK compat: FastMCP (v1) was renamed MCPServer (v2) — accept either.
 try:  # MCP SDK v1
     from mcp.server.fastmcp import FastMCP
 
@@ -31,14 +32,17 @@ except ImportError:  # MCP SDK v2 — FastMCP renamed to MCPServer
 
     mcp = MCPServer("miser-money")
 
+# Shared store handle (MongoDB); tools below are thin wrappers returning {ok, ...}.
 store = from_env()
 
 
+# Uniform error envelope so MCP clients always get {ok: False, error}.
 def _err(e: Exception) -> dict:
     return {"ok": False, "error": str(e)}
 
 
 # ── accounts ──────────────────────────────────────────────
+# create_account: unique name enforced in store; type/balance validated there.
 @mcp.tool()
 def create_account(name: str, type: str = "cash",
                    balance: float = 0) -> dict:
@@ -56,6 +60,7 @@ def create_account(name: str, type: str = "cash",
         return _err(e)
 
 
+# list_accounts: read-only; archived hidden unless explicitly requested.
 @mcp.tool()
 def list_accounts(include_archived: bool = False) -> dict:
     """List accounts with their current (stored) balances."""
@@ -65,6 +70,7 @@ def list_accounts(include_archived: bool = False) -> dict:
         return _err(e)
 
 
+# archive_account: soft-delete; history stays queryable, new writes blocked.
 @mcp.tool()
 def archive_account(name: str) -> dict:
     """Soft-delete an account (history stays queryable; blocked from new writes)."""
@@ -76,6 +82,7 @@ def archive_account(name: str) -> dict:
         return _err(e)
 
 
+# get_balances: stored balances (maintained transactionally) + active total.
 @mcp.tool()
 def get_balances() -> dict:
     """Current per-account balances plus total across active accounts."""
@@ -87,6 +94,7 @@ def get_balances() -> dict:
 
 
 # ── transactions ──────────────────────────────────────────
+# log_transaction: structured write; defaults date to today, note truncated to 300.
 @mcp.tool()
 def log_transaction(type: str, amount: float, category: str = "other",
                     account: str = "", sending_to: str = "",
@@ -116,6 +124,7 @@ def log_transaction(type: str, amount: float, category: str = "other",
         return _err(e)
 
 
+# log_text: free-form entry point; delegates parsing to parse.classify.
 @mcp.tool()
 def log_text(text: str, account: str = "") -> dict:
     """Log from free-form text ('spent 300 on groceries', 'got 5000 salary',
@@ -153,6 +162,7 @@ def log_text(text: str, account: str = "") -> dict:
             "error": f"Not a loggable statement (classified as '{r['action']}')."}
 
 
+# query_transactions: date-range read; empty filters mean "no filter".
 @mcp.tool()
 def query_transactions(start: str, end: str, type: str = "",
                        category: str = "", account: str = "") -> dict:
@@ -167,6 +177,7 @@ def query_transactions(start: str, end: str, type: str = "",
         return _err(e)
 
 
+# summarize: income/expense/net + per-category; period phrase or explicit range.
 @mcp.tool()
 def summarize(period: str = "this month", start: str = "",
               end: str = "", account: str = "") -> dict:
@@ -187,6 +198,7 @@ def summarize(period: str = "this month", start: str = "",
         return _err(e)
 
 
+# fix_last_transaction: corrects most-recent amount; balances adjusted atomically.
 @mcp.tool()
 def fix_last_transaction(amount: float) -> dict:
     """Correct the most recent transaction's amount (balances adjusted atomically)."""
@@ -198,6 +210,7 @@ def fix_last_transaction(amount: float) -> dict:
         return _err(e)
 
 
+# delete_transactions: filtered delete with balance inversion; requires ≥1 filter.
 @mcp.tool()
 def delete_transactions(amount: float = 0, category: str = "",
                         date: str = "", account: str = "") -> dict:
@@ -221,6 +234,7 @@ def delete_transactions(amount: float = 0, category: str = "",
         return _err(e)
 
 
+# prune_old: manual 90d purge (TTL does this in background); dry_run only reports.
 @mcp.tool()
 def prune_old(days: int = 90, dry_run: bool = True) -> dict:
     """Immediate 90-day purge (TTL handles this natively in the background;
