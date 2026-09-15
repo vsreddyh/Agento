@@ -26,9 +26,9 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # No setup-android step: ubuntu runners ship a preinstalled SDK, and
+      # android-actions/setup-android@v3 installs the long-removed `tools`
+      # package (sdkmanager exit 1). Gradle finds the SDK via ANDROID_HOME.
       - name: Generate debug keystore (release flavor signs with it)
         run: |
           mkdir -p ~/.android
