@@ -4,10 +4,6 @@ model:
   base_url: ${HERMES_BASE_URL}
   api_key: ${OPENCODE_ZEN_API_KEY}
 
-fallback_providers:
-  - provider: deepinfra
-    model: deepseek-ai/DeepSeek-V4-Flash-0731
-
 agent:
   max_turns: 90
   reasoning_effort: medium
