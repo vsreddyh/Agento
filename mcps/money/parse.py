@@ -1,8 +1,7 @@
 """Free-form natural-language parser for the money bot.
 
 Ported from the Hermes `money` profile contract
-(Discord-bots/profile-plans/money-management-plan.md +
- profiles/master/profiles/money/SOUL.md):
+(profiles/master/profiles/money/SOUL.md, retired with the Discord cutover):
 
     spent 300 on groceries
     got 5000 salary

@@ -1,7 +1,6 @@
 # Miser — Multi-Account Money MCP Server
 
-MCP server port of the money bot from `../Discord-bots`
-(plan: `profile-plans/money-management-plan.md`),
+MCP server port of the retired money bot profile,
 extended to **multiple accounts** with **atomic stored balances**.
 
 ## Tools
