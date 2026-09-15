@@ -27,9 +27,11 @@ sealed interface ChatEvent {
 }
 
 /** Supported LLM providers. Names must match the gateway config
- * (`provider: opencode`, `fallback_providers: deepinfra`). */
+ * (`provider: opencode`, `fallback_providers: deepinfra`) and the
+ * Hermes `opencode-go` provider (key: OPENCODE_GO_API_KEY in root .env). */
 enum class LlmProvider(val id: String) {
     OPENCODE("opencode"),
+    OPENCODE_GO("opencode-go"),
     DEEPINFRA("deepinfra"),
     ;
 
