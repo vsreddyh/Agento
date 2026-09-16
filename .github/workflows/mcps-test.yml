@@ -1,0 +1,36 @@
+name: MCP tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mcps/**"
+      - ".github/workflows/mcps-test.yml"
+  pull_request:
+    paths:
+      - "mcps/**"
+      - ".github/workflows/mcps-test.yml"
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: "mcps/**/requirements.txt"
+
+      - name: Install deps
+        run: |
+          for req in mcps/*/requirements.txt mcps/common/requirements.txt; do
+            [ -f "$req" ] && pip install -r "$req"
+          done
+          pip install pytest
+
+      - name: Run pytest (DB tests skip without MONGODB_URI)
+        run: python -m pytest mcps/ -q

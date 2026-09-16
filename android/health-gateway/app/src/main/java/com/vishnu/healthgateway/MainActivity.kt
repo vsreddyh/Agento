@@ -28,6 +28,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 
+/** Builds per-tab chat ViewModels so story/resumes/god keep isolated history. */
 class ChatViewModelFactory(
     private val app: android.app.Application,
     private val tab: String,
@@ -38,6 +39,7 @@ class ChatViewModelFactory(
     }
 }
 
+/** Bottom-nav destinations; first three map 1:1 to gateway profiles. */
 private enum class Destination(val title: String) {
     Story("Story"),
     Resumes("Resumes"),
@@ -45,10 +47,12 @@ private enum class Destination(val title: String) {
     Settings("Settings"),
 }
 
+/** Single-activity host; health state lives here, chat state per tab. */
 class MainActivity : ComponentActivity() {
 
     private val healthModel: MainViewModel by viewModels()
 
+    /** Inflates bottom nav; each destination hosts an independent tab. */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -82,6 +86,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** Scopes one chat ViewModel per tab key so drafts/history survive tab switches. */
 @Composable
 private fun ChatTab(app: android.app.Application, tab: String, title: String) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
@@ -95,6 +100,7 @@ private fun ChatTab(app: android.app.Application, tab: String, title: String) {
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop, onNew = vm::newConversation)
 }
 
+/** Streaming chat surface; auto-scrolls on new tokens, delegates I/O to callbacks. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatScreen(
@@ -177,6 +183,7 @@ private fun ChatScreen(
     }
 }
 
+/** Per-tab provider/model/path picker; blanks fall back to gateway defaults. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TabLlmConfig(
@@ -234,6 +241,7 @@ private fun TabLlmConfig(
     )
 }
 
+/** Settings hub for chat backend plus Health Connect sync; prefs load once on entry. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
@@ -255,6 +263,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var pathGod by remember { mutableStateOf("") }
     var modelsResult by remember { mutableStateOf("") }
 
+    /** Preloads persisted chat + sync prefs into compose state for editing. */
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences("health_gateway", android.content.Context.MODE_PRIVATE)
         // serverUrl/authToken fields below are the health-sync ones (unchanged keys).
@@ -271,6 +280,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
         pathGod = prefs.getString("path_god", "") ?: ""
     }
 
+    /** Refreshes health state after any permission flow returns. */
     val hcPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) {
@@ -338,6 +348,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
             path = pathGod,
             onPath = { pathGod = it },
         )
+        /** Probes each distinct profile path so one gateway serves all tabs. */
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 val api = ChatApi(context)
@@ -379,6 +390,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
         Text("Health sync", style = MaterialTheme.typography.titleMedium)
         HealthStatusCard(state)
 
+        /** Three-step gate: install Health Connect, grant permissions, then sync. */
         when {
             !state.healthAvailable -> {
                 Button(onClick = {
@@ -472,6 +484,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     }
 }
 
+/** Summarizes Health Connect install vs. permission state for Settings. */
 @Composable
 private fun HealthStatusCard(state: UiState) {
     Card(modifier = Modifier.fillMaxWidth()) {

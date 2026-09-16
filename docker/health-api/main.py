@@ -35,6 +35,7 @@ logger = logging.getLogger("health-api")
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
+# Lifespan: close the shared Mongo client on shutdown so the container exits cleanly.
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     yield
@@ -44,6 +45,7 @@ async def _lifespan(app: FastAPI):
         _client = None
 
 
+# App + startup token snapshot (re-read per request via _tokens so rotation needs no restart).
 app = FastAPI(title="Health Sync API", lifespan=_lifespan)
 
 _raw_tokens = os.environ.get("HEALTH_API_TOKENS", "") or os.environ.get("HEALTH_SYNC_TOKEN", "")
@@ -55,6 +57,7 @@ def _tokens() -> set[str]:
     raw = os.environ.get("HEALTH_API_TOKENS", "") or os.environ.get("HEALTH_SYNC_TOKEN", "")
     return {t.strip() for t in raw.split(",") if t.strip()}
 
+# Shared client (lazily created) + accessor honoring MONGODB_URI/MONGODB_DB from the root .env.
 _client: MongoClient | None = None
 
 
@@ -72,6 +75,7 @@ def _get_db():
 
 
 # ── Models matching the Android app's HealthSyncPayload ──
+# One sleep session; booked to the wake (IST) date so nights count toward the morning.
 class SleepEntry(BaseModel):
     startIso: str
     endIso: str
@@ -79,6 +83,7 @@ class SleepEntry(BaseModel):
     stages: dict[str, int] = Field(default_factory=dict)
 
 
+# One workout session; deduped downstream on (type, minutes, kcal) per start date.
 class WorkoutEntry(BaseModel):
     startIso: str
     endIso: str
@@ -88,6 +93,7 @@ class WorkoutEntry(BaseModel):
     caloriesKcal: float | None = None
 
 
+# Top-level sync body: today's totals plus bounded sleep/workout batches (max 100 each).
 class HealthSyncPayload(BaseModel):
     device: str = "Redmi Watch 5 Lite"
     syncedAtIso: str
@@ -108,6 +114,7 @@ def _local_date(iso: str) -> str:
         return iso[:10]
 
 
+# Bearer check against the accepted token set; 503 when the server itself has no tokens configured.
 def _authorize(authorization: str | None) -> None:
     tokens = _tokens()
     if not tokens:
@@ -120,11 +127,13 @@ def _authorize(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid token")
 
 
+# Liveness probe for the container orchestrator (no auth, no DB touch).
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
+# Main ingest: upserts today's totals into hc_days and appends deduped sleep/workout sessions.
 @app.post("/api/health/sync")
 async def sync(payload: HealthSyncPayload, authorization: str | None = Header(None)):
     _authorize(authorization)
@@ -191,6 +200,7 @@ async def sync(payload: HealthSyncPayload, authorization: str | None = Header(No
     return {"status": "ok", "synced_at": synced_at}
 
 
+# Whole-minute duration between two ISO timestamps; None when unparseable so the caller can skip.
 def _minutes_between(start_iso: str, end_iso: str) -> int | None:
     try:
         s = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))

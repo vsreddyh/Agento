@@ -17,6 +17,7 @@ from common.mongo import get_db
 from common.validate import StoreError, check_day, check_macros, sum_totals, utcnow
 
 
+# Store: binds hc_meals/hc_weight/hc_days + unique date indexes for upserts.
 class Store:
     def __init__(self, uri: str = "", db_name: str = ""):
         if uri:
@@ -32,6 +33,7 @@ class Store:
         self._meals.create_index("date")
 
     # ── meals (cal-in) ──
+    # _check_items: every item needs a name + all 5 macros; normalizes types/lengths.
     def _check_items(self, items: list) -> list[dict]:
         if not items:
             raise StoreError("log_meal needs at least one item with kcal/protein/carbs/fat/fiber")
@@ -47,6 +49,7 @@ class Store:
                         "fiber": float(it["fiber"])})
         return out
 
+    # log_meal: validates day/items, stores precomputed totals for cheap reads.
     def log_meal(self, day: str, description: str, items: list) -> dict:
         day = check_day(day)
         items = self._check_items(items)
@@ -56,6 +59,7 @@ class Store:
         doc["createdAt"] = str(doc["createdAt"])
         return doc
 
+    # query_meals: date-range read; ObjectIds/dates stringified for JSON clients.
     def query_meals(self, start: str, end: str) -> list[dict]:
         rows = list(self._meals.find(
             {"date": {"$gte": check_day(start), "$lte": check_day(end)}}).sort("date", 1).limit(500))
@@ -64,6 +68,7 @@ class Store:
             r["createdAt"] = str(r.get("createdAt", ""))
         return rows
 
+    # fix_last_meal: correction path; rewrites newest meal's items + totals.
     def fix_last_meal(self, description: str, items: list) -> dict | None:
         last = list(self._meals.find().sort("createdAt", -1).limit(1))
         if not last:
@@ -73,10 +78,12 @@ class Store:
                                {"$set": {"items": items, "totals": sum_totals(items)}})
         return {"date": last[0]["date"], "totals": sum_totals(items), "items": items}
 
+    # delete_meals: removes all meals for one day (no balance logic involved).
     def delete_meals(self, day: str) -> int:
         return self._meals.delete_many({"date": check_day(day)}).deleted_count
 
     # ── weight ──
+    # log_weight: one upserted row per date; 0–500 kg plausibility guard.
     def log_weight(self, day: str, kg: float) -> dict:
         day = check_day(day)
         try:
@@ -91,6 +98,7 @@ class Store:
         return {"date": day, "kg": kg}
 
     # ── days (cal-out + steps + sleep) ──
+    # log_sleep: upserted sleep_hours on the day row; 0–24 h plausibility guard.
     def log_sleep(self, day: str, hours: float) -> dict:
         day = check_day(day)
         try:
@@ -104,6 +112,7 @@ class Store:
                               upsert=True)
         return {"date": day, "sleep_hours": hours}
 
+    # log_workout: $push appends to workouts (history preserved); minutes > 0, kcal >= 0.
     def log_workout(self, day: str, type: str, minutes: float, kcal: float = 0) -> dict:
         day = check_day(day)
         try:
@@ -125,6 +134,7 @@ class Store:
         return {"date": day, **w}
 
     # ── reads ──
+    # daily_summary: joins meals + weight + day row; cal_out = workouts + active_kcal.
     def daily_summary(self, day: str) -> dict:
         day = check_day(day)
         meals = list(self._meals.find({"date": day}, {"_id": 0}))
@@ -138,6 +148,7 @@ class Store:
                 "cal_in": totals["kcal"], "cal_out": burn,
                 "net": round(totals["kcal"] - burn, 1)}
 
+    # prune: deletes meals/days older than cutoff; weight collection never touched.
     def prune(self, days: int = 30, dry_run: bool = True) -> dict:
         cutoff = (dt.date.today() - dt.timedelta(days=days)).isoformat()
         filt = {"date": {"$lt": cutoff}}
@@ -149,6 +160,7 @@ class Store:
         return {"cutoff": cutoff, **counts}
 
 
+# from_env: builds Store from MONGODB_URI/MONGODB_DB (single root .env).
 def from_env() -> Store:
     return Store(os.environ.get("MONGODB_URI", ""),
                  os.environ.get("MONGODB_DB", "hermes"))

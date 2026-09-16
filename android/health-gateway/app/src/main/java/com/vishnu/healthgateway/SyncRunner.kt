@@ -7,10 +7,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** Single-flight orchestrator: backfills history once, then sends today-only payloads. */
 object SyncRunner {
     private const val TAG = "SyncRunner"
     private val inFlight = AtomicBoolean(false)
 
+    /** Collects from Health Connect and posts; no-ops with a failure result when permissions/config are missing. */
     suspend fun run(context: Context): SyncResult {
         if (!inFlight.compareAndSet(false, true)) {
             return SyncResult(false, null, "sync already in progress")
@@ -40,6 +42,7 @@ object SyncRunner {
         }
     }
 
+    /** Uploads each backfill day in order; aborts on first failure so the retry resumes incomplete history. */
     private suspend fun backfill(client: SyncClient, manager: HealthConnectManager): SyncResult {
         val payloads = manager.collectBackfill()
         if (payloads.isEmpty()) {
@@ -55,6 +58,7 @@ object SyncRunner {
         return last
     }
 
+    /** Fire-and-forget entry point for Service/Worker callbacks; result is delivered via onDone. */
     fun runAsync(context: Context, onDone: (SyncResult) -> Unit = {}) {
         CoroutineScope(Dispatchers.IO).launch {
             onDone(run(context))

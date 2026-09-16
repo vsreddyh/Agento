@@ -22,17 +22,25 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
+/**
+ * Reads health data from Health Connect and shapes it into [HealthSyncPayload]
+ * for upload. All reads run on Dispatchers.IO; every method degrades to an
+ * empty payload (never throws) when the client is unavailable.
+ */
 class HealthConnectManager(context: Context) {
 
+    /** Null when Health Connect is missing/unusable — callers treat null as "no data". */
     private val client: HealthConnectClient? = runCatching {
         HealthConnectClient.getOrCreate(context)
     }.getOrNull()
 
+    /** Static helpers: permission set, install diagnostics, timestamp format. */
     companion object {
         private const val TAG = "HealthConnectManager"
 
         const val HEALTH_CONNECT_PACKAGE = "com.google.android.apps.healthdata"
 
+        /** Every Health Connect permission the app needs (must mirror the manifest). */
         val PERMISSIONS = setOf(
             HealthPermission.getReadPermission(StepsRecord::class),
             HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
@@ -44,6 +52,7 @@ class HealthConnectManager(context: Context) {
 
         private val UTC: DateTimeFormatter = DateTimeFormatter.ISO_INSTANT
 
+        /** Maps the Health Connect SDK status to the app's availability enum. */
         fun availabilityStatus(context: Context): HealthConnectAvailability =
             when (HealthConnectClient.getSdkStatus(context)) {
                 HealthConnectClient.SDK_UNAVAILABLE -> HealthConnectAvailability.UNAVAILABLE
@@ -52,6 +61,7 @@ class HealthConnectManager(context: Context) {
                 else -> HealthConnectAvailability.AVAILABLE
             }
 
+        /** Human-readable Health Connect install state for the diagnostics UI. */
         fun healthConnectPackageInfo(context: Context): String {
             return try {
                 val pm = context.packageManager
@@ -66,6 +76,7 @@ class HealthConnectManager(context: Context) {
             "https://play.google.com/store/apps/details?id=$HEALTH_CONNECT_PACKAGE"
     }
 
+    /** Currently granted permissions (subset of [PERMISSIONS]). */
     suspend fun grantedPermissions(): Set<String> {
         val c = client ?: return emptySet()
         return withContext(Dispatchers.IO) {
@@ -73,6 +84,7 @@ class HealthConnectManager(context: Context) {
         }
     }
 
+    /** Launches the system permission sheet; false only if the launch itself fails. */
     fun requestPermissions(
         launcher: ActivityResultLauncher<Set<String>>,
         permissions: Set<String> = PERMISSIONS,
@@ -82,12 +94,17 @@ class HealthConnectManager(context: Context) {
             .isSuccess
     }
 
+    /** Opens the Health Connect manage-data screen (fallback when rationale isn't enough). */
     fun openHealthConnectSettings(context: Context) {
         runCatching {
             context.startActivity(HealthConnectClient.getHealthConnectManageDataIntent(context))
         }.onFailure { Log.e(TAG, "open HC settings failed", it) }
     }
 
+    /**
+     * Today's payload: steps + active calories since UTC midnight, sleep and
+     * workouts from the last 24h (covers last night's sleep spilling past midnight).
+     */
     suspend fun collectToday(): HealthSyncPayload {
         val c = client ?: return HealthSyncPayload(
             syncedAtIso = UTC.format(Instant.now()),
@@ -117,6 +134,11 @@ class HealthConnectManager(context: Context) {
         }
     }
 
+    /**
+     * One payload per day for the last [days] days (first install / reinstall).
+     * Days with neither steps nor calories are skipped; sleep + workouts ride
+     * on the most recent payload since the server dedupes by timestamp.
+     */
     suspend fun collectBackfill(days: Int = 30): List<HealthSyncPayload> {
         val c = client ?: return emptyList()
         return withContext(Dispatchers.IO) {
@@ -150,6 +172,7 @@ class HealthConnectManager(context: Context) {
         }
     }
 
+    /** Total steps in [start, end] via an aggregate query (null = no data). */
     private suspend fun aggregateSteps(client: HealthConnectClient, start: Instant, end: Instant): Long? {
         val response = client.aggregate(
             AggregateRequest(
@@ -160,6 +183,7 @@ class HealthConnectManager(context: Context) {
         return response[StepsRecord.COUNT_TOTAL]
     }
 
+    /** Active calories in kcal in [start, end] (excludes basal metabolic rate). */
     private suspend fun aggregateActiveCalories(client: HealthConnectClient, start: Instant, end: Instant): Double? {
         val response = client.aggregate(
             AggregateRequest(
@@ -170,6 +194,7 @@ class HealthConnectManager(context: Context) {
         return response[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories
     }
 
+    /** Sleep sessions in [start, end] with per-stage minute counts. */
     private suspend fun readSleep(client: HealthConnectClient, start: Instant, end: Instant): List<SleepEntry> {
         val records = client.readRecords(
             ReadRecordsRequest(
@@ -194,6 +219,7 @@ class HealthConnectManager(context: Context) {
         }
     }
 
+    /** Exercise sessions enriched with distance + calories joined by record id. */
     private suspend fun readWorkouts(client: HealthConnectClient, start: Instant, end: Instant): List<WorkoutEntry> {
         val sessions = client.readRecords(
             ReadRecordsRequest(
@@ -217,6 +243,7 @@ class HealthConnectManager(context: Context) {
         }
     }
 
+    /** Distance records keyed by session id for the workout join. */
     private suspend fun readDistanceAggregates(client: HealthConnectClient, start: Instant, end: Instant): Map<String, Double> {
         val records = client.readRecords(
             ReadRecordsRequest(
@@ -227,6 +254,7 @@ class HealthConnectManager(context: Context) {
         return records.associate { it.metadata.id to it.distance.inMeters }
     }
 
+    /** Total-calories records keyed by session id for the workout join. */
     private suspend fun readCaloriesAggregates(client: HealthConnectClient, start: Instant, end: Instant): Map<String, Double> {
         val records = client.readRecords(
             ReadRecordsRequest(
@@ -238,6 +266,7 @@ class HealthConnectManager(context: Context) {
     }
 }
 
+/** Install/readiness state of Health Connect on this device. */
 enum class HealthConnectAvailability {
     AVAILABLE,
     UPDATE_REQUIRED,

@@ -1,8 +1,7 @@
 """Free-form natural-language parser for the money bot.
 
 Ported from the Hermes `money` profile contract
-(Discord-bots/profile-plans/money-management-plan.md +
- profiles/master/profiles/money/SOUL.md):
+(profiles/master/profiles/money/SOUL.md, retired with the Discord cutover):
 
     spent 300 on groceries
     got 5000 salary
@@ -20,11 +19,13 @@ import calendar
 import datetime as dt
 import re
 
+# Canonical categories; 'other' is the fallback when nothing matches.
 CATEGORIES = [
     "groceries", "eating out", "transport", "bills", "rent",
     "shopping", "health", "fun", "salary", "other",
 ]
 
+# Keyword hints: substring match maps vendor/meal words to a category.
 _CATEGORY_HINTS = {
     "groceries": ["grocer", "vegetable", "veggie", "fruit", "milk", "kirana", "supermarket"],
     "eating out": ["restaurant", "food", "lunch", "dinner", "breakfast", "cafe", "coffee",
@@ -40,14 +41,18 @@ _CATEGORY_HINTS = {
     "salary": ["salary", "paycheck", "wage", "income", "credited", "salary credit"],
 }
 
+# Amount regex: optional ₹/Rs/$ prefix, commas stripped before float(); first hit wins.
 _AMOUNT_RE = re.compile(r"(?:₹|rs\.?\s?|\$)?\s?(\d+(?:,\d+)*(?:\.\d{1,2})?)", re.I)
 
+# Signal words: income wins only when no expense word is present (checked in classify).
 INCOME_WORDS = ["got", "received", "income", "salary", "credited", "earned", "pay", "deposit"]
 EXPENSE_WORDS = ["spent", "paid", "bought", "purchase", "expense", "cost", "spend"]
 
+# Month lookup for period phrases ("June", "last month"); bare future month = last year.
 MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
 
 
+# Category match: exact category name first, then keyword hints, else 'other'.
 def normalize_category(text: str) -> str:
     t = text.lower()
     for cat in CATEGORIES:
@@ -59,6 +64,7 @@ def normalize_category(text: str) -> str:
     return "other"
 
 
+# Amount extraction: commas removed so "5,000" parses; None when no digits found.
 def extract_amount(text: str) -> float | None:
     m = _AMOUNT_RE.search(text.replace(",", ""))
     if not m:
@@ -69,12 +75,14 @@ def extract_amount(text: str) -> float | None:
         return None
 
 
+# Month bounds helper: returns ISO (first, last) day of the given month.
 def _month_range(year: int, month: int) -> tuple[str, str]:
     first = dt.date(year, month, 1)
     last = dt.date(year, month, calendar.monthrange(year, month)[1])
     return first.isoformat(), last.isoformat()
 
 
+# Period resolver: today/yesterday/week/last-month/named-month fall back to current month.
 def resolve_period(text: str, today: dt.date | None = None) -> tuple[str, str, str]:
     """Return (start_YYYY-MM-DD, end_YYYY-MM-DD, label)."""
     today = today or dt.date.today()
@@ -112,6 +120,7 @@ def resolve_period(text: str, today: dt.date | None = None) -> tuple[str, str, s
     return s, e, today.strftime("%B %Y")
 
 
+# Classifier: precedence is help → !command → delete/fix → question → transfer → income/expense.
 def classify(text: str) -> dict:
     """Classify free-form text into an action dict.
 

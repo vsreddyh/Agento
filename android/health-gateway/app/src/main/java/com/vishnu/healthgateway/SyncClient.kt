@@ -12,6 +12,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.util.concurrent.TimeUnit
 
+/** Thin HTTP client for the health-api sync endpoint; server URL/token come from SharedPreferences. */
 class SyncClient(context: Context) {
 
     private val prefs = context.getSharedPreferences("health_gateway", Context.MODE_PRIVATE)
@@ -26,12 +27,16 @@ class SyncClient(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
+    /** Returns the configured health-api base URL (empty until set in Settings). */
     fun serverUrl(): String = prefs.getString("server_url", "") ?: ""
+    /** Returns the stored Bearer token sent as `Authorization: Bearer <token>`. */
     fun authToken(): String = prefs.getString("auth_token", "") ?: ""
+    /** Marks the one-time historical backfill done so later runs send today-only payloads. */
     fun markFirstSyncDone() {
         prefs.edit().putBoolean("first_sync_done", true).apply()
     }
 
+    /** Persists server URL/token; normalizes trailing slash/whitespace so post() can build the endpoint directly. */
     fun setConfig(serverUrl: String, authToken: String) {
         prefs.edit()
             .putString("server_url", serverUrl.trimEnd('/'))
@@ -39,6 +44,7 @@ class SyncClient(context: Context) {
             .apply()
     }
 
+    /** POSTs the payload to /api/health/sync with Bearer auth; never throws — failures become SyncResult. */
     suspend fun post(payload: HealthSyncPayload): SyncResult = withContext(Dispatchers.IO) {
         val url = serverUrl()
         if (url.isEmpty()) return@withContext SyncResult(false, null, "server URL not configured")

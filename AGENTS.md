@@ -32,7 +32,7 @@ No host Hermes install, no native processes.
 ```
 story+resumes+default
    └─► ONE docker `gateway` container (HERMES_HOME=/hermes-home = profiles/master, HERMES_DASHBOARD=1 via s6)
-        └─► OpenCode Zen direct (https://opencode.ai/zen/v1, model muse-spark-1.2-free)
+        └─► OpenCode Zen direct (https://opencode.ai/zen/v1, model muse-spark-1.2-contributor-free)
 searxng (:8888)  •  health-api (:8001)  •  dashboard (:9119, password, s6 alongside gateway)
 MongoDB (remote prod; ephemeral local in dev)  •  retention (one-shot container)
 workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo vsreddyh/Resume) — separate git repos
@@ -62,19 +62,19 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   ephemeral dev data on `down -v` (or container remove) since there is no volume.
 - Docker: `docker/docker-compose.yml` = the whole stack (searxng
    + health-api + gateway (+ dashboard via s6 when HERMES_DASHBOARD=1) + retention) — the ONLY compose file. Dev and
-   prod run the same file; `HERMES_ENV=dev` keeps dev writes on a `test_`-prefixed
-   DB, never the prod DB. The bot image is built from `test/Dockerfile` +
-   `test/entrypoint.sh` (bakes in `hermes-god` + `s6-overlay`); those are the image source, not
+   prod run the same file; `HERMES_ENV=dev` repoints every data consumer at the
+   ephemeral local container under the same `MONGODB_DB` name, never the prod DB. The bot image is built from `test/Dockerfile` +
+   `test/entrypoint.sh` (bakes in `s6-overlay`; `hermes-agent` + `mcp` via pip); those are the image source, not
    a mirror stack.
-   Per-bot tokens/channels are injected via compose `environment:` interpolation
+   Provider keys + `API_SERVER_KEY` are injected via compose `environment:` interpolation
    from the root `.env`; `docker_compose()` always passes `--env-file "$REPO/.env"`
    (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
    silently falls back empty/default).
-- LLM: direct to OpenCode Zen (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-free`) — no proxy container.
+- LLM: direct to OpenCode Zen (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-contributor-free`) — no proxy container. OpenCode Go is enabled too (`OPENCODE_GO_API_KEY` in root `.env`, selectable per request as provider `opencode-go`).
 - App API: Hermes built-in OpenAI-compatible server on the gateway
   (`gateway.api_server`, `:8642`, shared `API_SERVER_KEY`); one port, each app
   tab uses its profile path (`/p/story|resumes|default`) and sends per-request
-  provider (`opencode`|`deepinfra`) + model from app Settings. Provider keys
+  provider (`opencode`|`opencode-go`) + model from app Settings. Provider keys
   live only in the VPS `.env`, never in git.
 - Bot config source is `profiles/master/config.yaml.template` (gateway home,
   not a bot) and `profiles/master/profiles/<bot>/config.yaml.template` (the three
@@ -92,7 +92,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   and each `SOUL.md` are **committed** so bot personality + learned state
   survives moving between VPSes. Only transient session/log/state files are
   git-ignored (runtime `memories/` are not tracked).
-- No tests, linter, or CI in this repo. Verify with `bash -n scripts/*.sh` + render a template to /tmp,
+- CI: `android-apk.yml` (builds debug+release APKs, `main` branch only) and `mcps-test.yml` (pytest over `mcps/`, `main` only; DB tests skip without `MONGODB_URI`). No linter. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
   `docker compose -f docker/docker-compose.yml config`, then check gateway logs on the live machine.
 
 ## Gotchas
@@ -102,8 +102,6 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 - `make setup` in docker/ references `docker/.env.example` which doesn't exist;
   compose reads the ROOT `.env` via `--env-file "$REPO/.env"` (there is no
   `env_file:` directive). `make` is only relevant for the searxng service now.
-- `auto_thread` defaults `true` in Hermes — must be disabled for a persistent
-  shared channel conversation.
 - Legacy native install: `start` detects stale `run/bots/*.pid` processes and
   stops them first; if a `hermes-gateway` systemd unit survives, `stop`
   best-effort stops it. `clean` no longer touches `~/.hermes` (no host install).
@@ -116,5 +114,3 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   bots, health-api, and retention. Prod (or unset) = remote `MONGODB_URI` as-is.
   Keep `HERMES_ENV=dev` on dev machines — dropping it silently points dev at the
   prod DB. Dev machines run the same single compose file with `COMPOSE_PROFILES=dev`.
-- Shared sessions = one running-agent slot per channel (messages interrupt/
-  queue), shared token costs.

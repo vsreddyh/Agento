@@ -19,10 +19,6 @@ gateway:
     port: 8642
     key: ${API_SERVER_KEY}
 
-fallback_providers:
-  - provider: deepinfra
-    model: deepseek-ai/DeepSeek-V4-Flash-0731
-
 auxiliary:
   vision:
     model: muse-spark-1.2-contributor-free

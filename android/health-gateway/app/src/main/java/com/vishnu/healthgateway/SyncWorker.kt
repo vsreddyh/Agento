@@ -6,6 +6,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 
+/** Periodic WorkManager entry point; success ends the run, failure asks WorkManager to retry with backoff. */
 class SyncWorker(
     context: Context,
     params: WorkerParameters,
@@ -15,6 +16,7 @@ class SyncWorker(
         const val TAG = "SyncWorker"
     }
 
+    /** Runs one sync under a foreground notification; tolerates setForeground failure on constrained devices. */
     override suspend fun doWork(): Result {
         try {
             setForeground(SyncNotifications.foregroundInfo(applicationContext))

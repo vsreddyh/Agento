@@ -32,14 +32,14 @@ The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a 
  resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
  default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
-         └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-free)
+         └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-contributor-free)
          └── API server :8642 ──────────┤   (Android app chat backend)
 Health Gateway (Android) ──► health-api (:8001) ──► MongoDB
 Hermes Dashboard ────────► 0.0.0.0:9119 via gateway (s6, basic auth, unified)
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
 
-- **LLM Connection**: Direct HTTPS communication with OpenCode Zen (`https://opencode.ai/zen/v1`, default model `muse-spark-1.2-free`).
+- **LLM Connection**: Direct HTTPS communication with OpenCode Zen (`https://opencode.ai/zen/v1`, default model `muse-spark-1.2-contributor-free`).
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
 - **gateway & dashboard**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles. `s6-overlay` supervises both the gateway and the dashboard process on `:9119` when `HERMES_DASHBOARD=1`.
 - **app API**: Hermes built-in OpenAI-compatible server (`gateway.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, shared `API_SERVER_KEY` bearer auth).
@@ -54,7 +54,7 @@ Retention ───────────────► one-shot container (c
 All profiles connect directly to OpenCode Zen (`https://opencode.ai/zen/v1`) using `OPENCODE_ZEN_API_KEY` defined in the root `.env`.
 
 - **Config Rendering**: Rendered as `api_key: ${OPENCODE_ZEN_API_KEY}` in each profile's `config.yaml` from `config.yaml.template` by [`test/entrypoint.sh`](file:///home/vsreddyh/Documents/Discord-bots/test/entrypoint.sh).
-- **Vision Model**: Auxiliary vision queries utilize `muse-spark-1.2-free` natively over OpenCode Zen.
+- **Vision Model**: Auxiliary vision queries utilize `muse-spark-1.2-contributor-free` natively over OpenCode Zen.
 - **Streaming Support**: Direct SSE passthrough when streaming is enabled in Hermes settings.
 
 ---
@@ -173,11 +173,11 @@ The custom Android app (`android/health-gateway/`, 3 chat tabs + Settings) talks
 curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <API_SERVER_KEY>"
 curl http://<host>:8642/p/story/v1/chat/completions \
   -H "Authorization: Bearer <API_SERVER_KEY>" -H "Content-Type: application/json" \
-  -d '{"provider": "opencode", "model": "muse-spark-1.2-free", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
+  -d '{"provider": "opencode", "model": "muse-spark-1.2-contributor-free", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
 
 - One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
-- Provider (`opencode` | `deepinfra`) + model are picked per request in app Settings (blank model = gateway default). Provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
+- Provider (`opencode` | `opencode-go`) + model are picked per request in app Settings (blank model = gateway default). Provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
 - Config lives in `profiles/master/config.yaml.template` (`gateway.api_server`, key rendered from `API_SERVER_KEY`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
 
 ---

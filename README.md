@@ -14,7 +14,7 @@ Fully Dockerized agent stack running **three Hermes profiles** (story, resumes, 
   resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
   default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
             3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
-          └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-free)
+          └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-contributor-free)
           └── API server :8642 ──────────┤   (Android app chat backend)
 Health Gateway (Android) ──► health-api (:8001) ──► MongoDB
 Hermes Dashboard ────────► 0.0.0.0:9119 via gateway (s6, basic auth, unified)
@@ -61,16 +61,17 @@ Retention ───────────────► one-shot container (c
   - `git@github.com:vsreddyh/Resume.git` (Resumes bot CV repository)
 
 ### Required External Services & API Keys
-- **OpenCode Zen API Key**: `OPENCODE_ZEN_API_KEY` from [opencode.ai](https://opencode.ai) (model: `muse-spark-1.2-free`).
-- **Android App API Key**: `API_SERVER_KEY` (shared bearer key for all 3 chat tabs; generate with `openssl rand -hex 32`). Each tab uses its profile path (`/p/story|resumes|default`) + per-request provider (`opencode`|`deepinfra`) and model from app Settings. Provider keys live only in the VPS `.env`, never in git.
+- **OpenCode Zen API Key**: `OPENCODE_ZEN_API_KEY` from [opencode.ai](https://opencode.ai) (model: `muse-spark-1.2-contributor-free`).
+- **OpenCode Go API Key**: `OPENCODE_GO_API_KEY` (provider `opencode-go`, selectable per request in app Settings).
+- **Android App API Key**: `API_SERVER_KEY` (shared bearer key for all 3 chat tabs; generate with `openssl rand -hex 32`). Each tab uses its profile path (`/p/story|resumes|default`) + per-request provider (`opencode`|`opencode-go`) and model from app Settings. Provider keys live only in the VPS `.env`, never in git.
 - **MongoDB Cluster**: MongoDB connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`). (In dev mode, `HERMES_ENV=dev` provides an ephemeral local single-node replica set instead.)
 - **Health Sync Secret**: `HEALTH_SYNC_TOKEN` Bearer token matching the Android Health Gateway app. (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only.)
 - **Dashboard Web Credentials**: `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET` (32+ chars).
 
 ### Network & Firewall Ports
 - Port `9119/tcp` (Hermes Dashboard) — Inbound access restricted or behind reverse proxy with Basic Auth.
-- Port `8642/tcp` (App API server) — Inbound HTTP access for the Android app chat tabs (bearer key auth).
-- Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests.
+- Port `8642/tcp` (App API server) — Inbound HTTP access for the Android app chat tabs (bearer key auth). The phone must reach the VPS: public IP + firewall rule, or private networking (Tailscale/WireGuard); put a TLS reverse proxy in front if exposed publicly. App Settings values: base URL `http://<host>:8642`, key = `API_SERVER_KEY`, paths `/p/story`, `/p/resumes`, `/p/default`.
+- Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as `8642`).
 - Port `8888/tcp` (SearXNG) — Internal compose network (optional host publish).
 - Outbound HTTPS (`443/tcp`) for OpenCode Zen (`opencode.ai`), MongoDB Atlas, and GitHub.
 

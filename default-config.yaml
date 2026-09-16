@@ -1,3 +1,6 @@
+# NOTE: unreferenced reference template — nothing in scripts/, compose, or the
+# entrypoint reads this file (per-profile config comes from
+# profiles/master*/config.yaml.template). Kept for local Hermes CLI parity.
 model:
   default: ${HERMES_MODEL}
   provider: custom
@@ -100,31 +103,9 @@ onboarding:
 
 group_sessions_per_user: false
 
-discord:
-  require_mention: true
-  auto_thread: false
-  reactions: true
-  voice_fx:
-    enabled: true
-    ambient_enabled: true
-    ack_enabled: true
-    ack_phrases:
-      - "Let me look into that."
-      - "One moment."
-      - "Checking on that now."
-      - "Give me a sec."
-      - "On it."
-  channel_skill_bindings:
-    - id: "${DISCORD_HOME_CHANNEL}"
-      skills:
-        - i-have-adhd
-        - docker-management
-
 platform_toolsets:
   cli:
     - file
     - terminal
-  discord:
-    - hermes-god
 
 _config_version: 33
