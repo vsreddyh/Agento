@@ -35,6 +35,7 @@ enum class LlmProvider(val id: String) {
     ;
 
     companion object {
+        /** Unknown ids (incl. retired `deepinfra` persisted in Settings) fall back to Zen. */
         fun fromId(id: String): LlmProvider =
             entries.firstOrNull { it.id == id } ?: OPENCODE
     }
