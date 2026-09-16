@@ -94,6 +94,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   git-ignored (runtime `memories/` are not tracked).
 - CI: `android-apk.yml` (builds debug+release APKs, `main` branch only) and `mcps-test.yml` (pytest over `mcps/`, `main` only; DB tests skip without `MONGODB_URI`). No linter. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
   `docker compose -f docker/docker-compose.yml config`, then check gateway logs on the live machine.
+- Git identity: every commit as `vsreddyh <shouryanreddyh@gmail.com>` (`git -c user.name=vsreddyh -c user.email=shouryanreddyh@gmail.com commit ...`). Never use another name/email.
 
 ## Gotchas
 
