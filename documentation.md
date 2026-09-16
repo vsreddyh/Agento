@@ -163,6 +163,11 @@ Agento Android App ──POST /api/health/sync──► health-api (:8001)
 1. **Agento** (`android/agento/`): Built with Jetpack Compose & Health Connect SDK 1.1.0. Backfills 30 days on initial setup and runs hourly background syncs.
 2. **`health-api` Endpoint** (`:8001`): Authenticates requests via `Authorization: Bearer <HEALTH_SYNC_TOKEN>` and upserts metrics into MongoDB.
 
+> **Upgrading from Health Gateway?** Agento ships under a new `applicationId` (`com.vishnu.agento`), so it installs **alongside** the old Health Gateway app — settings do not transfer automatically.
+> 1. Install Agento → re-enter the sync server URL/token and chat-backend Settings manually.
+> 2. Re-grant Health Connect permissions in Agento (grants are per-package).
+> 3. Confirm hourly syncs arrive, then **uninstall Health Gateway** to stop its worker and avoid double-syncs.
+
 ---
 
 ## Android App API (Chat)

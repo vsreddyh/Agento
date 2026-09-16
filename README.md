@@ -133,6 +133,11 @@ Setting `HERMES_ENV=dev` in the root `.env` switches the stack to an isolated de
 1. **Agento Android App** (`android/agento/`): Reads steps, calories, sleep stages, and workout sessions from Health Connect. Syncs periodically or manually to `POST /api/health/sync` with Bearer auth (`HEALTH_SYNC_TOKEN`).
 2. **`health-api` Service**: Validates auth, upserts one doc per date in `hc_days` (steps, active kcal, sleep hours, workouts — same shape the health-check MCP writes).
 
+> **Upgrading from Health Gateway?** Agento is a new app listing (`com.vishnu.agento`), so it installs **alongside** the old Health Gateway build — no auto-update, no settings carry-over (Android sandboxes are per-package).
+> 1. Install Agento, then re-enter the sync server URL + token and chat Settings by hand (or copy values over from the old app's Settings screen).
+> 2. Re-grant Health Connect permissions inside Agento (grants are per-package).
+> 3. Verify one hourly sync lands in `hc_days`, then **uninstall Health Gateway** so its hourly worker stops and the two apps don't double-sync.
+
 ---
 
 ## Remote MongoDB & Data Retention
