@@ -7,9 +7,9 @@ on:
       - "mcps/**"
       - ".github/workflows/mcps-test.yml"
   pull_request:
-    branches: [main]
     paths:
       - "mcps/**"
+      - ".github/workflows/mcps-test.yml"
   workflow_dispatch:
 
 jobs:
