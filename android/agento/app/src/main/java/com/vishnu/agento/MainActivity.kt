@@ -1,4 +1,4 @@
-package com.vishnu.healthgateway
+package com.vishnu.agento
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -265,7 +265,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
     /** Preloads persisted chat + sync prefs into compose state for editing. */
     LaunchedEffect(Unit) {
-        val prefs = context.getSharedPreferences("health_gateway", android.content.Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         // serverUrl/authToken fields below are the health-sync ones (unchanged keys).
         apiBase = prefs.getString("api_base_url", "") ?: ""
         apiKey = prefs.getString("api_key", "") ?: ""
@@ -417,7 +417,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     Text("Grant Health Connect permissions")
                 }
                 OutlinedButton(onClick = {
-                    viewModel.onSyncError("Open Health Connect → Permissions → Health Gateway → allow each")
+                    viewModel.onSyncError("Open Health Connect → Permissions → Agento → allow each")
                     HealthConnectManager(context).openHealthConnectSettings(context)
                 }) {
                     Text("Open Health Connect app")

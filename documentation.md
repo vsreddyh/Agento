@@ -34,7 +34,7 @@ The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a 
            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
          └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-contributor-free)
          └── API server :8642 ──────────┤   (Android app chat backend)
-Health Gateway (Android) ──► health-api (:8001) ──► MongoDB
+Agento (Android) ──► health-api (:8001) ──► MongoDB
 Hermes Dashboard ────────► 0.0.0.0:9119 via gateway (s6, basic auth, unified)
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
@@ -154,20 +154,25 @@ Run manual dry-runs via:
 ## Health Connect Pipeline
 
 ```
-Android Health Gateway App ──POST /api/health/sync──► health-api (:8001)
+Agento Android App ──POST /api/health/sync──► health-api (:8001)
                                                         │
                                                         ▼
                                        MongoDB: hc_days (one doc per date)
 ```
 
-1. **Android Gateway** (`android/health-gateway/`): Built with Jetpack Compose & Health Connect SDK 1.1.0. Backfills 30 days on initial setup and runs hourly background syncs.
+1. **Agento** (`android/agento/`): Built with Jetpack Compose & Health Connect SDK 1.1.0. Backfills 30 days on initial setup and runs hourly background syncs.
 2. **`health-api` Endpoint** (`:8001`): Authenticates requests via `Authorization: Bearer <HEALTH_SYNC_TOKEN>` and upserts metrics into MongoDB.
+
+> **Upgrading from Health Gateway?** Agento ships under a new `applicationId` (`com.vishnu.agento`), so it installs **alongside** the old Health Gateway app — settings do not transfer automatically.
+> 1. Install Agento → re-enter the sync server URL/token and chat-backend Settings manually.
+> 2. Re-grant Health Connect permissions in Agento (grants are per-package).
+> 3. Confirm hourly syncs arrive, then **uninstall Health Gateway** to stop its worker and avoid double-syncs.
 
 ---
 
 ## Android App API (Chat)
 
-The custom Android app (`android/health-gateway/`, 3 chat tabs + Settings) talks to Hermes's built-in OpenAI-compatible API server on the gateway (`:8642`, one port, shared `API_SERVER_KEY` bearer key):
+The custom Android app (`android/agento/`, 3 chat tabs + Settings) talks to Hermes's built-in OpenAI-compatible API server on the gateway (`:8642`, one port, shared `API_SERVER_KEY` bearer key):
 
 ```bash
 curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <API_SERVER_KEY>"
@@ -211,7 +216,7 @@ All settings are configured in the single root `.env` file:
 | `MONGODB_URI` | **Yes** | Remote MongoDB connection string (used in prod) |
 | `MONGODB_DB` | No | Target MongoDB database name (default: `hermes`) |
 | `HERMES_ENV` | No | Set to `dev` for local ephemeral MongoDB container |
-| `HEALTH_SYNC_TOKEN` | For Health | Bearer token for Android Health Gateway authentication |
+| `HEALTH_SYNC_TOKEN` | For Health | Bearer token for Agento Android health-sync authentication |
 | `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` | For Dashboard | Dashboard login username (default: `admin`) |
 | `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` | For Dashboard | Dashboard login password |
 | `HERMES_DASHBOARD_BASIC_AUTH_SECRET` | For Dashboard | Stable token signing key (32+ bytes recommended) |

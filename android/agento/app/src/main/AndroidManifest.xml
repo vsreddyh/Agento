@@ -26,11 +26,11 @@
     </queries>
 
     <application
-        android:name=".HealthGatewayApp"
+        android:name=".AgentoApp"
         android:allowBackup="true"
-        android:label="Health Gateway"
+        android:label="Agento"
         android:icon="@mipmap/ic_launcher"
-        android:theme="@style/Theme.HealthGateway"
+        android:theme="@style/Theme.Agento"
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config">
 

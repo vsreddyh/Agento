@@ -1,4 +1,4 @@
-package com.vishnu.healthgateway
+package com.vishnu.agento
 
 import android.app.Application
 import android.content.Context
@@ -8,7 +8,7 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 /** Application entry point; ensures hourly sync survives process death. */
-class HealthGatewayApp : Application() {
+class AgentoApp : Application() {
 
     /** Re-enqueues hourly sync on every cold start; safe to call repeatedly. */
     override fun onCreate() {
@@ -17,7 +17,14 @@ class HealthGatewayApp : Application() {
     }
 
     companion object {
-        const val SYNC_WORK_NAME = "health_gateway_sync"
+        // NOTE: Agento ships as a NEW app (applicationId com.vishnu.agento),
+        // so it installs alongside the old Health Gateway build instead of
+        // updating it. No state is shared across packages (separate
+        // /data/data/<package> and WorkManager DBs), so there is deliberately
+        // NO automatic migration of the old app's settings — re-enter config
+        // in Agento Settings (see README/docs side-by-side install notice).
+        const val PREFS_NAME = "agento"
+        const val SYNC_WORK_NAME = "agento_sync"
         const val SYNC_INTERVAL_HOURS = 1L
 
         /** Unique periodic work with UPDATE policy so reinstalls never duplicate. */

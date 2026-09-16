@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "health-gateway"
+rootProject.name = "agento"
 include(":app")

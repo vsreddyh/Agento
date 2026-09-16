@@ -1,4 +1,4 @@
-package com.vishnu.healthgateway
+package com.vishnu.agento
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -11,7 +11,7 @@ class BootReceiver : BroadcastReceiver() {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                HealthGatewayApp.scheduleSync(context)
+                AgentoApp.scheduleSync(context)
             }
         }
     }

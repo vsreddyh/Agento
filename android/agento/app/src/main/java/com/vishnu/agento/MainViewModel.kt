@@ -1,4 +1,4 @@
-package com.vishnu.healthgateway
+package com.vishnu.agento
 
 import android.app.Application
 import androidx.compose.runtime.State
@@ -34,7 +34,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Reloads prefs plus Health Connect availability; permission check runs async. */
     fun refresh() {
-        val prefs = getApplication<Application>().getSharedPreferences("health_gateway", android.content.Context.MODE_PRIVATE)
+        val prefs = getApplication<Application>().getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         _state.value = _state.value.copy(
             serverUrl = prefs.getString("server_url", "") ?: "",
             authToken = prefs.getString("auth_token", "") ?: "",
@@ -85,7 +85,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(syncing = true, lastResult = "syncing…")
         val app = getApplication<Application>()
         SyncRunner.runAsync(app) { result ->
-            val prefs = app.getSharedPreferences("health_gateway", android.content.Context.MODE_PRIVATE)
+            val prefs = app.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
             if (result.success) {
                 prefs.edit().putString("last_sync_at", java.time.Instant.now().toString()).apply()
             }
