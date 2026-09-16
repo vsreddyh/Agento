@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.vishnu.healthgateway"
+    namespace = "com.vishnu.agento"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.vishnu.healthgateway"
+        applicationId = "com.vishnu.agento"
         minSdk = 28
         targetSdk = 35
         versionCode = 1

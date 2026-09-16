@@ -1,4 +1,4 @@
-package com.vishnu.healthgateway
+package com.vishnu.agento
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
@@ -49,7 +49,7 @@ enum class LlmProvider(val id: String) {
  */
 class ChatApi(context: Context) {
 
-    private val prefs = context.getSharedPreferences("health_gateway", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.SECONDS) // streaming: no read timeout

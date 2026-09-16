@@ -1,4 +1,4 @@
-package com.vishnu.healthgateway
+package com.vishnu.agento
 
 import kotlinx.serialization.Serializable
 

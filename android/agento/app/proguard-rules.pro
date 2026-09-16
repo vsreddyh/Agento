@@ -1,21 +1,21 @@
 # kotlinx.serialization — keep serializer classes for @Serializable models
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.AnnotationsKt
--keepclassmembers class com.vishnu.healthgateway.** {
+-keepclassmembers class com.vishnu.agento.** {
     *** Companion;
 }
--keepclasseswithmembers class com.vishnu.healthgateway.** {
+-keepclasseswithmembers class com.vishnu.agento.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
--keep,includedescriptorclasses class com.vishnu.healthgateway.**$$serializer { *; }
--keepclassmembers class com.vishnu.healthgateway.** {
+-keep,includedescriptorclasses class com.vishnu.agento.**$$serializer { *; }
+-keepclassmembers class com.vishnu.agento.** {
     *** INSTANCE;
     kotlinx.serialization.KSerializer serializer(...);
 }
--keep,includedescriptorclasses class com.vishnu.healthgateway.HealthSyncPayload,
-    com.vishnu.healthgateway.SleepEntry,
-    com.vishnu.healthgateway.WorkoutEntry,
-    com.vishnu.healthgateway.SyncResult { *; }
+-keep,includedescriptorclasses class com.vishnu.agento.HealthSyncPayload,
+    com.vishnu.agento.SleepEntry,
+    com.vishnu.agento.WorkoutEntry,
+    com.vishnu.agento.SyncResult { *; }
 
 # Health Connect client uses reflection on records
 -keep class androidx.health.connect.client.records.** { *; }

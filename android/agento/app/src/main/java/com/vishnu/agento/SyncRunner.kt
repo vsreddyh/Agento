@@ -1,4 +1,4 @@
-package com.vishnu.healthgateway
+package com.vishnu.agento
 
 import android.content.Context
 import android.util.Log
@@ -25,7 +25,7 @@ object SyncRunner {
             } else {
                 val client = SyncClient(context)
                 val prefs = context.getSharedPreferences(
-                    "health_gateway", Context.MODE_PRIVATE,
+                    AgentoApp.PREFS_NAME, Context.MODE_PRIVATE,
                 )
                 val firstSyncDone = prefs.getBoolean("first_sync_done", false)
                 if (!firstSyncDone) {

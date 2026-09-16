@@ -81,13 +81,13 @@ profiles/*/profiles/*/skills/i-have-adhd/
 # per-run session/log state above is ignored.
 
 # ────────────────────────────────────────────────────────
-# Android app (health-gateway)
+# Android app (agento)
 # ────────────────────────────────────────────────────────
-android/health-gateway/.gradle/
-android/health-gateway/build/
-android/health-gateway/app/build/
-android/health-gateway/local.properties
-android/health-gateway/.kotlin/
+android/agento/.gradle/
+android/agento/build/
+android/agento/app/build/
+android/agento/local.properties
+android/agento/.kotlin/
 *.apk
 
 # ────────────────────────────────────────────────────────

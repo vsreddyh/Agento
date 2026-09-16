@@ -1,6 +1,6 @@
 """Health Connect sync endpoint for the health-check bot.
 
-Accepts POSTs from the Health Gateway Android app and persists to the
+Accepts POSTs from the Agento Android app and persists to the
 shared remote MongoDB collection the health-check bot also reads
 (hc_days — one doc per date, same shape the MCP writes).
 

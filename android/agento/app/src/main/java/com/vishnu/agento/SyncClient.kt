@@ -1,4 +1,4 @@
-package com.vishnu.healthgateway
+package com.vishnu.agento
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit
 /** Thin HTTP client for the health-api sync endpoint; server URL/token come from SharedPreferences. */
 class SyncClient(context: Context) {
 
-    private val prefs = context.getSharedPreferences("health_gateway", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
     private val http = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)

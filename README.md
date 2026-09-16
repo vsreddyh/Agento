@@ -16,7 +16,7 @@ Fully Dockerized agent stack running **three Hermes profiles** (story, resumes, 
             3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
           └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-contributor-free)
           └── API server :8642 ──────────┤   (Android app chat backend)
-Health Gateway (Android) ──► health-api (:8001) ──► MongoDB
+Agento (Android) ──► health-api (:8001) ──► MongoDB
 Hermes Dashboard ────────► 0.0.0.0:9119 via gateway (s6, basic auth, unified)
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
@@ -65,7 +65,7 @@ Retention ───────────────► one-shot container (c
 - **OpenCode Go API Key**: `OPENCODE_GO_API_KEY` (provider `opencode-go`, selectable per request in app Settings).
 - **Android App API Key**: `API_SERVER_KEY` (shared bearer key for all 3 chat tabs; generate with `openssl rand -hex 32`). Each tab uses its profile path (`/p/story|resumes|default`) + per-request provider (`opencode`|`opencode-go`) and model from app Settings. Provider keys live only in the VPS `.env`, never in git.
 - **MongoDB Cluster**: MongoDB connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`). (In dev mode, `HERMES_ENV=dev` provides an ephemeral local single-node replica set instead.)
-- **Health Sync Secret**: `HEALTH_SYNC_TOKEN` Bearer token matching the Android Health Gateway app. (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only.)
+- **Health Sync Secret**: `HEALTH_SYNC_TOKEN` Bearer token matching the Agento Android app. (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only.)
 - **Dashboard Web Credentials**: `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET` (32+ chars).
 
 ### Network & Firewall Ports
@@ -130,7 +130,7 @@ Setting `HERMES_ENV=dev` in the root `.env` switches the stack to an isolated de
 
 ## Health Connect Ingestion
 
-1. **Android App** (`android/health-gateway/`): Reads steps, calories, sleep stages, and workout sessions from Health Connect. Syncs periodically or manually to `POST /api/health/sync` with Bearer auth (`HEALTH_SYNC_TOKEN`).
+1. **Agento Android App** (`android/agento/`): Reads steps, calories, sleep stages, and workout sessions from Health Connect. Syncs periodically or manually to `POST /api/health/sync` with Bearer auth (`HEALTH_SYNC_TOKEN`).
 2. **`health-api` Service**: Validates auth, upserts one doc per date in `hc_days` (steps, active kcal, sleep hours, workouts — same shape the health-check MCP writes).
 
 ---
