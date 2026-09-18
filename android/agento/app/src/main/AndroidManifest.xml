@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- In-app updater (Settings → App updates): fires the platform package
+         installer for a downloaded release APK (issue #6). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Health Connect data permissions. REQUIRED for API 34+ (Android 14+):
          without these, the OS silently revokes access and the app never
@@ -68,6 +71,17 @@
             android:name=".SyncService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Serves downloaded release APKs to the platform installer. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- WorkManager runs setForeground() via its internal
              SystemForegroundService. Android 14+ (targetSdk 34+) requires an
