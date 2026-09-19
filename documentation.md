@@ -190,7 +190,7 @@ curl http://<host>:8642/p/story/v1/chat/completions \
 ```
 
 - One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
-- Provider + model are picked per tab in app Settings from live dropdowns backed by `GET /p/<profile>/api/model/options` (blank = gateway default). The gateway's provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
+- Provider + model are picked per tab in app Settings from live dropdowns backed by `GET /p/<profile>/api/model/options` (explicit selection required — no gateway default). The gateway's provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
 - Config lives in `profiles/master/config.yaml.template` (`gateway.api_server`, key rendered from `HEALTH_SYNC_TOKEN`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
 
 ---

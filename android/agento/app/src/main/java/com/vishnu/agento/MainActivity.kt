@@ -97,8 +97,8 @@ private fun ChatTab(app: android.app.Application, tab: String, title: String) {
     val vm: ChatViewModel = viewModel(key = "chat_$tab", factory = factory)
     val state by vm.state
     LaunchedEffect(Unit) { vm.refreshConfig() }
-    val subtitle = (if (state.model.isEmpty()) "gateway default" else state.model) +
-        " · " + state.provider.ifEmpty { "gateway default" }
+    val subtitle = state.model.ifEmpty { "(not set)" } +
+        " · " + state.provider.ifEmpty { "(not set)" }
     ChatScreen(title = title, model = subtitle, state = state,
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop, onNew = vm::newConversation)
 }
@@ -186,10 +186,10 @@ private fun ChatScreen(
     }
 }
 
-/** Per-tab provider/model/path picker; blanks fall back to gateway defaults.
+/** Per-tab provider/model picker; every tab needs an explicit provider + model.
  * Provider/model options come from the live gateway catalog
  * (`GET /api/model/options`); the saved value is always kept selectable so a
- * legacy or unknown slug is never lost, and blank always means default. */
+ * legacy or unknown slug is never lost. Blank means not configured. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TabLlmConfig(
@@ -239,18 +239,17 @@ private fun TabLlmConfig(
     Text("$tabTitle tab", style = MaterialTheme.typography.titleSmall)
     val shownProvider = providerOptions.firstOrNull { it.slug == provider }
         ?.let { providerDisplay(it.slug, it.label) }
-        ?: provider.ifEmpty { "(gateway default)" }
+        ?: provider.ifEmpty { "(select provider)" }
     OptionMenu(
         label = "Provider",
         shown = shownProvider,
-        options = listOf("" to "(gateway default)") +
-            providerOptions.map { o -> o.slug to providerDisplay(o.slug, o.label) },
+        options = providerOptions.map { o -> o.slug to providerDisplay(o.slug, o.label) },
         onPick = onProvider,
     )
     OptionMenu(
-        label = "Model (blank = gateway default)",
-        shown = model.ifEmpty { "(gateway default)" },
-        options = modelOptions.map { m -> m to m.ifEmpty { "(gateway default)" } },
+        label = "Model",
+        shown = model.ifEmpty { "(select model)" },
+        options = modelOptions.map { m -> m to m },
         onPick = onModel,
     )
 }
@@ -277,18 +276,15 @@ private fun providerOptionsFor(catalog: List<ProviderOption>, saved: String): Li
     }
 }
 
-/** Model options for a tab: blank (gateway default) plus ONLY the selected
- * provider's catalog models. No provider selected → default alone; nothing
- * is ever borrowed from other providers or stale saves. */
+/** Model options for a tab: ONLY the selected provider's catalog models.
+ * No provider selected → no options; nothing is ever borrowed from other
+ * providers or stale saves. */
 private fun modelOptionsFor(
     options: List<ProviderOption>,
     provider: String,
-): List<String> = buildList {
-    add("")
-    if (provider.isNotBlank()) {
-        addAll(options.firstOrNull { it.slug == provider }?.models.orEmpty())
-    }
-}
+): List<String> =
+    if (provider.isBlank()) emptyList()
+    else options.firstOrNull { it.slug == provider }?.models.orEmpty()
 
 /** Settings hub for chat backend plus Health Connect sync; prefs load once on entry. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -298,7 +294,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Per-tab LLM config: provider slug + model (blank = gateway default).
+    // Per-tab LLM config: explicit provider slug + model per tab.
     var providerStory by remember { mutableStateOf("") }
     var modelStory by remember { mutableStateOf("") }
     var providerResumes by remember { mutableStateOf("") }
