@@ -16,7 +16,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /** GitHub repo whose Releases carry the signed APKs (published by android-apk.yml). */
-private const val UPDATE_REPO = "vsreddyh/Discord-bots"
+private const val UPDATE_REPO = "vsreddyh/Agento"
 
 /** Matches "agento-v0.1.0-42", "v0.1.0" and "0.1.0" (build suffix optional). */
 private val TAG_PATTERN = Regex("""^(?:agento-)?v?(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$""")

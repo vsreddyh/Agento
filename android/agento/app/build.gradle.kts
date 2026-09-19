@@ -18,7 +18,7 @@ android {
         // (Android refuses to install an "update" with a lower/equal code).
         // VERSION_NAME defaults to the tracked release line.
         versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1)
-        versionName = (System.getenv("VERSION_NAME").takeUnless { it.isNullOrEmpty() } ?: "0.1.0")
+        versionName = (System.getenv("VERSION_NAME").takeUnless { it.isNullOrEmpty() } ?: "0.2.0")
     }
 
     signingConfigs {
@@ -46,6 +46,18 @@ android {
                 "proguard-rules.pro",
             )
             signingConfig = signingConfigs.getByName("release")
+        }
+    }
+
+    // APKs carry the project name + version so downloads and Release assets
+    // are self-describing: agento-0.2.0-42-release.apk. The in-app updater
+    // (UpdateManager) keys off the "release" substring, which this preserves.
+    applicationVariants.all {
+        val typeName = buildType.name
+        val vName = defaultConfig.versionName
+        val vCode = defaultConfig.versionCode
+        outputs.all {
+            outputFileName = "agento-$vName-$vCode-$typeName.apk"
         }
     }
 
