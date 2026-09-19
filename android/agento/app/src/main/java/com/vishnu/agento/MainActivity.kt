@@ -27,6 +27,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Builds per-tab chat ViewModels so story/resumes/god keep isolated history. */
 class ChatViewModelFactory(
@@ -262,9 +264,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var modelGod by remember { mutableStateOf("") }
     var pathGod by remember { mutableStateOf("") }
     var modelsResult by remember { mutableStateOf("") }
+    // Bumped after a settings import so the fields below reload from prefs.
+    var settingsRefresh by remember { mutableStateOf(0) }
 
     /** Preloads persisted chat + sync prefs into compose state for editing. */
-    LaunchedEffect(Unit) {
+    LaunchedEffect(settingsRefresh) {
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         // serverUrl/authToken fields below are the health-sync ones (unchanged keys).
         apiBase = prefs.getString("api_base_url", "") ?: ""
@@ -484,6 +488,107 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 },
             )
         }
+
+        Text("Settings backup", style = MaterialTheme.typography.titleMedium)
+        SettingsBackupSection(onImported = {
+            viewModel.refresh()
+            settingsRefresh++
+        })
+    }
+}
+
+/** Issue #16: manual settings export/import. SAF pickers need no storage
+ * permission; the file the user keeps survives any reinstall gap that outlives
+ * cloud backup. [onImported] reloads the on-screen fields from prefs. */
+@Composable
+private fun SettingsBackupSection(onImported: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var status by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    /** Writes the export JSON to the user-picked location. */
+    val exportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        status = "Exporting…"
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(SettingsBackup.export(context).toString(2).toByteArray())
+                    } ?: throw IllegalStateException("Could not open $uri for writing")
+                }
+            }
+            status = result.fold(
+                onSuccess = { "Exported — keep the file somewhere safe." },
+                onFailure = { e -> "FAILED — ${e.message}" },
+            )
+            busy = false
+        }
+    }
+
+    /** Reads a previously exported file and applies its known keys. */
+    val importPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        status = "Importing…"
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val text = context.contentResolver.openInputStream(uri)?.use { input ->
+                        input.bufferedReader().readText()
+                    } ?: throw IllegalStateException("Could not open $uri for reading")
+                    SettingsBackup.importFrom(context, org.json.JSONObject(text)).getOrThrow()
+                }
+            }
+            result.fold(
+                onSuccess = { n ->
+                    status = "Imported $n setting(s) — fields reloaded."
+                    onImported()
+                },
+                onFailure = { e -> status = "FAILED — ${e.message}" },
+            )
+            busy = false
+        }
+    }
+
+    Text(
+        "Upgrades and reinstalls keep settings automatically; export a copy " +
+            "to survive a reinstall after a long gap.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = { exportPicker.launch("agento-settings.json") },
+            enabled = !busy,
+            modifier = Modifier.weight(1f),
+        ) {
+            Text("Export settings")
+        }
+        OutlinedButton(
+            onClick = { importPicker.launch(arrayOf("application/json")) },
+            enabled = !busy,
+            modifier = Modifier.weight(1f),
+        ) {
+            Text("Import settings")
+        }
+    }
+    if (status.isNotEmpty()) {
+        Text(
+            status,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (status.startsWith("FAILED")) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
     }
 }
 

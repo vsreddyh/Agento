@@ -31,6 +31,8 @@
     <application
         android:name=".AgentoApp"
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="Agento"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Agento"

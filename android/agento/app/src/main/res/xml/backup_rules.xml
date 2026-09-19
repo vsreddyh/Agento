@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Issue #16: Auto Backup rules (API ≤30). Explicit rules REPLACE the
+     defaults, so re-include everything worth restoring: the "agento"
+     SharedPreferences (all chat + sync config) and databases (WorkManager).
+     Cache (incl. downloaded update APKs) is never backed up. -->
+<full-backup-content>
+    <include domain="sharedpref" path="." />
+    <include domain="database" path="." />
+</full-backup-content>

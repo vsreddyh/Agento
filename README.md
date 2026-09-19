@@ -144,6 +144,12 @@ Setting `HERMES_ENV=dev` in the root `.env` switches the stack to an isolated de
 - In the app, **Settings → App updates → Check for updates** diffs `/releases/latest` against the installed build, then **Download & install** streams the release APK and fires the platform installer (grants "install unknown apps" when prompted). Same-package updates keep all Settings + Health Connect grants.
 - Stable signing is required for updates to install: add these repo secrets once (Settings → Secrets → Actions) with your upload keystore — `ANDROID_KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Without them CI signs with a throwaway debug key and those APKs will not install over each other. `versionCode` is the GitHub run number so each main build sorts higher than the last.
 
+## Settings Backup (Survives Upgrade, Reinstall, Reinstall-After-Gap)
+
+- All config lives in one `SharedPreferences("agento")` file, which Android preserves across same-package upgrades automatically.
+- `backup_rules.xml` / `data_extraction_rules.xml` include sharedprefs + databases in Google Auto Backup, so settings also restore on reinstall from the same account.
+- For a reinstall after a long gap (cloud backup expired), use **Settings → Settings backup → Export settings** to keep a JSON copy, then **Import settings** to re-apply it. Import only applies known keys and reloads the on-screen fields.
+
 ---
 
 ## Remote MongoDB & Data Retention
