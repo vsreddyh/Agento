@@ -23,8 +23,6 @@ data class UiState(
 /** Owns health-sync config and status; chat state lives in per-tab ChatViewModels. */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val client = SyncClient(app)
-
     private val _state = mutableStateOf(UiState())
     val state: State<UiState> = _state
 
@@ -64,12 +62,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Updates draft server URL in memory; persisted only on saveConfig. */
+    /** Updates draft server URL in memory; persisted by Save chat config. */
     fun onServerUrl(v: String) {
         _state.value = _state.value.copy(serverUrl = v)
     }
 
-    /** Updates draft password in memory; persisted only on saveConfig. */
+    /** Updates draft password in memory; persisted by Save chat config. */
     fun onPassword(v: String) {
         _state.value = _state.value.copy(password = v)
     }
@@ -77,12 +75,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Surfaces permission/setup failures without starting a sync. */
     fun onSyncError(message: String) {
         _state.value = _state.value.copy(lastResult = "FAILED — $message")
-    }
-
-    /** Persists server URL/password, then re-queries availability. */
-    fun saveConfig() {
-        client.setConfig(_state.value.serverUrl, _state.value.password)
-        refresh()
     }
 
     /** Guards re-entry, stamps last sync time only on success, then refreshes. */
