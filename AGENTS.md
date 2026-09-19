@@ -96,6 +96,15 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   `docker compose -f docker/docker-compose.yml config`, then check gateway logs on the live machine.
 - Git identity: every commit as `vsreddyh <shouryanreddyh@gmail.com>` (`git -c user.name=vsreddyh -c user.email=shouryanreddyh@gmail.com commit ...`). Never use another name/email.
 
+## Agento app versioning (semver — MAJOR.MINOR.PATCH)
+
+- Source of truth is `versionName` in `android/agento/app/build.gradle.kts`. `versionCode` is ALWAYS the CI run number — never set it by hand.
+- CI tags releases `agento-v<versionName>-<run_number>`; the in-app updater compares semver first, then build number. A higher `versionName` with a lower build still counts as newer.
+- **PATCH** (`x.y.Z+1`): bug fixes with no behavior contract change — crash fix, sync bug, UI text/layout, proguard/R8 tweak. No new prefs keys, no new permissions, no workflow/tag changes.
+- **MINOR** (`x.Y+1.0`): backward-compatible features — new screen/section, new OPTIONAL prefs keys (old backups must still import: `SettingsBackup` skips unknown keys, so additive is safe), new permissions that degrade gracefully, new non-breaking server endpoints.
+- **MAJOR** (`X+1.0.0`): anything breaking — prefs key renames/removals, `PREFS_NAME` change, `applicationId` change, signing-key change, `SettingsBackup` export `version` bump, tag/scheme change, or a server API contract the old app can't speak (even if the breaking change lives outside `android/`).
+- Rules: any PR that changes the built APK (touches `android/**` or `.github/workflows/android-apk.yml` behavior) bumps `versionName` EXACTLY ONCE at the highest applicable level and resets lower segments to 0. Pure docs/notes-text tweaks don't bump. Non-app PRs (`profiles/`, `docker/`, `scripts/`, `mcps/`, `tools/`, docs) NEVER touch `versionName` — unless they force an app MAJOR per above.
+
 ## Gotchas
 
 - `init` copies `.env.example` → `.env` (single root file) when none exists, then
