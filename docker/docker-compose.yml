@@ -112,6 +112,29 @@ services:
       PYTHONPATH: /mcps
 
   # ──────────────────────────────────────────────────────
+  # Proxy — single URL for the Agento app (chat + sync on one port).
+  # Routes /p/* → gateway :8642 and /api/* + /health → health-api :8000
+  # (see docker/proxy/nginx.conf). App Server URL: http://<host>:${APP_PORT:-8080}.
+  # Direct ports (:8642, :8001) stay published for backward compatibility.
+  # ──────────────────────────────────────────────────────
+  proxy:
+    image: nginx:1.27-alpine
+    ports:
+      - "${APP_PORT:-8080}:80"
+    volumes:
+      - ../docker/proxy/nginx.conf:/etc/nginx/conf.d/agento.conf:ro
+    depends_on:
+      - gateway
+      - health-api
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────────
   # Retention — one-shot data lifecycle job, run via cron
   # (scripts/retention.sh run → docker compose run --rm retention).
   # Needs MONGODB_URI / MONGODB_DB only.

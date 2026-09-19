@@ -15,8 +15,9 @@ Fully Dockerized agent stack running **three Hermes profiles** (story, resumes, 
   default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
             3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
           └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-contributor-free)
-          └── API server :8642 ──────────┤   (Android app chat backend)
-Agento (Android) ──► health-api (:8001) ──► MongoDB
+          └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
+Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
+                                     └──► /api/* ─► health-api ──► MongoDB
 Hermes Dashboard ────────► 0.0.0.0:9119 via gateway (s6, basic auth, unified)
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
@@ -25,6 +26,7 @@ Retention ───────────────► one-shot container (c
 |---|---|---|---|
 | `gateway` | `gateway` container (`s6` supervised) | `9119` (dashboard), `8642` (app API) | Multiplexed gateway for all 3 profiles + embedded Web UI dashboard + OpenAI-compatible API server |
 | `health-api` | `health-api` container | `8001` | Ingests Health Connect sync data from Android and persists to MongoDB |
+| `proxy` | `proxy` container (nginx) | `8080` | Single app URL: routes `/p/*` → gateway chat, `/api/*` → health sync |
 | `searxng` | `searxng` container | `8888` | Private search backend for web search tool |
 | `retention` | `retention` container (one-shot) | — | Data retention policy runner (`tools/retention.py`) |
 | `mongodb` | `mongodb` container (dev-only) | `27017` (internal) | Ephemeral local MongoDB (single-node replica set `rs0`) active only when `HERMES_ENV=dev` |
@@ -70,7 +72,7 @@ Retention ───────────────► one-shot container (c
 
 ### Network & Firewall Ports
 - Port `9119/tcp` (Hermes Dashboard) — Inbound access restricted or behind reverse proxy with Basic Auth.
-- Port `8642/tcp` (App API server) — Inbound HTTP access for the Android app chat tabs (bearer key auth). The phone must reach the VPS: public IP + firewall rule, or private networking (Tailscale/WireGuard); put a TLS reverse proxy in front if exposed publicly. App Settings values: base URL `http://<host>:8642`, key = `API_SERVER_KEY`, paths `/p/story`, `/p/resumes`, `/p/default`.
+- Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, bearer key/token auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, chat key = `API_SERVER_KEY`, sync token = `HEALTH_SYNC_TOKEN`, paths `/p/story`, `/p/resumes`, `/p/default`. Direct ports `8642` (chat) / `8001` (sync) stay published for backward compatibility.
 - Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as `8642`).
 - Port `8888/tcp` (SearXNG) — Internal compose network (optional host publish).
 - Outbound HTTPS (`443/tcp`) for OpenCode Zen (`opencode.ai`), MongoDB Atlas, and GitHub.
@@ -140,9 +142,9 @@ Setting `HERMES_ENV=dev` in the root `.env` switches the stack to an isolated de
 
 ## Agento Releases & In-App Updates
 
-- Every push to `main` that touches `android/**` builds debug + release APKs and publishes them as a GitHub Release (`agento-v<versionName>-<run_number>`), so installable APKs live under the repo's **Releases** page. PR builds only upload CI artifacts, never cut a release.
+- Every push to `main` that touches `android/**` builds the release APK and publishes it as a GitHub Release (`agento-v<version>`, version-only, e.g. `agento-v0.3.0` — same-version rebuilds upsert the existing Release), so installable APKs live under the repo's **Releases** page. PR/branch builds only upload the debug APK as a CI artifact, never cut a release.
 - In the app, **Settings → App updates → Check for updates** diffs `/releases/latest` against the installed build, then **Download & install** streams the release APK and fires the platform installer (grants "install unknown apps" when prompted). Same-package updates keep all Settings + Health Connect grants.
-- Stable signing is required for updates to install: add these repo secrets once (Settings → Secrets → Actions) with your upload keystore — `ANDROID_KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Without them CI signs with a throwaway debug key and those APKs will not install over each other. `versionCode` is the GitHub run number so each main build sorts higher than the last.
+- Stable signing is required for updates to install: add these repo secrets once (Settings → Secrets → Actions) with your upload keystore — `ANDROID_KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Without them CI signs with a throwaway debug key and those APKs will not install over each other. `versionCode` derives from semver (`MAJOR*1000000+MINOR*1000+PATCH`) so every version bump sorts higher than the last — no build numbers anywhere.
 
 ## Settings Backup (Survives Upgrade, Reinstall, Reinstall-After-Gap)
 

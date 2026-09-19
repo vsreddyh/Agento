@@ -298,6 +298,7 @@ install_retention_cron
     info "Initialization complete."
     echo "  Next: edit .env with real keys (OPENCODE_ZEN_API_KEY, API_SERVER_KEY, Mongo URI), then ./scripts/hermes.sh start"
     echo "  Access: dashboard at http://<host>:9119  (set HERMES_DASHBOARD_BASIC_AUTH_* in .env)"
+    echo "  Access: Agento app (single URL: chat + sync) at http://<host>:8080  (APP_PORT in .env)"
     echo "  Access: app API at http://<host>:8642  (bearer API_SERVER_KEY)"
     echo "  Access: health-api at http://<host>:8001"
 }

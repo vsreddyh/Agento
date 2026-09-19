@@ -5,6 +5,21 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// Single source of truth: android/agento/VERSION. No fallbacks — a missing
+// or malformed file fails the build instead of shipping a stale version.
+// versionCode derives from semver so it rises with every bump (segments < 1000).
+val appVersion: String = rootProject.file("VERSION").readText().trim().also {
+    require(it.matches(Regex("""\d+\.\d+\.\d+"""))) {
+        "VERSION must hold MAJOR.MINOR.PATCH, got '$it'"
+    }
+}
+val appVersionCode: Int = appVersion.split(".").map(String::toInt).let { (maj, min, pat) ->
+    require(maj < 1000 && min < 1000 && pat < 1000) {
+        "VERSION segments must each be < 1000, got '$appVersion'"
+    }
+    maj * 1000000 + min * 1000 + pat
+}
+
 android {
     namespace = "com.vishnu.agento"
     compileSdk = 36
@@ -13,18 +28,13 @@ android {
         applicationId = "com.vishnu.agento"
         minSdk = 28
         targetSdk = 35
-        // CI sets VERSION_CODE to the GitHub run number so every main-branch
-        // build sorts higher than the last — required for the in-app updater
-        // (Android refuses to install an "update" with a lower/equal code).
-        // versionName has ONE source of truth: android/agento/VERSION — read
-        // with no fallback, so a release can never ship a stale hardcoded
-        // version if the file goes missing (fail fast instead).
-        versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1)
-        versionName = rootProject.file("VERSION").readText().trim().also {
-            require(it.matches(Regex("""\d+\.\d+\.\d+"""))) {
-                "VERSION must hold MAJOR.MINOR.PATCH, got '$it'"
-            }
-        }
+        // Version comes ONLY from android/agento/VERSION (no fallback — a
+        // missing or malformed file fails fast). versionCode is derived from
+        // semver (MAJOR*1000000 + MINOR*1000 + PATCH) so it always increases
+        // with every bump and no CI build number is needed anywhere.
+        // Constraint: each segment must be < 1000.
+        versionCode = appVersionCode
+        versionName = appVersion
     }
 
     signingConfigs {
@@ -56,18 +66,16 @@ android {
     }
 
     // APKs carry the project name + version so downloads and Release assets
-    // are self-describing: agento-0.2.0-42-release.apk. The in-app updater
+    // are self-describing: agento-0.3.0-release.apk. The in-app updater
     // (UpdateManager) keys off the "release" substring, which this preserves.
     applicationVariants.all {
         val typeName = buildType.name
-        val vName = defaultConfig.versionName
-        val vCode = defaultConfig.versionCode
         outputs.all {
             // Cast: AGP 8's public output interface exposes no outputFileName
             // setter to Kotlin DSL (Groovy-only recipe); the impl has it.
             // Pinned to AGP 8.9.1 in the root build.gradle.kts.
             (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
-                "agento-$vName-$vCode-$typeName.apk"
+                "agento-$appVersion-$typeName.apk"
         }
     }
 

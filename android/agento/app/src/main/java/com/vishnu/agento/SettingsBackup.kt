@@ -22,6 +22,9 @@ object SettingsBackup {
 
     /** Every string pref the app reads; import ignores anything else. */
     val STRING_KEYS: List<String> = buildList {
+        // Unified server URL (proxy: chat + sync); legacy per-feature keys
+        // below stay listed so old backups still restore and fall back.
+        add("server_base_url")
         add("api_base_url")
         add("api_key")
         for (t in TABS) {

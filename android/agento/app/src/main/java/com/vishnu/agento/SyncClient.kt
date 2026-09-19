@@ -27,8 +27,14 @@ class SyncClient(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    /** Returns the configured health-api base URL (empty until set in Settings). */
-    fun serverUrl(): String = prefs.getString("server_url", "") ?: ""
+    /** Single server URL (proxy: chat + sync on one port). Prefers the
+     * unified `server_base_url`; falls back to the legacy `server_url` so
+     * pre-unification configs and backups keep working (incl. background sync). */
+    fun serverUrl(): String {
+        val unified = (prefs.getString("server_base_url", "") ?: "").trim().trimEnd('/')
+        if (unified.isNotEmpty()) return unified
+        return (prefs.getString("server_url", "") ?: "").trim().trimEnd('/')
+    }
     /** Returns the stored Bearer token sent as `Authorization: Bearer <token>`. */
     fun authToken(): String = prefs.getString("auth_token", "") ?: ""
     /** Marks the one-time historical backfill done so later runs send today-only payloads. */
@@ -36,10 +42,10 @@ class SyncClient(context: Context) {
         prefs.edit().putBoolean("first_sync_done", true).apply()
     }
 
-    /** Persists server URL/token; normalizes trailing slash/whitespace so post() can build the endpoint directly. */
+    /** Persists the unified server URL + token; normalizes trailing slash/whitespace so post() can build the endpoint directly. */
     fun setConfig(serverUrl: String, authToken: String) {
         prefs.edit()
-            .putString("server_url", serverUrl.trimEnd('/'))
+            .putString("server_base_url", serverUrl.trimEnd('/'))
             .putString("auth_token", authToken.trim())
             .apply()
     }
