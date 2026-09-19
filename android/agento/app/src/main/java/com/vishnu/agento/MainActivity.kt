@@ -238,15 +238,13 @@ private fun TabLlmConfig(
 
     Text("$tabTitle tab", style = MaterialTheme.typography.titleSmall)
     val shownProvider = providerOptions.firstOrNull { it.slug == provider }
-        ?.let { if (it.label == it.slug) it.slug else "${it.label} (${it.slug})" }
+        ?.let { providerDisplay(it.slug, it.label) }
         ?: provider.ifEmpty { "(gateway default)" }
     OptionMenu(
         label = "Provider",
         shown = shownProvider,
         options = listOf("" to "(gateway default)") +
-            providerOptions.map { o ->
-                o.slug to (if (o.label == o.slug) o.slug else "${o.label} (${o.slug})")
-            },
+            providerOptions.map { o -> o.slug to providerDisplay(o.slug, o.label) },
         onPick = onProvider,
     )
     OptionMenu(
