@@ -63,7 +63,11 @@ android {
         val vName = defaultConfig.versionName
         val vCode = defaultConfig.versionCode
         outputs.all {
-            outputFileName = "agento-$vName-$vCode-$typeName.apk"
+            // Cast: AGP 8's public output interface exposes no outputFileName
+            // setter to Kotlin DSL (Groovy-only recipe); the impl has it.
+            // Pinned to AGP 8.9.1 in the root build.gradle.kts.
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+                "agento-$vName-$vCode-$typeName.apk"
         }
     }
 
