@@ -81,13 +81,12 @@ class ChatApi(context: Context) {
         return (prefs.getString("auth_token", "") ?: "").trim()
     }
 
-    /** Profile path prefix for a tab, e.g. `/p/story`. Blank = gateway root. */
-    fun pathFor(tab: String): String {
-        val saved = (prefs.getString("path_$tab", "") ?: "").trim().trimEnd('/')
-        if (saved.isNotEmpty()) return saved
+    /** Profile path prefix for a tab, e.g. `/p/story`. The path field was
+     * removed from Settings (defaults are always correct); this stays
+     * centralized so every sender resolves identically. */
+    fun pathFor(tab: String): String =
         // Tab keys don't all match profile dir names (god tab -> default profile).
-        return "/p/" + defaultProfileFor(tab)
-    }
+        "/p/" + defaultProfileFor(tab)
 
     /** Provider slug for a tab; blank = omit (gateway default applies). */
     fun providerFor(tab: String): String =
@@ -103,16 +102,15 @@ class ChatApi(context: Context) {
         tab: String,
         provider: String,
         model: String,
-        path: String,
     ) {
         prefs.edit()
             .putString("server_base_url", baseUrl.trim().trimEnd('/'))
             .putString("app_password", password.trim())
             .remove("api_base_url") // legacy: unified key is written above
             .remove("server_url") // legacy: unified key is written above
+            .remove("path_$tab") // legacy: path field removed, defaults apply
             .putString("provider_$tab", provider.trim())
             .putString("model_$tab", model.trim())
-            .putString("path_$tab", path.trim().trimEnd('/'))
             .apply()
     }
 
