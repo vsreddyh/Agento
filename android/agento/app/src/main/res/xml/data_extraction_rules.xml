@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Issue #16: backup rules (API 31+). Cloud backup restores the "agento"
+     SharedPreferences + databases on reinstall from the same Google account,
+     so all chat + sync config survives an uninstall/reinstall cycle. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="sharedpref" path="." />
+        <include domain="database" path="." />
+    </cloud-backup>
+</data-extraction-rules>
