@@ -13,17 +13,27 @@ android {
         applicationId = "com.vishnu.agento"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI sets VERSION_CODE to the GitHub run number so every main-branch
+        // build sorts higher than the last — required for the in-app updater
+        // (Android refuses to install an "update" with a lower/equal code).
+        // VERSION_NAME defaults to the tracked release line.
+        versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1)
+        versionName = (System.getenv("VERSION_NAME").takeUnless { it.isNullOrEmpty() } ?: "0.1.0")
     }
 
     signingConfigs {
         create("release") {
-            val debugKeystore = System.getProperty("user.home") + "/.android/debug.keystore"
-            storeFile = file(debugKeystore)
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            // Stable signature is REQUIRED for auto-updates: Android rejects
+            // an update signed with a different key. Provide a committed
+            // keystore via repo secrets (see android-apk.yml); the generated
+            // debug keystore fallback is for PR/ephemeral builds only.
+            val keystorePath = System.getenv("KEYSTORE_PATH")
+                ?: (System.getProperty("user.home") + "/.android/debug.keystore")
+            storeFile = file(keystorePath)
+            // takeUnless: unset GitHub secrets arrive as empty strings, not null.
+            storePassword = System.getenv("KEYSTORE_PASSWORD").takeUnless { it.isNullOrEmpty() } ?: "android"
+            keyAlias = System.getenv("KEY_ALIAS").takeUnless { it.isNullOrEmpty() } ?: "androiddebugkey"
+            keyPassword = System.getenv("KEY_PASSWORD").takeUnless { it.isNullOrEmpty() } ?: "android"
         }
     }
 

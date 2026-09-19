@@ -138,6 +138,12 @@ Setting `HERMES_ENV=dev` in the root `.env` switches the stack to an isolated de
 > 2. Re-grant Health Connect permissions inside Agento (grants are per-package).
 > 3. Verify one hourly sync lands in `hc_days`, then **uninstall Health Gateway** so its hourly worker stops and the two apps don't double-sync.
 
+## Agento Releases & In-App Updates
+
+- Every push to `main` that touches `android/**` builds debug + release APKs and publishes them as a GitHub Release (`agento-v<versionName>-<run_number>`), so installable APKs live under the repo's **Releases** page. PR builds only upload CI artifacts, never cut a release.
+- In the app, **Settings → App updates → Check for updates** diffs `/releases/latest` against the installed build, then **Download & install** streams the release APK and fires the platform installer (grants "install unknown apps" when prompted). Same-package updates keep all Settings + Health Connect grants.
+- Stable signing is required for updates to install: add these repo secrets once (Settings → Secrets → Actions) with your upload keystore — `ANDROID_KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Without them CI signs with a throwaway debug key and those APKs will not install over each other. `versionCode` is the GitHub run number so each main build sorts higher than the last.
+
 ---
 
 ## Remote MongoDB & Data Retention

@@ -387,6 +387,9 @@ fun SettingsScreen(viewModel: MainViewModel) {
             Text(modelsResult, style = MaterialTheme.typography.bodySmall)
         }
 
+        Text("App updates", style = MaterialTheme.typography.titleMedium)
+        AppUpdateSection()
+
         Text("Health sync", style = MaterialTheme.typography.titleMedium)
         HealthStatusCard(state)
 
@@ -481,6 +484,121 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 },
             )
         }
+    }
+}
+
+/** Issue #6: check-then-install updater against GitHub Releases on main. */
+@Composable
+private fun AppUpdateSection() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val (installedName, installedCode) = remember {
+        UpdateManager.currentVersion(context)
+    }
+    var status by remember { mutableStateOf("") }
+    var latest by remember { mutableStateOf<AppRelease?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(-1f) }
+
+    /** Returns from the "install unknown apps" toggle — install if allowed now. */
+    val unknownSourcesReturn = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (UpdateManager.canInstallUnknownApps(context)) {
+            status = "Allowed — tap Download & install again."
+        } else {
+            status = "Still not allowed — enable \"Allow from this source\", then retry."
+        }
+    }
+
+    Text(
+        "Installed: $installedName ($installedCode)",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    /** Checks /releases/latest and diffs the tag against the installed build. */
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = {
+                busy = true
+                progress = -1f
+                status = "Checking…"
+                scope.launch {
+                    UpdateManager.fetchLatest()
+                        .onSuccess { rel ->
+                            latest = if (UpdateManager.isNewer(rel.tag, installedName, installedCode)) {
+                                status = "Update available: ${rel.name}"
+                                rel
+                            } else {
+                                status = "Up to date (${rel.tag})."
+                                null
+                            }
+                        }
+                        .onFailure { e ->
+                            latest = null
+                            status = "FAILED — ${e.message}"
+                        }
+                    busy = false
+                }
+            },
+            enabled = !busy,
+            modifier = Modifier.weight(1f),
+        ) {
+            Text("Check for updates")
+        }
+        Button(
+            onClick = {
+                val rel = latest ?: return@Button
+                if (!UpdateManager.canInstallUnknownApps(context)) {
+                    runCatching { unknownSourcesReturn.launch(UpdateManager.unknownSourcesIntent(context)) }
+                    status = "Allow \"install unknown apps\", then tap again."
+                    return@Button
+                }
+                busy = true
+                progress = 0f
+                status = "Downloading ${rel.tag}…"
+                scope.launch {
+                    val dest = java.io.File(
+                        java.io.File(context.cacheDir, "updates"),
+                        "agento-${rel.tag}.apk",
+                    )
+                    UpdateManager.download(rel.apkUrl, dest) { p -> progress = p }
+                        .onSuccess { apk ->
+                            status = "Downloaded — opening installer…"
+                            runCatching {
+                                context.startActivity(UpdateManager.installIntent(context, apk))
+                            }.onFailure { e ->
+                                status = "FAILED — could not open installer: ${e.message}"
+                            }
+                        }
+                        .onFailure { e ->
+                            status = "FAILED — ${e.message}"
+                        }
+                    busy = false
+                }
+            },
+            enabled = !busy && latest != null,
+            modifier = Modifier.weight(1f),
+        ) {
+            Text("Download & install")
+        }
+    }
+    if (busy && progress >= 0f) {
+        LinearProgressIndicator(
+            progress = { progress.coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    if (status.isNotEmpty()) {
+        Text(
+            status,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (status.startsWith("FAILED")) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
     }
 }
 

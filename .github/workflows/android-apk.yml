@@ -12,6 +12,10 @@ on:
       - ".github/workflows/android-apk.yml"
   workflow_dispatch:
 
+# Publishing GitHub Releases (APKs under the repo's Releases page) needs this.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -28,18 +32,48 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      # Tag scheme: agento-v<versionName>-<run_number> (e.g. agento-v0.1.0-42).
+      # versionName comes from app/build.gradle.kts; versionCode is the run
+      # number so every main build is installable as an update over the last.
+      - name: Resolve version
+        id: version
+        run: |
+          # versionName line looks like: versionName = (... ?: "0.1.0")
+          NAME=$(sed -n 's/.*versionName.*?: "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
+          # VERSION_NAME env override wins when set (release trains).
+          if [ -n "$VERSION_NAME" ]; then NAME="$VERSION_NAME"; fi
+          echo "version_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "tag=agento-v${NAME}-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      # Stable signature is REQUIRED for the in-app updater: Android refuses
+      # an update signed with a different key. Add these repo secrets once
+      # (Settings → Secrets → Actions) with your upload keystore:
+      #   ANDROID_KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
+      # Without them CI falls back to a throwaway debug keystore, and those
+      # APKs will NOT install over each other as updates.
       # No setup-android step: ubuntu runners ship a preinstalled SDK, and
       # android-actions/setup-android@v3 installs the long-removed `tools`
       # package (sdkmanager exit 1). Gradle finds the SDK via ANDROID_HOME.
-      - name: Generate debug keystore (release flavor signs with it)
+      - name: Set up signing keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
-            keytool -genkeypair -v \
-              -keystore ~/.android/debug.keystore \
-              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10950 \
-              -storepass android -keypass android \
-              -dname "CN=Android Debug,O=Android,C=US"
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > ~/.android/upload.keystore
+            echo "KEYSTORE_PATH=$HOME/.android/upload.keystore" >> "$GITHUB_ENV"
+            echo "Using upload keystore from secrets."
+          else
+            if [ ! -f ~/.android/debug.keystore ]; then
+              keytool -genkeypair -v \
+                -keystore ~/.android/debug.keystore \
+                -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10950 \
+                -storepass android -keypass android \
+                -dname "CN=Android Debug,O=Android,C=US"
+            fi
+            echo "KEYSTORE_PATH=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret — signed with throwaway debug key; APKs won't install as updates."
           fi
 
       - name: Grant execute permission for gradlew
@@ -47,6 +81,12 @@ jobs:
 
       - name: Build debug + release APKs
         run: ./gradlew assembleDebug assembleRelease --stacktrace
+        env:
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -59,3 +99,21 @@ jobs:
         with:
           name: app-release
           path: android/agento/app/build/outputs/apk/release/*.apk
+
+      # Publishes the APKs under the repo's Releases page (issue #6).
+      # PR builds stop at artifacts above; only main-branch pushes cut a
+      # release so /releases/latest always points at the newest main build.
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Agento ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})
+          generate_release_notes: true
+          body: |
+            Agento `${{ steps.version.outputs.version_name }}` (build `${{ steps.version.outputs.version_code }}`).
+
+            Install `app-release.apk` on your phone — or tap **Check for updates** in Agento → Settings to pull it in-app.
+          files: |
+            android/agento/app/build/outputs/apk/release/*.apk
+            android/agento/app/build/outputs/apk/debug/*.apk
