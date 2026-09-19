@@ -286,16 +286,17 @@ private fun providerOptionsFor(catalog: List<ProviderOption>, saved: String): Li
     }
 }
 
-/** Model options for a tab: blank (gateway default) + the selected
- * provider's catalog models + the saved value. */
+/** Model options for a tab: blank (gateway default) plus ONLY the selected
+ * provider's catalog models. No provider selected → default alone; nothing
+ * is ever borrowed from other providers or stale saves. */
 private fun modelOptionsFor(
     options: List<ProviderOption>,
     provider: String,
-    saved: String,
 ): List<String> = buildList {
     add("")
-    addAll(options.firstOrNull { it.slug == provider }?.models.orEmpty())
-    if (saved.isNotBlank() && saved !in this) add(saved)
+    if (provider.isNotBlank()) {
+        addAll(options.firstOrNull { it.slug == provider }?.models.orEmpty())
+    }
 }
 
 /** Settings hub for chat backend plus Health Connect sync; prefs load once on entry. */
@@ -401,7 +402,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
             providerOptions = storyProviders,
             model = modelStory,
             onModel = { modelStory = it },
-            modelOptions = modelOptionsFor(storyProviders, providerStory, modelStory),
+            modelOptions = modelOptionsFor(storyProviders, providerStory),
             path = pathStory,
             onPath = { pathStory = it },
         )
@@ -412,7 +413,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
             providerOptions = resumesProviders,
             model = modelResumes,
             onModel = { modelResumes = it },
-            modelOptions = modelOptionsFor(resumesProviders, providerResumes, modelResumes),
+            modelOptions = modelOptionsFor(resumesProviders, providerResumes),
             path = pathResumes,
             onPath = { pathResumes = it },
         )
@@ -423,7 +424,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
             providerOptions = godProviders,
             model = modelGod,
             onModel = { modelGod = it },
-            modelOptions = modelOptionsFor(godProviders, providerGod, modelGod),
+            modelOptions = modelOptionsFor(godProviders, providerGod),
             path = pathGod,
             onPath = { pathGod = it },
         )
