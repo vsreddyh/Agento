@@ -26,26 +26,26 @@ sealed interface ChatEvent {
     data class Error(val message: String) : ChatEvent
 }
 
-/** Supported LLM providers. Names must match the gateway config
- * (`provider: opencode`) and the Hermes `opencode-go` provider
- * (key: OPENCODE_GO_API_KEY in root .env). */
+/** Known provider slugs: offline fallback for the dynamic picker (the live
+ * list comes from GET /api/model/options on the gateway). */
 enum class LlmProvider(val id: String) {
     OPENCODE("opencode"),
     OPENCODE_GO("opencode-go"),
-    ;
-
-    companion object {
-        /** Unknown ids (incl. retired `deepinfra` persisted in Settings) fall back to Zen. */
-        fun fromId(id: String): LlmProvider =
-            entries.firstOrNull { it.id == id } ?: OPENCODE
-    }
 }
+
+/** One row of the gateway picker inventory (`GET /api/model/options`). */
+data class ProviderOption(
+    val slug: String,
+    val label: String,
+    val models: List<String>,
+)
 
 /**
  * Minimal OpenAI-compatible chat client for the Hermes API server
- * (gateway :8642). One base URL + shared bearer key; each tab talks
- * to its profile path (`/p/<profile>/...`) and sends its own
- * provider + model per request. Streaming via SSE.
+ * (gateway :8642, via the single-URL proxy). One server URL + single app
+ * password; each tab talks to its profile path (`/p/<profile>/...`) and
+ * sends its own provider + model per request. Streaming via SSE.
+ * Provider/model dropdown options come from `GET /api/model/options`.
  */
 class ChatApi(context: Context) {
 
@@ -68,7 +68,15 @@ class ChatApi(context: Context) {
         if (unified.isNotEmpty()) return unified
         return (prefs.getString("api_base_url", "") ?: "").trim().trimEnd('/')
     }
-    fun apiKey(): String = prefs.getString("api_key", "") ?: ""
+    /** Single app password (the sync token doubles as chat credential).
+     * Prefers `app_password`; falls back to the legacy `auth_token` so users
+     * who configured a sync token keep working without re-entry. The retired
+     * `api_key` is deliberately NOT read (the server no longer accepts it). */
+    fun password(): String {
+        val v = (prefs.getString("app_password", "") ?: "").trim()
+        if (v.isNotEmpty()) return v
+        return (prefs.getString("auth_token", "") ?: "").trim()
+    }
 
     /** Profile path prefix for a tab, e.g. `/p/story`. Blank = gateway root. */
     fun pathFor(tab: String): String {
@@ -78,8 +86,9 @@ class ChatApi(context: Context) {
         return "/p/" + defaultProfileFor(tab)
     }
 
-    fun providerFor(tab: String): LlmProvider =
-        LlmProvider.fromId((prefs.getString("provider_$tab", "") ?: "").trim())
+    /** Provider slug for a tab; blank = omit (gateway default applies). */
+    fun providerFor(tab: String): String =
+        (prefs.getString("provider_$tab", "") ?: "").trim()
 
     /** Model for a tab; blank = omit (gateway default applies). */
     fun modelFor(tab: String): String =
@@ -87,64 +96,92 @@ class ChatApi(context: Context) {
 
     fun setChatConfig(
         baseUrl: String,
-        apiKey: String,
+        password: String,
         tab: String,
-        provider: LlmProvider,
+        provider: String,
         model: String,
         path: String,
     ) {
         prefs.edit()
             .putString("server_base_url", baseUrl.trimEnd('/'))
-            .putString("api_key", apiKey.trim())
-            .putString("provider_$tab", provider.id)
+            .putString("app_password", password.trim())
+            .putString("provider_$tab", provider.trim())
             .putString("model_$tab", model.trim())
             .putString("path_$tab", path.trim().trimEnd('/'))
             .apply()
     }
 
-    suspend fun listModels(path: String = ""): Result<List<String>> = withContext(Dispatchers.IO) {
-        val base = baseUrl()
-        if (base.isEmpty()) return@withContext Result.failure(IllegalStateException("API base URL not configured"))
-        val request = Request.Builder()
-            .url("$base$path/v1/models")
-            .header("Authorization", "Bearer ${apiKey()}")
-            .get()
-            .build()
-        try {
-            http.newCall(request).execute().use { response ->
-                val body = response.body?.string() ?: ""
-                if (!response.isSuccessful) return@withContext Result.failure(RuntimeException("HTTP ${response.code}: ${body.take(200)}"))
-                val ids = mutableListOf<String>()
-                val data = JSONObject(body).optJSONArray("data")
-                if (data != null) {
-                    for (i in 0 until data.length()) {
-                        data.optJSONObject(i)?.optString("id")?.takeIf { it.isNotEmpty() }?.let { ids.add(it) }
-                    }
-                }
-                Result.success(ids)
+    /** Fetches the Hermes provider-aware picker inventory that backs the
+     * dynamic provider/model dropdowns (`slug` + display `name` + string
+     * `models` per row). Lenient by design: rows without a slug are skipped,
+     * non-string model entries are skipped, and an empty result is a failure
+     * so the UI falls back to the offline provider list. */
+    suspend fun fetchCatalog(path: String, refresh: Boolean = false): Result<List<ProviderOption>> =
+        withContext(Dispatchers.IO) {
+            val base = baseUrl()
+            if (base.isEmpty()) {
+                return@withContext Result.failure(IllegalStateException("Server URL not configured"))
             }
-        } catch (e: Exception) {
-            Result.failure(e)
+            val url = "$base$path/api/model/options" + if (refresh) "?refresh=1" else ""
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer ${password()}")
+                .get()
+                .build()
+            try {
+                http.newCall(request).execute().use { response ->
+                    val body = response.body?.string() ?: ""
+                    if (!response.isSuccessful) {
+                        return@withContext Result.failure(
+                            RuntimeException("HTTP ${response.code}: ${body.take(200)}")
+                        )
+                    }
+                    val providers = mutableListOf<ProviderOption>()
+                    val arr = JSONObject(body).optJSONArray("providers")
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val o = arr.optJSONObject(i) ?: continue
+                            val slug = o.optString("slug", "").trim()
+                            if (slug.isEmpty()) continue
+                            val label = o.optString("name", "").trim().ifEmpty { slug }
+                            val models = mutableListOf<String>()
+                            val marr = o.optJSONArray("models")
+                            if (marr != null) {
+                                for (j in 0 until marr.length()) {
+                                    val m = marr.opt(j)
+                                    if (m is String && m.isNotBlank()) models.add(m.trim())
+                                }
+                            }
+                            providers.add(ProviderOption(slug, label, models))
+                        }
+                    }
+                    if (providers.isEmpty()) {
+                        return@withContext Result.failure(RuntimeException("No providers in catalog"))
+                    }
+                    Result.success(providers)
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
         }
-    }
 
     /** Streams reply deltas for [messages]; emits Done(fullText) at `[DONE]`. */
     fun streamChat(
         path: String,
-        provider: LlmProvider,
+        provider: String,
         model: String,
         messages: List<ChatMessage>,
     ): Flow<ChatEvent> = callbackFlow {
         val base = baseUrl()
         if (base.isEmpty()) {
-            trySend(ChatEvent.Error("API base URL not configured — see Settings"))
+            trySend(ChatEvent.Error("Server URL not configured — see Settings"))
             close()
             return@callbackFlow
         }
         val payload = JSONObject()
-        // Explicit provider is always honored server-side; a blank model
-        // falls back to the gateway default.
-        payload.put("provider", provider.id)
+        // An explicit provider is always honored server-side; blanks fall
+        // back to the gateway default for both provider and model.
+        if (provider.isNotEmpty()) payload.put("provider", provider)
         if (model.isNotEmpty()) payload.put("model", model)
         val arr = JSONArray()
         for (m in messages) {
@@ -155,7 +192,7 @@ class ChatApi(context: Context) {
         val body = payload.toString().toRequestBody(JSON)
         val request = Request.Builder()
             .url("$base$path/v1/chat/completions")
-            .header("Authorization", "Bearer ${apiKey()}")
+            .header("Authorization", "Bearer ${password()}")
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .post(body)

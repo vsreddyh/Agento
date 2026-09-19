@@ -10,7 +10,7 @@ import kotlinx.coroutines.launch
 /** Health-sync UI state; persisted fields live in SharedPreferences, rest is queried. */
 data class UiState(
     val serverUrl: String = "",
-    val authToken: String = "",
+    val password: String = "",
     val healthAvailable: Boolean = false,
     val healthUpdateRequired: Boolean = false,
     val healthPackageInfo: String = "",
@@ -41,7 +41,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             (prefs.getString(key, "") ?: "").trim().trimEnd('/').takeIf { it.isNotEmpty() } ?: ""
         _state.value = _state.value.copy(
             serverUrl = url("server_base_url").ifEmpty { url("server_url").ifEmpty { url("api_base_url") } },
-            authToken = prefs.getString("auth_token", "") ?: "",
+            password = (prefs.getString("app_password", "") ?: "").trim().ifEmpty {
+            (prefs.getString("auth_token", "") ?: "").trim()
+        },
             lastSyncAt = prefs.getString("last_sync_at", "") ?: "",
         )
         val availability = HealthConnectManager.availabilityStatus(getApplication())
@@ -67,9 +69,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(serverUrl = v)
     }
 
-    /** Updates draft auth token in memory; persisted only on saveConfig. */
-    fun onAuthToken(v: String) {
-        _state.value = _state.value.copy(authToken = v)
+    /** Updates draft password in memory; persisted only on saveConfig. */
+    fun onPassword(v: String) {
+        _state.value = _state.value.copy(password = v)
     }
 
     /** Surfaces permission/setup failures without starting a sync. */
@@ -77,9 +79,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(lastResult = "FAILED — $message")
     }
 
-    /** Persists server URL/token, then re-queries availability. */
+    /** Persists server URL/password, then re-queries availability. */
     fun saveConfig() {
-        client.setConfig(_state.value.serverUrl, _state.value.authToken)
+        client.setConfig(_state.value.serverUrl, _state.value.password)
         refresh()
     }
 

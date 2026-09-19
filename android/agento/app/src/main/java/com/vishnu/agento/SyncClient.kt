@@ -35,18 +35,24 @@ class SyncClient(context: Context) {
         if (unified.isNotEmpty()) return unified
         return (prefs.getString("server_url", "") ?: "").trim().trimEnd('/')
     }
-    /** Returns the stored Bearer token sent as `Authorization: Bearer <token>`. */
-    fun authToken(): String = prefs.getString("auth_token", "") ?: ""
+    /** Single app password (the sync token doubles as chat credential).
+     * Prefers `app_password`; falls back to the legacy `auth_token` so users
+     * who configured a sync token keep working without re-entry. */
+    fun password(): String {
+        val v = (prefs.getString("app_password", "") ?: "").trim()
+        if (v.isNotEmpty()) return v
+        return (prefs.getString("auth_token", "") ?: "").trim()
+    }
     /** Marks the one-time historical backfill done so later runs send today-only payloads. */
     fun markFirstSyncDone() {
         prefs.edit().putBoolean("first_sync_done", true).apply()
     }
 
-    /** Persists the unified server URL + token; normalizes trailing slash/whitespace so post() can build the endpoint directly. */
-    fun setConfig(serverUrl: String, authToken: String) {
+    /** Persists the unified server URL + password; normalizes trailing slash/whitespace so post() can build the endpoint directly. */
+    fun setConfig(serverUrl: String, password: String) {
         prefs.edit()
             .putString("server_base_url", serverUrl.trimEnd('/'))
-            .putString("auth_token", authToken.trim())
+            .putString("app_password", password.trim())
             .apply()
     }
 
@@ -58,7 +64,7 @@ class SyncClient(context: Context) {
         val json = Json { ignoreUnknownKeys = true }.encodeToString(payload)
         val request = Request.Builder()
             .url("$url/api/health/sync")
-            .header("Authorization", "Bearer ${authToken()}")
+            .header("Authorization", "Bearer ${password()}")
             .header("Content-Type", "application/json")
             .post(json.toRequestBody(JSON))
             .build()
