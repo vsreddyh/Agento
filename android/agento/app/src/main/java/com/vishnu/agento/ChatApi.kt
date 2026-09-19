@@ -109,6 +109,7 @@ class ChatApi(context: Context) {
             .putString("server_base_url", baseUrl.trim().trimEnd('/'))
             .putString("app_password", password.trim())
             .remove("api_base_url") // legacy: unified key is written above
+            .remove("server_url") // legacy: unified key is written above
             .putString("provider_$tab", provider.trim())
             .putString("model_$tab", model.trim())
             .putString("path_$tab", path.trim().trimEnd('/'))
