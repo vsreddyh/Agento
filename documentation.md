@@ -178,6 +178,9 @@ The custom Android app (`android/agento/`, 3 chat tabs + Settings) uses ONE Serv
 
 ```bash
 curl http://<host>:8080/p/story/v1/models -H "Authorization: Bearer <HEALTH_SYNC_TOKEN>"
+```
+
+Direct (bypassing the proxy):
 
 ```bash
 curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <HEALTH_SYNC_TOKEN>"

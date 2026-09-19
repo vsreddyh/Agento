@@ -340,9 +340,20 @@ fun SettingsScreen(viewModel: MainViewModel) {
         modelGod = (prefs.getString("model_god", "") ?: "").trim()
         pathGod = (prefs.getString("path_god", "") ?: "").trim()
         val api = ChatApi(context)
-        catalog = runCatching {
+        val loaded = runCatching {
             api.fetchCatalog(catalogPath(api)).getOrThrow()
         }.getOrDefault(emptyList())
+        catalog = loaded
+        if (loaded.isNotEmpty()) {
+            fun clean(prov: String, mod: String): String {
+                if (prov.isBlank() || mod.isBlank()) return mod
+                val row = loaded.firstOrNull { it.slug == prov } ?: return mod
+                return if (mod in row.models) mod else ""
+            }
+            modelStory = clean(providerStory, modelStory)
+            modelResumes = clean(providerResumes, modelResumes)
+            modelGod = clean(providerGod, modelGod)
+        }
     }
 
     /** Refreshes health state after any permission flow returns. */
@@ -398,7 +409,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
         TabLlmConfig(
             tabTitle = "Story",
             provider = providerStory,
-            onProvider = { providerStory = it },
+            onProvider = { if (it != providerStory) modelStory = ""; providerStory = it },
             providerOptions = storyProviders,
             model = modelStory,
             onModel = { modelStory = it },
@@ -409,7 +420,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
         TabLlmConfig(
             tabTitle = "Resumes",
             provider = providerResumes,
-            onProvider = { providerResumes = it },
+            onProvider = { if (it != providerResumes) modelResumes = ""; providerResumes = it },
             providerOptions = resumesProviders,
             model = modelResumes,
             onModel = { modelResumes = it },
@@ -420,7 +431,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
         TabLlmConfig(
             tabTitle = "God",
             provider = providerGod,
-            onProvider = { providerGod = it },
+            onProvider = { if (it != providerGod) modelGod = ""; providerGod = it },
             providerOptions = godProviders,
             model = modelGod,
             onModel = { modelGod = it },

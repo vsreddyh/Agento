@@ -60,13 +60,16 @@ class ChatApi(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    /** Single server URL (proxy: chat + sync on one port). Prefers the
-     * unified `server_base_url`; falls back to the legacy per-feature keys
-     * so pre-unification configs and backups keep working. */
+    /** Single server URL (proxy: chat + sync on one port). One chain
+     * everywhere (`server_base_url` → `server_url` → `api_base_url`) so chat,
+     * sync, and Settings can never disagree pre-save; legacy keys fall back
+     * for pre-unification configs and are removed on save. */
     fun baseUrl(): String {
-        val unified = (prefs.getString("server_base_url", "") ?: "").trim().trimEnd('/')
-        if (unified.isNotEmpty()) return unified
-        return (prefs.getString("api_base_url", "") ?: "").trim().trimEnd('/')
+        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
+            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
+            if (v.isNotEmpty()) return v
+        }
+        return ""
     }
     /** Single app password (the sync token doubles as chat credential).
      * Prefers `app_password`; falls back to the legacy `auth_token` so users
@@ -103,8 +106,9 @@ class ChatApi(context: Context) {
         path: String,
     ) {
         prefs.edit()
-            .putString("server_base_url", baseUrl.trimEnd('/'))
+            .putString("server_base_url", baseUrl.trim().trimEnd('/'))
             .putString("app_password", password.trim())
+            .remove("api_base_url") // legacy: unified key is written above
             .putString("provider_$tab", provider.trim())
             .putString("model_$tab", model.trim())
             .putString("path_$tab", path.trim().trimEnd('/'))
