@@ -12,17 +12,16 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 6. [Data Retention & Lifecycle](#data-retention--lifecycle)
 7. [Health Connect Pipeline](#health-connect-pipeline)
 8. [Android App API (Chat)](#android-app-api-chat)
-9. [Hermes Dashboard & Web UI](#hermes-dashboard--web-ui)
-10. [Development Mode Isolation](#development-mode-isolation)
-11. [Configuration & Environment Reference](#configuration--environment-reference)
-12. [Security & Isolation](#security--isolation)
-13. [Extending the Stack](#extending-the-stack)
+9. [Development Mode Isolation](#development-mode-isolation)
+10. [Configuration & Environment Reference](#configuration--environment-reference)
+11. [Security & Isolation](#security--isolation)
+12. [Extending the Stack](#extending-the-stack)
 
 ---
 
 ## System Architecture
 
-The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a health sync API, an embedded web dashboard, and a scheduled retention job — **fully in Docker**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
+The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a health sync API, and a scheduled retention job — **fully in Docker**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
 
 ```
                                Remote MongoDB (money, health, cookbook)
@@ -32,17 +31,15 @@ The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a 
  resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
  default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
-         └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-contributor-free)
          └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
-Hermes Dashboard ────────► 0.0.0.0:9119 via gateway (s6, basic auth, unified)
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Zen (`https://opencode.ai/zen/v1`, default model `muse-spark-1.2-contributor-free`).
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **gateway & dashboard**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles. `s6-overlay` supervises both the gateway and the dashboard process on `:9119` when `HERMES_DASHBOARD=1`.
+- **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles, supervised by `s6-overlay`.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
 - **app API**: Hermes built-in OpenAI-compatible server (`gateway.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `HEALTH_SYNC_TOKEN` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **searxng**: Self-hosted metasearch instance (`:8888`) providing local privacy-preserving search tool capabilities.
@@ -195,15 +192,6 @@ curl http://<host>:8642/p/story/v1/chat/completions \
 
 ---
 
-## Hermes Dashboard & Web UI
-
-- **Supervision**: Supervised via `s6-overlay` in the `gateway` container when `HERMES_DASHBOARD=1`.
-- **Binding**: Exposed on `0.0.0.0:9119`.
-- **Authentication**: Uses basic HTTP authentication configured via `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET` in `.env`.
-- **Unified Overview**: Displays runtime state, active sessions, and configuration for all three multiplexed bot profiles.
-
----
-
 ## Development Mode Isolation
 
 Setting `HERMES_ENV=dev` enables isolated development without impacting production databases:
@@ -224,9 +212,6 @@ All settings are configured in the single root `.env` file:
 | `MONGODB_DB` | No | Target MongoDB database name (default: `hermes`) |
 | `HERMES_ENV` | No | Set to `dev` for local ephemeral MongoDB container |
 | `HEALTH_SYNC_TOKEN` | For Health + App | Single password for Agento Android chat + health-sync authentication |
-| `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` | For Dashboard | Dashboard login username (default: `admin`) |
-| `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` | For Dashboard | Dashboard login password |
-| `HERMES_DASHBOARD_BASIC_AUTH_SECRET` | For Dashboard | Stable token signing key (32+ bytes recommended) |
 | `SEARXNG_SECRET_KEY` | No | Secret key for SearXNG instance |
 
 ---
@@ -236,7 +221,6 @@ All settings are configured in the single root `.env` file:
 - **Secrets Management**: Live API keys and database credentials reside exclusively in the git-ignored `.env` file.
 - **Container Isolation**: `gateway` container mounts only required directories (`profiles/master`, `workspace`, `/tools` read-only) with no host Docker socket access.
 - **Search Hardening**: The SearXNG container runs with all Linux capabilities dropped (`cap_drop: ALL`).
-- **Dashboard Protection**: Basic auth protection on port `9119` with secret session token hashing.
 
 ---
 

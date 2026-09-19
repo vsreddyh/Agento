@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Fully-Dockerized live stack orchestrator.
 #
-# Everything (searxng, health-api, gateway+dashboard (3 profiles), retention) — direct to https://opencode.ai/zen/v1, no proxy
+# Everything (searxng, health-api, gateway (3 profiles), retention) — direct to https://opencode.ai/zen/v1, no proxy
 # runs as compose services in docker/docker-compose.yml. init self-installs the
 # host tools it needs (curl, docker + compose, python3, cron),
 # builds the images, seeds the single root .env, copies skills,
@@ -43,7 +43,7 @@ Usage: $(basename "$0") <command>
 
 Commands:
   init       Build images, seed the root .env (all env vars) + skills, set up host tools (curl, docker, python, cron), install retention cron
-  start      Start the whole Docker stack (searxng, health-api, gateway+dashboard (4 bots))
+  start      Start the whole Docker stack (searxng, health-api, gateway (3 profiles))
   stop       Stop the Docker stack
   restart    Stop then start
   status     Show all service states
@@ -297,7 +297,6 @@ install_retention_cron
     echo
     info "Initialization complete."
     echo "  Next: edit .env with real keys (OPENCODE_ZEN_API_KEY, HEALTH_SYNC_TOKEN, Mongo URI), then ./scripts/hermes.sh start"
-    echo "  Access: dashboard at http://<host>:9119  (set HERMES_DASHBOARD_BASIC_AUTH_* in .env)"
     echo "  Access: Agento app (single URL: chat + sync) at http://<host>:8080  (APP_PORT in .env)"
     echo "  Access: app API at http://<host>:8642  (bearer HEALTH_SYNC_TOKEN)"
     echo "  Access: health-api at http://<host>:8001"
@@ -339,7 +338,7 @@ cmd_start() {
         done
     }
 
-    info "Starting Docker stack (searxng, health-api, gateway+dashboard (4 bots))..."
+    info "Starting Docker stack (searxng, health-api, gateway (3 profiles))..."
     # Use BuildKit cache for pip (test/Dockerfile + health-api/Dockerfile have
     # --mount=type=cache,target=/root/.cache/pip). Restarts should reuse cache
     # and not prune it — only `init` does a full --build.
@@ -391,7 +390,7 @@ cmd_status() {
     echo "Hermes Agent Status (docker stack)" && echo ""
     docker_compose -f "$COMPOSE" ps
     echo ""
-    echo "Logs: docker compose -f docker/docker-compose.yml logs -f <service>  (gateway includes dashboard when HERMES_DASHBOARD=1)"
+    echo "Logs: docker compose -f docker/docker-compose.yml logs -f <service>"
 }
 
 # ────────────────────────────────────────────────────────────

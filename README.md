@@ -1,6 +1,6 @@
 # Hermes Android stack
 
-Fully Dockerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Zen (`https://opencode.ai/zen/v1`). Includes private SearXNG search, **one multiplexed gateway container** with an embedded password-protected dashboard and a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully Dockerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Zen (`https://opencode.ai/zen/v1`). Includes private SearXNG search, **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
@@ -14,17 +14,15 @@ Fully Dockerized agent stack running **three Hermes profiles** (story, resumes, 
   resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
   default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
             3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
-          └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-contributor-free)
           └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
-Hermes Dashboard ────────► 0.0.0.0:9119 via gateway (s6, basic auth, unified)
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
 
 | Service | Container / Process | Published Port | Purpose |
 |---|---|---|---|
-| `gateway` | `gateway` container (`s6` supervised) | `9119` (dashboard), `8642` (app API) | Multiplexed gateway for all 3 profiles + embedded Web UI dashboard + OpenAI-compatible API server |
+| `gateway` | `gateway` container (`s6` supervised) | `8642` (app API) | Multiplexed gateway for all 3 profiles + OpenAI-compatible API server |
 | `health-api` | `health-api` container | `8001` | Ingests Health Connect sync data from Android and persists to MongoDB |
 | `proxy` | `proxy` container (nginx) | `8080` | Single app URL: routes `/p/*` → gateway chat, `/api/*` → health sync |
 | `searxng` | `searxng` container | `8888` | Private search backend for web search tool |
@@ -51,7 +49,7 @@ Retention ───────────────► one-shot container (c
 | Specification | Minimum Requirement | Recommended (Production) | Notes |
 |---|---|---|---|
 | **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Docker image build (LaTeX/tectonic, Hermes) and SearXNG engine queries benefit from multiple cores. |
-| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The multiplexed `gateway` (Python + 3 profiles + web dashboard) and `searxng` consume ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `docker build`. |
+| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The multiplexed `gateway` (Python + 3 profiles) and `searxng` consume ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `docker build`. |
 | **Disk Storage** | 15 GB SSD | 30+ GB SSD | Docker base images, pip caches, SearXNG indices, local repo clones, LaTeX build artifacts, and logs. |
 | **OS** | Linux (Ubuntu 22.04+, Debian 12+, Arch, Fedora) | Ubuntu 22.04/24.04 LTS or Debian 12 | Linux kernel 5.10+ with systemd and package manager (`apt`, `pacman`, or `dnf`). |
 
@@ -68,10 +66,8 @@ Retention ───────────────► one-shot container (c
 - **Android App Password**: `HEALTH_SYNC_TOKEN` (single bearer credential for chat + sync; generate with `openssl rand -hex 32`). The app takes one Server URL + Password; each tab picks provider/model from the live gateway catalog in Settings dropdowns. Provider keys live only in the VPS `.env`, never in git.
 - **MongoDB Cluster**: MongoDB connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`). (In dev mode, `HERMES_ENV=dev` provides an ephemeral local single-node replica set instead.)
 - **Health Sync Secret**: `HEALTH_SYNC_TOKEN` Bearer token matching the Agento Android app Password field (same single credential as chat). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY` — the sync token is now the only app password.)
-- **Dashboard Web Credentials**: `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET` (32+ chars).
 
 ### Network & Firewall Ports
-- Port `9119/tcp` (Hermes Dashboard) — Inbound access restricted or behind reverse proxy with Basic Auth.
 - Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `HEALTH_SYNC_TOKEN`, provider/model picked per tab from live dropdowns, paths `/p/story`, `/p/resumes`, `/p/default`. Direct ports `8642` (chat) / `8001` (sync) stay published for backward compatibility.
 - Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as `8642`).
 - Port `8888/tcp` (SearXNG) — Internal compose network (optional host publish).
@@ -100,8 +96,6 @@ docker compose -f docker/docker-compose.yml logs -f gateway
 # 5. Stop the stack
 ./scripts/hermes.sh stop
 ```
-
-Dashboard is accessible at `http://<host>:9119` using credentials configured via `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` and `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` in `.env`.
 
 ---
 

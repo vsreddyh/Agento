@@ -69,15 +69,10 @@ services:
   # Multiplexed gateway — ONE container serves story + resumes +
   # default (god) profiles with money/cookbook/health-check MCPs, plus
   # the built-in OpenAI-compatible API server (:8642) for the custom
-  # Android app and the dashboard (:9119, s6-supervised).
-  # HERMES_HOME (profiles/master) is the gateway home; story/resumes/
-  # default are named profiles under profiles/master/profiles/. The
-  # entrypoint renders each profile's config from these env vars.
-  #
-  # HERMES_DASHBOARD=1 runs dashboard alongside gateway in the SAME
-  # container, supervised by s6 (mirrors official
-  # nousresearch/hermes-agent where HERMES_DASHBOARD=1 enables the
-  # dashboard s6 service). Port 9119 is exposed on this single service.
+  # Android app. HERMES_HOME (profiles/master) is the gateway home;
+  # story/resumes/default are named profiles under
+  # profiles/master/profiles/. The entrypoint renders each profile's
+  # config from these env vars.
   #
   # ALL env comes from the single root .env (compose interpolation).
   # Deliberately NOT the whole root env (no host-oriented
@@ -85,11 +80,9 @@ services:
   # ──────────────────────────────────────────────────────
   gateway:
     <<: *bot-base
-    # s6-overlay needs to start as root to s6-setuidgid 1000:1000 for services;
-    # running the container as 1000:1000 breaks s6-applyuidgid (dashboard 9119 reset).
+    # s6-overlay starts as root to s6-setuidgid 1000:1000 for services.
     user: "0:0"
     ports:
-      - "${HERMES_DASHBOARD_PORT:-9119}:9119"
       - "${API_SERVER_PORT:-8642}:8642"
     volumes:
       - ../profiles/master:/hermes-home
@@ -101,12 +94,6 @@ services:
       - ../mcps/money:/mcps/miser-money:ro
     environment:
       <<: *bot-base-environment
-      HERMES_DASHBOARD: ${HERMES_DASHBOARD:-1}
-      HERMES_DASHBOARD_HOST: ${HERMES_DASHBOARD_HOST:-0.0.0.0}
-      HERMES_DASHBOARD_PORT: ${HERMES_DASHBOARD_PORT:-9119}
-      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-}
-      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}
-      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}
       MONEY_DEFAULT_ACCOUNT: ${MONEY_DEFAULT_ACCOUNT:-Cash}
       HEALTH_SYNC_TOKEN: ${HEALTH_SYNC_TOKEN:-}
       PYTHONPATH: /mcps

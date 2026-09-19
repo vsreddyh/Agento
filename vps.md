@@ -1,6 +1,6 @@
 # VPS sizing — 3-profile Hermes stack (Dockerized)
 
-Fully Dockerized stack: three Hermes profiles + dashboard + app API server in **one multiplexed gateway** (`HERMES_DASHBOARD=1` via `s6`) + searxng + health-api + retention.
+Fully Dockerized stack: three Hermes profiles + app API server in **one multiplexed gateway** (`s6`-supervised) + searxng + health-api + retention.
 MongoDB stays **remote** (Atlas) — no Mongo container or storage counted below.
 
 **Key fact: no LLM inference happens on this box.** OpenCode Zen runs the models, the
@@ -24,15 +24,15 @@ number of Hermes agents running at the same time (max 3, one single-user session
 ## RAM — the real numbers
 
 Measured live via `docker stats` on a running stack, all bots idle (gateway-based, all bots in one
-process at measure time). The whole stack (bots + health-api + dashboard via `s6` + remote Mongo)
-sits at **~1.1 GiB**. The multiplexed layout (**all bots + dashboard in ONE gateway container** via `s6`) merges the bot rows
+process at measure time). The whole stack (bots + health-api via `s6` + remote Mongo)
+sits at **~1.1 GiB**. The multiplexed layout (**all bots in ONE gateway container** via `s6`) merges the bot rows
 into a single ~0.58 GiB gateway, i.e. roughly the same total. Per container:
 
 | Container | RAM (idle) |
 |---|---|
 | OpenCode Zen (direct) | 0 MiB (no local container) |
 | health-api | ~53 MiB |
-| gateway (multiplexed — all bots + dashboard via s6) | ~0.58 GiB (all bots + dashboard, one container) |
+| gateway (multiplexed — all bots via s6) | ~0.58 GiB (all bots, one container) |
 | **Stack total** | **~1.06 GiB** |
 
 + searxng (~0.2 GB) + Docker + OS (~0.4 GB) → realistic **floor ≈ 1.1 GB** (remote Mongo).
@@ -76,5 +76,5 @@ Measured (`docker system df` + repo `du`), not guessed:
 
 ## Access
 
-- Dashboard (:9119) + health-api (:8001) bind `0.0.0.0` inside Docker — restrict with firewall/reverse proxy if exposed publicly.
+- health-api (:8001) binds `0.0.0.0` inside Docker — restrict with firewall/reverse proxy if exposed publicly.
 - SSH on 22 (restrict source IPs / use key auth).

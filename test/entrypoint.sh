@@ -11,11 +11,9 @@ set -euo pipefail
 # compose mounts ../profiles/master:/hermes-home and ../workspace:/workspace,
 # so this renders config.yaml for the gateway home + each named profile.
 #
-# With s6-overlay, HERMES_DASHBOARD=1 runs dashboard alongside gateway in
-# the SAME container (mirrors official nousresearch/hermes-agent image:
-# `gateway run` supervised by s6, dashboard is an s6-rc service). Without
-# it the container only runs the multiplexed gateway. HERMES_MODE=dashboard
-# is deprecated but kept for backward compat (runs dashboard only).
+# The gateway container runs the multiplexed gateway supervised by
+# s6-overlay (`gateway run` is an s6-rc service, mirroring official
+# nousresearch/hermes-agent).
 
 if [[ "${1:-}" == "chown-data" ]]; then
     uid="${HERMES_UID:-1000}"
@@ -79,29 +77,7 @@ if [[ "${1:-}" == "render-only" ]]; then
     exit 0
 fi
 
-# Normal startup: render first
+# Normal startup: render first, then run the multiplexed gateway.
 do_render
-
-# Backward compat: HERMES_MODE=dashboard runs dashboard only (deprecated)
-if [[ "${HERMES_MODE:-gateway}" == "dashboard" ]]; then
-    warning "HERMES_MODE=dashboard is deprecated, use HERMES_DASHBOARD=1"
-    exec hermes dashboard \
-        --host "${HERMES_DASHBOARD_HOST:-0.0.0.0}" \
-        --port "${HERMES_DASHBOARD_PORT:-9119}" \
-        --no-open --skip-build
-fi
-
-# HERMES_DASHBOARD=1 (or true/yes) → run both gateway + dashboard supervised by s6
-dashboard_enabled=0
-case "${HERMES_DASHBOARD:-0}" in
-    1|true|TRUE|True|yes|YES|Yes) dashboard_enabled=1 ;;
-esac
-
-if [[ "$dashboard_enabled" == "1" ]]; then
-    info "HERMES_DASHBOARD=1 — starting s6 supervision (gateway + dashboard on :${HERMES_DASHBOARD_PORT:-9119})"
-    # Ensure dashboard service is enabled for s6 (remove down file if present)
-    rm -f /etc/services.d/dashboard/down 2>/dev/null || true
-    exec /init
-fi
 
 exec hermes gateway run --force --accept-hooks
