@@ -27,26 +27,36 @@ class SyncClient(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    /** Single server URL (proxy: chat + sync on one port). Prefers the
-     * unified `server_base_url`; falls back to the legacy `server_url` so
-     * pre-unification configs and backups keep working (incl. background sync). */
+    /** Single server URL (proxy: chat + sync on one port). Same chain as
+     * chat (`server_base_url` → `server_url` → `api_base_url`) so both sides
+     * agree pre-save (incl. background sync); legacy keys are removed on save. */
     fun serverUrl(): String {
-        val unified = (prefs.getString("server_base_url", "") ?: "").trim().trimEnd('/')
-        if (unified.isNotEmpty()) return unified
-        return (prefs.getString("server_url", "") ?: "").trim().trimEnd('/')
+        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
+            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
+            if (v.isNotEmpty()) return v
+        }
+        return ""
     }
-    /** Returns the stored Bearer token sent as `Authorization: Bearer <token>`. */
-    fun authToken(): String = prefs.getString("auth_token", "") ?: ""
+    /** Single app password (the sync token doubles as chat credential).
+     * Prefers `app_password`; falls back to the legacy `auth_token` so users
+     * who configured a sync token keep working without re-entry. */
+    fun password(): String {
+        val v = (prefs.getString("app_password", "") ?: "").trim()
+        if (v.isNotEmpty()) return v
+        return (prefs.getString("auth_token", "") ?: "").trim()
+    }
     /** Marks the one-time historical backfill done so later runs send today-only payloads. */
     fun markFirstSyncDone() {
         prefs.edit().putBoolean("first_sync_done", true).apply()
     }
 
-    /** Persists the unified server URL + token; normalizes trailing slash/whitespace so post() can build the endpoint directly. */
-    fun setConfig(serverUrl: String, authToken: String) {
+    /** Persists the unified server URL + password; normalizes trailing slash/whitespace so post() can build the endpoint directly. */
+    fun setConfig(serverUrl: String, password: String) {
         prefs.edit()
-            .putString("server_base_url", serverUrl.trimEnd('/'))
-            .putString("auth_token", authToken.trim())
+            .putString("server_base_url", serverUrl.trim().trimEnd('/'))
+            .putString("app_password", password.trim())
+            .remove("server_url") // legacy: unified key is written above
+            .remove("auth_token") // legacy: unified key is written above
             .apply()
     }
 
@@ -58,7 +68,7 @@ class SyncClient(context: Context) {
         val json = Json { ignoreUnknownKeys = true }.encodeToString(payload)
         val request = Request.Builder()
             .url("$url/api/health/sync")
-            .header("Authorization", "Bearer ${authToken()}")
+            .header("Authorization", "Bearer ${password()}")
             .header("Content-Type", "application/json")
             .post(json.toRequestBody(JSON))
             .build()

@@ -12,12 +12,14 @@ gateway:
   # Built-in OpenAI-compatible HTTP API for the custom Android app
   # (3 chat tabs + Settings). One port; each tab sends its profile's
   # model name (see GET /v1/models to confirm names under multiplex).
-  # Key is required — rendered from API_SERVER_KEY in the root .env.
+  # Key is required — rendered from HEALTH_SYNC_TOKEN in the root .env.
+  # The sync token doubles as the single app password (chat + sync share
+  # it; the Android app sends it as the bearer credential on every call).
   api_server:
     enabled: true
     host: 0.0.0.0
     port: 8642
-    key: ${API_SERVER_KEY}
+    key: ${HEALTH_SYNC_TOKEN}
 
 auxiliary:
   vision:

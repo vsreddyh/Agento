@@ -9,7 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class ChatUiState(
-    val provider: LlmProvider = LlmProvider.OPENCODE,
+    val provider: String = "",
     val model: String = "",
     val path: String = "",
     val messages: List<ChatMessage> = emptyList(),

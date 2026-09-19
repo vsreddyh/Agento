@@ -65,14 +65,14 @@ Retention ───────────────► one-shot container (c
 ### Required External Services & API Keys
 - **OpenCode Zen API Key**: `OPENCODE_ZEN_API_KEY` from [opencode.ai](https://opencode.ai) (model: `muse-spark-1.2-contributor-free`).
 - **OpenCode Go API Key**: `OPENCODE_GO_API_KEY` (provider `opencode-go`, selectable per request in app Settings).
-- **Android App API Key**: `API_SERVER_KEY` (shared bearer key for all 3 chat tabs; generate with `openssl rand -hex 32`). Each tab uses its profile path (`/p/story|resumes|default`) + per-request provider (`opencode`|`opencode-go`) and model from app Settings. Provider keys live only in the VPS `.env`, never in git.
+- **Android App Password**: `HEALTH_SYNC_TOKEN` (single bearer credential for chat + sync; generate with `openssl rand -hex 32`). The app takes one Server URL + Password; each tab picks provider/model from the live gateway catalog in Settings dropdowns. Provider keys live only in the VPS `.env`, never in git.
 - **MongoDB Cluster**: MongoDB connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`). (In dev mode, `HERMES_ENV=dev` provides an ephemeral local single-node replica set instead.)
-- **Health Sync Secret**: `HEALTH_SYNC_TOKEN` Bearer token matching the Agento Android app. (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only.)
+- **Health Sync Secret**: `HEALTH_SYNC_TOKEN` Bearer token matching the Agento Android app Password field (same single credential as chat). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY` — the sync token is now the only app password.)
 - **Dashboard Web Credentials**: `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET` (32+ chars).
 
 ### Network & Firewall Ports
 - Port `9119/tcp` (Hermes Dashboard) — Inbound access restricted or behind reverse proxy with Basic Auth.
-- Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, bearer key/token auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, chat key = `API_SERVER_KEY`, sync token = `HEALTH_SYNC_TOKEN`, paths `/p/story`, `/p/resumes`, `/p/default`. Direct ports `8642` (chat) / `8001` (sync) stay published for backward compatibility.
+- Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `HEALTH_SYNC_TOKEN`, provider/model picked per tab from live dropdowns, paths `/p/story`, `/p/resumes`, `/p/default`. Direct ports `8642` (chat) / `8001` (sync) stay published for backward compatibility.
 - Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as `8642`).
 - Port `8888/tcp` (SearXNG) — Internal compose network (optional host publish).
 - Outbound HTTPS (`443/tcp`) for OpenCode Zen (`opencode.ai`), MongoDB Atlas, and GitHub.

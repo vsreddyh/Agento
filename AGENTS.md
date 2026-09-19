@@ -66,13 +66,13 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
    ephemeral local container under the same `MONGODB_DB` name, never the prod DB. The bot image is built from `test/Dockerfile` +
    `test/entrypoint.sh` (bakes in `s6-overlay`; `hermes-agent` + `mcp` via pip); those are the image source, not
    a mirror stack.
-   Provider keys + `API_SERVER_KEY` are injected via compose `environment:` interpolation
+   Provider keys + `HEALTH_SYNC_TOKEN` are injected via compose `environment:` interpolation
    from the root `.env`; `docker_compose()` always passes `--env-file "$REPO/.env"`
    (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
    silently falls back empty/default).
 - LLM: direct to OpenCode Zen (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-contributor-free`) — no proxy container. OpenCode Go is enabled too (`OPENCODE_GO_API_KEY` in root `.env`, selectable per request as provider `opencode-go`).
 - App API: Hermes built-in OpenAI-compatible server on the gateway
-  (`gateway.api_server`, `:8642`, shared `API_SERVER_KEY`); one port, each app
+  (`gateway.api_server`, `:8642`, single-password `HEALTH_SYNC_TOKEN`); one port, each app
   tab uses its profile path (`/p/story|resumes|default`) and sends per-request
   provider (`opencode`|`opencode-go`) + model from app Settings. Provider keys
   live only in the VPS `.env`, never in git.
@@ -80,7 +80,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   not a bot) and `profiles/master/profiles/<bot>/config.yaml.template` (the three
   domain profiles — nested because Hermes multiplexes named profiles under the
   gateway home). Templates use `${HERMES_BASE_URL}` and `${HERMES_CWD}` plus
-  `${API_SERVER_KEY}` on the gateway home.
+  `${HEALTH_SYNC_TOKEN}` on the gateway home.
   `test/entrypoint.sh` renders each to a git-ignored `config.yaml` at container
   start with docker defaults: `https://opencode.ai/zen/v1` + `/workspace/<bot>`.
 - Dashboard binds `0.0.0.0:9119` with `HERMES_HOME=/hermes-home` (mounts

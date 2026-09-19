@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.health.connect.client.PermissionController
@@ -97,7 +98,7 @@ private fun ChatTab(app: android.app.Application, tab: String, title: String) {
     val state by vm.state
     LaunchedEffect(Unit) { vm.refreshConfig() }
     val subtitle = (if (state.model.isEmpty()) "gateway default" else state.model) +
-        " · " + state.provider.id
+        " · " + state.provider.ifEmpty { "gateway default" }
     ChatScreen(title = title, model = subtitle, state = state,
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop, onNew = vm::newConversation)
 }
@@ -185,51 +186,76 @@ private fun ChatScreen(
     }
 }
 
-/** Per-tab provider/model/path picker; blanks fall back to gateway defaults. */
+/** Per-tab provider/model/path picker; blanks fall back to gateway defaults.
+ * Provider/model options come from the live gateway catalog
+ * (`GET /api/model/options`); the saved value is always kept selectable so a
+ * legacy or unknown slug is never lost, and blank always means default. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TabLlmConfig(
     tabTitle: String,
-    provider: LlmProvider,
-    onProvider: (LlmProvider) -> Unit,
+    provider: String,
+    onProvider: (String) -> Unit,
+    providerOptions: List<ProviderOption>,
     model: String,
     onModel: (String) -> Unit,
+    modelOptions: List<String>,
     path: String,
     onPath: (String) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Text("$tabTitle tab", style = MaterialTheme.typography.titleSmall)
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
+    /** Read-only option menu (saved values stay intact; picks write the slug). */
+    @Composable
+    fun OptionMenu(
+        label: String,
+        shown: String,
+        options: List<Pair<String, String>>,
+        onPick: (String) -> Unit,
     ) {
-        OutlinedTextField(
-            value = provider.id,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Provider") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor(),
-        )
-        ExposedDropdownMenu(
+        var expanded by remember { mutableStateOf(false) }
+        ExposedDropdownMenuBox(
             expanded = expanded,
-            onDismissRequest = { expanded = false },
+            onExpandedChange = { expanded = it },
         ) {
-            LlmProvider.entries.forEach { p ->
-                DropdownMenuItem(
-                    text = { Text(p.id) },
-                    onClick = { onProvider(p); expanded = false },
-                )
+            OutlinedTextField(
+                value = shown,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text(label) },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier.fillMaxWidth().menuAnchor(),
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                options.forEach { (value, text) ->
+                    DropdownMenuItem(
+                        text = { Text(text) },
+                        onClick = { onPick(value); expanded = false },
+                    )
+                }
             }
         }
     }
-    OutlinedTextField(
-        value = model,
-        onValueChange = onModel,
-        label = { Text("Model (blank = gateway default)") },
-        placeholder = { Text("muse-spark-1.2-free") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
+
+    Text("$tabTitle tab", style = MaterialTheme.typography.titleSmall)
+    val shownProvider = providerOptions.firstOrNull { it.slug == provider }
+        ?.let { if (it.label == it.slug) it.slug else "${it.label} (${it.slug})" }
+        ?: provider.ifEmpty { "(gateway default)" }
+    OptionMenu(
+        label = "Provider",
+        shown = shownProvider,
+        options = listOf("" to "(gateway default)") +
+            providerOptions.map { o ->
+                o.slug to (if (o.label == o.slug) o.slug else "${o.label} (${o.slug})")
+            },
+        onPick = onProvider,
+    )
+    OptionMenu(
+        label = "Model (blank = gateway default)",
+        shown = model.ifEmpty { "(gateway default)" },
+        options = modelOptions.map { m -> m to m.ifEmpty { "(gateway default)" } },
+        onPick = onModel,
     )
     OutlinedTextField(
         value = path,
@@ -243,6 +269,36 @@ private fun TabLlmConfig(
     )
 }
 
+/** Providers are gateway-global; one catalog fetch covers all tabs. */
+private fun catalogPath(api: ChatApi): String =
+    listOf(api.pathFor("story"), api.pathFor("resumes"), api.pathFor("god")).distinct().first()
+
+/** Dropdown options for a tab: live catalog, else known slugs; the saved
+ * value is always kept so legacy/unknown slugs are never lost. */
+private fun providerOptionsFor(catalog: List<ProviderOption>, saved: String): List<ProviderOption> {
+    val base = catalog.ifEmpty {
+        LlmProvider.entries.map { ProviderOption(it.id, it.id, emptyList()) }
+    }
+    return if (saved.isNotBlank() && base.none { it.slug == saved }) {
+        listOf(ProviderOption(saved, "$saved (saved)", emptyList())) + base
+    } else {
+        base
+    }
+}
+
+/** Model options for a tab: blank (gateway default) plus ONLY the selected
+ * provider's catalog models. No provider selected → default alone; nothing
+ * is ever borrowed from other providers or stale saves. */
+private fun modelOptionsFor(
+    options: List<ProviderOption>,
+    provider: String,
+): List<String> = buildList {
+    add("")
+    if (provider.isNotBlank()) {
+        addAll(options.firstOrNull { it.slug == provider }?.models.orEmpty())
+    }
+}
+
 /** Settings hub for chat backend plus Health Connect sync; prefs load once on entry. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -251,38 +307,53 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Per-tab LLM config: provider + model (+ profile path override).
-    // The server URL is single and shared (proxy: chat + sync on one port) —
-    // owned by the viewModel (state.serverUrl) so both sections edit one value.
-    var apiKey by remember { mutableStateOf("") }
-    var providerStory by remember { mutableStateOf(LlmProvider.OPENCODE) }
+    // Per-tab LLM config: provider slug + model (blank = gateway default).
+    var providerStory by remember { mutableStateOf("") }
     var modelStory by remember { mutableStateOf("") }
     var pathStory by remember { mutableStateOf("") }
-    var providerResumes by remember { mutableStateOf(LlmProvider.OPENCODE) }
+    var providerResumes by remember { mutableStateOf("") }
     var modelResumes by remember { mutableStateOf("") }
     var pathResumes by remember { mutableStateOf("") }
-    var providerGod by remember { mutableStateOf(LlmProvider.OPENCODE) }
+    var providerGod by remember { mutableStateOf("") }
     var modelGod by remember { mutableStateOf("") }
     var pathGod by remember { mutableStateOf("") }
     var modelsResult by remember { mutableStateOf("") }
+    // Live picker inventory (providers + their models); empty until loaded.
+    var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     // Bumped after a settings import so the fields below reload from prefs.
     var settingsRefresh by remember { mutableStateOf(0) }
 
-    /** Preloads persisted chat + sync prefs into compose state for editing. */
+    /** Preloads persisted chat prefs into compose state, then pulls the live
+     * provider/model catalog for the dropdowns (silent on failure — the
+     * offline fallback list + saved values keep the pickers usable). */
     LaunchedEffect(settingsRefresh) {
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-        // serverUrl lives in the viewModel (single shared field, legacy keys
-        // fall back inside MainViewModel.refresh, already called on init).
-        apiKey = prefs.getString("api_key", "") ?: ""
-        providerStory = LlmProvider.fromId(prefs.getString("provider_story", "") ?: "")
-        modelStory = prefs.getString("model_story", "") ?: ""
-        pathStory = prefs.getString("path_story", "") ?: ""
-        providerResumes = LlmProvider.fromId(prefs.getString("provider_resumes", "") ?: "")
-        modelResumes = prefs.getString("model_resumes", "") ?: ""
-        pathResumes = prefs.getString("path_resumes", "") ?: ""
-        providerGod = LlmProvider.fromId(prefs.getString("provider_god", "") ?: "")
-        modelGod = prefs.getString("model_god", "") ?: ""
-        pathGod = prefs.getString("path_god", "") ?: ""
+        // serverUrl/password live in the viewModel (single shared fields,
+        // legacy keys fall back inside MainViewModel.refresh on init).
+        providerStory = (prefs.getString("provider_story", "") ?: "").trim()
+        modelStory = (prefs.getString("model_story", "") ?: "").trim()
+        pathStory = (prefs.getString("path_story", "") ?: "").trim()
+        providerResumes = (prefs.getString("provider_resumes", "") ?: "").trim()
+        modelResumes = (prefs.getString("model_resumes", "") ?: "").trim()
+        pathResumes = (prefs.getString("path_resumes", "") ?: "").trim()
+        providerGod = (prefs.getString("provider_god", "") ?: "").trim()
+        modelGod = (prefs.getString("model_god", "") ?: "").trim()
+        pathGod = (prefs.getString("path_god", "") ?: "").trim()
+        val api = ChatApi(context)
+        val loaded = runCatching {
+            api.fetchCatalog(catalogPath(api)).getOrThrow()
+        }.getOrDefault(emptyList())
+        catalog = loaded
+        if (loaded.isNotEmpty()) {
+            fun clean(prov: String, mod: String): String {
+                if (prov.isBlank() || mod.isBlank()) return mod
+                val row = loaded.firstOrNull { it.slug == prov } ?: return mod
+                return if (mod in row.models) mod else ""
+            }
+            modelStory = clean(providerStory, modelStory)
+            modelResumes = clean(providerResumes, modelResumes)
+            modelGod = clean(providerGod, modelGod)
+        }
     }
 
     /** Refreshes health state after any permission flow returns. */
@@ -323,75 +394,88 @@ fun SettingsScreen(viewModel: MainViewModel) {
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        Text("Chat backend", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(
-            value = apiKey,
-            onValueChange = { apiKey = it },
-            label = { Text("API key (gateway, shared)") },
+            value = state.password,
+            onValueChange = viewModel::onPassword,
+            label = { Text("Password (sync token)") },
             singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
         )
+        Text("Chat backend", style = MaterialTheme.typography.titleMedium)
+        val storyProviders = providerOptionsFor(catalog, providerStory)
+        val resumesProviders = providerOptionsFor(catalog, providerResumes)
+        val godProviders = providerOptionsFor(catalog, providerGod)
         TabLlmConfig(
             tabTitle = "Story",
             provider = providerStory,
-            onProvider = { providerStory = it },
+            onProvider = { if (it != providerStory) modelStory = ""; providerStory = it },
+            providerOptions = storyProviders,
             model = modelStory,
             onModel = { modelStory = it },
+            modelOptions = modelOptionsFor(storyProviders, providerStory),
             path = pathStory,
             onPath = { pathStory = it },
         )
         TabLlmConfig(
             tabTitle = "Resumes",
             provider = providerResumes,
-            onProvider = { providerResumes = it },
+            onProvider = { if (it != providerResumes) modelResumes = ""; providerResumes = it },
+            providerOptions = resumesProviders,
             model = modelResumes,
             onModel = { modelResumes = it },
+            modelOptions = modelOptionsFor(resumesProviders, providerResumes),
             path = pathResumes,
             onPath = { pathResumes = it },
         )
         TabLlmConfig(
             tabTitle = "God",
             provider = providerGod,
-            onProvider = { providerGod = it },
+            onProvider = { if (it != providerGod) modelGod = ""; providerGod = it },
+            providerOptions = godProviders,
             model = modelGod,
             onModel = { modelGod = it },
+            modelOptions = modelOptionsFor(godProviders, providerGod),
             path = pathGod,
             onPath = { pathGod = it },
         )
-        /** Probes each distinct profile path so one gateway serves all tabs. */
+        /** Saves config, then reloads the live provider/model catalog. */
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 val api = ChatApi(context)
-                api.setChatConfig(state.serverUrl, apiKey, "story", providerStory, modelStory, pathStory)
-                api.setChatConfig(state.serverUrl, apiKey, "resumes", providerResumes, modelResumes, pathResumes)
-                api.setChatConfig(state.serverUrl, apiKey, "god", providerGod, modelGod, pathGod)
+                api.setChatConfig(state.serverUrl, state.password, "story", providerStory, modelStory, pathStory)
+                api.setChatConfig(state.serverUrl, state.password, "resumes", providerResumes, modelResumes, pathResumes)
+                api.setChatConfig(state.serverUrl, state.password, "god", providerGod, modelGod, pathGod)
                 modelsResult = "Saved."
             }, modifier = Modifier.weight(1f)) {
                 Text("Save chat config")
             }
             OutlinedButton(onClick = {
                 val api = ChatApi(context)
-                api.setChatConfig(state.serverUrl, apiKey, "story", providerStory, modelStory, pathStory)
-                api.setChatConfig(state.serverUrl, apiKey, "resumes", providerResumes, modelResumes, pathResumes)
-                api.setChatConfig(state.serverUrl, apiKey, "god", providerGod, modelGod, pathGod)
-                modelsResult = "Checking…"
+                api.setChatConfig(state.serverUrl, state.password, "story", providerStory, modelStory, pathStory)
+                api.setChatConfig(state.serverUrl, state.password, "resumes", providerResumes, modelResumes, pathResumes)
+                api.setChatConfig(state.serverUrl, state.password, "god", providerGod, modelGod, pathGod)
+                modelsResult = "Loading providers…"
                 scope.launch {
-                    val paths = listOf(
-                        api.pathFor("story"), api.pathFor("resumes"), api.pathFor("god"),
-                    ).distinct()
-                    val parts = mutableListOf<String>()
-                    for (p in paths) {
-                        val r = api.listModels(p)
-                        parts.add("$p: " + r.fold(
-                            onSuccess = { ids -> if (ids.isEmpty()) "(none)" else ids.joinToString() },
-                            onFailure = { e -> "FAILED — ${e.message}" },
-                        ))
-                    }
-                    modelsResult = parts.joinToString("\n")
+                    api.fetchCatalog(catalogPath(api), refresh = true).fold(
+                        onSuccess = { list ->
+                            catalog = list
+                            modelsResult = list.joinToString("\n") { o ->
+                                "${o.label}: ${o.models.size} model(s)"
+                            }
+                        },
+                        onFailure = { e -> modelsResult = "FAILED — ${e.message}" },
+                    )
                 }
             }, modifier = Modifier.weight(1f)) {
-                Text("Check models")
+                Text("Reload catalog")
             }
+        }
+        if (catalog.isEmpty()) {
+            Text(
+                "Providers not loaded — check Server URL + Password, then Reload catalog.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         if (modelsResult.isNotEmpty()) {
             Text(modelsResult, style = MaterialTheme.typography.bodySmall)
@@ -461,13 +545,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
-        OutlinedTextField(
-            value = state.authToken,
-            onValueChange = viewModel::onAuthToken,
-            label = { Text("Sync auth token") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
         Button(onClick = viewModel::saveConfig, modifier = Modifier.fillMaxWidth()) {
             Text("Save sync config")
         }

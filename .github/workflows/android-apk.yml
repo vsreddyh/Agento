@@ -134,6 +134,8 @@ jobs:
 
             Install `agento-${{ steps.version.outputs.version_name }}-release.apk` on your phone — or tap **Check for updates** in Agento → Settings to pull it in-app.
 
+            Upgrading from ≤0.2.x? Set Server URL to the proxy (`http://<host>:8080`) and Password to `HEALTH_SYNC_TOKEN` — the old API key no longer authenticates chat.
+
             ### Changes
           files: |
             android/agento/app/build/outputs/apk/release/*.apk
