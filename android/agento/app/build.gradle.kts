@@ -16,9 +16,15 @@ android {
         // CI sets VERSION_CODE to the GitHub run number so every main-branch
         // build sorts higher than the last — required for the in-app updater
         // (Android refuses to install an "update" with a lower/equal code).
-        // VERSION_NAME defaults to the tracked release line.
+        // versionName has ONE source of truth: android/agento/VERSION — read
+        // with no fallback, so a release can never ship a stale hardcoded
+        // version if the file goes missing (fail fast instead).
         versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1)
-        versionName = (System.getenv("VERSION_NAME").takeUnless { it.isNullOrEmpty() } ?: "0.2.0")
+        versionName = rootProject.file("VERSION").readText().trim().also {
+            require(it.matches(Regex("""\d+\.\d+\.\d+"""))) {
+                "VERSION must hold MAJOR.MINOR.PATCH, got '$it'"
+            }
+        }
     }
 
     signingConfigs {
