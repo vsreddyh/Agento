@@ -16,9 +16,15 @@ android {
         // CI sets VERSION_CODE to the GitHub run number so every main-branch
         // build sorts higher than the last — required for the in-app updater
         // (Android refuses to install an "update" with a lower/equal code).
-        // VERSION_NAME defaults to the tracked release line.
+        // versionName has ONE source of truth: android/agento/VERSION — read
+        // with no fallback, so a release can never ship a stale hardcoded
+        // version if the file goes missing (fail fast instead).
         versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1)
-        versionName = (System.getenv("VERSION_NAME").takeUnless { it.isNullOrEmpty() } ?: "0.1.0")
+        versionName = rootProject.file("VERSION").readText().trim().also {
+            require(it.matches(Regex("""\d+\.\d+\.\d+"""))) {
+                "VERSION must hold MAJOR.MINOR.PATCH, got '$it'"
+            }
+        }
     }
 
     signingConfigs {
@@ -46,6 +52,22 @@ android {
                 "proguard-rules.pro",
             )
             signingConfig = signingConfigs.getByName("release")
+        }
+    }
+
+    // APKs carry the project name + version so downloads and Release assets
+    // are self-describing: agento-0.2.0-42-release.apk. The in-app updater
+    // (UpdateManager) keys off the "release" substring, which this preserves.
+    applicationVariants.all {
+        val typeName = buildType.name
+        val vName = defaultConfig.versionName
+        val vCode = defaultConfig.versionCode
+        outputs.all {
+            // Cast: AGP 8's public output interface exposes no outputFileName
+            // setter to Kotlin DSL (Groovy-only recipe); the impl has it.
+            // Pinned to AGP 8.9.1 in the root build.gradle.kts.
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+                "agento-$vName-$vCode-$typeName.apk"
         }
     }
 
