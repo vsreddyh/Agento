@@ -33,7 +33,7 @@ No host Hermes install, no native processes.
 story+resumes+default
    └─► ONE docker `gateway` container (HERMES_HOME=/hermes-home = profiles/master, HERMES_DASHBOARD=1 via s6)
         └─► OpenCode Zen direct (https://opencode.ai/zen/v1, model muse-spark-1.2-contributor-free)
-searxng (:8888)  •  health-api (:8001)  •  dashboard (:9119, password, s6 alongside gateway)
+searxng (:8888)  •  proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)  •  dashboard (:9119, password, s6 alongside gateway)
 MongoDB (remote prod; ephemeral local in dev)  •  retention (one-shot container)
 workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo vsreddyh/Resume) — separate git repos
 ```
@@ -98,8 +98,8 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 
 ## Agento app versioning (semver — MAJOR.MINOR.PATCH)
 
-- Source of truth is `android/agento/VERSION` (holds `MAJOR.MINOR.PATCH`, nothing else). Gradle reads it with NO fallback (missing/malformed file fails the build); CI reads the same file for the tag, release name/notes, and artifact names. `versionCode` is ALWAYS the CI run number — never set it by hand.
-- CI tags releases `agento-v<versionName>-<run_number>`; the in-app updater compares semver first, then build number. A higher `versionName` with a lower build still counts as newer.
+- Source of truth is `android/agento/VERSION` (holds `MAJOR.MINOR.PATCH`, nothing else). Gradle reads it with NO fallback (missing/malformed file fails the build); CI reads the same file for the tag, release name/notes, and artifact names. `versionCode` is derived from semver in Gradle (`MAJOR*1000000+MINOR*1000+PATCH`, segments <1000) — never set it by hand, no env needed.
+- Version-only scheme, NO build numbers anywhere: tags are `agento-v<version>` (e.g. `agento-v0.3.0`), APKs are `agento-<version>-<type>.apk`, artifacts and release names match. Same-version rebuilds upsert the existing Release. The in-app updater compares semver only (old `-<build>` tags still parse).
 - **PATCH** (`x.y.Z+1`): bug fixes with no behavior contract change — crash fix, sync bug, UI text/layout, proguard/R8 tweak. No new prefs keys, no new permissions, no workflow/tag changes.
 - **MINOR** (`x.Y+1.0`): backward-compatible features — new screen/section, new OPTIONAL prefs keys (old backups must still import: `SettingsBackup` skips unknown keys, so additive is safe), new permissions that degrade gracefully, new non-breaking server endpoints.
 - **MAJOR** (`X+1.0.0`): anything breaking — prefs key renames/removals, `PREFS_NAME` change, `applicationId` change, signing-key change, `SettingsBackup` export `version` bump, tag/scheme change, or a server API contract the old app can't speak (even if the breaking change lives outside `android/`).

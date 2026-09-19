@@ -33,8 +33,9 @@ The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a 
  default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
          └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-contributor-free)
-         └── API server :8642 ──────────┤   (Android app chat backend)
-Agento (Android) ──► health-api (:8001) ──► MongoDB
+         └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
+Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
+                                     └──► /api/* ─► health-api ──► MongoDB
 Hermes Dashboard ────────► 0.0.0.0:9119 via gateway (s6, basic auth, unified)
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
@@ -42,7 +43,8 @@ Retention ───────────────► one-shot container (c
 - **LLM Connection**: Direct HTTPS communication with OpenCode Zen (`https://opencode.ai/zen/v1`, default model `muse-spark-1.2-contributor-free`).
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
 - **gateway & dashboard**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles. `s6-overlay` supervises both the gateway and the dashboard process on `:9119` when `HERMES_DASHBOARD=1`.
-- **app API**: Hermes built-in OpenAI-compatible server (`gateway.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, shared `API_SERVER_KEY` bearer auth).
+- **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
+- **app API**: Hermes built-in OpenAI-compatible server (`gateway.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, shared `API_SERVER_KEY` bearer auth). Direct port stays published; the app goes through the proxy.
 - **searxng**: Self-hosted metasearch instance (`:8888`) providing local privacy-preserving search tool capabilities.
 - **retention**: One-shot retention job executing [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py) via cron or on stack start.
 - **Development Isolation**: `HERMES_ENV=dev` directs all database operations to an ephemeral local `mongodb` container (`mongodb://mongodb:27017`), preventing dev writes from ever touching remote production data.
@@ -154,7 +156,7 @@ Run manual dry-runs via:
 ## Health Connect Pipeline
 
 ```
-Agento Android App ──POST /api/health/sync──► health-api (:8001)
+Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► health-api (:8001)
                                                         │
                                                         ▼
                                        MongoDB: hc_days (one doc per date)
@@ -172,7 +174,10 @@ Agento Android App ──POST /api/health/sync──► health-api (:8001)
 
 ## Android App API (Chat)
 
-The custom Android app (`android/agento/`, 3 chat tabs + Settings) talks to Hermes's built-in OpenAI-compatible API server on the gateway (`:8642`, one port, shared `API_SERVER_KEY` bearer key):
+The custom Android app (`android/agento/`, 3 chat tabs + Settings) uses ONE Server URL — the proxy (`:8080`) — which routes chat to Hermes's built-in OpenAI-compatible API server on the gateway (`/p/* → :8642`, shared `API_SERVER_KEY` bearer key) and sync to health-api (`/api/* → :8001`):
+
+```bash
+curl http://<host>:8080/p/story/v1/models -H "Authorization: Bearer <API_SERVER_KEY>"
 
 ```bash
 curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <API_SERVER_KEY>"

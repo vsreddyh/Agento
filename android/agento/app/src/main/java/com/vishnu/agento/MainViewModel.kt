@@ -35,8 +35,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Reloads prefs plus Health Connect availability; permission check runs async. */
     fun refresh() {
         val prefs = getApplication<Application>().getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        // Unified server URL first; legacy per-feature keys as fallback so
+        // pre-unification configs and backups migrate silently on next save.
+        fun url(key: String): String =
+            (prefs.getString(key, "") ?: "").trim().trimEnd('/').takeIf { it.isNotEmpty() } ?: ""
         _state.value = _state.value.copy(
-            serverUrl = prefs.getString("server_url", "") ?: "",
+            serverUrl = url("server_base_url").ifEmpty { url("server_url").ifEmpty { url("api_base_url") } },
             authToken = prefs.getString("auth_token", "") ?: "",
             lastSyncAt = prefs.getString("last_sync_at", "") ?: "",
         )

@@ -60,7 +60,14 @@ class ChatApi(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    fun baseUrl(): String = prefs.getString("api_base_url", "") ?: ""
+    /** Single server URL (proxy: chat + sync on one port). Prefers the
+     * unified `server_base_url`; falls back to the legacy per-feature keys
+     * so pre-unification configs and backups keep working. */
+    fun baseUrl(): String {
+        val unified = (prefs.getString("server_base_url", "") ?: "").trim().trimEnd('/')
+        if (unified.isNotEmpty()) return unified
+        return (prefs.getString("api_base_url", "") ?: "").trim().trimEnd('/')
+    }
     fun apiKey(): String = prefs.getString("api_key", "") ?: ""
 
     /** Profile path prefix for a tab, e.g. `/p/story`. Blank = gateway root. */
@@ -87,7 +94,7 @@ class ChatApi(context: Context) {
         path: String,
     ) {
         prefs.edit()
-            .putString("api_base_url", baseUrl.trimEnd('/'))
+            .putString("server_base_url", baseUrl.trimEnd('/'))
             .putString("api_key", apiKey.trim())
             .putString("provider_$tab", provider.id)
             .putString("model_$tab", model.trim())

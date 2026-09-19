@@ -251,9 +251,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var apiBase by remember { mutableStateOf("") }
-    var apiKey by remember { mutableStateOf("") }
     // Per-tab LLM config: provider + model (+ profile path override).
+    // The server URL is single and shared (proxy: chat + sync on one port) —
+    // owned by the viewModel (state.serverUrl) so both sections edit one value.
+    var apiKey by remember { mutableStateOf("") }
     var providerStory by remember { mutableStateOf(LlmProvider.OPENCODE) }
     var modelStory by remember { mutableStateOf("") }
     var pathStory by remember { mutableStateOf("") }
@@ -270,8 +271,8 @@ fun SettingsScreen(viewModel: MainViewModel) {
     /** Preloads persisted chat + sync prefs into compose state for editing. */
     LaunchedEffect(settingsRefresh) {
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-        // serverUrl/authToken fields below are the health-sync ones (unchanged keys).
-        apiBase = prefs.getString("api_base_url", "") ?: ""
+        // serverUrl lives in the viewModel (single shared field, legacy keys
+        // fall back inside MainViewModel.refresh, already called on init).
         apiKey = prefs.getString("api_key", "") ?: ""
         providerStory = LlmProvider.fromId(prefs.getString("provider_story", "") ?: "")
         modelStory = prefs.getString("model_story", "") ?: ""
@@ -309,15 +310,20 @@ fun SettingsScreen(viewModel: MainViewModel) {
     ) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
 
-        Text("Chat backend", style = MaterialTheme.typography.titleMedium)
+        Text("Server", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "One URL for chat + sync (reverse proxy routes /p/* to the gateway, /api/* to health sync).",
+            style = MaterialTheme.typography.bodySmall,
+        )
         OutlinedTextField(
-            value = apiBase,
-            onValueChange = { apiBase = it },
-            label = { Text("API base URL") },
-            placeholder = { Text("http://192.168.1.10:8642") },
+            value = state.serverUrl,
+            onValueChange = viewModel::onServerUrl,
+            label = { Text("Server URL") },
+            placeholder = { Text("http://192.168.1.10:8080") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+        Text("Chat backend", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(
             value = apiKey,
             onValueChange = { apiKey = it },
@@ -356,18 +362,18 @@ fun SettingsScreen(viewModel: MainViewModel) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 val api = ChatApi(context)
-                api.setChatConfig(apiBase, apiKey, "story", providerStory, modelStory, pathStory)
-                api.setChatConfig(apiBase, apiKey, "resumes", providerResumes, modelResumes, pathResumes)
-                api.setChatConfig(apiBase, apiKey, "god", providerGod, modelGod, pathGod)
+                api.setChatConfig(state.serverUrl, apiKey, "story", providerStory, modelStory, pathStory)
+                api.setChatConfig(state.serverUrl, apiKey, "resumes", providerResumes, modelResumes, pathResumes)
+                api.setChatConfig(state.serverUrl, apiKey, "god", providerGod, modelGod, pathGod)
                 modelsResult = "Saved."
             }, modifier = Modifier.weight(1f)) {
                 Text("Save chat config")
             }
             OutlinedButton(onClick = {
                 val api = ChatApi(context)
-                api.setChatConfig(apiBase, apiKey, "story", providerStory, modelStory, pathStory)
-                api.setChatConfig(apiBase, apiKey, "resumes", providerResumes, modelResumes, pathResumes)
-                api.setChatConfig(apiBase, apiKey, "god", providerGod, modelGod, pathGod)
+                api.setChatConfig(state.serverUrl, apiKey, "story", providerStory, modelStory, pathStory)
+                api.setChatConfig(state.serverUrl, apiKey, "resumes", providerResumes, modelResumes, pathResumes)
+                api.setChatConfig(state.serverUrl, apiKey, "god", providerGod, modelGod, pathGod)
                 modelsResult = "Checking…"
                 scope.launch {
                     val paths = listOf(
@@ -455,14 +461,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
-        OutlinedTextField(
-            value = state.serverUrl,
-            onValueChange = viewModel::onServerUrl,
-            label = { Text("Sync server URL") },
-            placeholder = { Text("http://192.168.1.10:8001") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
         OutlinedTextField(
             value = state.authToken,
             onValueChange = viewModel::onAuthToken,
