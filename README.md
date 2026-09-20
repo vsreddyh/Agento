@@ -26,8 +26,6 @@ Retention ───────────────► one-shot container (c
 | `health-api` | `health-api` container | `8001` | Ingests Health Connect sync data from Android and persists to MongoDB |
 | `proxy` | `proxy` container (nginx) | `8080` | Single app URL: routes `/p/*` → gateway chat, `/api/*` → health sync |
 | `retention` | `retention` container (one-shot) | — | Data retention policy runner (`tools/retention.py`) |
-| `mongodb` | `mongodb` container (dev-only) | `27017` (internal) | Ephemeral local MongoDB (single-node replica set `rs0`) active only when `HERMES_ENV=dev` |
-| `mongodb-init` | `mongodb-init` container (dev-only, one-shot) | — | Runs `rs.initiate()` so dev transactions behave like prod |
 
 ---
 
@@ -62,7 +60,7 @@ Retention ───────────────► one-shot container (c
 ### Required External Services & API Keys
 - **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai) (model: `muse-spark-1.2-contributor-free`). One key covers both providers selectable per request in app Settings (`opencode` = Zen, `opencode-go` = Go).
 - **Android App Password**: `PASSWORD` (single bearer credential for chat + sync; generate with `openssl rand -hex 32`). The app takes one Server URL + Password; each tab picks provider/model from the live gateway catalog in Settings dropdowns. Provider keys live only in the VPS `.env`, never in git.
-- **MongoDB Cluster**: MongoDB connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`). (In dev mode, `HERMES_ENV=dev` provides an ephemeral local single-node replica set instead.)
+- **MongoDB Cluster**: MongoDB Atlas connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`) — the single data backend for money/health/cookbook.
 - **App Password**: `PASSWORD` Bearer token matching the Agento Android app Password field (single credential for chat + sync). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password.)
 
 ### Network & Firewall Ports
@@ -113,11 +111,7 @@ podman-compose -f docker/docker-compose.yml logs -f gateway
 
 ## Development Mode
 
-Setting `HERMES_ENV=dev` in the root `.env` switches the stack to an isolated dev environment:
-- Starts a local ephemeral `mongo:7` container (`mongodb://mongodb:27017`, no volume) as a single-node replica set (`rs0`, initiated by the `mongodb-init` one-shot) so money transactions behave exactly like prod Atlas.
-- All services (gateway, health-api, retention) connect to the local container.
-- Production remote MongoDB is never touched.
-- Data resets cleanly upon container destruction.
+All services read the same root `.env`, so a dev checkout just points `MONGODB_URI` at a separate Atlas database (or a throwaway `MONGODB_DB` name) — no local MongoDB container, no profile switching.
 
 ---
 

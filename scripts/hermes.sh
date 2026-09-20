@@ -252,9 +252,9 @@ cmd_init() {
     # as separate git remotes; this repo does NOT vendor their files.
     #  - vsreddyh/portals → workspace/portals (story bot lore vault; story cwd is workspace/story)
     #  - vsreddyh/Resume  → workspace/resumes  (resumes bot cwd IS the repo)
-    # In dev (HERMES_ENV=dev) the existing host key at ~/.ssh (or $SUDO_USER's
-    # ~/.ssh when run with sudo) is reused — no key generation. In prod add
-    # the deploy key to ~/.ssh before running init.
+    # The host key at ~/.ssh (or $SUDO_USER's ~/.ssh when run with sudo)
+    # is reused — no key generation. Add the deploy key to ~/.ssh before
+    # running init.
     _clone_repo() {
         local url="$1" dest="$2"
         # When run via sudo, clone as the invoking user so the host's existing

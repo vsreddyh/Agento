@@ -21,10 +21,11 @@ RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \
 RUN pip install --no-cache-dir hermes-agent pymongo mcp python-dotenv requests
 
 # Playwright MCP (browser automation for the bots): the official
-# @playwright/mcp server + headless chromium only. Browsers live in
-# /ms-playwright so the s6-setuidgid 1000:1000 services can execute them.
+# @playwright/mcp server + headless shell only (--only-shell skips the
+# full chromium + ffmpeg, which the headless MCP never uses). Browsers live
+# in /ms-playwright so the s6-setuidgid 1000:1000 services can execute them.
 RUN npm install -g @playwright/mcp \
- && npx -y playwright install --with-deps chromium \
+ && npx -y playwright install --with-deps --only-shell chromium \
  && chmod -R a+rX /ms-playwright
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

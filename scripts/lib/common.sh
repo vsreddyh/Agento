@@ -33,21 +33,8 @@ load_root_env() {
             export "$key"
         done < "$REPO/.env"
     fi
-    # Dev isolation: HERMES_ENV=dev uses a temporary local MongoDB container
-    # (mongodb:27017) instead of the remote Atlas cluster. Prod/unset uses
-    # the remote MONGODB_URI as-is. This keeps dev writes off the prod DB
-    # without needing a separate test_ database on Atlas.
-    # Exported after load so compose interpolation sees it over --env-file.
-    if [[ "${HERMES_ENV:-}" == "dev" ]]; then
-        export MONGODB_URI="mongodb://mongodb:27017"
-        export MONGODB_DB="${MONGODB_DB:-hermes}"
-        # Enable the `dev` compose profile so the local `mongodb` service is started.
-        if [[ -z "${COMPOSE_PROFILES:-}" ]]; then
-            export COMPOSE_PROFILES=dev
-        elif [[ ",$COMPOSE_PROFILES," != *",dev,"* ]]; then
-            export COMPOSE_PROFILES="${COMPOSE_PROFILES},dev"
-        fi
-    fi
+    # All data consumers use MONGODB_URI as-is (remote Atlas) — there is no
+    # local MongoDB service anymore.
 }
 
 # Run podman-compose, transparently falling back to sudo when the current
