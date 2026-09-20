@@ -2,7 +2,7 @@ model:
   default: muse-spark-1.2-contributor-free
   provider: opencode
   base_url: ${HERMES_BASE_URL}
-  api_key: ${OPENCODE_ZEN_API_KEY}
+  api_key: ${OPENCODE_API_KEY}
 
 agent:
   max_turns: 90
@@ -41,6 +41,15 @@ platform_toolsets:
   cli:
     - file
     - terminal
+
+# Browser automation (Playwright MCP, headless chromium bundled in the bot
+# image). Same stdio server on every bot profile.
+mcp_servers:
+  playwright:
+    command: "npx"
+    args: ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--headless"]
+    timeout: 120
+    connect_timeout: 60
 
 _config_version: 34
 

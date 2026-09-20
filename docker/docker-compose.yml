@@ -10,10 +10,8 @@ x-bot-base: &bot-base
   environment: &bot-base-environment
     HERMES_HOME: /hermes-home
     HOME: /hermes-home
-    OPENCODE_ZEN_API_KEY: ${OPENCODE_ZEN_API_KEY:-}
-    OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
-    HERMES_API_KEY: ${OPENCODE_ZEN_API_KEY:-}
-    SEARXNG_URL: http://searxng:8080
+    OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+    HERMES_API_KEY: ${OPENCODE_API_KEY:-}
     MONGODB_URI: ${MONGODB_URI:-}
     MONGODB_DB: ${MONGODB_DB:-hermes}
   restart: unless-stopped
@@ -21,31 +19,8 @@ x-bot-base: &bot-base
 services:
 
   # ──────────────────────────────────────────────────────
-  # SearXNG — Private metasearch engine
-  # ──────────────────────────────────────────────────────
-  searxng:
-    image: searxng/searxng:latest
-    # run as root initially to create settings.yml on first run (volume is root-owned)
-    user: "0:0"
-    ports:
-      - "${SEARXNG_PORT:-8888}:8080"
-    environment:
-      SEARXNG_BASE_URL: https://${SEARXNG_HOSTNAME:-localhost}/
-      SEARXNG_SECRET_KEY: ${SEARXNG_SECRET_KEY:-}
-    volumes:
-      - searxng_data:/etc/searxng
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
-      - DAC_OVERRIDE
-    restart: unless-stopped
-
-  # ──────────────────────────────────────────────────────
   # Health Connect sync endpoint (Android app → MongoDB).
-  # MONGODB_URI/HEALTH_SYNC_TOKEN from root .env.
+  # MONGODB_URI/PASSWORD from root .env.
   # ──────────────────────────────────────────────────────
   health-api:
     build:
@@ -56,7 +31,7 @@ services:
     environment:
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
-      HEALTH_SYNC_TOKEN: ${HEALTH_SYNC_TOKEN:-}
+      PASSWORD: ${PASSWORD:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -69,27 +44,18 @@ services:
   # Multiplexed gateway — ONE container serves story + resumes +
   # default (god) profiles with money/cookbook/health-check MCPs, plus
   # the built-in OpenAI-compatible API server (:8642) for the custom
-  # Android app and the dashboard (:9119, s6-supervised).
-  # HERMES_HOME (profiles/master) is the gateway home; story/resumes/
-  # default are named profiles under profiles/master/profiles/. The
-  # entrypoint renders each profile's config from these env vars.
-  #
-  # HERMES_DASHBOARD=1 runs dashboard alongside gateway in the SAME
-  # container, supervised by s6 (mirrors official
-  # nousresearch/hermes-agent where HERMES_DASHBOARD=1 enables the
-  # dashboard s6 service). Port 9119 is exposed on this single service.
+  # Android app. HERMES_HOME (profiles/master) is the gateway home;
+  # story/resumes/default are named profiles under
+  # profiles/master/profiles/. The entrypoint renders each profile's
+  # config from these env vars.
   #
   # ALL env comes from the single root .env (compose interpolation).
-  # Deliberately NOT the whole root env (no host-oriented
-  # SEARXNG_URL=localhost:8888, which would break web search in-container).
   # ──────────────────────────────────────────────────────
   gateway:
     <<: *bot-base
-    # s6-overlay needs to start as root to s6-setuidgid 1000:1000 for services;
-    # running the container as 1000:1000 breaks s6-applyuidgid (dashboard 9119 reset).
+    # s6-overlay starts as root to s6-setuidgid 1000:1000 for services.
     user: "0:0"
     ports:
-      - "${HERMES_DASHBOARD_PORT:-9119}:9119"
       - "${API_SERVER_PORT:-8642}:8642"
     volumes:
       - ../profiles/master:/hermes-home
@@ -101,14 +67,7 @@ services:
       - ../mcps/money:/mcps/miser-money:ro
     environment:
       <<: *bot-base-environment
-      HERMES_DASHBOARD: ${HERMES_DASHBOARD:-1}
-      HERMES_DASHBOARD_HOST: ${HERMES_DASHBOARD_HOST:-0.0.0.0}
-      HERMES_DASHBOARD_PORT: ${HERMES_DASHBOARD_PORT:-9119}
-      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-}
-      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}
-      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}
-      MONEY_DEFAULT_ACCOUNT: ${MONEY_DEFAULT_ACCOUNT:-Cash}
-      HEALTH_SYNC_TOKEN: ${HEALTH_SYNC_TOKEN:-}
+      PASSWORD: ${PASSWORD:-}
       PYTHONPATH: /mcps
 
   # ──────────────────────────────────────────────────────
@@ -190,6 +149,3 @@ services:
           sleep 2
         done
     restart: "no"
-
-volumes:
-  searxng_data:

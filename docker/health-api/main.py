@@ -4,8 +4,9 @@ Accepts POSTs from the Agento Android app and persists to the
 shared remote MongoDB collection the health-check bot also reads
 (hc_days — one doc per date, same shape the MCP writes).
 
-Auth: per-install tokens via `Authorization: Bearer <token>`.
-HEALTH_API_TOKENS is a comma-separated list (one token per install).
+Auth: single password via `Authorization: Bearer <token>`.
+PASSWORD is the one credential for chat + sync (matches the
+Password field in the Agento app Settings).
 
 Env:
   MONGODB_URI  connection string (required)
@@ -48,13 +49,13 @@ async def _lifespan(app: FastAPI):
 # App + startup token snapshot (re-read per request via _tokens so rotation needs no restart).
 app = FastAPI(title="Health Sync API", lifespan=_lifespan)
 
-_raw_tokens = os.environ.get("HEALTH_API_TOKENS", "") or os.environ.get("HEALTH_SYNC_TOKEN", "")
+_raw_tokens = os.environ.get("PASSWORD", "")
 TOKENS = {t.strip() for t in _raw_tokens.split(",") if t.strip()}
 
 
 def _tokens() -> set[str]:
     """Read accepted tokens fresh (env may rotate without a restart)."""
-    raw = os.environ.get("HEALTH_API_TOKENS", "") or os.environ.get("HEALTH_SYNC_TOKEN", "")
+    raw = os.environ.get("PASSWORD", "")
     return {t.strip() for t in raw.split(",") if t.strip()}
 
 # Shared client (lazily created) + accessor honoring MONGODB_URI/MONGODB_DB from the root .env.
@@ -118,7 +119,7 @@ def _local_date(iso: str) -> str:
 def _authorize(authorization: str | None) -> None:
     tokens = _tokens()
     if not tokens:
-        logger.warning("HEALTH_API_TOKENS not set — rejecting all requests")
+        logger.warning("PASSWORD not set — rejecting all requests")
         raise HTTPException(status_code=503, detail="server not configured with tokens")
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing bearer token")

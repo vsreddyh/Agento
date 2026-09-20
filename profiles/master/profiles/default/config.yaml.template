@@ -2,7 +2,7 @@ model:
   default: muse-spark-1.2-contributor-free
   provider: opencode
   base_url: ${HERMES_BASE_URL}
-  api_key: ${OPENCODE_ZEN_API_KEY}
+  api_key: ${OPENCODE_API_KEY}
 
 agent:
   max_turns: 90
@@ -53,7 +53,6 @@ mcp_servers:
     env:
       MONGODB_URI: "${MONGODB_URI}"
       MONGODB_DB: "${MONGODB_DB}"
-      MONEY_DEFAULT_ACCOUNT: "${MONEY_DEFAULT_ACCOUNT}"
     timeout: 120
     connect_timeout: 60
   cookbook:
@@ -72,6 +71,13 @@ mcp_servers:
       MONGODB_URI: "${MONGODB_URI}"
       MONGODB_DB: "${MONGODB_DB}"
       PYTHONPATH: "/mcps"
+    timeout: 120
+    connect_timeout: 60
+  # Browser automation (Playwright MCP, headless chromium bundled in the bot
+  # image). Same stdio server on every bot profile.
+  playwright:
+    command: "npx"
+    args: ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--headless"]
     timeout: 120
     connect_timeout: 60
 

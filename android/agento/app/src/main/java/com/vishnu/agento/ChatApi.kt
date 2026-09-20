@@ -88,11 +88,11 @@ class ChatApi(context: Context) {
         // Tab keys don't all match profile dir names (god tab -> default profile).
         "/p/" + defaultProfileFor(tab)
 
-    /** Provider slug for a tab; blank = omit (gateway default applies). */
+    /** Provider slug for a tab; blank means not configured (legacy: omitted). */
     fun providerFor(tab: String): String =
         (prefs.getString("provider_$tab", "") ?: "").trim()
 
-    /** Model for a tab; blank = omit (gateway default applies). */
+    /** Model for a tab; blank means not configured (legacy: omitted). */
     fun modelFor(tab: String): String =
         (prefs.getString("model_$tab", "") ?: "").trim()
 
@@ -182,8 +182,8 @@ class ChatApi(context: Context) {
             return@callbackFlow
         }
         val payload = JSONObject()
-        // An explicit provider is always honored server-side; blanks fall
-        // back to the gateway default for both provider and model.
+        // An explicit provider/model is always sent; blanks are omitted
+        // (legacy configs predate required selection).
         if (provider.isNotEmpty()) payload.put("provider", provider)
         if (model.isNotEmpty()) payload.put("model", model)
         val arr = JSONArray()

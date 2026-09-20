@@ -106,7 +106,8 @@ def log_transaction(type: str, amount: float, category: str = "other",
         amount: Positive amount.
         category: One of groceries, eating out, transport, bills, rent,
             shopping, health, fun, salary, other.
-        account: Source account name (default: MONEY_DEFAULT_ACCOUNT).
+        account: Source account name (required; no default — blank fails
+            with "no accounts found" or "account is required").
         sending_to: Required for transfers (receiving account name).
         note: Free-text description.
         date: YYYY-MM-DD, defaults to today.
@@ -128,8 +129,8 @@ def log_transaction(type: str, amount: float, category: str = "other",
 @mcp.tool()
 def log_text(text: str, account: str = "") -> dict:
     """Log from free-form text ('spent 300 on groceries', 'got 5000 salary',
-    'transfer 2000 to Cash'). Optional account override; otherwise the
-    default account is used.
+    'transfer 2000 to Cash'). Optional account override; blank requires an
+    existing account and fails with "no accounts found" when none exists.
     """
     r = classify(text)
     if r["action"] in ("log_income", "log_expense"):
