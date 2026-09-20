@@ -77,7 +77,7 @@ services:
   # Direct ports (:8642, :8001) stay published for backward compatibility.
   # ──────────────────────────────────────────────────────
   proxy:
-    image: nginx:1.27-alpine
+    image: docker.io/nginx:1.27-alpine
     ports:
       - "${APP_PORT:-8080}:80"
     volumes:
