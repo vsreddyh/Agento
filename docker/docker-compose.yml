@@ -11,6 +11,11 @@ x-bot-base: &bot-base
     HERMES_HOME: /hermes-home
     HOME: /hermes-home
     OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+    # hermes-agent resolves provider credentials ONLY from these two names
+    # (plugins/model-providers/opencode-zen: env_vars per provider) — same
+    # single key value under both names.
+    OPENCODE_ZEN_API_KEY: ${OPENCODE_API_KEY:-}
+    OPENCODE_GO_API_KEY: ${OPENCODE_API_KEY:-}
     HERMES_API_KEY: ${OPENCODE_API_KEY:-}
     MONGODB_URI: ${MONGODB_URI:-}
     MONGODB_DB: ${MONGODB_DB:-hermes}
