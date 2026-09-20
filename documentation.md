@@ -41,7 +41,7 @@ Retention ───────────────► one-shot container (c
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
 - **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles, supervised by `s6-overlay`.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
-- **app API**: Hermes built-in OpenAI-compatible server (`gateway.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
+- **app API**: Hermes built-in OpenAI-compatible server (`platforms.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **playwright**: Browser automation via the official `@playwright/mcp` stdio server (headless chromium bundled in the bot image), configured per profile in `mcp_servers`.
 - **retention**: One-shot retention job executing [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py) via cron or on stack start.
 - **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched.
@@ -188,7 +188,7 @@ curl http://<host>:8642/p/story/v1/chat/completions \
 
 - One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
 - Provider + model are picked per tab in app Settings from live dropdowns backed by `GET /p/<profile>/api/model/options` (explicit selection required — no gateway default). The gateway's provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
-- Config lives in `profiles/master/config.yaml.template` (`gateway.api_server`, key rendered from `PASSWORD`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
+- Config lives in `profiles/master/config.yaml.template` (`platforms.api_server`, key rendered from `PASSWORD`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
 
 ---
 

@@ -63,7 +63,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
    silently falls back empty/default).
 - LLM: direct to OpenCode (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-contributor-free`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` covers both per-request providers (`opencode`|`opencode-go`).
 - App API: Hermes built-in OpenAI-compatible server on the gateway
-  (`gateway.api_server`, `:8642`, single-password `PASSWORD`); one port, each app
+  (`platforms.api_server`, `:8642`, single-password `PASSWORD`); one port, each app
   tab uses its profile path (`/p/story|resumes|default`) and sends per-request
   provider (`opencode`|`opencode-go`) + model from app Settings. Provider keys
   live only in the VPS `.env`, never in git.
