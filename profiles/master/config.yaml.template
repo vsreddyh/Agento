@@ -9,17 +9,21 @@ model:
 # a bot itself — it only hosts the multiplexed gateway.
 gateway:
   multiplex_profiles: true
-  # Built-in OpenAI-compatible HTTP API for the custom Android app
-  # (3 chat tabs + Settings). One port; each tab sends its profile's
-  # model name (see GET /v1/models to confirm names under multiplex).
-  # Key is required — rendered from PASSWORD in the root .env.
-  # The sync token doubles as the single app password (chat + sync share
-  # it; the Android app sends it as the bearer credential on every call).
+
+# Built-in OpenAI-compatible HTTP API for the custom Android app
+# (3 chat tabs + Settings). NOTE: hermes-agent only reads this from the
+# `platforms:` map (extra.host/port/key) — a `gateway.api_server` block is
+# silently ignored. The primary profile owns the sole listener; multiplexed
+# profiles are served through the /p/<profile>/ URL prefix.
+# Key is rendered from PASSWORD in the root .env (doubles as the single
+# app password; the Android app sends it as the bearer credential).
+platforms:
   api_server:
     enabled: true
-    host: 0.0.0.0
-    port: 8642
-    key: ${PASSWORD}
+    extra:
+      host: 0.0.0.0
+      port: 8642
+      key: ${PASSWORD}
 
 auxiliary:
   vision:
