@@ -166,10 +166,20 @@ ensure_podman() {
         info "podman-compose installed."
     else
         info "podman-compose not in system repos — trying pip..."
-        (pip install --break-system-packages podman-compose 2>&1 || pip install podman-compose 2>&1) | sed 's/^/  /' || {
+        # ensure_podman runs before ensure_python in init, so guarantee pip
+        # exists first. PIPESTATUS (like apt_install) — `| sed` would mask
+        # pip's exit code and the failure branch below would never fire.
+        ensure_python || true
+        set +e
+        { pip install podman-compose 2>&1 \
+            || python3 -m pip install --break-system-packages podman-compose 2>&1; } | sed 's/^/  /'
+        rc=${PIPESTATUS[0]}
+        set -e
+        if [[ "$rc" != "0" ]]; then
             warn "podman-compose install failed — install manually (apt: podman-compose, or pip: pip install podman-compose)."
             return 1
-        }
+        fi
+        info "podman-compose installed via pip."
     fi
     # Rootless podman needs lingering so user containers survive logout
     # (the retention cron runs outside any login session). enable-linger
