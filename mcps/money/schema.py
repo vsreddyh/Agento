@@ -2,7 +2,8 @@
 """One-time (idempotent) MongoDB schema setup for the Miser MCP server.
 
 Creates/updates, in the configured database:
-  - money_accounts     (strict validator, unique name index, seed `Cash`)
+  - money_accounts     (strict validator, unique name index; no seed —
+                        the user creates accounts via create_account)
   - money_transactions (strict validator, TTL + query indexes)
   - views: money_monthly_summary, money_category_breakdown, money_balances
 
@@ -30,7 +31,6 @@ TX_TYPES = ["income", "expense", "transfer"]
 CATEGORIES = ["groceries", "eating out", "transport", "bills", "rent",
               "shopping", "health", "fun", "salary", "other"]
 RETENTION_DAYS = 90
-DEFAULT_ACCOUNT = os.environ.get("MONEY_DEFAULT_ACCOUNT", "Cash")
 
 # Strict validators: reject malformed docs at the DB layer (app validates first).
 ACCOUNTS_VALIDATOR = {
@@ -166,17 +166,9 @@ def ensure_views(db, dry_run, log):
             db.create_collection(view, viewOn=sources[view], pipeline=pipeline)
 
 
-# Seed: guarantees a default cash account so inserts without account still resolve.
-def seed_default_account(db, dry_run, log):
-    if db["money_accounts"].count_documents({"name": DEFAULT_ACCOUNT}, limit=1):
-        log(f"seed: account '{DEFAULT_ACCOUNT}' already exists")
-        return
-    log(f"seed: create account '{DEFAULT_ACCOUNT}' (cash, balance 0)")
-    if not dry_run:
-        db["money_accounts"].insert_one({
-            "name": DEFAULT_ACCOUNT, "type": "cash",
-            "balance": 0.0,
-            "archived": False, "createdAt": dt.datetime.now(dt.timezone.utc)})
+# No seed account: inserts without an account fail with
+# "no accounts found — please configure an account first" until the user
+# creates one via create_account.
 
 
 def migrate_renames(db, dry_run, log):
@@ -214,7 +206,6 @@ def main() -> int:
     migrate_renames(db, args.dry_run, log)
     ensure_indexes(db, args.dry_run, log)
     ensure_views(db, args.dry_run, log)
-    seed_default_account(db, args.dry_run, log)
     print("done.")
     return 0
 

@@ -50,7 +50,7 @@ See `schema.py`.
 ```bash
 cp .env.example .env   # MONGODB_URI required
 pip install -r requirements.txt
-python schema.py --apply   # one-time DB setup (idempotent; also seeds Cash)
+python schema.py --apply   # one-time DB setup (idempotent; no seed — create accounts via create_account)
 python server.py           # stdio transport
 ```
 

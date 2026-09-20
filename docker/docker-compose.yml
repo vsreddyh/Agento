@@ -67,7 +67,6 @@ services:
       - ../mcps/money:/mcps/miser-money:ro
     environment:
       <<: *bot-base-environment
-      MONEY_DEFAULT_ACCOUNT: ${MONEY_DEFAULT_ACCOUNT:-Cash}
       PASSWORD: ${PASSWORD:-}
       PYTHONPATH: /mcps
 

@@ -33,8 +33,8 @@ def st():
     schema.ensure_collection(db, "money_transactions", schema.TRANSACTIONS_VALIDATOR,
                              False, lambda *a: None)
     schema.ensure_indexes(db, False, lambda *a: None)
-    schema.seed_default_account(db, False, lambda *a: None)
     s = Store(uri=uri, db_name=TEST_DB)
+    s.create_account("Cash", "cash", 0)
     yield s
     client.drop_database(TEST_DB)
     client.close()
@@ -138,6 +138,21 @@ def test_transfer_validation(st):
     # nothing was written by any failed attempt
     assert st.query("2026-01-01", "2026-12-31") == []
     assert balances(st)["HDFC"] == 1000
+
+
+def test_blank_account_requires_setup(st):
+    # No accounts at all → configure-first error.
+    st._accts.delete_many({})
+    with pytest.raises(StoreError, match="no accounts found"):
+        st.insert(date="2026-09-01", amount=100, type="expense",
+                  category="other", account="")
+    # Accounts exist but none named → must pick one explicitly.
+    st.create_account("Cash", "cash", 0)
+    with pytest.raises(StoreError, match="account is required"):
+        st.insert(date="2026-09-01", amount=100, type="expense",
+                  category="other", account="")
+    # nothing was written by either failed attempt
+    assert st.query("2026-01-01", "2026-12-31") == []
 
 
 def test_delete_inverts_balances(st):

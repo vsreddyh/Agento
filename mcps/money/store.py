@@ -79,7 +79,6 @@ class Store:
         db = self._client[db_name or "hermes"]
         self._accts = db[ACCOUNTS]
         self._txns = db[TRANSACTIONS]
-        self.default_account = os.environ.get("MONEY_DEFAULT_ACCOUNT", "Cash")
         self._txn_supported: bool | None = None  # probed lazily via hello
 
     def _use_transactions(self) -> bool:
@@ -198,7 +197,18 @@ class Store:
             category = "other"
 
         def _run(sess):
-            src = self._resolve(account or self.default_account, sess)
+            # No default account: blank means the caller must choose.
+            name = (account or "").strip()
+            if not name:
+                existing = [a["name"] for a in
+                            self._accts.find({"archived": False}, {"name": 1},
+                                             session=sess).sort("name", 1)]
+                if not existing:
+                    raise StoreError("no accounts found — please configure an "
+                                     "account first (use create_account)")
+                raise StoreError("account is required — available accounts: " +
+                                 ", ".join(existing))
+            src = self._resolve(name, sess)
             doc: dict = {"date": date, "amount": amount, "type": type,
                          "category": category, "note": (note or "")[:300],
                          "source": (source or "mcp")[:64],
