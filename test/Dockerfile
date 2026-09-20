@@ -49,8 +49,11 @@ COPY --from=gobuild /out/miser-money /out/cookbook /out/health-check /out/retent
 # @playwright/mcp server + headless shell only (--only-shell skips the
 # full chromium + ffmpeg, which the headless MCP never uses). Browsers live
 # in /ms-playwright so the s6-setuidgid 1000:1000 services can execute them.
-RUN npm install -g @playwright/mcp \
- && npx -y playwright install --with-deps --only-shell chromium \
+# Split across RUNs: buildah needs ~2x each layer free at commit time, and
+# the combined OS-deps + browsers layer is too big to commit on a 19G disk.
+RUN npm install -g @playwright/mcp
+RUN npx -y playwright install-deps chromium
+RUN npx -y playwright install --only-shell chromium \
  && chmod -R a+rX /ms-playwright
 
 COPY test/entrypoint.sh /usr/local/bin/entrypoint.sh
