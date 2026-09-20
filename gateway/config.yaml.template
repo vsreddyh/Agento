@@ -4,9 +4,10 @@ model:
   base_url: ${HERMES_BASE_URL}
   api_key: ${OPENCODE_API_KEY}
 
-# Gateway home: multiplex host for the named profiles under
-# HERMES_HOME/profiles/ (story, resumes, default-god). This profile is NOT
-# a bot itself — it only hosts the multiplexed gateway.
+# God = the gateway home = Hermes' built-in "default" profile.
+# Story + resumes are side profiles nested under HERMES_HOME/profiles/.
+# There is no profiles/default/ dir: Hermes maps the name "default" to the
+# home dir itself and skips any nested dir of that name.
 gateway:
   multiplex_profiles: true
 

@@ -286,7 +286,15 @@ cmd_init() {
 
     info "Installing project skills into god + each side profile..."
     if [[ -d "$REPO/skills" ]]; then
-        for home in "$GATEWAY_HOME" $(for b in "${BOTS[@]}"; do profile_home "$b"; done); do
+        local homes=("$GATEWAY_HOME")
+        local b
+        for b in "${BOTS[@]}"; do
+            homes+=("$(profile_home "$b")")
+        done
+        local home
+        for home in "${homes[@]}"; do
+            local label; label="$(basename "$home")"
+            [[ "$label" == "gateway" ]] && label="god"
             # One-time cleanup: the docker-management skill was renamed to
             # podman-management — drop the orphaned copy if present.
             rm -rf "$home/skills/docker-management"
@@ -296,7 +304,7 @@ cmd_init() {
                 if [[ ! -d "$target" ]]; then
                     mkdir -p "$home/skills"
                     cp -r "$skill_dir" "$target"
-                    info "  $(basename "$home"): installed skill $skill_name"
+                    info "  $label: installed skill $skill_name"
                 fi
             done
         done

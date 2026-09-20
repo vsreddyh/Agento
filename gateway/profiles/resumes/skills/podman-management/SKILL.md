@@ -7,7 +7,7 @@ description: "Manage the project's Podman stack: container lifecycle, logs, heal
 
 ## Services
 
-- **LLM** — OpenCode direct (https://opencode.ai/zen/v1), no proxy. One `OPENCODE_API_KEY` covers `opencode` + `opencode-go`.
+- **LLM** — OpenCode direct (https://opencode.ai/zen/go/v1), no proxy. One `OPENCODE_API_KEY`, provider `opencode-go` only.
 
 ## Common commands
 
@@ -42,7 +42,7 @@ podman image prune -f
 
 ### Health check
 ```bash
-curl -s https://opencode.ai/zen/v1/models -H "Authorization: Bearer $OPENCODE_API_KEY" | head -20
+curl -s https://opencode.ai/zen/go/v1/models -H "Authorization: Bearer $OPENCODE_API_KEY" | head -20
 ```
 
 ### Cleanup

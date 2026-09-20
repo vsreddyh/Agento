@@ -183,7 +183,7 @@ Direct (bypassing the proxy):
 curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
 curl http://<host>:8642/p/story/v1/chat/completions \
   -H "Authorization: Bearer <PASSWORD>" -H "Content-Type: application/json" \
-  -d '{"provider": "opencode", "model": "glm-5.1", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
+  -d '{"provider": "opencode-go", "model": "glm-5.1", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
 
 - One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
