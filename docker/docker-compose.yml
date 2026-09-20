@@ -95,7 +95,7 @@ services:
 
   # ──────────────────────────────────────────────────────
   # Retention — one-shot data lifecycle job, run via cron
-  # (scripts/retention.sh run → docker compose run --rm retention).
+  # (scripts/retention.sh run → podman-compose run --rm retention).
   # Needs MONGODB_URI / MONGODB_DB only.
   # ──────────────────────────────────────────────────────
   retention:

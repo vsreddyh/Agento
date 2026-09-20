@@ -3,7 +3,7 @@ set -euo pipefail
 
 : "${HERMES_HOME:=/hermes-home}"
 
-# NOTE: env is injected entirely by docker-compose (from the single root
+# NOTE: env is injected entirely by compose (from the single root
 # .env). There are no per-profile .env files.
 #
 # Multiplex layout: HERMES_HOME is the gateway home (profiles/master) and
@@ -22,14 +22,14 @@ if [[ "${1:-}" == "chown-data" ]]; then
     exit 0
 fi
 
-# Docker-environment defaults, used by both the live and test stacks.
+# Container-environment defaults, used by both the live and test stacks.
 export HERMES_BASE_URL="${HERMES_BASE_URL:-https://opencode.ai/zen/v1}"
 export MONGODB_URI="${MONGODB_URI:-mongodb://mongodb:27017}"
 export MONGODB_DB="${MONGODB_DB:-hermes}"
 
 render_config() {
     # Render one profile's $1/config.yaml.template → $1/config.yaml.
-    # Env vars come from the process env (injected by docker-compose
+    # Env vars come from the process env (injected by compose
     # from the single root .env).
     local home="$1" t c
     t="$home/config.yaml.template"

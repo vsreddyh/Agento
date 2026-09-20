@@ -5,8 +5,8 @@
 - NEVER modify, restart, or touch live Hermes state on this machine:
   - `~/.hermes/` (config.yaml, .env, logs, skills, state)
   - `hermes` CLI, `hermes-gateway` systemd unit, `hermes dashboard`
-  - Docker stack on this machine (compose services) — compose files in
-    this repo are the source of truth, but do NOT run `docker compose` or
+  - Container stack on this machine (compose services) — compose files in
+    this repo are the source of truth, but do NOT run `podman-compose` or
     `./scripts/hermes.sh start|stop|restart|init` against the live daemons
     while working here.
 - Work only inside this repo. Preview/validate changes here; the user applies
@@ -20,7 +20,7 @@ OpenCode Zen directly (no proxy). ONE multiplexed gateway process
 for all three profiles (Hermes `gateway.multiplex_profiles`, `s6`-supervised),
 a built-in OpenAI-compatible API server (:8642) for the custom Android app,
 and remote MongoDB for domain data (money, health, cookbook). **The live stack
-is fully Dockerized** — one compose file (`docker/docker-compose.yml`): health-api + one `gateway` container (all 3 profiles, direct to `https://opencode.ai/zen/v1`, `s6` supervised) +
+is fully containerized** — one compose file (`docker/docker-compose.yml`): health-api + one `gateway` container (all 3 profiles, direct to `https://opencode.ai/zen/v1`, `s6` supervised) +
 a one-shot retention job (plus ephemeral `mongodb` in dev). Development runs the SAME single compose file;
 `HERMES_ENV=dev` in the root `.env` switches every data consumer to a temporary
 local `mongodb` container (`mongodb://mongodb:27017`, no volume, ephemeral).
@@ -28,7 +28,7 @@ No host Hermes install, no native processes.
 
 ```
 story+resumes+default
-   └─► ONE docker `gateway` container (HERMES_HOME=/hermes-home = profiles/master, s6-supervised)
+   └─► ONE `gateway` container (HERMES_HOME=/hermes-home = profiles/master, s6-supervised)
         └─► OpenCode Zen direct (https://opencode.ai/zen/v1, model muse-spark-1.2-contributor-free)
 proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)
 MongoDB (remote prod; ephemeral local in dev)  •  retention (one-shot container)
@@ -43,12 +43,12 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   NO `profiles/*/.env`.
 - Docs: `README.md` = quick start; `documentation.md` = deep dive.
 - `scripts/hermes.sh` = single entry point (`init|start|stop|restart|status|clean`),
-  a thin Docker orchestrator over `docker/docker-compose.yml`. No host installs.
-  `init` self-installs the host tools it needs: **docker + compose, curl,
+  a thin Podman orchestrator over `docker/docker-compose.yml`. No host installs.
+  `init` self-installs the host tools it needs: **podman + compose, curl,
   python3, cron** (only git + sudo must pre-exist). Hermes harness only —
-  `init` never installs the opencode CLI. health-api (:8001) binds `0.0.0.0` inside Docker.
+  `init` never installs the opencode CLI. health-api (:8001) binds `0.0.0.0` inside its container.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
-  (`docker compose run --rm retention` → `tools/retention.py`); cron daily 03:00
+  (`podman-compose run --rm retention` → `tools/retention.py`); cron daily 03:00
    installed by `init`, also runs on every `start`. money wipes transactions >90d;
    health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
    permanent; story/resumes (git repos) are no-ops.
@@ -57,14 +57,14 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   to ephemeral local `mongodb` container (`mongodb://mongodb:27017`, no volume)
   via `scripts/lib/common.sh` (`COMPOSE_PROFILES=dev`). `clean` removes the
   ephemeral dev data on `down -v` (or container remove) since there is no volume.
-- Docker: `docker/docker-compose.yml` = the whole stack (health-api
+- Podman: `docker/docker-compose.yml` = the whole stack (health-api
    + gateway + retention) — the ONLY compose file. Dev and
    prod run the same file; `HERMES_ENV=dev` repoints every data consumer at the
    ephemeral local container under the same `MONGODB_DB` name, never the prod DB. The bot image is built from `test/Dockerfile` +
    `test/entrypoint.sh` (bakes in `s6-overlay`; `hermes-agent` + `mcp` via pip; nodejs + headless chromium for the Playwright MCP); those are the image source, not
    a mirror stack.
    Provider keys + `PASSWORD` are injected via compose `environment:` interpolation
-   from the root `.env`; `docker_compose()` always passes `--env-file "$REPO/.env"`
+   from the root `.env`; `podman_compose()` always passes `--env-file "$REPO/.env"`
    (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
    silently falls back empty/default).
 - LLM: direct to OpenCode (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-contributor-free`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` covers both per-request providers (`opencode`|`opencode-go`).
@@ -79,7 +79,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   gateway home). Templates use `${HERMES_BASE_URL}` and `${HERMES_CWD}` plus
   `${PASSWORD}` on the gateway home.
   `test/entrypoint.sh` renders each to a git-ignored `config.yaml` at container
-  start with docker defaults: `https://opencode.ai/zen/v1` + `/workspace/<bot>`.
+  start with container defaults: `https://opencode.ai/zen/v1` + `/workspace/<bot>`.
 - Skills: project skills live in `skills/` and are copied into every profile on
   init. Hermes skill content (incl. autogenerated + `nousresearch/`), the
   skill-curator learning state (`.curator_state`/`.usage.json`),
@@ -87,7 +87,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   survives moving between VPSes. Only transient session/log/state files are
   git-ignored (runtime `memories/` are not tracked).
 - CI: `android-apk.yml` (builds debug+release APKs, `main` branch only) and `mcps-test.yml` (pytest over `mcps/`, `main` only; DB tests skip without `MONGODB_URI`). No linter. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
-  `docker compose -f docker/docker-compose.yml config`, then check gateway logs on the live machine.
+  `podman-compose -f docker/docker-compose.yml config`, then check gateway logs on the live machine.
 - Git identity: every commit as `vsreddyh <shouryanreddyh@gmail.com>` (`git -c user.name=vsreddyh -c user.email=shouryanreddyh@gmail.com commit ...`). Never use another name/email.
 
 ## Agento app versioning (semver — MAJOR.MINOR.PATCH)
@@ -110,7 +110,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 - Legacy native install: `start` detects stale `run/bots/*.pid` processes and
   stops them first; if a `hermes-gateway` systemd unit survives, `stop`
   best-effort stops it. `clean` no longer touches `~/.hermes` (no host install).
-- Migration (first Docker start after the native era): stop old native bots /
+- Migration (first container start after the native era): stop old native bots /
   health-api before `./scripts/hermes.sh start`, or two
   gateways will fight over the same ports.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.

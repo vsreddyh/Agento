@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fully-Dockerized live stack orchestrator.
+# Fully-containerized live stack orchestrator (Podman).
 #
 # Everything (health-api, gateway (3 profiles), retention) — direct to https://opencode.ai/zen/v1, no proxy
 # runs as compose services in docker/docker-compose.yml. init self-installs the
-# host tools it needs (curl, docker + compose, python3, cron),
+# host tools it needs (curl, podman + podman-compose, python3, cron),
 # builds the images, seeds the single root .env, copies skills,
 # and installs the retention cron. Only git + sudo must pre-exist.
 # All env lives in the root .env (no per-profile .env files).
@@ -42,12 +42,12 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed the root .env (all env vars) + skills, set up host tools (curl, docker, python, cron), install retention cron
-  start      Start the whole Docker stack (health-api, gateway (3 profiles))
-  stop       Stop the Docker stack
+  init       Build images, seed the root .env (all env vars) + skills, set up host tools (curl, podman, python, cron), install retention cron
+  start      Start the whole container stack (health-api, gateway (3 profiles))
+  stop       Stop the container stack
   restart    Stop then start
   status     Show all service states
-  clean      Wipe everything (profiles state, docker volumes, cron). Destructive.
+  clean      Wipe everything (profiles state, container volumes, cron). Destructive.
 EOF
 }
 
@@ -90,7 +90,7 @@ remove_retention_cron() {
 }
 
 # ────────────────────────────────────────────────────────────
-# HOST TOOLS (docker, curl, python, cron)
+# HOST TOOLS (podman, curl, python, cron)
 # ────────────────────────────────────────────────────────────
 # apt-install <pkgs...> — runs apt-get install, prints output indented, and
 # returns apt's real exit code (the pipe to sed must not mask failures).
@@ -117,8 +117,6 @@ pkg_install() {
         for p in "$@"; do
             case "$p" in
                 cron) p="cronie" ;;
-                docker.io) p="docker" ;;
-                docker-compose-v2|docker-compose-plugin) p="docker-compose" ;;
                 python3-venv) p="python-virtualenv" ;;
                 python3-pip) p="python-pip" ;;
             esac
@@ -152,31 +150,41 @@ ensure_curl() {
     info "curl installed."
 }
 
-ensure_docker() {
-    if command -v docker &>/dev/null; then
-        if docker compose version &>/dev/null 2>&1; then
-            info "docker + compose plugin available."
-        else
-            info "docker present — installing compose plugin..."
-            pkg_install docker-compose-v2 docker-compose-plugin 2>/dev/null \
-                || { warn "compose plugin install failed."; return 1; }
-        fi
+ensure_podman() {
+    if command -v podman &>/dev/null; then
+        info "podman available ($(podman --version 2>&1))."
     else
-        info "docker not found — installing docker.io + compose plugin..."
-        if ! pkg_install docker.io docker-compose-v2; then
-            # Some distros/repos name the plugin differently (Docker Inc repo).
-            pkg_install docker.io docker-compose-plugin || {
-                warn "docker install failed — install manually: https://docs.docker.com/engine/install/"
-                return 1
-            }
+        info "podman not found — installing podman..."
+        pkg_install podman || {
+            warn "podman install failed — install manually: https://podman.io/docs/installation"
+            return 1
+        }
+    fi
+    if command -v podman-compose &>/dev/null; then
+        info "podman-compose available."
+    elif pkg_install podman-compose 2>/dev/null; then
+        info "podman-compose installed."
+    else
+        info "podman-compose not in system repos — trying pip..."
+        # ensure_podman runs before ensure_python in init, so guarantee pip
+        # exists first. PIPESTATUS (like apt_install) — `| sed` would mask
+        # pip's exit code and the failure branch below would never fire.
+        ensure_python || true
+        set +e
+        { pip install podman-compose 2>&1 \
+            || python3 -m pip install --break-system-packages podman-compose 2>&1; } | sed 's/^/  /'
+        rc=${PIPESTATUS[0]}
+        set -e
+        if [[ "$rc" != "0" ]]; then
+            warn "podman-compose install failed — install manually (apt: podman-compose, or pip: pip install podman-compose)."
+            return 1
         fi
-        sudo systemctl enable --now docker 2>&1 | sed 's/^/  /' || true
+        info "podman-compose installed via pip."
     fi
-    if [[ "$(id -u)" != "0" ]] && ! id -nG | grep -qw docker; then
-        info "Adding $USER to the docker group..."
-        sudo usermod -aG docker "$USER" 2>&1 | sed 's/^/  /' || true
-        warn "Docker group access applies after re-login; init uses sudo for docker until then."
-    fi
+    # Rootless podman needs lingering so user containers survive logout
+    # (the retention cron runs outside any login session). enable-linger
+    # takes a username, so this works both rootless and under sudo.
+    sudo loginctl enable-linger "${SUDO_USER:-$USER}" 2>&1 | sed 's/^/  /' || true
 }
 
 ensure_python() {
@@ -218,14 +226,14 @@ cmd_init() {
     mkdir -p "$RUN_DIR"
 
     ensure_curl || true
-    ensure_docker || true
+    ensure_podman || true
     ensure_python || true
     ensure_cron || true
 
-    info "Building Docker images (bot image, health-api)..."
-    docker_compose -f "$COMPOSE" build 2>&1 || { error "docker compose build failed."; exit 1; }
-    info "Pruning dangling build cache (prevents 7+ GB bloat)..."
-    docker builder prune -f 2>&1 | sed 's/^/  /' || true
+    info "Building container images (bot image, health-api)..."
+    podman_compose -f "$COMPOSE" build 2>&1 || { error "podman-compose build failed."; exit 1; }
+    info "Pruning unused images (prevents GBs of bloat)..."
+    podman image prune -f 2>&1 | sed 's/^/  /' || true
 
     mkdir -p "$GATEWAY_HOME" "$REPO/workspace"
     local b
@@ -279,6 +287,9 @@ cmd_init() {
     if [[ -d "$REPO/skills" ]]; then
         for b in "${BOTS[@]}"; do
             local home; home="$(profile_home "$b")"
+            # One-time cleanup: the docker-management skill was renamed to
+            # podman-management — drop the orphaned copy if present.
+            rm -rf "$home/skills/docker-management"
             for skill_dir in "$REPO/skills"/*/; do
                 skill_name="$(basename "$skill_dir")"
                 target="$home/skills/$skill_name"
@@ -306,13 +317,13 @@ install_retention_cron
 # START / STOP / RESTART
 # ────────────────────────────────────────────────────────────
 legacy_native_bots() {
-    # PIDs left behind by the pre-Docker native launcher.
+    # PIDs left behind by the pre-container native launcher.
     local pf found=0
     for pf in "$RUN_DIR"/bots/*.pid; do
         [[ -f "$pf" ]] || continue
         if kill -0 "$(cat "$pf")" 2>/dev/null; then
             warn "Stale NATIVE bot process found: $pf (PID $(cat "$pf"))."
-            warn "  Stop it before starting the Docker stack or ports will conflict."
+            warn "  Stop it before starting the container stack or ports will conflict."
             found=1
         fi
     done
@@ -338,15 +349,14 @@ cmd_start() {
         done
     }
 
-    info "Starting Docker stack (health-api, gateway (3 profiles))..."
-    # Use BuildKit cache for pip (test/Dockerfile + health-api/Dockerfile have
-    # --mount=type=cache,target=/root/.cache/pip). Restarts should reuse cache
-    # and not prune it — only `init` does a full --build.
+    info "Starting container stack (health-api, gateway (3 profiles))..."
+    # Restarts reuse layers; only `init` prunes. `up --build` rebuilds layers
+    # whose COPY/requirements changed.
     if [[ "${HERMES_NO_BUILD:-0}" == "1" ]]; then
-        docker_compose -f "$COMPOSE" up -d 2>&1 || { error "docker compose up failed."; exit 1; }
+        podman_compose -f "$COMPOSE" up -d 2>&1 || { error "podman-compose up failed."; exit 1; }
     else
-        docker_compose -f "$COMPOSE" up -d --build 2>&1 || { error "docker compose up failed."; exit 1; }
-        docker builder prune -f 2>&1 | sed 's/^/  /' || true
+        podman_compose -f "$COMPOSE" up -d --build 2>&1 || { error "podman-compose up failed."; exit 1; }
+        podman image prune -f 2>&1 | sed 's/^/  /' || true
     fi
 
     info "Running data retention ..."
@@ -357,7 +367,7 @@ cmd_start() {
 }
 
 cmd_stop() {
-    docker_compose -f "$COMPOSE" down 2>&1 || warn "docker compose down failed."
+    podman_compose -f "$COMPOSE" down 2>&1 || warn "podman-compose down failed."
 
     # Best-effort: some previous setups still have a hermes-gateway systemd unit.
     if systemctl --user is-active hermes-gateway &>/dev/null 2>&1; then
@@ -370,13 +380,12 @@ cmd_stop() {
 }
 
 cmd_restart() {
-    # Rebuild for changed files but reuse BuildKit cache (pip cache in /root/.cache/pip
-    # via --mount=type=cache, plus layer cache). `up -d --build` only rebuilds
-    # layers whose COPY/requirements changed; unchanged pip wheels hit cache.
+    # Rebuild for changed files (`up -d --build` only rebuilds layers whose
+    # COPY/requirements changed).
     echo "=== Restarting (rebuild with cache) ==="
-    info "Rebuilding changed layers (BuildKit cache: pip /root/.cache/pip)..."
-    docker_compose -f "$COMPOSE" up -d --build 2>&1 || { error "docker compose up failed."; exit 1; }
-    # keep builder cache for next restart; `start` prunes dangling, `restart` does not
+    info "Rebuilding changed layers..."
+    podman_compose -f "$COMPOSE" up -d --build 2>&1 || { error "podman-compose up failed."; exit 1; }
+    # `start` prunes dangling images, `restart` does not
     info "Running data retention ..."
     bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
     echo ""
@@ -387,10 +396,10 @@ cmd_restart() {
 # STATUS
 # ────────────────────────────────────────────────────────────
 cmd_status() {
-    echo "Hermes Agent Status (docker stack)" && echo ""
-    docker_compose -f "$COMPOSE" ps
+    echo "Hermes Agent Status (podman stack)" && echo ""
+    podman_compose -f "$COMPOSE" ps
     echo ""
-    echo "Logs: docker compose -f docker/docker-compose.yml logs -f <service>"
+    echo "Logs: podman-compose -f docker/docker-compose.yml logs -f <service>"
 }
 
 # ────────────────────────────────────────────────────────────
@@ -401,7 +410,7 @@ cmd_clean() {
     echo "  - all profile runtime state (sessions, logs, DBs, rendered config)"
     echo "  - per-profile .env files (regenerated at container start)"
     echo "  - the retention cron entry"
-    echo "  - Docker volumes and containers"
+    echo "  - container volumes and containers"
     echo -e "${RED}Remote MongoDB is NOT touched. Committed files (skills, memories,"
     echo -e "SOUL.md, templates) are KEPT. Committed files are NOT touched.${NC}"
     read -r -p "Type 'yes' to wipe everything: " answer
@@ -410,8 +419,8 @@ cmd_clean() {
         exit 0
     fi
 
-    docker_compose -f "$COMPOSE" down -v 2>&1 || true
-    info "Docker containers and volumes removed."
+    podman_compose -f "$COMPOSE" down -v 2>&1 || true
+    info "Containers and volumes removed."
 
     remove_retention_cron
     bash "$SCRIPTS_DIR/sysmon.sh" remove || true

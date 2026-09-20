@@ -1,6 +1,6 @@
 .PHONY: up down restart logs status setup build
 
-COMPOSE := docker compose --env-file ../.env -f docker-compose.yml
+COMPOSE := podman-compose --env-file ../.env -f docker-compose.yml
 
 up:
 	$(COMPOSE) up -d

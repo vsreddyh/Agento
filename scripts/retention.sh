@@ -4,7 +4,7 @@ set -euo pipefail
 # Data retention for the Hermes bots. Runs via cron (installed by
 # scripts/hermes.sh init) and once on every start.
 #
-# The live stack is fully Dockerized, so this just runs the `retention`
+# The live stack is fully containerized (Podman), so this just runs the `retention`
 # one-shot service from docker/docker-compose.yml (same bot image, mounts
 # tools/ read-only, MONGODB_URI/MONGODB_DB injected from the root .env).
 # The actual policy logic lives in tools/retention.py.
@@ -23,7 +23,7 @@ COMPOSE="$REPO/docker/docker-compose.yml"
 load_root_env
 
 if [[ "${1:-}" == "--dry-run" ]]; then
-    docker_compose -f "$COMPOSE" run --rm retention --dry-run
+    podman_compose -f "$COMPOSE" run --rm retention --dry-run
 else
-    docker_compose -f "$COMPOSE" run --rm retention
+    podman_compose -f "$COMPOSE" run --rm retention
 fi

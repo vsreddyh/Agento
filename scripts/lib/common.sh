@@ -50,16 +50,16 @@ load_root_env() {
     fi
 }
 
-# Run docker compose, transparently falling back to sudo when the current
-# session predates docker-group membership (fresh install / first run).
+# Run podman-compose, transparently falling back to sudo when the current
+# session has no user podman socket (fresh install / first run).
 #
 # --env-file: interpolation reads the single root .env. Without it, compose
 # looks for .env in the compose file's dir (docker/ or test/) and every
 # ${VAR} (tokens, MONGODB_URI, ...) silently falls back to empty/default.
-docker_compose() {
-    if docker info &>/dev/null 2>&1; then
-        docker compose --env-file "$REPO/.env" "$@"
+podman_compose() {
+    if podman info &>/dev/null 2>&1; then
+        podman-compose --env-file "$REPO/.env" "$@"
     else
-        sudo docker compose --env-file "$REPO/.env" "$@"
+        sudo podman-compose --env-file "$REPO/.env" "$@"
     fi
 }

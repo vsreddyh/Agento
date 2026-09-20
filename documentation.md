@@ -6,7 +6,7 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 
 1. [System Architecture](#system-architecture)
 2. [LLM Connection (Direct Zen)](#llm-connection-direct-zen)
-3. [Stack Lifecycle (Docker)](#stack-lifecycle-docker)
+3. [Stack Lifecycle (Podman)](#stack-lifecycle-podman)
 4. [Bot Profiles & Multiplexing](#bot-profiles--multiplexing)
 5. [Remote MongoDB & Storage Model](#remote-mongodb--storage-model)
 6. [Data Retention & Lifecycle](#data-retention--lifecycle)
@@ -21,12 +21,12 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 
 ## System Architecture
 
-The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a health sync API, and a scheduled retention job — **fully in Docker**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
+The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a health sync API, and a scheduled retention job — **fully in containers**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
 
 ```
                                Remote MongoDB (money, health, cookbook)
                                             ▲
-                             Docker containers
+                             Containers
  story ──┐               │
  resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
  default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
@@ -58,33 +58,33 @@ All profiles connect directly to OpenCode Zen (`https://opencode.ai/zen/v1`) usi
 
 ---
 
-## Stack Lifecycle (Docker)
+## Stack Lifecycle (Podman)
 
 All container management is orchestrated through [`scripts/hermes.sh`](file:///home/vsreddyh/Documents/Discord-bots/scripts/hermes.sh), backed by [`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml).
 
 ### `init`
-1. Verifies host dependencies (docker, compose, python3, curl, cron) and installs missing requirements.
-2. Builds the shared bot image ([`test/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/test/Dockerfile), baking in `s6-overlay`) and the `health-api` image.
+1. Verifies host dependencies (podman, compose, python3, curl, cron) and installs missing requirements.
+2. Builds the shared bot image ([`test/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/test/Dockerfile), baking in `s6-overlay`) and the `health-api` image. Note: podman/buildah has no BuildKit-style pip cache mounts, so rebuilds reinstall Python deps from the network — expect slower `start`/`restart` rebuilds than under Docker.
 3. Initializes root `.env` from `.env.example` if not already present.
 4. Copies skill files from `skills/` into each profile directory.
 5. Installs the daily data retention cron job (runs daily at 03:00).
 
 ### `start`
 1. Cleans up any stale native PIDs in `run/bots/*.pid`.
-2. Starts the compose stack in detached mode: `docker compose -f docker/docker-compose.yml up -d --build`.
+2. Starts the compose stack in detached mode: `podman-compose -f docker/docker-compose.yml up -d --build`.
 3. Runs an initial retention check using [`scripts/retention.sh`](file:///home/vsreddyh/Documents/Discord-bots/scripts/retention.sh).
 
 ### `stop`
-Gracefully halts running containers: `docker compose -f docker/docker-compose.yml down`.
+Gracefully halts running containers: `podman-compose -f docker/docker-compose.yml down`.
 
 ### `restart`
 Executes a stop followed by a full start sequence.
 
 ### `status`
-Displays container states and published ports via `docker compose -f docker/docker-compose.yml ps`.
+Displays container states and published ports via `podman-compose -f docker/docker-compose.yml ps`.
 
 ### `clean` (Destructive)
-Stops containers, wipes docker volumes (`down -v`), removes `run/`, clears rendered configs and per-profile `.env` files, and removes the retention crontab entry. **Never touches remote MongoDB.**
+Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered configs and per-profile `.env` files, and removes the retention crontab entry. **Never touches remote MongoDB.**
 
 ---
 
@@ -218,7 +218,7 @@ All settings are configured in the single root `.env` file:
 ## Security & Isolation
 
 - **Secrets Management**: Live API keys and database credentials reside exclusively in the git-ignored `.env` file.
-- **Container Isolation**: `gateway` container mounts only required directories (`profiles/master`, `workspace`, `/tools` read-only) with no host Docker socket access.
+- **Container Isolation**: `gateway` container mounts only required directories (`profiles/master`, `workspace`, `/tools` read-only) with no host container-socket access (Podman is daemonless — there is no shared socket).
 
 ---
 
