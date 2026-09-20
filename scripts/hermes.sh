@@ -260,13 +260,13 @@ cmd_init() {
     }
     if [[ ! -d "$REPO/workspace/resumes/.git" ]]; then
         info "Cloning Resumes repo into workspace/resumes..."
-        _clone_repo "${HERMES_RESUMES_REPO:-git@github.com:vsreddyh/Resume.git}" "$REPO/workspace/resumes" \
-            || warn "clone failed — configure an SSH key for this host first (or set HERMES_RESUMES_REPO). ./scripts/hermes.sh start will still work, but the resumes bot won't have its workspace."
+        _clone_repo "git@github.com:vsreddyh/Resume.git" "$REPO/workspace/resumes" \
+            || warn "clone failed — configure an SSH key for this host first. ./scripts/hermes.sh start will still work, but the resumes bot won't have its workspace."
     fi
     if [[ ! -d "$REPO/workspace/portals/.git" ]]; then
         info "Cloning Portals (lore vault) repo into workspace/portals..."
-        _clone_repo "${HERMES_PORTALS_REPO:-git@github.com:vsreddyh/portals.git}" "$REPO/workspace/portals" \
-            || warn "clone failed — configure an SSH key for this host first (or set HERMES_PORTALS_REPO). ./scripts/hermes.sh start will still work, but the story bot won't have its vault."
+        _clone_repo "git@github.com:vsreddyh/portals.git" "$REPO/workspace/portals" \
+            || warn "clone failed — configure an SSH key for this host first. ./scripts/hermes.sh start will still work, but the story bot won't have its vault."
     fi
     unset -f _clone_repo
     # When run with sudo, ensure workspace/profile dirs stay owned by the
