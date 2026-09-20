@@ -162,18 +162,19 @@ ensure_podman() {
     fi
     if command -v podman-compose &>/dev/null; then
         info "podman-compose available."
+    elif pkg_install podman-compose 2>/dev/null; then
+        info "podman-compose installed."
     else
-        info "podman-compose not found — installing..."
-        pkg_install podman-compose || {
+        info "podman-compose not in system repos — trying pip..."
+        (pip install --break-system-packages podman-compose 2>&1 || pip install podman-compose 2>&1) | sed 's/^/  /' || {
             warn "podman-compose install failed — install manually (apt: podman-compose, or pip: pip install podman-compose)."
             return 1
         }
     fi
     # Rootless podman needs lingering so user containers survive logout
-    # (the retention cron runs outside any login session).
-    if [[ "$(id -u)" != "0" ]]; then
-        sudo loginctl enable-linger "$USER" 2>&1 | sed 's/^/  /' || true
-    fi
+    # (the retention cron runs outside any login session). enable-linger
+    # takes a username, so this works both rootless and under sudo.
+    sudo loginctl enable-linger "${SUDO_USER:-$USER}" 2>&1 | sed 's/^/  /' || true
 }
 
 ensure_python() {
@@ -276,6 +277,9 @@ cmd_init() {
     if [[ -d "$REPO/skills" ]]; then
         for b in "${BOTS[@]}"; do
             local home; home="$(profile_home "$b")"
+            # One-time cleanup: the docker-management skill was renamed to
+            # podman-management — drop the orphaned copy if present.
+            rm -rf "$home/skills/docker-management"
             for skill_dir in "$REPO/skills"/*/; do
                 skill_name="$(basename "$skill_dir")"
                 target="$home/skills/$skill_name"

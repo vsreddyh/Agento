@@ -18,7 +18,7 @@ number of Hermes agents running at the same time (max 3, one single-user session
 
 ## OS
 
-- **Ubuntu 24.04 LTS (x86_64)** — supported until 2029; clean Docker/systemd support. Debian 12 is the fallback.
+- **Ubuntu 24.04 LTS (x86_64)** — supported until 2029; clean Podman/systemd support. Debian 12 is the fallback.
 - No host Hermes install anymore — the stack is 100% containers, so the OS stays minimal.
 
 ## RAM — the real numbers

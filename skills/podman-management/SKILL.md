@@ -14,7 +14,7 @@ description: "Manage the project's Podman stack: container lifecycle, logs, heal
 ### Status
 ```bash
 podman-compose -f docker/docker-compose.yml ps
-podman-compose -f docker/docker-compose.yml ps --status running
+podman ps --filter status=running
 ```
 
 ### Logs
