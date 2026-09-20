@@ -24,7 +24,10 @@ if [[ "${1:-}" == "chown-data" ]]; then
 fi
 
 # Container-environment defaults, used by both the live and test stacks.
-export HERMES_BASE_URL="${HERMES_BASE_URL:-https://opencode.ai/zen/go/v1}"
+# Model traffic goes through the local go-shim sidecar (injects the
+# x-opencode-session header hermes 0.19.0 doesn't send). Override only to
+# bypass the shim (direct upstream needs a client that sends the header).
+export HERMES_BASE_URL="${HERMES_BASE_URL:-http://127.0.0.1:18081}"
 export MONGODB_URI="${MONGODB_URI:-}"
 export MONGODB_DB="${MONGODB_DB:-hermes}"
 

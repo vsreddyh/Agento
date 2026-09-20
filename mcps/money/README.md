@@ -49,9 +49,7 @@ See `schema.py`.
 
 ```bash
 cp .env.example .env   # MONGODB_URI required
-pip install -r requirements.txt
-python schema.py --apply   # one-time DB setup (idempotent; no seed — create accounts via create_account)
-python server.py           # stdio transport
+go run ./cmd/miser-money          # stdio transport (or go build -o miser-money ./cmd/miser-money)
 ```
 
 ## Client config
@@ -60,18 +58,16 @@ python server.py           # stdio transport
 {
   "mcpServers": {
     "miser-money": {
-      "command": "python",
-      "args": ["server.py"],
-      "cwd": "/home/vsreddyh/Documents/mcps-gemini-spark/miser-money"
+      "command": "/usr/local/bin/miser-money",
+      "args": []
     }
   }
 }
 ```
 
-## Files
+## Files (Go, `internal/money/` + `cmd/miser-money/`)
 
-- `server.py` — MCP server + tool definitions
-- `store.py` — accounts, atomic transactions, stored balances
-- `schema.py` — validators, indexes, views, seed (`--apply` / `--dry-run`)
-- `parse.py` — free-form text parser
-- `test_miser.py` — tests (`pytest test_miser.py`, needs `MONGODB_URI`)
+- `cmd/miser-money/main.go` — MCP server + tool definitions
+- `internal/money/store.go` — accounts, atomic transactions, stored balances
+- `internal/money/parse.go` — free-form text parser
+- `internal/money/money_test.go` — tests (`go test ./internal/money/`, needs `MONGODB_URI`)

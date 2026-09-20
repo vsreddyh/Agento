@@ -3,10 +3,9 @@
 # ──────────────────────────────────────────────────────
 x-bot-base: &bot-base
   build:
-    context: ../test
+    context: ..
+    dockerfile: test/Dockerfile
   user: "1000:1000"
-  volumes:
-    - ../tools:/tools:ro
   environment: &bot-base-environment
     HERMES_HOME: /hermes-home
     HOME: /hermes-home
@@ -64,7 +63,6 @@ services:
     volumes:
       - ../gateway:/hermes-home
       - ../workspace:/workspace
-      - ../tools:/tools:ro
       - ../mcps/common:/mcps/common:ro
       - ../mcps/cookbook:/mcps/cookbook:ro
       - ../mcps/health_check:/mcps/health_check:ro
@@ -106,12 +104,11 @@ services:
   # ──────────────────────────────────────────────────────
   retention:
     build:
-      context: ../test
+      context: ..
+      dockerfile: test/Dockerfile
     user: "1000:1000"
-    volumes:
-      - ../tools:/tools:ro
     environment:
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
-    entrypoint: ["python3", "/tools/retention.py"]
+    entrypoint: ["/usr/local/bin/retention"]
     restart: "no"

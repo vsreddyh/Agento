@@ -10,6 +10,5 @@ Cal-in + cal-out + weight. Minimal schemas (old `food_*` abandoned, no migration
   `workouts[{type, minutes, kcal}]`, `updatedAt`. One doc per date — MCP and
   health-api write the same shape (no field drift).
 
-Run: `PYTHONPATH=mcps pip install -r mcps/health_check/requirements.txt`,
-needs `MONGODB_URI`/`MONGODB_DB`, then `python mcps/health_check/server.py` (stdio).
-In-container `PYTHONPATH=/mcps`.
+Run: `go run ./cmd/health-check` (stdio), needs `MONGODB_URI`/`MONGODB_DB`.
+In-container binary: `/usr/local/bin/health-check`.

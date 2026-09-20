@@ -25,7 +25,7 @@ Retention ───────────────► one-shot container (c
 | `gateway` | `gateway` container (`s6` supervised) | `8642` (app API) | Multiplexed gateway for all 3 profiles + OpenAI-compatible API server |
 | `health-api` | `health-api` container | `8001` | Ingests Health Connect sync data from Android and persists to MongoDB |
 | `proxy` | `proxy` container (nginx) | `8080` | Single app URL: routes `/p/*` → gateway chat, `/api/*` → health sync |
-| `retention` | `retention` container (one-shot) | — | Data retention policy runner (`tools/retention.py`) |
+| `retention` | `retention` container (one-shot) | — | Data retention policy runner (`cmd/retention`, Go binary in bot image) |
 
 ---
 
@@ -141,14 +141,14 @@ All services read the same root `.env`, so a dev checkout just points `MONGODB_U
 
 ## Remote MongoDB & Data Retention
 
-The shared CLI tool `tools/mongo.py` provides database operations:
+The shared CLI tool `mongo` (`cmd/mongo/main.go`) provides database operations:
 
 ```bash
-python3 tools/mongo.py insert money_transactions '{"date":"2026-08-08","amount":300,"type":"expense","category":"groceries"}'
-python3 tools/mongo.py aggregate money_transactions '[{"$group":{"_id":"$category","total":{"$sum":"$amount"}}}]'
+go run ./cmd/mongo insert money_transactions '{"date":"2026-08-08","amount":300,"type":"expense","category":"groceries"}'
+go run ./cmd/mongo aggregate money_transactions '[{"$group":{"_id":"$category","total":{"$sum":"$amount"}}}]'
 ```
 
-Data lifecycle is governed by `tools/retention.py` (`scripts/retention.sh run`):
+Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`, `scripts/retention.sh run`):
 - `money_transactions`: Purges records where `date < today - 90d`.
 - `hc_meals`, `hc_days`: Purges records where `date < today - 30d`.
 - `hc_weight`: **Permanent retention** (never pruned).
@@ -177,9 +177,14 @@ Data lifecycle is governed by `tools/retention.py` (`scripts/retention.sh run`):
 │   ├── config.yaml.template # model + platforms.api_server + MCPs
 │   ├── SOUL.md              # god operator
 │   └── profiles/            # Nested side profiles (story, resumes)
-├── tools/
-│   ├── mongo.py             # MongoDB CLI helper for bot toolsets
-│   └── retention.py         # Data lifecycle prune runner
+├── cmd/                 # Go services (each builds to a static binary)
+│   ├── mongo/             # MongoDB CLI helper for bot toolsets
+│   ├── retention/         # Data lifecycle prune runner
+│   ├── health-api/        # Health Connect sync service
+│   ├── miser-money/       # money MCP server (stdio)
+│   ├── cookbook/          # cookbook MCP server (stdio)
+│   └── health-check/      # health-check MCP server (stdio)
+├── internal/              # Shared Go packages (mongo, validate, money, cookbook, healthcheck)
 ├── scripts/
 │   ├── hermes.sh            # Main orchestration CLI
 │   ├── retention.sh         # Retention execution wrapper

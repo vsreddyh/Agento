@@ -138,35 +138,31 @@ platform_toolsets:
     - file
     - terminal
 
-# God tool backend: money + cookbook + health-check (in-repo mcps/*)
-# run as stdio MCP servers. Mounts (compose): ../mcps/money:/mcps/miser-money:ro,
-# ../mcps/common:/mcps/common:ro, ../mcps/cookbook:/mcps/cookbook:ro,
-# ../mcps/health_check:/mcps/health_check:ro.
+# God tool backend: money + cookbook + health-check (in-repo Go MCP servers,
+# baked into the bot image at /usr/local/bin by test/Dockerfile).
 mcp_servers:
   miser-money:
-    command: "python3"
-    args: ["/mcps/miser-money/server.py"]
+    command: "/usr/local/bin/miser-money"
+    args: []
     env:
       MONGODB_URI: "${MONGODB_URI}"
       MONGODB_DB: "${MONGODB_DB}"
     timeout: 120
     connect_timeout: 60
   cookbook:
-    command: "python3"
-    args: ["/mcps/cookbook/server.py"]
+    command: "/usr/local/bin/cookbook"
+    args: []
     env:
       MONGODB_URI: "${MONGODB_URI}"
       MONGODB_DB: "${MONGODB_DB}"
-      PYTHONPATH: "/mcps"
     timeout: 120
     connect_timeout: 60
   health-check:
-    command: "python3"
-    args: ["/mcps/health_check/server.py"]
+    command: "/usr/local/bin/health-check"
+    args: []
     env:
       MONGODB_URI: "${MONGODB_URI}"
       MONGODB_DB: "${MONGODB_DB}"
-      PYTHONPATH: "/mcps"
     timeout: 120
     connect_timeout: 60
   # Browser automation (Playwright MCP, headless chromium bundled in the bot

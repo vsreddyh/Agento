@@ -43,7 +43,7 @@ Retention ───────────────► one-shot container (c
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
 - **app API**: Hermes built-in OpenAI-compatible server (`platforms.api_server` in `gateway/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **playwright**: Browser automation via the official `@playwright/mcp` stdio server (headless chromium bundled in the bot image), configured per profile in `mcp_servers`.
-- **retention**: One-shot retention job executing [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py) via cron or on stack start.
+- **retention**: One-shot retention job executing the `retention` Go binary (`cmd/retention/main.go`) via cron or on stack start.
 - **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched.
 
 ---
@@ -120,19 +120,19 @@ Domain data for `money`, `health-check`, and `cookbook` is managed in MongoDB (d
 | `cookbook_cook_log` | Cookbook | `recipe_id`, `date`, `cooking_note`, `aftertaste_note` — **permanent** |
 
 ### Database Helper CLI
-Bots and scripts interact with MongoDB using [`tools/mongo.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/mongo.py):
+Bots and scripts interact with MongoDB using the `mongo` Go CLI (`cmd/mongo/main.go`, baked into the bot image at `/usr/local/bin/mongo`):
 
 ```bash
-python3 tools/mongo.py count money_transactions '{"type":"expense"}'
-python3 tools/mongo.py insert hc_weight '{"date":"2026-08-08","kg":63.2}'
-python3 tools/mongo.py upsert hc_days '{"date":"2026-08-08"}' '{"steps":8452}'
+go run ./cmd/mongo count money_transactions '{"type":"expense"}'
+go run ./cmd/mongo insert hc_weight '{"date":"2026-08-08","kg":63.2}'
+go run ./cmd/mongo upsert hc_days '{"date":"2026-08-08"}' '{"steps":8452}'
 ```
 
 ---
 
 ## Data Retention & Lifecycle
 
-Automated data pruning is executed by [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py):
+Automated data pruning is executed by the `retention` Go binary (`cmd/retention/main.go`):
 
 | Target | Retention Window | Action |
 |---|---|---|
