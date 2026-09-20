@@ -1,6 +1,6 @@
 # VPS sizing — 3-profile Hermes stack (Dockerized)
 
-Fully Dockerized stack: three Hermes profiles + app API server in **one multiplexed gateway** (`s6`-supervised) + searxng + health-api + retention.
+Fully Dockerized stack: three Hermes profiles + app API server in **one multiplexed gateway** (`s6`-supervised) + health-api + retention.
 MongoDB stays **remote** (Atlas) — no Mongo container or storage counted below.
 
 **Key fact: no LLM inference happens on this box.** OpenCode Zen runs the models, the
@@ -35,7 +35,7 @@ into a single ~0.58 GiB gateway, i.e. roughly the same total. Per container:
 | gateway (multiplexed — all bots via s6) | ~0.58 GiB (all bots, one container) |
 | **Stack total** | **~1.06 GiB** |
 
-+ searxng (~0.2 GB) + Docker + OS (~0.4 GB) → realistic **floor ≈ 1.1 GB** (remote Mongo).
++ Docker + OS (~0.4 GB) → realistic **floor ≈ 1.1 GB** (remote Mongo).
 
 Each **concurrently active agent** adds ~0.6 GB (conversation context + tool output; the model
 itself runs elsewhere).
@@ -50,14 +50,13 @@ guidance was ~2–3× over — safe, but you'd be paying for RAM the bots never 
 ## CPU
 
 - Agents are I/O-bound; **2 vCPU handles all tiers comfortably** (idle CPU is ~0.2% per container).
-- Searxng spawns a short-lived worker per search query — the only real CPU spike.
 - 4 vCPU only for the all-4-at-once tier as breathing room. More is wasted.
 
 ## Disk — whole numbers
 
 Measured (`docker system df` + repo `du`), not guessed:
 
-- Docker images: ~3.0 GB (bot 457 MB, searxng 258 MB, health-api 198 MB)
+- Docker images: bot (now includes nodejs + headless chromium for Playwright MCP) + health-api — re-measure with `docker system df` after build, old ~3.0 GB figure no longer applies
 - Volumes + container writable layers: ~0.5 GB
 - Live repo data (profiles, workspace, skills): ~0.15 GB
 - **Total keep-everything footprint: ~4 GB**

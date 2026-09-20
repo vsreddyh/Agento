@@ -5,7 +5,7 @@
 - NEVER modify, restart, or touch live Hermes state on this machine:
   - `~/.hermes/` (config.yaml, .env, logs, skills, state)
   - `hermes` CLI, `hermes-gateway` systemd unit, `hermes dashboard`
-  - Docker stack on this machine (`searxng`) — compose files in
+  - Docker stack on this machine (compose services) — compose files in
     this repo are the source of truth, but do NOT run `docker compose` or
     `./scripts/hermes.sh start|stop|restart|init` against the live daemons
     while working here.
@@ -16,12 +16,11 @@
 ## What this project is
 
 Runs **three Hermes profiles** (story, resumes, default-god) against
-OpenCode Zen directly (no proxy). Private SearXNG, ONE multiplexed gateway process
+OpenCode Zen directly (no proxy). ONE multiplexed gateway process
 for all three profiles (Hermes `gateway.multiplex_profiles`, `s6`-supervised),
 a built-in OpenAI-compatible API server (:8642) for the custom Android app,
 and remote MongoDB for domain data (money, health, cookbook). **The live stack
-is fully Dockerized** — one compose file (`docker/docker-compose.yml`): searxng
-+ health-api + one `gateway` container (all 3 profiles, direct to `https://opencode.ai/zen/v1`, `s6` supervised) +
+is fully Dockerized** — one compose file (`docker/docker-compose.yml`): health-api + one `gateway` container (all 3 profiles, direct to `https://opencode.ai/zen/v1`, `s6` supervised) +
 a one-shot retention job (plus ephemeral `mongodb` in dev). Development runs the SAME single compose file;
 `HERMES_ENV=dev` in the root `.env` switches every data consumer to a temporary
 local `mongodb` container (`mongodb://mongodb:27017`, no volume, ephemeral).
@@ -31,7 +30,7 @@ No host Hermes install, no native processes.
 story+resumes+default
    └─► ONE docker `gateway` container (HERMES_HOME=/hermes-home = profiles/master, s6-supervised)
         └─► OpenCode Zen direct (https://opencode.ai/zen/v1, model muse-spark-1.2-contributor-free)
-searxng (:8888)  •  proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)
+proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)
 MongoDB (remote prod; ephemeral local in dev)  •  retention (one-shot container)
 workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo vsreddyh/Resume) — separate git repos
 ```
@@ -58,19 +57,19 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   to ephemeral local `mongodb` container (`mongodb://mongodb:27017`, no volume)
   via `scripts/lib/common.sh` (`COMPOSE_PROFILES=dev`). `clean` removes the
   ephemeral dev data on `down -v` (or container remove) since there is no volume.
-- Docker: `docker/docker-compose.yml` = the whole stack (searxng
-   + health-api + gateway + retention) — the ONLY compose file. Dev and
+- Docker: `docker/docker-compose.yml` = the whole stack (health-api
+   + gateway + retention) — the ONLY compose file. Dev and
    prod run the same file; `HERMES_ENV=dev` repoints every data consumer at the
    ephemeral local container under the same `MONGODB_DB` name, never the prod DB. The bot image is built from `test/Dockerfile` +
-   `test/entrypoint.sh` (bakes in `s6-overlay`; `hermes-agent` + `mcp` via pip); those are the image source, not
+   `test/entrypoint.sh` (bakes in `s6-overlay`; `hermes-agent` + `mcp` via pip; nodejs + headless chromium for the Playwright MCP); those are the image source, not
    a mirror stack.
-   Provider keys + `HEALTH_SYNC_TOKEN` are injected via compose `environment:` interpolation
+   Provider keys + `PASSWORD` are injected via compose `environment:` interpolation
    from the root `.env`; `docker_compose()` always passes `--env-file "$REPO/.env"`
    (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
    silently falls back empty/default).
-- LLM: direct to OpenCode Zen (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-contributor-free`) — no proxy container. OpenCode Go is enabled too (`OPENCODE_GO_API_KEY` in root `.env`, selectable per request as provider `opencode-go`).
+- LLM: direct to OpenCode (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-contributor-free`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` covers both per-request providers (`opencode`|`opencode-go`).
 - App API: Hermes built-in OpenAI-compatible server on the gateway
-  (`gateway.api_server`, `:8642`, single-password `HEALTH_SYNC_TOKEN`); one port, each app
+  (`gateway.api_server`, `:8642`, single-password `PASSWORD`); one port, each app
   tab uses its profile path (`/p/story|resumes|default`) and sends per-request
   provider (`opencode`|`opencode-go`) + model from app Settings. Provider keys
   live only in the VPS `.env`, never in git.
@@ -78,7 +77,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   not a bot) and `profiles/master/profiles/<bot>/config.yaml.template` (the three
   domain profiles — nested because Hermes multiplexes named profiles under the
   gateway home). Templates use `${HERMES_BASE_URL}` and `${HERMES_CWD}` plus
-  `${HEALTH_SYNC_TOKEN}` on the gateway home.
+  `${PASSWORD}` on the gateway home.
   `test/entrypoint.sh` renders each to a git-ignored `config.yaml` at container
   start with docker defaults: `https://opencode.ai/zen/v1` + `/workspace/<bot>`.
 - Skills: project skills live in `skills/` and are copied into every profile on
@@ -107,7 +106,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   tells you to EDIT it — placeholder tokens/URIs won't work until you do.
 - `make setup` in docker/ references `docker/.env.example` which doesn't exist;
   compose reads the ROOT `.env` via `--env-file "$REPO/.env"` (there is no
-  `env_file:` directive). `make` is only relevant for the searxng service now.
+  `env_file:` directive). `make` targets wrap compose in `docker/`.
 - Legacy native install: `start` detects stale `run/bots/*.pid` processes and
   stops them first; if a `hermes-gateway` systemd unit survives, `stop`
   best-effort stops it. `clean` no longer touches `~/.hermes` (no host install).

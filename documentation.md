@@ -27,7 +27,7 @@ The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a 
                                Remote MongoDB (money, health, cookbook)
                                             ▲
                              Docker containers
- story ──┐               │        ┌──── SearXNG (:8888)
+ story ──┐               │
  resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
  default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
@@ -41,8 +41,8 @@ Retention ───────────────► one-shot container (c
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
 - **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles, supervised by `s6-overlay`.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
-- **app API**: Hermes built-in OpenAI-compatible server (`gateway.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `HEALTH_SYNC_TOKEN` single-password bearer auth). Direct port stays published; the app goes through the proxy.
-- **searxng**: Self-hosted metasearch instance (`:8888`) providing local privacy-preserving search tool capabilities.
+- **app API**: Hermes built-in OpenAI-compatible server (`gateway.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
+- **playwright**: Browser automation via the official `@playwright/mcp` stdio server (headless chromium bundled in the bot image), configured per profile in `mcp_servers`.
 - **retention**: One-shot retention job executing [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py) via cron or on stack start.
 - **Development Isolation**: `HERMES_ENV=dev` directs all database operations to an ephemeral local `mongodb` container (`mongodb://mongodb:27017`), preventing dev writes from ever touching remote production data.
 
@@ -50,9 +50,9 @@ Retention ───────────────► one-shot container (c
 
 ## LLM Connection (Direct Zen)
 
-All profiles connect directly to OpenCode Zen (`https://opencode.ai/zen/v1`) using `OPENCODE_ZEN_API_KEY` defined in the root `.env`.
+All profiles connect directly to OpenCode Zen (`https://opencode.ai/zen/v1`) using `OPENCODE_API_KEY` defined in the root `.env`.
 
-- **Config Rendering**: Rendered as `api_key: ${OPENCODE_ZEN_API_KEY}` in each profile's `config.yaml` from `config.yaml.template` by [`test/entrypoint.sh`](file:///home/vsreddyh/Documents/Discord-bots/test/entrypoint.sh).
+- **Config Rendering**: Rendered as `api_key: ${OPENCODE_API_KEY}` in each profile's `config.yaml` from `config.yaml.template` by [`test/entrypoint.sh`](file:///home/vsreddyh/Documents/Discord-bots/test/entrypoint.sh).
 - **Vision Model**: Auxiliary vision queries utilize `muse-spark-1.2-contributor-free` natively over OpenCode Zen.
 - **Streaming Support**: Direct SSE passthrough when streaming is enabled in Hermes settings.
 
@@ -160,7 +160,7 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► 
 ```
 
 1. **Agento** (`android/agento/`): Built with Jetpack Compose & Health Connect SDK 1.1.0. Backfills 30 days on initial setup and runs hourly background syncs.
-2. **`health-api` Endpoint** (`:8001`): Authenticates requests via `Authorization: Bearer <HEALTH_SYNC_TOKEN>` and upserts metrics into MongoDB.
+2. **`health-api` Endpoint** (`:8001`): Authenticates requests via `Authorization: Bearer <PASSWORD>` and upserts metrics into MongoDB.
 
 > **Upgrading from Health Gateway?** Agento ships under a new `applicationId` (`com.vishnu.agento`), so it installs **alongside** the old Health Gateway app — settings do not transfer automatically.
 > 1. Install Agento → re-enter the sync server URL/token and chat-backend Settings manually.
@@ -171,24 +171,24 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► 
 
 ## Android App API (Chat)
 
-The custom Android app (`android/agento/`, 3 chat tabs + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to Hermes's built-in OpenAI-compatible API server on the gateway (`/p/* → :8642`, `HEALTH_SYNC_TOKEN` bearer auth) and sync to health-api (`/api/* → :8001`):
+The custom Android app (`android/agento/`, 3 chat tabs + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to Hermes's built-in OpenAI-compatible API server on the gateway (`/p/* → :8642`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`):
 
 ```bash
-curl http://<host>:8080/p/story/v1/models -H "Authorization: Bearer <HEALTH_SYNC_TOKEN>"
+curl http://<host>:8080/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
 ```
 
 Direct (bypassing the proxy):
 
 ```bash
-curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <HEALTH_SYNC_TOKEN>"
+curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
 curl http://<host>:8642/p/story/v1/chat/completions \
-  -H "Authorization: Bearer <HEALTH_SYNC_TOKEN>" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <PASSWORD>" -H "Content-Type: application/json" \
   -d '{"provider": "opencode", "model": "muse-spark-1.2-contributor-free", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
 
 - One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
 - Provider + model are picked per tab in app Settings from live dropdowns backed by `GET /p/<profile>/api/model/options` (explicit selection required — no gateway default). The gateway's provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
-- Config lives in `profiles/master/config.yaml.template` (`gateway.api_server`, key rendered from `HEALTH_SYNC_TOKEN`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
+- Config lives in `profiles/master/config.yaml.template` (`gateway.api_server`, key rendered from `PASSWORD`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
 
 ---
 
@@ -207,12 +207,11 @@ All settings are configured in the single root `.env` file:
 
 | Variable | Required | Description |
 |---|---|---|
-| `OPENCODE_ZEN_API_KEY` | **Yes** | API key for OpenCode Zen direct connection |
+| `OPENCODE_API_KEY` | **Yes** | API key for OpenCode (covers `opencode` + `opencode-go` providers) |
 | `MONGODB_URI` | **Yes** | Remote MongoDB connection string (used in prod) |
 | `MONGODB_DB` | No | Target MongoDB database name (default: `hermes`) |
 | `HERMES_ENV` | No | Set to `dev` for local ephemeral MongoDB container |
-| `HEALTH_SYNC_TOKEN` | For Health + App | Single password for Agento Android chat + health-sync authentication |
-| `SEARXNG_SECRET_KEY` | No | Secret key for SearXNG instance |
+| `PASSWORD` | For Health + App | Single password for Agento Android chat + health-sync authentication |
 
 ---
 
@@ -220,7 +219,6 @@ All settings are configured in the single root `.env` file:
 
 - **Secrets Management**: Live API keys and database credentials reside exclusively in the git-ignored `.env` file.
 - **Container Isolation**: `gateway` container mounts only required directories (`profiles/master`, `workspace`, `/tools` read-only) with no host Docker socket access.
-- **Search Hardening**: The SearXNG container runs with all Linux capabilities dropped (`cap_drop: ALL`).
 
 ---
 

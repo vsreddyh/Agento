@@ -28,9 +28,6 @@ approvals:
 browser:
   inactivity_timeout: 120
 
-web:
-  search_backend: searxng
-
 session_reset:
   mode: idle
   idle_minutes: 1440

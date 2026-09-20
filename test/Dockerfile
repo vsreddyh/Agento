@@ -1,13 +1,18 @@
 # syntax=docker/dockerfile:1
-FROM python:3.11-alpine
+FROM python:3.11-slim
 
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # s6-overlay supervises `gateway run` in the gateway container (mirrors
 # the official nousresearch/hermes-agent image where `gateway run` is
 # supervised by s6 as an s6-rc service).
+# Debian (not alpine): Playwright's bundled chromium needs glibc.
 ARG S6_OVERLAY_VERSION=3.2.1.0
-RUN apk add --no-cache bash git openssh-client curl sqlite tectonic opus opus-dev libsodium-dev ffmpeg xz
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash git openssh-client curl sqlite3 ca-certificates xz-utils \
+    nodejs npm \
+  && rm -rf /var/lib/apt/lists
 ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp
 ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-x86_64.tar.xz /tmp
 RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \
@@ -15,6 +20,13 @@ RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \
  && rm /tmp/s6-overlay-*.tar.xz
 
 RUN --mount=type=cache,target=/root/.cache/pip pip install hermes-agent pymongo mcp python-dotenv requests
+
+# Playwright MCP (browser automation for the bots): the official
+# @playwright/mcp server + headless chromium only. Browsers live in
+# /ms-playwright so the s6-setuidgid 1000:1000 services can execute them.
+RUN npm install -g @playwright/mcp \
+ && npx -y playwright install --with-deps chromium \
+ && chmod -R a+rX /ms-playwright
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

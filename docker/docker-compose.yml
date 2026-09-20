@@ -10,10 +10,8 @@ x-bot-base: &bot-base
   environment: &bot-base-environment
     HERMES_HOME: /hermes-home
     HOME: /hermes-home
-    OPENCODE_ZEN_API_KEY: ${OPENCODE_ZEN_API_KEY:-}
-    OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
-    HERMES_API_KEY: ${OPENCODE_ZEN_API_KEY:-}
-    SEARXNG_URL: http://searxng:8080
+    OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+    HERMES_API_KEY: ${OPENCODE_API_KEY:-}
     MONGODB_URI: ${MONGODB_URI:-}
     MONGODB_DB: ${MONGODB_DB:-hermes}
   restart: unless-stopped
@@ -21,31 +19,8 @@ x-bot-base: &bot-base
 services:
 
   # ──────────────────────────────────────────────────────
-  # SearXNG — Private metasearch engine
-  # ──────────────────────────────────────────────────────
-  searxng:
-    image: searxng/searxng:latest
-    # run as root initially to create settings.yml on first run (volume is root-owned)
-    user: "0:0"
-    ports:
-      - "${SEARXNG_PORT:-8888}:8080"
-    environment:
-      SEARXNG_BASE_URL: https://${SEARXNG_HOSTNAME:-localhost}/
-      SEARXNG_SECRET_KEY: ${SEARXNG_SECRET_KEY:-}
-    volumes:
-      - searxng_data:/etc/searxng
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
-      - DAC_OVERRIDE
-    restart: unless-stopped
-
-  # ──────────────────────────────────────────────────────
   # Health Connect sync endpoint (Android app → MongoDB).
-  # MONGODB_URI/HEALTH_SYNC_TOKEN from root .env.
+  # MONGODB_URI/PASSWORD from root .env.
   # ──────────────────────────────────────────────────────
   health-api:
     build:
@@ -56,7 +31,7 @@ services:
     environment:
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
-      HEALTH_SYNC_TOKEN: ${HEALTH_SYNC_TOKEN:-}
+      PASSWORD: ${PASSWORD:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -75,8 +50,6 @@ services:
   # config from these env vars.
   #
   # ALL env comes from the single root .env (compose interpolation).
-  # Deliberately NOT the whole root env (no host-oriented
-  # SEARXNG_URL=localhost:8888, which would break web search in-container).
   # ──────────────────────────────────────────────────────
   gateway:
     <<: *bot-base
@@ -95,7 +68,7 @@ services:
     environment:
       <<: *bot-base-environment
       MONEY_DEFAULT_ACCOUNT: ${MONEY_DEFAULT_ACCOUNT:-Cash}
-      HEALTH_SYNC_TOKEN: ${HEALTH_SYNC_TOKEN:-}
+      PASSWORD: ${PASSWORD:-}
       PYTHONPATH: /mcps
 
   # ──────────────────────────────────────────────────────
@@ -177,6 +150,3 @@ services:
           sleep 2
         done
     restart: "no"
-
-volumes:
-  searxng_data:
