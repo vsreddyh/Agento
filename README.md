@@ -1,6 +1,6 @@
 # Hermes Android stack
 
-Fully Dockerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Zen (`https://opencode.ai/zen/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully containerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Zen (`https://opencode.ai/zen/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
@@ -9,7 +9,7 @@ Fully Dockerized agent stack running **three Hermes profiles** (story, resumes, 
 ```
                                 Remote MongoDB (money, health, cookbook)
                                              ▲
-                              Docker containers
+                              Containers
   story ──┐               │
   resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
   default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
@@ -47,14 +47,14 @@ Retention ───────────────► one-shot container (c
 
 | Specification | Minimum Requirement | Recommended (Production) | Notes |
 |---|---|---|---|
-| **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Docker image build (LaTeX/tectonic, Hermes, Playwright chromium) benefits from multiple cores. |
-| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The multiplexed `gateway` (Python + 3 profiles + bundled chromium) consumes ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `docker build`. |
-| **Disk Storage** | 15 GB SSD | 30+ GB SSD | Docker base images, pip caches, local repo clones, LaTeX build artifacts, Playwright chromium, and logs. |
+| **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Image build (LaTeX/tectonic, Hermes, Playwright chromium) benefits from multiple cores. |
+| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The multiplexed `gateway` (Python + 3 profiles + bundled chromium) consumes ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
+| **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, pip caches, local repo clones, LaTeX build artifacts, Playwright chromium, and logs. |
 | **OS** | Linux (Ubuntu 22.04+, Debian 12+, Arch, Fedora) | Ubuntu 22.04/24.04 LTS or Debian 12 | Linux kernel 5.10+ with systemd and package manager (`apt`, `pacman`, or `dnf`). |
 
 ### Required Host Tools & Access
 - **Git** (`git`) and **sudo** privileges (pre-installed).
-- **Docker Engine** (24.0+) & **Docker Compose v2** (`docker compose` plugin). Auto-installed by `./scripts/hermes.sh init` if missing.
+- **Podman** (4.0+) & **podman-compose** (`podman-compose`). Auto-installed by `./scripts/hermes.sh init` if missing. No daemon — Podman is daemonless.
 - **SSH Key Pair**: Configured in `~/.ssh` with read/write access to private GitHub repos for Git-backed bots:
   - `git@github.com:vsreddyh/portals.git` (Story bot lore vault)
   - `git@github.com:vsreddyh/Resume.git` (Resumes bot CV repository)
@@ -83,12 +83,12 @@ cp .env.example .env && nano .env
 # 2. Build images and register daily retention cron
 ./scripts/hermes.sh init
 
-# 3. Start the entire Docker stack
+# 3. Start the entire container stack
 ./scripts/hermes.sh start
 
 # 4. Inspect container health and logs
 ./scripts/hermes.sh status
-docker compose -f docker/docker-compose.yml logs -f gateway
+podman-compose -f docker/docker-compose.yml logs -f gateway
 
 # 5. Stop the stack
 ./scripts/hermes.sh stop
@@ -102,11 +102,11 @@ docker compose -f docker/docker-compose.yml logs -f gateway
 
 | Command | Action |
 |---|---|
-| `./scripts/hermes.sh init` | Self-installs host deps (curl, docker + compose, python3, cron), builds images, creates directories, copies skills, sets up cron. Hermes harness only — never installs the opencode CLI. |
-| `./scripts/hermes.sh start` | Starts all services (`docker compose up -d --build`) and runs retention once. |
-| `./scripts/hermes.sh stop` | Shuts down the stack (`docker compose down`). |
+| `./scripts/hermes.sh init` | Self-installs host deps (curl, podman + compose, python3, cron), builds images, creates directories, copies skills, sets up cron. Hermes harness only — never installs the opencode CLI. |
+| `./scripts/hermes.sh start` | Starts all services (`podman-compose up -d --build`) and runs retention once. |
+| `./scripts/hermes.sh stop` | Shuts down the stack (`podman-compose down`). |
 | `./scripts/hermes.sh restart` | Performs a clean stop and start sequence. |
-| `./scripts/hermes.sh status` | Displays container health and published ports (`docker compose ps`). |
+| `./scripts/hermes.sh status` | Displays container health and published ports (`podman-compose ps`). |
 | `./scripts/hermes.sh clean` | **Destructive.** Wipes containers, volumes, `run/`, rendered configs, per-profile `.env` files, and retention cron. Remote MongoDB is untouched. |
 
 ---
@@ -171,9 +171,8 @@ Data lifecycle is governed by `tools/retention.py` (`scripts/retention.sh run`):
 ├── docker/
 │   ├── docker-compose.yml   # Unified compose configuration (health-api + gateway + retention)
 │   ├── health-api/          # Health Connect FastAPI sync service
-│   └── README.md            # Docker services documentation
 ├── test/
-│   ├── Dockerfile           # Shared bot image definition (Alpine + hermes-god + s6-overlay)
+│   ├── Dockerfile           # Shared bot image definition (Debian slim + s6-overlay + Playwright chromium)
 │   └── entrypoint.sh        # Config rendering and s6 service orchestration
 ├── mcps/
 │   ├── common/              # Shared Mongo/validation lib (not an MCP)

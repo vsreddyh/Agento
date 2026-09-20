@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Data retention for the Hermes bots.
 
-Runs inside the `retention` service of the live Docker stack (see
+Runs inside the `retention` service of the live container stack (see
 docker/docker-compose.yml) and natively via `scripts/retention.sh` (which wraps
-`docker compose run --rm retention`). Policy summary:
+`podman-compose run --rm retention`). Policy summary:
 
   story       git repo (workspace/portals)    — no-op
   resumes     git repo (workspace/resumes)    — no-op

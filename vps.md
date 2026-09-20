@@ -1,6 +1,6 @@
-# VPS sizing — 3-profile Hermes stack (Dockerized)
+# VPS sizing — 3-profile Hermes stack (containerized)
 
-Fully Dockerized stack: three Hermes profiles + app API server in **one multiplexed gateway** (`s6`-supervised) + health-api + retention.
+Fully containerized stack: three Hermes profiles + app API server in **one multiplexed gateway** (`s6`-supervised) + health-api + retention.
 MongoDB stays **remote** (Atlas) — no Mongo container or storage counted below.
 
 **Key fact: no LLM inference happens on this box.** OpenCode Zen runs the models, the
@@ -23,7 +23,7 @@ number of Hermes agents running at the same time (max 3, one single-user session
 
 ## RAM — the real numbers
 
-Measured live via `docker stats` on a running stack, all bots idle (gateway-based, all bots in one
+Measured live via `podman stats` on a running stack, all bots idle (gateway-based, all bots in one
 process at measure time). The whole stack (bots + health-api via `s6` + remote Mongo)
 sits at **~1.1 GiB**. The multiplexed layout (**all bots in ONE gateway container** via `s6`) merges the bot rows
 into a single ~0.58 GiB gateway, i.e. roughly the same total. Per container:
@@ -35,7 +35,7 @@ into a single ~0.58 GiB gateway, i.e. roughly the same total. Per container:
 | gateway (multiplexed — all bots via s6) | ~0.58 GiB (all bots, one container) |
 | **Stack total** | **~1.06 GiB** |
 
-+ Docker + OS (~0.4 GB) → realistic **floor ≈ 1.1 GB** (remote Mongo).
++ Podman + OS (~0.4 GB) → realistic **floor ≈ 1.1 GB** (remote Mongo).
 
 Each **concurrently active agent** adds ~0.6 GB (conversation context + tool output; the model
 itself runs elsewhere).
@@ -54,19 +54,18 @@ guidance was ~2–3× over — safe, but you'd be paying for RAM the bots never 
 
 ## Disk — whole numbers
 
-Measured (`docker system df` + repo `du`), not guessed:
+Measured (`podman system df` + repo `du`), not guessed:
 
-- Docker images: bot (now includes nodejs + headless chromium for Playwright MCP) + health-api — re-measure with `docker system df` after build, old ~3.0 GB figure no longer applies
+- Container images: bot (now includes nodejs + headless chromium for Playwright MCP) + health-api — re-measure with `podman system df` after build, old ~3.0 GB figure no longer applies
 - Volumes + container writable layers: ~0.5 GB
 - Live repo data (profiles, workspace, skills): ~0.15 GB
 - **Total keep-everything footprint: ~4 GB**
 
 - 10 GB is the comfortable floor (stack + logs + a snapshot).
-- 20 GB leaves room for years of logs + Docker build cache (7.6 GB unpruned).
+- 20 GB leaves room for years of logs + image layers.
 - 30 GB = max comfort; the old 30/50/80 guidance was ~4× over.
-- Enable Docker log rotation (`max-size`) so idle-chatty bots don't eat simple loops of disk.
-- **Always run `docker builder prune -f` after every build** — the build cache (7.6 GB here)
-  grows on every `--build` and never shrinks on its own.
+- Enable container log rotation (`max-size`) so idle-chatty bots don't eat simple loops of disk.
+- **Always run `podman image prune -f` after every build** — dangling images pile up fast.
 
 ## Network
 
@@ -75,5 +74,5 @@ Measured (`docker system df` + repo `du`), not guessed:
 
 ## Access
 
-- health-api (:8001) binds `0.0.0.0` inside Docker — restrict with firewall/reverse proxy if exposed publicly.
+- health-api (:8001) binds `0.0.0.0` inside its container — restrict with firewall/reverse proxy if exposed publicly.
 - SSH on 22 (restrict source IPs / use key auth).

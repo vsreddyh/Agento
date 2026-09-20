@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -19,7 +18,7 @@ RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \
  && tar -C / -Jxpf /tmp/s6-overlay-x86_64.tar.xz \
  && rm /tmp/s6-overlay-*.tar.xz
 
-RUN --mount=type=cache,target=/root/.cache/pip pip install hermes-agent pymongo mcp python-dotenv requests
+RUN pip install --no-cache-dir hermes-agent pymongo mcp python-dotenv requests
 
 # Playwright MCP (browser automation for the bots): the official
 # @playwright/mcp server + headless chromium only. Browsers live in
