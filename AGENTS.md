@@ -21,17 +21,15 @@ for all three profiles (Hermes `gateway.multiplex_profiles`, `s6`-supervised),
 a built-in OpenAI-compatible API server (:8642) for the custom Android app,
 and remote MongoDB for domain data (money, health, cookbook). **The live stack
 is fully containerized** — one compose file (`docker/docker-compose.yml`): health-api + one `gateway` container (all 3 profiles, direct to `https://opencode.ai/zen/v1`, `s6` supervised) +
-a one-shot retention job (plus ephemeral `mongodb` in dev). Development runs the SAME single compose file;
-`HERMES_ENV=dev` in the root `.env` switches every data consumer to a temporary
-local `mongodb` container (`mongodb://mongodb:27017`, no volume, ephemeral).
-No host Hermes install, no native processes.
+a one-shot retention job. Development runs the SAME single compose file
+against Atlas. No host Hermes install, no native processes.
 
 ```
 story+resumes+default
    └─► ONE `gateway` container (HERMES_HOME=/hermes-home = profiles/master, s6-supervised)
         └─► OpenCode Zen direct (https://opencode.ai/zen/v1, model muse-spark-1.2-contributor-free)
 proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)
-MongoDB (remote prod; ephemeral local in dev)  •  retention (one-shot container)
+MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo vsreddyh/Resume) — separate git repos
 ```
 
@@ -53,14 +51,10 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
    health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
    permanent; story/resumes (git repos) are no-ops.
 - `tools/mongo.py` = shared pymongo CLI; `tools/retention.py` = data lifecycle.
-  `MONGODB_URI`/`MONGODB_DB` in root `.env` for prod; `HERMES_ENV=dev` switches
-  to ephemeral local `mongodb` container (`mongodb://mongodb:27017`, no volume)
-  via `scripts/lib/common.sh` (`COMPOSE_PROFILES=dev`). `clean` removes the
-  ephemeral dev data on `down -v` (or container remove) since there is no volume.
+  `MONGODB_URI`/`MONGODB_DB` in root `.env` (Atlas, all environments).
 - Podman: `docker/docker-compose.yml` = the whole stack (health-api
-   + gateway + retention) — the ONLY compose file. Dev and
-   prod run the same file; `HERMES_ENV=dev` repoints every data consumer at the
-   ephemeral local container under the same `MONGODB_DB` name, never the prod DB. The bot image is built from `test/Dockerfile` +
+   + gateway + retention) — the ONLY compose file. All environments run the
+   same file against the Atlas `MONGODB_URI`. The bot image is built from `test/Dockerfile` +
    `test/entrypoint.sh` (bakes in `s6-overlay`; `hermes-agent` + `mcp` via pip; nodejs + headless chromium for the Playwright MCP); those are the image source, not
    a mirror stack.
    Provider keys + `PASSWORD` are injected via compose `environment:` interpolation
@@ -114,8 +108,4 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   health-api before `./scripts/hermes.sh start`, or two
   gateways will fight over the same ports.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
-- Dev isolation = `HERMES_ENV=dev` in the root `.env` uses a temporary local
-  `mongodb` container (`mongodb://mongodb:27017`, no volume, ephemeral) for
-  bots, health-api, and retention. Prod (or unset) = remote `MONGODB_URI` as-is.
-  Keep `HERMES_ENV=dev` on dev machines — dropping it silently points dev at the
-  prod DB. Dev machines run the same single compose file with `COMPOSE_PROFILES=dev`.
+- Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service.

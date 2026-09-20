@@ -24,7 +24,7 @@ fi
 
 # Container-environment defaults, used by both the live and test stacks.
 export HERMES_BASE_URL="${HERMES_BASE_URL:-https://opencode.ai/zen/v1}"
-export MONGODB_URI="${MONGODB_URI:-mongodb://mongodb:27017}"
+export MONGODB_URI="${MONGODB_URI:-}"
 export MONGODB_DB="${MONGODB_DB:-hermes}"
 
 render_config() {

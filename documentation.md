@@ -44,7 +44,7 @@ Retention ───────────────► one-shot container (c
 - **app API**: Hermes built-in OpenAI-compatible server (`gateway.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **playwright**: Browser automation via the official `@playwright/mcp` stdio server (headless chromium bundled in the bot image), configured per profile in `mcp_servers`.
 - **retention**: One-shot retention job executing [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py) via cron or on stack start.
-- **Development Isolation**: `HERMES_ENV=dev` directs all database operations to an ephemeral local `mongodb` container (`mongodb://mongodb:27017`), preventing dev writes from ever touching remote production data.
+- **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched.
 
 ---
 
@@ -194,10 +194,7 @@ curl http://<host>:8642/p/story/v1/chat/completions \
 
 ## Development Mode Isolation
 
-Setting `HERMES_ENV=dev` enables isolated development without impacting production databases:
-- Activates the `dev` Compose profile, launching an ephemeral `mongo:7` container (`mongodb://mongodb:27017`, no volume) as a single-node replica set (`rs0`, via the `mongodb-init` one-shot) so transactions behave like prod.
-- Gateway, `health-api`, and retention automatically target the local MongoDB instance.
-- Tearing down the container clears dev data completely.
+There is no local MongoDB service — every environment (dev included) uses the Atlas `MONGODB_URI`. Isolate development by pointing `MONGODB_URI`/`MONGODB_DB` at a separate throwaway database.
 
 ---
 
@@ -210,7 +207,6 @@ All settings are configured in the single root `.env` file:
 | `OPENCODE_API_KEY` | **Yes** | API key for OpenCode (covers `opencode` + `opencode-go` providers) |
 | `MONGODB_URI` | **Yes** | Remote MongoDB connection string (used in prod) |
 | `MONGODB_DB` | No | Target MongoDB database name (default: `hermes`) |
-| `HERMES_ENV` | No | Set to `dev` for local ephemeral MongoDB container |
 | `PASSWORD` | For Health + App | Single password for Agento Android chat + health-sync authentication |
 
 ---

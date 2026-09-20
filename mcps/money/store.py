@@ -84,11 +84,11 @@ class Store:
     def _use_transactions(self) -> bool:
         """True when the deployment supports multi-doc transactions.
 
-        Standalone/uninitiated mongod has no replica set, so transactions
-        are rejected — fall back to plain writes. Only a positive result
-        is cached: a negative one is re-probed on every call so a process
-        that starts before replica-set initiation (dev `mongodb-init`)
-        upgrades to transactions automatically once the set is up.
+        Standalone mongod has no replica set, so transactions are rejected
+        — fall back to plain writes. Only a positive result is cached: a
+        negative one is re-probed on every call so a process that starts
+        before the set is initiated upgrades to transactions automatically
+        once it is up.
         """
         if self._txn_supported:
             return True
