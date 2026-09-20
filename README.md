@@ -1,6 +1,6 @@
 # Hermes Android stack
 
-Fully containerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Zen (`https://opencode.ai/zen/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully containerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
@@ -12,8 +12,8 @@ Fully containerized agent stack running **three Hermes profiles** (story, resume
                               Containers
   story ──┐               │
   resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
-  default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
-            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
+  default ┘ (multiplexed  │ /hermes-home │   OpenCode Go Direct
+            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/go/v1)
           └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
@@ -33,9 +33,9 @@ Retention ───────────────► one-shot container (c
 
 | Profile | App Tab | Purpose & Storage | Data Retention Policy |
 |---|---|---|---|
-| `story` | Story | Mana Revolution lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) | No DB retention (Git tracked) |
-| `resumes` | Resumes | LaTeX resume tailoring & cover letters in Git repo (`workspace/resumes`, `vsreddyh/Resume`) | No DB retention (Git tracked) |
-| `default` | God | Money (`money_transactions`), cookbook (`cookbook_*`, permanent), health tracking (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync via `health-api` | Money >90d autowipe; `hc_meals`/`hc_days` >30d; `hc_weight` + `cookbook_*` **never pruned** |
+| `default` | God (main) | Money (`money_transactions`), cookbook (`cookbook_*`, permanent), health tracking (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync via `health-api` | Money >90d autowipe; `hc_meals`/`hc_days` >30d; `hc_weight` + `cookbook_*` **never pruned** |
+| `story` | Story (side) | Mana Revolution lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) | No DB retention (Git tracked) |
+| `resumes` | Resumes (side) | LaTeX resume tailoring & cover letters in Git repo (`workspace/resumes`, `vsreddyh/Resume`) | No DB retention (Git tracked) |
 
 ---
 
@@ -58,7 +58,7 @@ Retention ───────────────► one-shot container (c
   - `git@github.com:vsreddyh/Resume.git` (Resumes bot CV repository)
 
 ### Required External Services & API Keys
-- **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai) (model: `muse-spark-1.2-contributor-free`). One key covers both providers selectable per request in app Settings (`opencode` = Zen, `opencode-go` = Go).
+- **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai). One key for the single `opencode-go` provider, selected per request in app Settings (model `glm-5.1`).
 - **Android App Password**: `PASSWORD` (single bearer credential for chat + sync; generate with `openssl rand -hex 32`). The app takes one Server URL + Password; each tab picks provider/model from the live gateway catalog in Settings dropdowns. Provider keys live only in the VPS `.env`, never in git.
 - **MongoDB Cluster**: MongoDB Atlas connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`) — the single data backend for money/health/cookbook.
 - **App Password**: `PASSWORD` Bearer token matching the Agento Android app Password field (single credential for chat + sync). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password.)
@@ -66,7 +66,7 @@ Retention ───────────────► one-shot container (c
 ### Network & Firewall Ports
 - Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `PASSWORD`, provider/model picked per tab from live dropdowns, paths `/p/story`, `/p/resumes`, `/p/default`. Direct ports `8642` (chat) / `8001` (sync) stay published for backward compatibility.
 - Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as `8642`).
-- Outbound HTTPS (`443/tcp`) for OpenCode Zen (`opencode.ai`), MongoDB Atlas, and GitHub.
+- Outbound HTTPS (`443/tcp`) for OpenCode Go (`opencode.ai`), MongoDB Atlas, and GitHub.
 
 ---
 
@@ -173,11 +173,10 @@ Data lifecycle is governed by `tools/retention.py` (`scripts/retention.sh run`):
 │   ├── money/               # miser-money MCP (accounts + transactions)
 │   ├── cookbook/            # cookbook MCP (permanent recipe library)
 │   └── health_check/        # health-check MCP (meals + days + weight)
-├── profiles/
-│   └── master/              # Gateway home
-│       ├── config.yaml.template
-│       ├── SOUL.md
-│       └── profiles/        # Nested named profiles (story, resumes, default)
+├── gateway/               # God = default profile = gateway home (HERMES_HOME)
+│   ├── config.yaml.template # model + platforms.api_server + MCPs
+│   ├── SOUL.md              # god operator
+│   └── profiles/            # Nested side profiles (story, resumes)
 ├── tools/
 │   ├── mongo.py             # MongoDB CLI helper for bot toolsets
 │   └── retention.py         # Data lifecycle prune runner

@@ -29,7 +29,6 @@ sealed interface ChatEvent {
 /** Known provider slugs: offline fallback for the dynamic picker (the live
  * list comes from GET /api/model/options on the gateway). */
 enum class LlmProvider(val id: String) {
-    OPENCODE("opencode"),
     OPENCODE_GO("opencode-go"),
 }
 

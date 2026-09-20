@@ -1,12 +1,13 @@
 model:
-  default: muse-spark-1.2-contributor-free
-  provider: opencode
+  default: glm-5.1
+  provider: opencode-go
   base_url: ${HERMES_BASE_URL}
   api_key: ${OPENCODE_API_KEY}
 
-# Gateway home: multiplex host for the named profiles under
-# HERMES_HOME/profiles/ (story, resumes, default-god). This profile is NOT
-# a bot itself — it only hosts the multiplexed gateway.
+# God = the gateway home = Hermes' built-in "default" profile.
+# Story + resumes are side profiles nested under HERMES_HOME/profiles/.
+# There is no profiles/default/ dir: Hermes maps the name "default" to the
+# home dir itself and skips any nested dir of that name.
 gateway:
   multiplex_profiles: true
 
@@ -27,7 +28,7 @@ platforms:
 
 auxiliary:
   vision:
-    model: muse-spark-1.2-contributor-free
+    model: glm-5.1
 
 agent:
   max_turns: 90
@@ -136,5 +137,44 @@ platform_toolsets:
   cli:
     - file
     - terminal
+
+# God tool backend: money + cookbook + health-check (in-repo mcps/*)
+# run as stdio MCP servers. Mounts (compose): ../mcps/money:/mcps/miser-money:ro,
+# ../mcps/common:/mcps/common:ro, ../mcps/cookbook:/mcps/cookbook:ro,
+# ../mcps/health_check:/mcps/health_check:ro.
+mcp_servers:
+  miser-money:
+    command: "python3"
+    args: ["/mcps/miser-money/server.py"]
+    env:
+      MONGODB_URI: "${MONGODB_URI}"
+      MONGODB_DB: "${MONGODB_DB}"
+    timeout: 120
+    connect_timeout: 60
+  cookbook:
+    command: "python3"
+    args: ["/mcps/cookbook/server.py"]
+    env:
+      MONGODB_URI: "${MONGODB_URI}"
+      MONGODB_DB: "${MONGODB_DB}"
+      PYTHONPATH: "/mcps"
+    timeout: 120
+    connect_timeout: 60
+  health-check:
+    command: "python3"
+    args: ["/mcps/health_check/server.py"]
+    env:
+      MONGODB_URI: "${MONGODB_URI}"
+      MONGODB_DB: "${MONGODB_DB}"
+      PYTHONPATH: "/mcps"
+    timeout: 120
+    connect_timeout: 60
+  # Browser automation (Playwright MCP, headless chromium bundled in the bot
+  # image). Same stdio server on every bot profile.
+  playwright:
+    command: "npx"
+    args: ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--headless"]
+    timeout: 120
+    connect_timeout: 60
 
 _config_version: 33

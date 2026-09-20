@@ -1,6 +1,6 @@
 # NOTE: unreferenced reference template — nothing in scripts/, compose, or the
 # entrypoint reads this file (per-profile config comes from
-# profiles/master*/config.yaml.template). Kept for local Hermes CLI parity.
+# gateway/config.yaml.template). Kept for local Hermes CLI parity.
 model:
   default: ${HERMES_MODEL}
   provider: custom

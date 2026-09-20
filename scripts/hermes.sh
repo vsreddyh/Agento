@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Fully-containerized live stack orchestrator (Podman).
 #
-# Everything (health-api, gateway (3 profiles), retention) — direct to https://opencode.ai/zen/v1, no proxy
+# Everything (health-api, gateway (3 profiles), retention) — direct to https://opencode.ai/zen/go/v1, no proxy
 # runs as compose services in docker/docker-compose.yml. init self-installs the
 # host tools it needs (curl, podman + podman-compose, python3, cron),
 # builds the images, seeds the single root .env, copies skills,
@@ -11,20 +11,21 @@ set -euo pipefail
 # All env lives in the root .env (no per-profile .env files).
 # No host Hermes install, venvs, or native processes.
 # NOTE: Hermes harness only — this script never installs the opencode CLI
-# (LLM traffic goes direct to OpenCode Zen over HTTPS; no CLI needed).
+# (LLM traffic goes direct to OpenCode Go over HTTPS; no CLI needed).
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUN_DIR="$REPO/run"
 COMPOSE="$REPO/docker/docker-compose.yml"
-BOTS=(story resumes default)
-GATEWAY_HOME="$REPO/profiles/master"
+BOTS=(story resumes)
+GATEWAY_HOME="$REPO/gateway"
 
-# Multiplex layout: profiles/master is the gateway home; bots are
-# named profiles NESTED under it (profiles/master/profiles/<bot>/).
+# Multiplex layout: gateway/ is BOTH the gateway home (HERMES_HOME) and the
+# god profile (Hermes' built-in "default" profile IS the home dir). Story and
+# resumes are side profiles NESTED under it (gateway/profiles/<bot>/).
 profile_home() {
     local b="$1"
-    echo "$REPO/profiles/master/profiles/$b"
+    echo "$REPO/gateway/profiles/$b"
 }
 
 # shellcheck source=scripts/lib/common.sh
@@ -283,10 +284,17 @@ cmd_init() {
         chown -R "$SUDO_USER:${SUDO_USER:-$(id -gn "$SUDO_USER")}" "$REPO/workspace" "$GATEWAY_HOME" 2>/dev/null || true
     fi
 
-    info "Installing project skills into each profile..."
+    info "Installing project skills into god + each side profile..."
     if [[ -d "$REPO/skills" ]]; then
+        local homes=("$GATEWAY_HOME")
+        local b
         for b in "${BOTS[@]}"; do
-            local home; home="$(profile_home "$b")"
+            homes+=("$(profile_home "$b")")
+        done
+        local home
+        for home in "${homes[@]}"; do
+            local label; label="$(basename "$home")"
+            [[ "$label" == "gateway" ]] && label="god"
             # One-time cleanup: the docker-management skill was renamed to
             # podman-management — drop the orphaned copy if present.
             rm -rf "$home/skills/docker-management"
@@ -296,7 +304,7 @@ cmd_init() {
                 if [[ ! -d "$target" ]]; then
                     mkdir -p "$home/skills"
                     cp -r "$skill_dir" "$target"
-                    info "  $b: installed skill $skill_name"
+                    info "  $label: installed skill $skill_name"
                 fi
             done
         done
@@ -431,7 +439,7 @@ cmd_clean() {
     for b in "${BOTS[@]}"; do
         wipe_profile "$b"
     done
-    # Also wipe gateway home rendered config / runtime (not a bot, but Hermes
+    # Also wipe gateway home (god) rendered config / runtime (Hermes
     # writes state there too).
     if [[ -d "$GATEWAY_HOME" ]]; then
         info "Wiping gateway home runtime state ..."

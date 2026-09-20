@@ -6,10 +6,11 @@ set -euo pipefail
 # NOTE: env is injected entirely by compose (from the single root
 # .env). There are no per-profile .env files.
 #
-# Multiplex layout: HERMES_HOME is the gateway home (profiles/master) and
-# every bot is a NAMED profile under $HERMES_HOME/profiles/<name>.
-# compose mounts ../profiles/master:/hermes-home and ../workspace:/workspace,
-# so this renders config.yaml for the gateway home + each named profile.
+# Multiplex layout: HERMES_HOME is the gateway home AND the god profile
+# (Hermes' built-in "default" profile IS the home dir). Story + resumes are
+# side profiles nested under $HERMES_HOME/profiles/.
+# compose mounts ../gateway:/hermes-home and ../workspace:/workspace,
+# so this renders config.yaml for god (home) + each side profile.
 #
 # The gateway container runs the multiplexed gateway supervised by
 # s6-overlay (`gateway run` is an s6-rc service, mirroring official
@@ -23,7 +24,7 @@ if [[ "${1:-}" == "chown-data" ]]; then
 fi
 
 # Container-environment defaults, used by both the live and test stacks.
-export HERMES_BASE_URL="${HERMES_BASE_URL:-https://opencode.ai/zen/v1}"
+export HERMES_BASE_URL="${HERMES_BASE_URL:-https://opencode.ai/zen/go/v1}"
 export MONGODB_URI="${MONGODB_URI:-}"
 export MONGODB_DB="${MONGODB_DB:-hermes}"
 
@@ -53,19 +54,14 @@ warning() { echo "[entrypoint] WARN: $*" >&2; }
 info() { echo "[entrypoint] $*"; }
 
 do_render() {
-    # ── Gateway home (profiles/master — not a bot, just the multiplex host) ──
+    # ── God (gateway home = Hermes' built-in "default" profile) ──
     export HERMES_CWD="${HERMES_CWD:-/workspace}"
     render_config "$HERMES_HOME"
 
-    # ── Named profiles (story, resumes, default-god) ───────
+    # ── Side profiles (story, resumes) ───────
     for home in "$HERMES_HOME"/profiles/*/; do
         [[ -d "$home" ]] || continue
-        name="$(basename "$home")"
-        if [[ "$name" == "default" ]]; then
-            HERMES_CWD="/workspace" render_config "$home"
-        else
-            HERMES_CWD="/workspace/$name" render_config "$home"
-        fi
+        HERMES_CWD="/workspace/$(basename "$home")" render_config "$home"
     done
 
     export HERMES_HOME
