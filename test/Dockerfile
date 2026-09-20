@@ -18,7 +18,7 @@ RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \
  && tar -C / -Jxpf /tmp/s6-overlay-x86_64.tar.xz \
  && rm /tmp/s6-overlay-*.tar.xz
 
-RUN pip install --no-cache-dir hermes-agent pymongo mcp python-dotenv requests
+RUN pip install --no-cache-dir hermes-agent pymongo mcp python-dotenv requests aiohttp
 
 # Playwright MCP (browser automation for the bots): the official
 # @playwright/mcp server + headless shell only (--only-shell skips the
