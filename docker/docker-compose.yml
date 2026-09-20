@@ -46,13 +46,12 @@ services:
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────
-  # Multiplexed gateway — ONE container serves story + resumes +
-  # default (god) profiles with money/cookbook/health-check MCPs, plus
-  # the built-in OpenAI-compatible API server (:8642) for the custom
-  # Android app. HERMES_HOME (profiles/master) is the gateway home;
-  # story/resumes/default are named profiles under
-  # profiles/master/profiles/. The entrypoint renders each profile's
-  # config from these env vars.
+  # Multiplexed gateway — ONE container serves god (default profile =
+  # gateway home) + story/resumes sides, with money/cookbook/health-check
+  # MCPs on god, plus the built-in OpenAI-compatible API server (:8642)
+  # for the custom Android app. HERMES_HOME (gateway/) IS god; story/resumes
+  # are nested under gateway/profiles/. The entrypoint renders each
+  # profile's config from these env vars.
   #
   # ALL env comes from the single root .env (compose interpolation).
   # ──────────────────────────────────────────────────────
@@ -63,7 +62,7 @@ services:
     ports:
       - "${API_SERVER_PORT:-8642}:8642"
     volumes:
-      - ../profiles/master:/hermes-home
+      - ../gateway:/hermes-home
       - ../workspace:/workspace
       - ../tools:/tools:ro
       - ../mcps/common:/mcps/common:ro

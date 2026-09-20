@@ -41,7 +41,7 @@ Retention ───────────────► one-shot container (c
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
 - **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles, supervised by `s6-overlay`.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
-- **app API**: Hermes built-in OpenAI-compatible server (`platforms.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
+- **app API**: Hermes built-in OpenAI-compatible server (`platforms.api_server` in `gateway/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **playwright**: Browser automation via the official `@playwright/mcp` stdio server (headless chromium bundled in the bot image), configured per profile in `mcp_servers`.
 - **retention**: One-shot retention job executing [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py) via cron or on stack start.
 - **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched.
@@ -90,13 +90,13 @@ Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered con
 
 ## Bot Profiles & Multiplexing
 
-[`profiles/master/`](file:///home/vsreddyh/Documents/Discord-bots/profiles/master) acts as the gateway root (`HERMES_HOME=/hermes-home`). The individual bot profiles are organized under `profiles/master/profiles/<bot>/`:
+[`gateway/`](file:///home/vsreddyh/Documents/Discord-bots/gateway) IS the god profile — Hermes' built-in `default` profile is the gateway home itself (`HERMES_HOME=/hermes-home`). Story and resumes are side profiles nested under `gateway/profiles/<bot>/`:
 
 | Profile | App Tab | Workspace & Domain Data |
 |---|---|---|
-| `story` | Story | Lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) |
-| `resumes` | Resumes | LaTeX CV workspace in Git repo (`workspace/resumes`, `vsreddyh/Resume`) |
-| `default` | God | Money (`money_transactions`), cookbook (`cookbook_*`), health (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync |
+| `default` (god, main) | God | Money (`money_transactions`), cookbook (`cookbook_*`), health (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync — lives at the gateway home itself |
+| `story` (side) | Story | Lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) |
+| `resumes` (side) | Resumes | LaTeX CV workspace in Git repo (`workspace/resumes`, `vsreddyh/Resume`) |
 
 ### Environment & Token Injection
 - All tokens and channel IDs reside in the root `.env`.
@@ -188,7 +188,7 @@ curl http://<host>:8642/p/story/v1/chat/completions \
 
 - One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
 - Provider + model are picked per tab in app Settings from live dropdowns backed by `GET /p/<profile>/api/model/options` (explicit selection required — no gateway default). The gateway's provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
-- Config lives in `profiles/master/config.yaml.template` (`platforms.api_server`, key rendered from `PASSWORD`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
+- Config lives in `gateway/config.yaml.template` (`platforms.api_server`, key rendered from `PASSWORD`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
 
 ---
 
@@ -214,7 +214,7 @@ All settings are configured in the single root `.env` file:
 ## Security & Isolation
 
 - **Secrets Management**: Live API keys and database credentials reside exclusively in the git-ignored `.env` file.
-- **Container Isolation**: `gateway` container mounts only required directories (`profiles/master`, `workspace`, `/tools` read-only) with no host container-socket access (Podman is daemonless — there is no shared socket).
+- **Container Isolation**: `gateway` container mounts only required directories (`gateway`, `workspace`, `/tools` read-only) with no host container-socket access (Podman is daemonless — there is no shared socket).
 
 ---
 
@@ -222,7 +222,7 @@ All settings are configured in the single root `.env` file:
 
 ### Adding a New Bot Profile
 1. Create a plan in `profile-plans/<bot>-plan.md`.
-2. Create profile directory `profiles/master/profiles/<bot>/` with `config.yaml.template`, `SOUL.md`, and skills.
+2. Create profile directory `gateway/profiles/<bot>/` with `config.yaml.template`, `SOUL.md`, and skills.
 3. Add the bot identifier to the `BOTS` array in `scripts/hermes.sh`.
 4. Rebuild and restart the gateway container:
    ```bash

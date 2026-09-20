@@ -17,14 +17,15 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUN_DIR="$REPO/run"
 COMPOSE="$REPO/docker/docker-compose.yml"
-BOTS=(story resumes default)
-GATEWAY_HOME="$REPO/profiles/master"
+BOTS=(story resumes)
+GATEWAY_HOME="$REPO/gateway"
 
-# Multiplex layout: profiles/master is the gateway home; bots are
-# named profiles NESTED under it (profiles/master/profiles/<bot>/).
+# Multiplex layout: gateway/ is BOTH the gateway home (HERMES_HOME) and the
+# god profile (Hermes' built-in "default" profile IS the home dir). Story and
+# resumes are side profiles NESTED under it (gateway/profiles/<bot>/).
 profile_home() {
     local b="$1"
-    echo "$REPO/profiles/master/profiles/$b"
+    echo "$REPO/gateway/profiles/$b"
 }
 
 # shellcheck source=scripts/lib/common.sh
@@ -283,10 +284,9 @@ cmd_init() {
         chown -R "$SUDO_USER:${SUDO_USER:-$(id -gn "$SUDO_USER")}" "$REPO/workspace" "$GATEWAY_HOME" 2>/dev/null || true
     fi
 
-    info "Installing project skills into each profile..."
+    info "Installing project skills into god + each side profile..."
     if [[ -d "$REPO/skills" ]]; then
-        for b in "${BOTS[@]}"; do
-            local home; home="$(profile_home "$b")"
+        for home in "$GATEWAY_HOME" $(for b in "${BOTS[@]}"; do profile_home "$b"; done); do
             # One-time cleanup: the docker-management skill was renamed to
             # podman-management — drop the orphaned copy if present.
             rm -rf "$home/skills/docker-management"
@@ -296,7 +296,7 @@ cmd_init() {
                 if [[ ! -d "$target" ]]; then
                     mkdir -p "$home/skills"
                     cp -r "$skill_dir" "$target"
-                    info "  $b: installed skill $skill_name"
+                    info "  $(basename "$home"): installed skill $skill_name"
                 fi
             done
         done
@@ -431,7 +431,7 @@ cmd_clean() {
     for b in "${BOTS[@]}"; do
         wipe_profile "$b"
     done
-    # Also wipe gateway home rendered config / runtime (not a bot, but Hermes
+    # Also wipe gateway home (god) rendered config / runtime (Hermes
     # writes state there too).
     if [[ -d "$GATEWAY_HOME" ]]; then
         info "Wiping gateway home runtime state ..."

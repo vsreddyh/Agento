@@ -26,7 +26,7 @@ against Atlas. No host Hermes install, no native processes.
 
 ```
 story+resumes+default
-   └─► ONE `gateway` container (HERMES_HOME=/hermes-home = profiles/master, s6-supervised)
+   └─► ONE `gateway` container (HERMES_HOME=/hermes-home = gateway/, s6-supervised)
         └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model glm-5.1)
 proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)
 MongoDB (Atlas)  •  retention (one-shot container)
@@ -67,9 +67,9 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   tab uses its profile path (`/p/story|resumes|default`) and sends per-request
   provider `opencode-go` + model from app Settings. Provider key
   live only in the VPS `.env`, never in git.
-- Bot config source is `profiles/master/config.yaml.template` (gateway home,
-  not a bot) and `profiles/master/profiles/<bot>/config.yaml.template` (the three
-  domain profiles — nested because Hermes multiplexes named profiles under the
+- Bot config source is `gateway/config.yaml.template` (god = default profile =
+  gateway home) and `gateway/profiles/<bot>/config.yaml.template` (the two
+  side profiles — nested because Hermes multiplexes named profiles under the
   gateway home). Templates use `${HERMES_BASE_URL}` and `${HERMES_CWD}` plus
   `${PASSWORD}` on the gateway home.
   `test/entrypoint.sh` renders each to a git-ignored `config.yaml` at container

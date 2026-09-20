@@ -33,9 +33,9 @@ Retention ───────────────► one-shot container (c
 
 | Profile | App Tab | Purpose & Storage | Data Retention Policy |
 |---|---|---|---|
-| `story` | Story | Mana Revolution lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) | No DB retention (Git tracked) |
-| `resumes` | Resumes | LaTeX resume tailoring & cover letters in Git repo (`workspace/resumes`, `vsreddyh/Resume`) | No DB retention (Git tracked) |
-| `default` | God | Money (`money_transactions`), cookbook (`cookbook_*`, permanent), health tracking (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync via `health-api` | Money >90d autowipe; `hc_meals`/`hc_days` >30d; `hc_weight` + `cookbook_*` **never pruned** |
+| `default` | God (main) | Money (`money_transactions`), cookbook (`cookbook_*`, permanent), health tracking (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync via `health-api` | Money >90d autowipe; `hc_meals`/`hc_days` >30d; `hc_weight` + `cookbook_*` **never pruned** |
+| `story` | Story (side) | Mana Revolution lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) | No DB retention (Git tracked) |
+| `resumes` | Resumes (side) | LaTeX resume tailoring & cover letters in Git repo (`workspace/resumes`, `vsreddyh/Resume`) | No DB retention (Git tracked) |
 
 ---
 
@@ -173,11 +173,10 @@ Data lifecycle is governed by `tools/retention.py` (`scripts/retention.sh run`):
 │   ├── money/               # miser-money MCP (accounts + transactions)
 │   ├── cookbook/            # cookbook MCP (permanent recipe library)
 │   └── health_check/        # health-check MCP (meals + days + weight)
-├── profiles/
-│   └── master/              # Gateway home
-│       ├── config.yaml.template
-│       ├── SOUL.md
-│       └── profiles/        # Nested named profiles (story, resumes, default)
+├── gateway/               # God = default profile = gateway home (HERMES_HOME)
+│   ├── config.yaml.template # model + platforms.api_server + MCPs
+│   ├── SOUL.md              # god operator
+│   └── profiles/            # Nested side profiles (story, resumes)
 ├── tools/
 │   ├── mongo.py             # MongoDB CLI helper for bot toolsets
 │   └── retention.py         # Data lifecycle prune runner
