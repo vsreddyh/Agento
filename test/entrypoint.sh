@@ -79,4 +79,13 @@ fi
 # Normal startup: render first, then run the multiplexed gateway.
 do_render
 
+# go-shim sidecar (localhost reverse proxy injecting x-opencode-session for
+# Go chat). s6 service defs exist but s6 itself is bypassed (entrypoint execs
+# the gateway directly), so the shim starts here as a background child of
+# PID 1 — it dies with the container, same lifecycle as the gateway.
+if command -v /usr/local/bin/go-shim &>/dev/null; then
+    info "starting go-shim sidecar (:18081 -> opencode.ai Go)"
+    /usr/local/bin/go-shim 2>&1 | sed 's/^/[go-shim] /' &
+fi
+
 exec hermes gateway run --force --accept-hooks

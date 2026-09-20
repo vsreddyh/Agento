@@ -62,11 +62,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # s6 service definition for the multiplexed gateway.
 # Use per-profile s6 naming (gateway-default) as Hermes service_manager expects
 # (S6_SERVICE_PREFIX=gateway-); plain "gateway" is legacy and not listed.
-RUN mkdir -p /etc/services.d/gateway-default /etc/services.d/go-shim
+RUN mkdir -p /etc/services.d/gateway-default
 RUN printf '#!/command/with-contenv bash\nexec s6-setuidgid 1000:1000 hermes gateway run --force --accept-hooks --no-supervise\n' > /etc/services.d/gateway-default/run \
   && chmod +x /etc/services.d/gateway-default/run
-RUN printf '#!/command/with-contenv bash\nexec s6-setuidgid 1000:1000 /usr/local/bin/go-shim\n' > /etc/services.d/go-shim/run \
-  && chmod +x /etc/services.d/go-shim/run
+# NOTE: s6 itself is bypassed (entrypoint execs the gateway directly), so the
+# go-shim sidecar is started from entrypoint.sh, not as an s6 service.
 
 # cont-init renders configs before s6 starts services (when launched via /init)
 RUN mkdir -p /etc/cont-init.d
