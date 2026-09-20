@@ -3,7 +3,7 @@
 Fully containerized stack: three Hermes profiles + app API server in **one multiplexed gateway** (`s6`-supervised) + health-api + retention.
 MongoDB stays **remote** (Atlas) — no Mongo container or storage counted below.
 
-**Key fact: no LLM inference happens on this box.** OpenCode Zen runs the models, the
+**Key fact: no LLM inference happens on this box.** OpenCode Go runs the models, the
 agents just stream text. Agents are I/O-bound (they wait on the app API + the network), so CPU and RAM
 stay modest. No GPU needed.
 
@@ -30,7 +30,7 @@ into a single ~0.58 GiB gateway, i.e. roughly the same total. Per container:
 
 | Container | RAM (idle) |
 |---|---|
-| OpenCode Zen (direct) | 0 MiB (no local container) |
+| OpenCode Go (direct) | 0 MiB (no local container) |
 | health-api | ~53 MiB |
 | gateway (multiplexed — all bots via s6) | ~0.58 GiB (all bots, one container) |
 | **Stack total** | **~1.06 GiB** |

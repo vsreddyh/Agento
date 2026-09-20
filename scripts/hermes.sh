@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Fully-containerized live stack orchestrator (Podman).
 #
-# Everything (health-api, gateway (3 profiles), retention) — direct to https://opencode.ai/zen/v1, no proxy
+# Everything (health-api, gateway (3 profiles), retention) — direct to https://opencode.ai/zen/go/v1, no proxy
 # runs as compose services in docker/docker-compose.yml. init self-installs the
 # host tools it needs (curl, podman + podman-compose, python3, cron),
 # builds the images, seeds the single root .env, copies skills,
@@ -11,7 +11,7 @@ set -euo pipefail
 # All env lives in the root .env (no per-profile .env files).
 # No host Hermes install, venvs, or native processes.
 # NOTE: Hermes harness only — this script never installs the opencode CLI
-# (LLM traffic goes direct to OpenCode Zen over HTTPS; no CLI needed).
+# (LLM traffic goes direct to OpenCode Go over HTTPS; no CLI needed).
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"

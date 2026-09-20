@@ -259,9 +259,9 @@ private fun catalogPath(api: ChatApi): String =
     listOf(api.pathFor("story"), api.pathFor("resumes"), api.pathFor("god")).distinct().first()
 
 /** Display name for a provider slug. The wire value stays the gateway slug
- * (`opencode` per the gateway config); only the label reads `opencode-zen`. */
+ * (`opencode-go` per the gateway config); the catalog label is preferred. */
 private fun providerDisplay(slug: String, label: String): String =
-    if (slug == "opencode") "opencode-zen" else if (label == slug) slug else "$label ($slug)"
+    if (label == slug) slug else "$label ($slug)"
 
 /** Dropdown options for a tab: live catalog, else known slugs; the saved
  * value is always kept so legacy/unknown slugs are never lost. */

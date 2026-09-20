@@ -5,7 +5,7 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 ## Table of Contents
 
 1. [System Architecture](#system-architecture)
-2. [LLM Connection (Direct Zen)](#llm-connection-direct-zen)
+2. [LLM Connection (Direct Go)](#llm-connection-direct-go)
 3. [Stack Lifecycle (Podman)](#stack-lifecycle-podman)
 4. [Bot Profiles & Multiplexing](#bot-profiles--multiplexing)
 5. [Remote MongoDB & Storage Model](#remote-mongodb--storage-model)
@@ -29,15 +29,15 @@ The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a 
                              Containers
  story ──┐               │
  resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
- default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
-           3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
+ default ┘ (multiplexed  │ /hermes-home │   OpenCode Go Direct
+           3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/go/v1)
          └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
 
-- **LLM Connection**: Direct HTTPS communication with OpenCode Zen (`https://opencode.ai/zen/v1`, default model `muse-spark-1.2-contributor-free`).
+- **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `glm-5.1`).
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
 - **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles, supervised by `s6-overlay`.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
@@ -48,12 +48,12 @@ Retention ───────────────► one-shot container (c
 
 ---
 
-## LLM Connection (Direct Zen)
+## LLM Connection (Direct Go)
 
-All profiles connect directly to OpenCode Zen (`https://opencode.ai/zen/v1`) using `OPENCODE_API_KEY` defined in the root `.env`.
+All profiles connect directly to OpenCode Go (`https://opencode.ai/zen/go/v1`) using `OPENCODE_API_KEY` defined in the root `.env`.
 
 - **Config Rendering**: Rendered as `api_key: ${OPENCODE_API_KEY}` in each profile's `config.yaml` from `config.yaml.template` by [`test/entrypoint.sh`](file:///home/vsreddyh/Documents/Discord-bots/test/entrypoint.sh).
-- **Vision Model**: Auxiliary vision queries utilize `muse-spark-1.2-contributor-free` natively over OpenCode Zen.
+- **Vision Model**: Auxiliary vision queries utilize `glm-5.1` natively over OpenCode Go.
 - **Streaming Support**: Direct SSE passthrough when streaming is enabled in Hermes settings.
 
 ---
@@ -183,7 +183,7 @@ Direct (bypassing the proxy):
 curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
 curl http://<host>:8642/p/story/v1/chat/completions \
   -H "Authorization: Bearer <PASSWORD>" -H "Content-Type: application/json" \
-  -d '{"provider": "opencode", "model": "muse-spark-1.2-contributor-free", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
+  -d '{"provider": "opencode", "model": "glm-5.1", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
 
 - One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
@@ -204,7 +204,7 @@ All settings are configured in the single root `.env` file:
 
 | Variable | Required | Description |
 |---|---|---|
-| `OPENCODE_API_KEY` | **Yes** | API key for OpenCode (covers `opencode` + `opencode-go` providers) |
+| `OPENCODE_API_KEY` | **Yes** | API key for OpenCode Go (single provider `opencode-go`) |
 | `MONGODB_URI` | **Yes** | Remote MongoDB connection string (used in prod) |
 | `MONGODB_DB` | No | Target MongoDB database name (default: `hermes`) |
 | `PASSWORD` | For Health + App | Single password for Agento Android chat + health-sync authentication |

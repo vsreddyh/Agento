@@ -55,6 +55,7 @@ profiles/**/platforms/
 profiles/**/sessions/
 profiles/**/state/
 profiles/**/state.db*
+profiles/**/response_store.db*
 profiles/**/sandboxes/
 profiles/**/data/
 profiles/**/.clean_shutdown

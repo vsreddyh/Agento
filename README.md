@@ -1,6 +1,6 @@
 # Hermes Android stack
 
-Fully containerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Zen (`https://opencode.ai/zen/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully containerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
@@ -12,8 +12,8 @@ Fully containerized agent stack running **three Hermes profiles** (story, resume
                               Containers
   story ──┐               │
   resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
-  default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
-            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
+  default ┘ (multiplexed  │ /hermes-home │   OpenCode Go Direct
+            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/go/v1)
           └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
@@ -58,7 +58,7 @@ Retention ───────────────► one-shot container (c
   - `git@github.com:vsreddyh/Resume.git` (Resumes bot CV repository)
 
 ### Required External Services & API Keys
-- **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai) (model: `muse-spark-1.2-contributor-free`). One key covers both providers selectable per request in app Settings (`opencode` = Zen, `opencode-go` = Go).
+- **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai) (model: `glm-5.1`). One key covers both providers selectable per request in app Settings (provider `opencode-go`, model `glm-5.1`).
 - **Android App Password**: `PASSWORD` (single bearer credential for chat + sync; generate with `openssl rand -hex 32`). The app takes one Server URL + Password; each tab picks provider/model from the live gateway catalog in Settings dropdowns. Provider keys live only in the VPS `.env`, never in git.
 - **MongoDB Cluster**: MongoDB Atlas connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`) — the single data backend for money/health/cookbook.
 - **App Password**: `PASSWORD` Bearer token matching the Agento Android app Password field (single credential for chat + sync). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password.)
@@ -66,7 +66,7 @@ Retention ───────────────► one-shot container (c
 ### Network & Firewall Ports
 - Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `PASSWORD`, provider/model picked per tab from live dropdowns, paths `/p/story`, `/p/resumes`, `/p/default`. Direct ports `8642` (chat) / `8001` (sync) stay published for backward compatibility.
 - Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as `8642`).
-- Outbound HTTPS (`443/tcp`) for OpenCode Zen (`opencode.ai`), MongoDB Atlas, and GitHub.
+- Outbound HTTPS (`443/tcp`) for OpenCode Go (`opencode.ai`), MongoDB Atlas, and GitHub.
 
 ---
 

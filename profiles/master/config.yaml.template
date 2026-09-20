@@ -1,6 +1,6 @@
 model:
-  default: muse-spark-1.2-contributor-free
-  provider: opencode
+  default: glm-5.1
+  provider: opencode-go
   base_url: ${HERMES_BASE_URL}
   api_key: ${OPENCODE_API_KEY}
 
@@ -27,7 +27,7 @@ platforms:
 
 auxiliary:
   vision:
-    model: muse-spark-1.2-contributor-free
+    model: glm-5.1
 
 agent:
   max_turns: 90
