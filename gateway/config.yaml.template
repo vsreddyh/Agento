@@ -1,5 +1,5 @@
 model:
-  default: glm-5.1
+  default: mimo-v2.5
   provider: opencode-go
   base_url: ${HERMES_BASE_URL}
   api_key: ${OPENCODE_API_KEY}
@@ -28,7 +28,7 @@ platforms:
 
 auxiliary:
   vision:
-    model: glm-5.1
+    model: mimo-v2.5
 
 agent:
   max_turns: 90

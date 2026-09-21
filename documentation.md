@@ -37,7 +37,7 @@ Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gatew
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
 
-- **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `glm-5.1`).
+- **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.5`).
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
 - **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles, supervised by `s6-overlay`.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
@@ -53,7 +53,7 @@ Retention ───────────────► one-shot container (c
 All profiles connect directly to OpenCode Go (`https://opencode.ai/zen/go/v1`) using `OPENCODE_API_KEY` defined in the root `.env`.
 
 - **Config Rendering**: Rendered as `api_key: ${OPENCODE_API_KEY}` in each profile's `config.yaml` from `config.yaml.template` by [`test/entrypoint.sh`](file:///home/vsreddyh/Documents/Discord-bots/test/entrypoint.sh).
-- **Vision Model**: Auxiliary vision queries utilize `glm-5.1` natively over OpenCode Go.
+- **Vision Model**: Auxiliary vision queries utilize `mimo-v2.5` natively over OpenCode Go.
 - **Streaming Support**: Direct SSE passthrough when streaming is enabled in Hermes settings.
 
 ---
@@ -183,7 +183,7 @@ Direct (bypassing the proxy):
 curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
 curl http://<host>:8642/p/story/v1/chat/completions \
   -H "Authorization: Bearer <PASSWORD>" -H "Content-Type: application/json" \
-  -d '{"provider": "opencode-go", "model": "glm-5.1", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
+  -d '{"provider": "opencode-go", "model": "mimo-v2.5", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
 
 - One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
