@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${HERMES_HOME:=/hermes-home}"
+: "${HERMES_HOME:=/opt/data}"
 
 # NOTE: env is injected entirely by compose (from the single root
 # .env). There are no per-profile .env files.
@@ -9,7 +9,7 @@ set -euo pipefail
 # Multiplex layout: HERMES_HOME is the gateway home AND the god profile
 # (Hermes' built-in "default" profile IS the home dir). Story + resumes are
 # side profiles nested under $HERMES_HOME/profiles/.
-# compose mounts ../gateway:/hermes-home and ../workspace:/workspace,
+# compose mounts ../gateway:/opt/data and ../workspace:/workspace,
 # so this renders config.yaml for god (home) + each side profile.
 #
 # The gateway container runs the multiplexed gateway supervised by
@@ -24,25 +24,26 @@ if [[ "${1:-}" == "chown-data" ]]; then
 fi
 
 # Container-environment defaults, used by both the live and test stacks.
-# Model traffic goes through the local go-shim sidecar (injects the
-# x-opencode-session header hermes 0.19.0 doesn't send). Override only to
-# bypass the shim (direct upstream needs a client that sends the header).
-export HERMES_BASE_URL="${HERMES_BASE_URL:-http://127.0.0.1:18081}"
+# Model traffic goes direct to OpenCode Go (the official image's hermes
+# sends x-opencode-session natively). Override only to point elsewhere.
+export HERMES_BASE_URL="${HERMES_BASE_URL:-https://opencode.ai/zen/go/v1}"
 export MONGODB_URI="${MONGODB_URI:-}"
 export MONGODB_DB="${MONGODB_DB:-hermes}"
 
 render_config() {
     # Render one profile's $1/config.yaml.template → $1/config.yaml.
     # Env vars come from the process env (injected by compose
-    # from the single root .env).
-    local home="$1" t c
+    # from the single root .env). Uses venv python when plain python3
+    # is absent (official image keeps it at /opt/hermes/.venv/bin).
+    local home="$1" t c py
     t="$home/config.yaml.template"
     c="$home/config.yaml"
     if [[ ! -f "$t" ]]; then
         warning "missing template $t"
         return 0
     fi
-    python3 - "$t" "$c" <<'PY'
+    py="$(command -v python3 || echo /opt/hermes/.venv/bin/python)"
+    "$py" - "$t" "$c" <<'PY'
 import os, re, sys
 src = open(sys.argv[1]).read()
 def sub(m):
@@ -78,14 +79,5 @@ fi
 
 # Normal startup: render first, then run the multiplexed gateway.
 do_render
-
-# go-shim sidecar (localhost reverse proxy injecting x-opencode-session for
-# Go chat). s6 service defs exist but s6 itself is bypassed (entrypoint execs
-# the gateway directly), so the shim starts here as a background child of
-# PID 1 — it dies with the container, same lifecycle as the gateway.
-if command -v /usr/local/bin/go-shim &>/dev/null; then
-    info "starting go-shim sidecar (:18081 -> opencode.ai Go)"
-    /usr/local/bin/go-shim 2>&1 | sed 's/^/[go-shim] /' &
-fi
 
 exec hermes gateway run --force --accept-hooks

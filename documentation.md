@@ -39,7 +39,7 @@ Retention ───────────────► one-shot container (c
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.5`).
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles, supervised by `s6-overlay`.
+- **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving god + 2 sides from the official image (entrypoint renders templates, then execs the gateway directly — their s6 tree is bypassed).
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
 - **app API**: Hermes built-in OpenAI-compatible server (`platforms.api_server` in `gateway/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **playwright**: Browser automation via the official `@playwright/mcp` stdio server (headless chromium bundled in the bot image), configured per profile in `mcp_servers`.
@@ -64,7 +64,7 @@ All container management is orchestrated through [`scripts/hermes.sh`](file:///h
 
 ### `init`
 1. Verifies host dependencies (podman, compose, python3, curl, cron) and installs missing requirements.
-2. Builds the shared bot image ([`test/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/test/Dockerfile), baking in `s6-overlay`) and the `health-api` image. Note: podman/buildah has no BuildKit-style pip cache mounts, so rebuilds reinstall Python deps from the network — expect slower `start`/`restart` rebuilds than under Docker.
+2. Builds the derived bot image ([`test/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/test/Dockerfile): official hermes image + in-repo Go MCP binaries) and the `health-api` image.
 3. Initializes root `.env` from `.env.example` if not already present.
 4. Copies skill files from `skills/` into each profile directory.
 5. Installs the daily data retention cron job (runs daily at 03:00).
@@ -90,7 +90,7 @@ Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered con
 
 ## Bot Profiles & Multiplexing
 
-[`gateway/`](file:///home/vsreddyh/Documents/Discord-bots/gateway) IS the god profile — Hermes' built-in `default` profile is the gateway home itself (`HERMES_HOME=/hermes-home`). Story and resumes are side profiles nested under `gateway/profiles/<bot>/`:
+[`gateway/`](file:///home/vsreddyh/Documents/Discord-bots/gateway) IS the god profile — Hermes' built-in `default` profile is the gateway home itself (`HERMES_HOME=/opt/data`). Story and resumes are side profiles nested under `gateway/profiles/<bot>/`:
 
 | Profile | App Tab | Workspace & Domain Data |
 |---|---|---|

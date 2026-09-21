@@ -7,8 +7,11 @@ x-bot-base: &bot-base
     dockerfile: test/Dockerfile
   user: "1000:1000"
   environment: &bot-base-environment
-    HERMES_HOME: /hermes-home
-    HOME: /hermes-home
+    HERMES_HOME: /opt/data
+    HOME: /opt/data
+    # Official image refuses root gateways unless explicitly allowed
+    # (we run root so bind-mounted state stays host-owned; same as before).
+    HERMES_ALLOW_ROOT_GATEWAY: 1
     OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
     # hermes-agent resolves provider credentials ONLY from these two names
     # (plugins/model-providers/opencode-zen: env_vars per provider) — same
@@ -28,7 +31,8 @@ services:
   # ──────────────────────────────────────────────────────
   health-api:
     build:
-      context: ../docker/health-api
+      context: ..
+      dockerfile: docker/health-api/Dockerfile
     user: "1000:1000"
     ports:
       - "8001:8000"
@@ -61,16 +65,11 @@ services:
     ports:
       - "${API_SERVER_PORT:-8642}:8642"
     volumes:
-      - ../gateway:/hermes-home
+      - ../gateway:/opt/data
       - ../workspace:/workspace
-      - ../mcps/common:/mcps/common:ro
-      - ../mcps/cookbook:/mcps/cookbook:ro
-      - ../mcps/health_check:/mcps/health_check:ro
-      - ../mcps/money:/mcps/miser-money:ro
     environment:
       <<: *bot-base-environment
       PASSWORD: ${PASSWORD:-}
-      PYTHONPATH: /mcps
 
   # ──────────────────────────────────────────────────────
   # Proxy — single URL for the Agento app (chat + sync on one port).

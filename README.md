@@ -12,7 +12,7 @@ Fully containerized agent stack running **three Hermes profiles** (story, resume
                               Containers
   story ──┐               │
   resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
-  default ┘ (multiplexed  │ /hermes-home │   OpenCode Go Direct
+  default ┘ (multiplexed  │ /opt/data │   OpenCode Go Direct
             3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/go/v1)
           └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
@@ -166,7 +166,7 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── docker-compose.yml   # Unified compose configuration (health-api + gateway + retention)
 │   ├── health-api/          # Health Connect FastAPI sync service
 ├── test/
-│   ├── Dockerfile           # Shared bot image definition (Debian slim + s6-overlay + Playwright chromium)
+│   ├── Dockerfile           # Derived bot image (official hermes + Go MCP binaries)
 │   └── entrypoint.sh        # Config rendering and s6 service orchestration
 ├── mcps/
 │   ├── common/              # Shared Mongo/validation lib (not an MCP)

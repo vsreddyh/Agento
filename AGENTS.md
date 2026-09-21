@@ -26,7 +26,7 @@ against Atlas. No host Hermes install, no native processes.
 
 ```
 story+resumes+default
-   └─► ONE `gateway` container (HERMES_HOME=/hermes-home = gateway/, s6-supervised)
+   └─► ONE `gateway` container (HERMES_HOME=/opt/data = gateway/, official image + custom entrypoint)
         └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model mimo-v2.5)
 proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)
 MongoDB (Atlas)  •  retention (one-shot container)
@@ -55,7 +55,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 - Podman: `docker/docker-compose.yml` = the whole stack (health-api
    + gateway + retention) — the ONLY compose file. All environments run the
    same file against the Atlas `MONGODB_URI`. The bot image is built from `test/Dockerfile` +
-   `test/entrypoint.sh` (bakes in `s6-overlay`; `hermes-agent` from git main + `aiohttp` via pip; in-repo Go MCP servers + CLIs built by a golang stage; nodejs + headless shell for the Playwright MCP); those are the image source, not
+   `test/entrypoint.sh` (renders templates, execs gateway; in-repo Go MCP servers + CLIs built by a golang stage onto the official image); those are the image source, not
    a mirror stack.
    Provider keys + `PASSWORD` are injected via compose `environment:` interpolation
    from the root `.env`; `podman_compose()` always passes `--env-file "$REPO/.env"`
