@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
@@ -71,6 +72,7 @@ private enum class Destination(val title: String) {
     God("God"),
     Tasks("Tasks"),
     Storage("Storage"),
+    Reminders("Reminders"),
     Settings("Settings"),
 }
 
@@ -79,6 +81,7 @@ private fun Destination.icon() = when (this) {
     Destination.Resumes -> Icons.Filled.Description
     Destination.God -> Icons.Filled.Star
     Destination.Tasks -> Icons.Filled.List
+    Destination.Reminders -> Icons.Filled.Alarm
     Destination.Storage -> Icons.Filled.Folder
     Destination.Settings -> Icons.Filled.Settings
 }
@@ -162,6 +165,7 @@ class MainActivity : ComponentActivity() {
                             )
                             Destination.Tasks -> TasksScreen()
                             Destination.Storage -> StorageScreen()
+                            Destination.Reminders -> RemindersScreen()
                             Destination.Settings -> SettingsScreen(
                                 healthModel,
                                 themeMode = themeMode,
@@ -511,6 +515,185 @@ private fun humanSize(bytes: Long): String {
         u++
     }
     return if (u == 0) "$bytes B" else "%.1f %s".format(v, units[u])
+}
+
+/** Reminders + timers: exact alarms with permission fallback (#31, #32). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RemindersScreen() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var items by remember { mutableStateOf<List<ReminderItem>>(emptyList()) }
+    var loaded by remember { mutableStateOf(false) }
+    var showAdd by remember { mutableStateOf(false) }
+    var exactOk by remember { mutableStateOf(Reminders.canScheduleExact(context)) }
+
+    LaunchedEffect(Unit) {
+        items = withContext(Dispatchers.IO) { ReminderStore.load(context) }
+        loaded = true
+    }
+
+    fun persist(next: List<ReminderItem>) {
+        items = next.sortedBy { it.atEpoch }
+        scope.launch(Dispatchers.IO) { ReminderStore.save(context, next) }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Reminders") },
+            actions = {
+                TextButton(onClick = { showAdd = true }) { Text("Add") }
+            },
+        )
+        if (!exactOk) {
+            Text(
+                "Exact alarms not allowed — reminders may arrive late. Enable in system Settings → Apps → Agento → Alarms & reminders.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+        if (!loaded) {
+            Text("Loading…", modifier = Modifier.padding(16.dp))
+        } else if (items.isEmpty()) {
+            Text(
+                "No reminders. Tap Add to schedule the first one.",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(16.dp),
+            )
+        }
+        val now = System.currentTimeMillis()
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 8.dp),
+        ) {
+            items(items.filter { it.atEpoch > now }, key = { it.id }) { r ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                r.title.ifEmpty { "(untitled)" },
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            if (r.text.isNotEmpty()) {
+                                Text(r.text, style = MaterialTheme.typography.bodyMedium)
+                            }
+                            Text(
+                                formatEpoch(r.atEpoch),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        IconButton(onClick = {
+                            Reminders.cancel(context, r.id)
+                            persist(items.filterNot { it.id == r.id })
+                        }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAdd) {
+        ReminderDialog(
+            onDismiss = { showAdd = false },
+            onSave = { title, text, atEpoch ->
+                val item = ReminderItem(
+                    id = ReminderStore.newId(), title = title.trim(),
+                    text = text.trim(), atEpoch = atEpoch,
+                )
+                if (atEpoch <= System.currentTimeMillis()) return@ReminderDialog
+                Reminders.schedule(context, item)
+                persist(items + item)
+                exactOk = Reminders.canScheduleExact(context)
+                showAdd = false
+            },
+        )
+    }
+}
+
+/** Add-reminder dialog with date + time pickers. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReminderDialog(onDismiss: () -> Unit, onSave: (String, String, Long) -> Unit) {
+    var title by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf("") }
+    val dateState = rememberDatePickerState()
+    val timeState = rememberTimePickerState(is24Hour = true)
+    var step by remember { mutableStateOf(0) } // 0 fields, 1 date, 2 time
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(when (step) {
+            0 -> "New reminder"
+            1 -> "Pick a date"
+            else -> "Pick a time"
+        }) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (step) {
+                    0 -> {
+                        OutlinedTextField(
+                            value = title,
+                            onValueChange = { title = it },
+                            label = { Text("Title") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = text,
+                            onValueChange = { text = it },
+                            label = { Text("Note (optional)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 3,
+                        )
+                    }
+                    1 -> DatePicker(state = dateState)
+                    else -> TimePicker(state = timeState)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                when (step) {
+                    0 -> step = 1
+                    1 -> step = if (dateState.selectedDateMillis == null) 1 else 2
+                    else -> {
+                        val day = dateState.selectedDateMillis ?: return@TextButton
+                        val cal = java.util.Calendar.getInstance().apply {
+                            timeInMillis = day
+                            set(java.util.Calendar.HOUR_OF_DAY, timeState.hour)
+                            set(java.util.Calendar.MINUTE, timeState.minute)
+                            set(java.util.Calendar.SECOND, 0)
+                        }
+                        onSave(title, text, cal.timeInMillis)
+                    }
+                }
+            }) { Text(when (step) { 2 -> "Save"; else -> "Next" }) }
+        },
+        dismissButton = {
+            if (step == 0) {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            } else {
+                TextButton(onClick = { step-- }) { Text("Back") }
+            }
+        },
+    )
+}
+
+private fun formatEpoch(epoch: Long): String {
+    return try {
+        val zdt = java.time.Instant.ofEpochMilli(epoch)
+            .atZone(java.time.ZoneId.systemDefault())
+        zdt.format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm"))
+    } catch (e: Exception) {
+        ""
+    }
 }
 
 /** Short HH:mm (plus date when not today); empty for unknown timestamps. */
