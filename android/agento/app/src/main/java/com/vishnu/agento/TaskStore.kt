@@ -3,6 +3,7 @@ package com.vishnu.agento
 import android.content.Context
 import java.io.File
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 /** One task row: name + status + note (#34). Status is free text. */
@@ -30,7 +31,7 @@ object TaskStore {
         val f = file(context)
         if (!f.exists()) return emptyList()
         return runCatching {
-            taskJson.decodeFromString<List<TaskItem>>(f.readText())
+            taskJson.decodeFromString(ListSerializer(TaskItem.serializer()), f.readText())
                 .filter { it.id.isNotEmpty() }
                 .take(MAX_TASKS)
         }.getOrDefault(emptyList())
@@ -38,7 +39,7 @@ object TaskStore {
 
     fun save(context: Context, tasks: List<TaskItem>) {
         runCatching {
-            file(context).writeText(taskJson.encodeToString(tasks.take(MAX_TASKS)))
+            file(context).writeText(taskJson.encodeToString(ListSerializer(TaskItem.serializer()), tasks.take(MAX_TASKS)))
         }
     }
 }
