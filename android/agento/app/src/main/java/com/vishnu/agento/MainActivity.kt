@@ -9,17 +9,35 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -42,7 +60,7 @@ class ChatViewModelFactory(
     }
 }
 
-/** Bottom-nav destinations; first three map 1:1 to gateway profiles. */
+/** Sidebar destinations; first three map 1:1 to gateway profiles (#18). */
 private enum class Destination(val title: String) {
     Story("Story"),
     Resumes("Resumes"),
@@ -50,37 +68,98 @@ private enum class Destination(val title: String) {
     Settings("Settings"),
 }
 
+private fun Destination.icon() = when (this) {
+    Destination.Story -> Icons.Filled.MenuBook
+    Destination.Resumes -> Icons.Filled.Description
+    Destination.God -> Icons.Filled.Star
+    Destination.Settings -> Icons.Filled.Settings
+}
+
+/** App theme mode keys (prefs `theme_mode`; #28). */
+object ThemeStore {
+    const val KEY = "theme_mode"
+    const val SYSTEM = "system"
+    const val LIGHT = "light"
+    const val DARK = "dark"
+
+    fun load(context: android.content.Context): String =
+        context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .getString(KEY, SYSTEM) ?: SYSTEM
+
+    fun save(context: android.content.Context, mode: String) {
+        context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .edit().putString(KEY, mode).apply()
+    }
+}
+
 /** Single-activity host; health state lives here, chat state per tab. */
 class MainActivity : ComponentActivity() {
 
     private val healthModel: MainViewModel by viewModels()
 
-    /** Inflates bottom nav; each destination hosts an independent tab. */
+    /** Sidebar drawer navigation (#18); theme from prefs (#28). */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            val context = LocalContext.current
+            var themeMode by remember { mutableStateOf(ThemeStore.load(context)) }
+            val dark = when (themeMode) {
+                ThemeStore.LIGHT -> false
+                ThemeStore.DARK -> true
+                else -> isSystemInDarkTheme()
+            }
+            MaterialTheme(
+                colorScheme = if (dark) darkColorScheme() else lightColorScheme(),
+            ) {
                 var dest by remember { mutableStateOf(Destination.Story) }
-                Scaffold(
-                    bottomBar = {
-                        NavigationBar {
+                val drawerState = rememberDrawerState(DrawerValue.Closed)
+                val scope = rememberCoroutineScope()
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    drawerContent = {
+                        ModalDrawerSheet {
+                            Text(
+                                "Agento",
+                                style = MaterialTheme.typography.titleLarge,
+                                modifier = Modifier.padding(16.dp),
+                            )
                             Destination.entries.forEach { d ->
-                                NavigationBarItem(
-                                    selected = dest == d,
-                                    onClick = { dest = d },
+                                NavigationDrawerItem(
                                     label = { Text(d.title) },
-                                    icon = {},
+                                    icon = { Icon(d.icon(), contentDescription = null) },
+                                    selected = dest == d,
+                                    onClick = {
+                                        dest = d
+                                        scope.launch { drawerState.close() }
+                                    },
+                                    modifier = Modifier.padding(horizontal = 8.dp),
                                 )
                             }
                         }
                     },
-                ) { padding ->
-                    Box(modifier = Modifier.padding(padding)) {
+                ) {
+                    Box {
                         when (dest) {
-                            Destination.Story -> ChatTab(app = application, tab = "story", title = "Story")
-                            Destination.Resumes -> ChatTab(app = application, tab = "resumes", title = "Resumes")
-                            Destination.God -> ChatTab(app = application, tab = "god", title = "God")
-                            Destination.Settings -> SettingsScreen(healthModel)
+                            Destination.Story -> ChatTab(
+                                app = application, tab = "story", title = "Story",
+                                onMenu = { scope.launch { drawerState.open() } },
+                            )
+                            Destination.Resumes -> ChatTab(
+                                app = application, tab = "resumes", title = "Resumes",
+                                onMenu = { scope.launch { drawerState.open() } },
+                            )
+                            Destination.God -> ChatTab(
+                                app = application, tab = "god", title = "God",
+                                onMenu = { scope.launch { drawerState.open() } },
+                            )
+                            Destination.Settings -> SettingsScreen(
+                                healthModel,
+                                themeMode = themeMode,
+                                onTheme = {
+                                    themeMode = it
+                                    ThemeStore.save(context, it)
+                                },
+                            )
                         }
                     }
                 }
@@ -91,16 +170,208 @@ class MainActivity : ComponentActivity() {
 
 /** Scopes one chat ViewModel per tab key so drafts/history survive tab switches. */
 @Composable
-private fun ChatTab(app: android.app.Application, tab: String, title: String) {
+private fun ChatTab(
+    app: android.app.Application,
+    tab: String,
+    title: String,
+    onMenu: () -> Unit,
+) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
     // Keyed per tab — otherwise all three tabs would share one ViewModel.
     val vm: ChatViewModel = viewModel(key = "chat_$tab", factory = factory)
     val state by vm.state
     LaunchedEffect(Unit) { vm.refreshConfig() }
-    val subtitle = state.model.ifEmpty { "(not set)" } +
-        " · " + state.provider.ifEmpty { "(not set)" }
-    ChatScreen(title = title, model = subtitle, state = state,
-        onPending = vm::onPending, onSend = vm::send, onStop = vm::stop, onNew = vm::newConversation)
+    var showThreads by remember { mutableStateOf(false) }
+    var showModel by remember { mutableStateOf(false) }
+    val subtitle = (if (state.model.isEmpty()) "not set" else state.model) +
+        " · " + state.provider.ifEmpty { "not set" }
+    ChatScreen(
+        title = title, model = subtitle, state = state,
+        onMenu = onMenu,
+        onThreads = { showThreads = true },
+        onModel = { showModel = true },
+        onPending = vm::onPending, onSend = vm::send, onStop = vm::stop,
+        onNew = vm::newConversation, onRetry = vm::retry,
+    )
+    if (showThreads) {
+        ThreadSheet(
+            threads = state.threads,
+            activeId = state.activeThreadId,
+            onSelect = { vm.switchThread(it); showThreads = false },
+            onDelete = vm::deleteThread,
+            onNew = { vm.newConversation(); showThreads = false },
+            onClose = { showThreads = false },
+        )
+    }
+    if (showModel) {
+        TabModelSheet(app = app, tab = tab, title = title,
+            onChanged = vm::refreshConfig, onClose = { showModel = false })
+    }
+}
+
+/** Short HH:mm (plus date when not today); empty for unknown timestamps. */
+private fun shortTime(ts: Long): String {
+    if (ts <= 0) return ""
+    return try {
+        val zdt = java.time.Instant.ofEpochMilli(ts)
+            .atZone(java.time.ZoneId.systemDefault())
+        val today = java.time.LocalDate.now()
+        if (zdt.toLocalDate() == today) {
+            zdt.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+        } else {
+            zdt.format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm"))
+        }
+    } catch (e: Exception) {
+        ""
+    }
+}
+
+/** Thread switcher: past conversations survive New and restarts (#17). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThreadSheet(
+    threads: List<Pair<String, String>>,
+    activeId: String,
+    onSelect: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onNew: () -> Unit,
+    onClose: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onClose) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Text("Conversations", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(8.dp))
+            LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                items(threads, key = { it.first }) { (id, title) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(
+                            onClick = { onSelect(id) },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(8.dp),
+                        ) {
+                            Text(
+                                (if (id == activeId) "● " else "") + title,
+                                maxLines = 1,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        if (threads.size > 1) {
+                            IconButton(onClick = { onDelete(id) }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(onClick = onNew, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.Add, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("New conversation")
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+/**
+ * Per-tab provider/model picker (#18: model selection lives on each
+ * profile's own page). Saves immediately on pick; blanks mean not set.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TabModelSheet(
+    app: android.app.Application,
+    tab: String,
+    title: String,
+    onChanged: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var provider by remember { mutableStateOf("") }
+    var model by remember { mutableStateOf("") }
+    var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
+    var status by remember { mutableStateOf("") }
+    LaunchedEffect(tab) {
+        val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        provider = (prefs.getString("provider_$tab", "") ?: "").trim()
+        model = (prefs.getString("model_$tab", "") ?: "").trim()
+        val api = ChatApi(context)
+        catalog = runCatching {
+            api.fetchCatalog(catalogPath(api)).getOrThrow()
+        }.getOrDefault(emptyList())
+    }
+    fun save(p: String, m: String) {
+        val api = ChatApi(context)
+        api.setChatConfig(api.baseUrl(), api.password(), tab, p, m)
+        onChanged()
+    }
+    ModalBottomSheet(onDismissRequest = onClose) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Text("$title model", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(8.dp))
+            val options = providerOptionsFor(catalog, provider)
+            val shownProvider = options.firstOrNull { it.slug == provider }
+                ?.let { providerDisplay(it.slug, it.label) }
+                ?: provider.ifEmpty { "(select provider)" }
+            OptionMenu(
+                label = "Provider",
+                shown = shownProvider,
+                options = options.map { o -> o.slug to providerDisplay(o.slug, o.label) },
+                onPick = {
+                    if (it != provider) model = ""
+                    provider = it
+                    save(provider, model)
+                },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OptionMenu(
+                label = "Model",
+                shown = model.ifEmpty { "(select model)" },
+                options = modelOptionsFor(options, provider).map { m -> m to m },
+                onPick = {
+                    model = it
+                    save(provider, model)
+                },
+            )
+            if (status.isNotEmpty()) {
+                Text(status, style = MaterialTheme.typography.bodySmall)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        status = "Loading providers…"
+                        scope.launch {
+                            val api = ChatApi(context)
+                            api.fetchCatalog(api.pathFor(tab), refresh = true).fold(
+                                onSuccess = { list ->
+                                    catalog = list
+                                    status = list.joinToString("\n") { o ->
+                                        "${o.label}: ${o.models.size} model(s)"
+                                    }
+                                },
+                                onFailure = { e -> status = "FAILED — ${e.message}" },
+                            )
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Reload catalog")
+                }
+            }
+            if (catalog.isEmpty()) {
+                Text(
+                    "Providers not loaded — check Server URL + Password in Settings, then Reload.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
 }
 
 /** Streaming chat surface; auto-scrolls on new tokens, delegates I/O to callbacks. */
@@ -110,29 +381,57 @@ private fun ChatScreen(
     title: String,
     model: String,
     state: ChatUiState,
+    onMenu: () -> Unit,
+    onThreads: () -> Unit,
+    onModel: () -> Unit,
     onPending: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onNew: () -> Unit,
+    onRetry: () -> Unit,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(state.messages.size, state.messages.lastOrNull()?.content?.length) {
         if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size - 1)
     }
+    val clipboard = LocalClipboardManager.current
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("$title · $model") },
+            navigationIcon = {
+                IconButton(onClick = onMenu) {
+                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                }
+            },
+            title = { Text("$title · $model", maxLines = 1) },
             actions = {
+                IconButton(onClick = onThreads, enabled = !state.streaming) {
+                    Icon(Icons.Filled.History, contentDescription = "Conversations")
+                }
+                IconButton(onClick = onModel, enabled = !state.streaming) {
+                    Icon(Icons.Filled.Tune, contentDescription = "Model")
+                }
                 TextButton(onClick = onNew, enabled = !state.streaming) { Text("New") }
             },
         )
         if (state.error.isNotEmpty()) {
-            Text(
-                state.error,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    state.error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (!state.streaming) {
+                    TextButton(onClick = onRetry) {
+                        Icon(Icons.Filled.Refresh, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Retry")
+                    }
+                }
+            }
         }
         LazyColumn(
             state = listState,
@@ -143,25 +442,57 @@ private fun ChatScreen(
             if (state.messages.isEmpty()) {
                 item {
                     Text(
-                        "No messages yet. Ask anything — history stays in this tab until New.",
+                        "No messages yet. Ask anything — threads keep history until you delete them.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
             }
             items(state.messages) { msg ->
+                val isUser = msg.role == "user"
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = if (msg.role == "user") {
+                    colors = if (isUser) {
                         CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
                     } else {
                         CardDefaults.cardColors()
                     },
                 ) {
-                    Text(
-                        msg.content.ifEmpty { "…" },
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (isUser) "You" else "Assistant",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            val ts = shortTime(msg.ts)
+                            if (ts.isNotEmpty()) {
+                                Text(
+                                    ts,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (!isUser && msg.content.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { clipboard.setText(AnnotatedString(msg.content)) },
+                                    modifier = Modifier.size(28.dp),
+                                ) {
+                                    Icon(Icons.Filled.ContentCopy, contentDescription = "Copy")
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        SelectionContainer {
+                            Text(
+                                msg.content.ifEmpty { "…" },
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -186,72 +517,40 @@ private fun ChatScreen(
     }
 }
 
-/** Per-tab provider/model picker; every tab needs an explicit provider + model.
- * Provider/model options come from the live gateway catalog
- * (`GET /api/model/options`); the saved value is always kept selectable so a
- * legacy or unknown slug is never lost. Blank means not configured. */
+/** Read-only option menu (saved values stay intact; picks write the slug). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TabLlmConfig(
-    tabTitle: String,
-    provider: String,
-    onProvider: (String) -> Unit,
-    providerOptions: List<ProviderOption>,
-    model: String,
-    onModel: (String) -> Unit,
-    modelOptions: List<String>,
+private fun OptionMenu(
+    label: String,
+    shown: String,
+    options: List<Pair<String, String>>,
+    onPick: (String) -> Unit,
 ) {
-    /** Read-only option menu (saved values stay intact; picks write the slug). */
-    @Composable
-    fun OptionMenu(
-        label: String,
-        shown: String,
-        options: List<Pair<String, String>>,
-        onPick: (String) -> Unit,
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
     ) {
-        var expanded by remember { mutableStateOf(false) }
-        ExposedDropdownMenuBox(
+        OutlinedTextField(
+            value = shown,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.fillMaxWidth().menuAnchor(),
+        )
+        ExposedDropdownMenu(
             expanded = expanded,
-            onExpandedChange = { expanded = it },
+            onDismissRequest = { expanded = false },
         ) {
-            OutlinedTextField(
-                value = shown,
-                onValueChange = {},
-                readOnly = true,
-                label = { Text(label) },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                modifier = Modifier.fillMaxWidth().menuAnchor(),
-            )
-            ExposedDropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-            ) {
-                options.forEach { (value, text) ->
-                    DropdownMenuItem(
-                        text = { Text(text) },
-                        onClick = { onPick(value); expanded = false },
-                    )
-                }
+            options.forEach { (value, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = { onPick(value); expanded = false },
+                )
             }
         }
     }
-
-    Text("$tabTitle tab", style = MaterialTheme.typography.titleSmall)
-    val shownProvider = providerOptions.firstOrNull { it.slug == provider }
-        ?.let { providerDisplay(it.slug, it.label) }
-        ?: provider.ifEmpty { "(select provider)" }
-    OptionMenu(
-        label = "Provider",
-        shown = shownProvider,
-        options = providerOptions.map { o -> o.slug to providerDisplay(o.slug, o.label) },
-        onPick = onProvider,
-    )
-    OptionMenu(
-        label = "Model",
-        shown = model.ifEmpty { "(select model)" },
-        options = modelOptions.map { m -> m to m },
-        onPick = onModel,
-    )
 }
 
 /** Providers are gateway-global; one catalog fetch covers all tabs. */
@@ -286,55 +585,43 @@ private fun modelOptionsFor(
     if (provider.isBlank()) emptyList()
     else options.firstOrNull { it.slug == provider }?.models.orEmpty()
 
-/** Settings hub for chat backend plus Health Connect sync; prefs load once on entry. */
+/** One labeled section card so Settings reads as groups, not a wall (#17). */
+@Composable
+private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Text(title, style = MaterialTheme.typography.titleMedium)
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            content = content,
+        )
+    }
+}
+
+/** Settings hub, grouped into sections (#17); model pickers moved to each
+ * tab's own page (#18). Theme toggle lives under Appearance (#28). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: MainViewModel) {
+fun SettingsScreen(
+    viewModel: MainViewModel,
+    themeMode: String = ThemeStore.SYSTEM,
+    onTheme: (String) -> Unit = {},
+) {
     val state by viewModel.state
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
-    // Per-tab LLM config: explicit provider slug + model per tab.
-    var providerStory by remember { mutableStateOf("") }
-    var modelStory by remember { mutableStateOf("") }
-    var providerResumes by remember { mutableStateOf("") }
-    var modelResumes by remember { mutableStateOf("") }
-    var providerGod by remember { mutableStateOf("") }
-    var modelGod by remember { mutableStateOf("") }
     var modelsResult by remember { mutableStateOf("") }
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     // Bumped after a settings import so the fields below reload from prefs.
     var settingsRefresh by remember { mutableStateOf(0) }
 
-    /** Preloads persisted chat prefs into compose state, then pulls the live
-     * provider/model catalog for the dropdowns (silent on failure — the
-     * offline fallback list + saved values keep the pickers usable). */
+    /** Preloads the live provider/model catalog (pickers live per tab now). */
     LaunchedEffect(settingsRefresh) {
-        val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-        // serverUrl/password live in the viewModel (single shared fields,
-        // legacy keys fall back inside MainViewModel.refresh on init).
-        providerStory = (prefs.getString("provider_story", "") ?: "").trim()
-        modelStory = (prefs.getString("model_story", "") ?: "").trim()
-        providerResumes = (prefs.getString("provider_resumes", "") ?: "").trim()
-        modelResumes = (prefs.getString("model_resumes", "") ?: "").trim()
-        providerGod = (prefs.getString("provider_god", "") ?: "").trim()
-        modelGod = (prefs.getString("model_god", "") ?: "").trim()
         val api = ChatApi(context)
-        val loaded = runCatching {
-            api.fetchCatalog(catalogPath(api)).getOrThrow()
+        catalog = runCatching {
+            api.fetchCatalog(catalogPath(api)).getOrDefault(emptyList())
         }.getOrDefault(emptyList())
-        catalog = loaded
-        if (loaded.isNotEmpty()) {
-            fun clean(prov: String, mod: String): String {
-                if (prov.isBlank() || mod.isBlank()) return mod
-                val row = loaded.firstOrNull { it.slug == prov } ?: return mod
-                return if (mod in row.models) mod else ""
-            }
-            modelStory = clean(providerStory, modelStory)
-            modelResumes = clean(providerResumes, modelResumes)
-            modelGod = clean(providerGod, modelGod)
-        }
     }
 
     /** Refreshes health state after any permission flow returns. */
@@ -362,185 +649,184 @@ fun SettingsScreen(viewModel: MainViewModel) {
     ) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
 
-        Text("Server", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "One URL for chat + sync (reverse proxy routes /p/* to the gateway, /api/* to health sync).",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        OutlinedTextField(
-            value = state.serverUrl,
-            onValueChange = viewModel::onServerUrl,
-            label = { Text("Server URL") },
-            placeholder = { Text("http://192.168.1.10:8080") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = state.password,
-            onValueChange = viewModel::onPassword,
-            label = { Text("Password (sync token)") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text("Chat backend", style = MaterialTheme.typography.titleMedium)
-        val storyProviders = providerOptionsFor(catalog, providerStory)
-        val resumesProviders = providerOptionsFor(catalog, providerResumes)
-        val godProviders = providerOptionsFor(catalog, providerGod)
-        TabLlmConfig(
-            tabTitle = "Story",
-            provider = providerStory,
-            onProvider = { if (it != providerStory) modelStory = ""; providerStory = it },
-            providerOptions = storyProviders,
-            model = modelStory,
-            onModel = { modelStory = it },
-            modelOptions = modelOptionsFor(storyProviders, providerStory),
-        )
-        TabLlmConfig(
-            tabTitle = "Resumes",
-            provider = providerResumes,
-            onProvider = { if (it != providerResumes) modelResumes = ""; providerResumes = it },
-            providerOptions = resumesProviders,
-            model = modelResumes,
-            onModel = { modelResumes = it },
-            modelOptions = modelOptionsFor(resumesProviders, providerResumes),
-        )
-        TabLlmConfig(
-            tabTitle = "God",
-            provider = providerGod,
-            onProvider = { if (it != providerGod) modelGod = ""; providerGod = it },
-            providerOptions = godProviders,
-            model = modelGod,
-            onModel = { modelGod = it },
-            modelOptions = modelOptionsFor(godProviders, providerGod),
-        )
-        /** Saves config, then reloads the live provider/model catalog. */
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                val api = ChatApi(context)
-                api.setChatConfig(state.serverUrl, state.password, "story", providerStory, modelStory)
-                api.setChatConfig(state.serverUrl, state.password, "resumes", providerResumes, modelResumes)
-                api.setChatConfig(state.serverUrl, state.password, "god", providerGod, modelGod)
-                modelsResult = "Saved."
-            }, modifier = Modifier.weight(1f)) {
-                Text("Save chat config")
-            }
-            OutlinedButton(onClick = {
-                val api = ChatApi(context)
-                api.setChatConfig(state.serverUrl, state.password, "story", providerStory, modelStory)
-                api.setChatConfig(state.serverUrl, state.password, "resumes", providerResumes, modelResumes)
-                api.setChatConfig(state.serverUrl, state.password, "god", providerGod, modelGod)
-                modelsResult = "Loading providers…"
-                scope.launch {
-                    api.fetchCatalog(catalogPath(api), refresh = true).fold(
-                        onSuccess = { list ->
-                            catalog = list
-                            modelsResult = list.joinToString("\n") { o ->
-                                "${o.label}: ${o.models.size} model(s)"
-                            }
-                        },
-                        onFailure = { e -> modelsResult = "FAILED — ${e.message}" },
-                    )
+        SettingsSection("Server") {
+            Text(
+                "One URL for chat + sync (reverse proxy routes /p/* to the gateway, /api/* to health sync).",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedTextField(
+                value = state.serverUrl,
+                onValueChange = viewModel::onServerUrl,
+                label = { Text("Server URL") },
+                placeholder = { Text("http://192.168.1.10:8080") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = state.password,
+                onValueChange = viewModel::onPassword,
+                label = { Text("Password (sync token)") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            /** Saves server fields (chat config per tab saves from its own page). */
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    val api = ChatApi(context)
+                    val prefs = context.getSharedPreferences(
+                        AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                    prefs.edit()
+                        .putString("server_base_url", state.serverUrl.trim().trimEnd('/'))
+                        .putString("app_password", state.password.trim())
+                        .remove("api_base_url")
+                        .remove("server_url")
+                        .apply()
+                    modelsResult = "Saved."
+                    scope.launch {
+                        api.fetchCatalog(catalogPath(api), refresh = true).fold(
+                            onSuccess = { list ->
+                                catalog = list
+                                modelsResult = "Saved. Providers:\n" + list.joinToString("\n") { o ->
+                                    "${o.label}: ${o.models.size} model(s)"
+                                }
+                            },
+                            onFailure = { e -> modelsResult = "Saved. Catalog FAILED — ${e.message}" },
+                        )
+                    }
+                }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Save server")
                 }
-            }, modifier = Modifier.weight(1f)) {
-                Text("Reload catalog")
+            }
+            if (catalog.isEmpty()) {
+                Text(
+                    "Providers not loaded — check Server URL + Password, then Save server.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (modelsResult.isNotEmpty()) {
+                Text(modelsResult, style = MaterialTheme.typography.bodySmall)
             }
         }
-        if (catalog.isEmpty()) {
+
+        SettingsSection("Chat backend") {
             Text(
-                "Providers not loaded — check Server URL + Password, then Reload catalog.",
+                "Provider + model are picked on each tab's own page (top bar ⋮ model button).",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        if (modelsResult.isNotEmpty()) {
-            Text(modelsResult, style = MaterialTheme.typography.bodySmall)
-        }
 
-        Text("App updates", style = MaterialTheme.typography.titleMedium)
-        AppUpdateSection()
-
-        Text("Health sync", style = MaterialTheme.typography.titleMedium)
-        HealthStatusCard(state)
-
-        /** Three-step gate: install Health Connect, grant permissions, then sync. */
-        when {
-            !state.healthAvailable -> {
-                Button(onClick = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
-                        != PackageManager.PERMISSION_GRANTED
+        SettingsSection("Appearance") {
+            Text("Theme", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    ThemeStore.SYSTEM to "System",
+                    ThemeStore.LIGHT to "Light",
+                    ThemeStore.DARK to "Dark",
+                ).forEach { (value, text) ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.selectable(
+                            selected = themeMode == value,
+                            onClick = { onTheme(value) },
+                            role = Role.RadioButton,
+                        ),
                     ) {
-                        hcPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        RadioButton(selected = themeMode == value, onClick = null)
+                        Text(text, style = MaterialTheme.typography.bodyMedium)
                     }
-                    HealthConnectManager(context).openHealthConnectSettings(context)
-                }) {
-                    Text("Install / Update Health Connect")
                 }
             }
-            !state.permissionsGranted -> {
-                Button(onClick = {
-                    val mgr = HealthConnectManager(context)
-                    val launched = mgr.requestPermissions(hcRequest)
-                    if (!launched) {
-                        viewModel.onSyncError("Permission screen unavailable — opening Health Connect app")
-                        mgr.openHealthConnectSettings(context)
+        }
+
+        SettingsSection("App updates") {
+            AppUpdateSection()
+        }
+
+        SettingsSection("Health sync") {
+            HealthStatusCard(state)
+
+            /** Three-step gate: install Health Connect, grant permissions, then sync. */
+            when {
+                !state.healthAvailable -> {
+                    Button(onClick = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                            != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            hcPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        HealthConnectManager(context).openHealthConnectSettings(context)
+                    }) {
+                        Text("Install / Update Health Connect")
                     }
-                }) {
-                    Text("Grant Health Connect permissions")
                 }
-                OutlinedButton(onClick = {
-                    viewModel.onSyncError("Open Health Connect → Permissions → Agento → allow each")
-                    HealthConnectManager(context).openHealthConnectSettings(context)
-                }) {
-                    Text("Open Health Connect app")
+                !state.permissionsGranted -> {
+                    Button(onClick = {
+                        val mgr = HealthConnectManager(context)
+                        val launched = mgr.requestPermissions(hcRequest)
+                        if (!launched) {
+                            viewModel.onSyncError("Permission screen unavailable — opening Health Connect app")
+                            mgr.openHealthConnectSettings(context)
+                        }
+                    }) {
+                        Text("Grant Health Connect permissions")
+                    }
+                    OutlinedButton(onClick = {
+                        viewModel.onSyncError("Open Health Connect → Permissions → Agento → allow each")
+                        HealthConnectManager(context).openHealthConnectSettings(context)
+                    }) {
+                        Text("Open Health Connect app")
+                    }
+                    OutlinedButton(onClick = {
+                        val intent = android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse(HealthConnectManager.playStoreUrl()),
+                        )
+                        runCatching { context.startActivity(intent) }
+                    }) {
+                        Text("Install / Update Health Connect (Play Store)")
+                    }
+                    if (state.healthPackageInfo.isNotEmpty()) {
+                        Text(
+                            "HC package: ${state.healthPackageInfo}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
-                OutlinedButton(onClick = {
-                    val intent = android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse(HealthConnectManager.playStoreUrl()),
-                    )
-                    runCatching { context.startActivity(intent) }
-                }) {
-                    Text("Install / Update Health Connect (Play Store)")
-                }
-                if (state.healthPackageInfo.isNotEmpty()) {
-                    Text(
-                        "HC package: ${state.healthPackageInfo}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                else -> {
+                    Button(
+                        onClick = { viewModel.syncNow() },
+                        enabled = !state.syncing,
+                    ) {
+                        Text(if (state.syncing) "Syncing…" else "Sync now")
+                    }
                 }
             }
-            else -> {
-                Button(
-                    onClick = { viewModel.syncNow() },
-                    enabled = !state.syncing,
-                ) {
-                    Text(if (state.syncing) "Syncing…" else "Sync now")
-                }
+
+
+            if (state.lastSyncAt.isNotEmpty()) {
+                Text("Last sync: ${state.lastSyncAt}", style = MaterialTheme.typography.bodySmall)
+            }
+            if (state.lastResult.isNotEmpty()) {
+                Text(
+                    state.lastResult,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (state.lastResult.startsWith("FAILED")) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                )
             }
         }
 
-
-        if (state.lastSyncAt.isNotEmpty()) {
-            Text("Last sync: ${state.lastSyncAt}", style = MaterialTheme.typography.bodySmall)
+        SettingsSection("Settings backup") {
+            SettingsBackupSection(onImported = {
+                viewModel.refresh()
+                settingsRefresh++
+            })
         }
-        if (state.lastResult.isNotEmpty()) {
-            Text(
-                state.lastResult,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (state.lastResult.startsWith("FAILED")) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-            )
-        }
-
-        Text("Settings backup", style = MaterialTheme.typography.titleMedium)
-        SettingsBackupSection(onImported = {
-            viewModel.refresh()
-            settingsRefresh++
-        })
     }
 }
 

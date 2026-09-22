@@ -34,6 +34,7 @@ object SettingsBackup {
         }
         add("server_url")
         add("auth_token")
+        add("theme_mode")
         add("last_sync_at")
     }
 
