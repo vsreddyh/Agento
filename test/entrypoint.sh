@@ -68,6 +68,12 @@ do_render() {
     for home in "$HERMES_HOME"/profiles/*/; do
         [[ -d "$home" ]] || continue
         HERMES_CWD="/workspace/$(basename "$home")" render_config "$home"
+        # Secret scope: hermes 0.21.4 resolves API_SERVER_KEY per profile
+        # from <profile>/.env ONLY (never os.environ under multiplexing),
+        # and the name must literally be API_SERVER_KEY. Render a minimal
+        # file from PASSWORD (fail-fast above guarantees it) — regenerated
+        # every start, git-ignored, nothing extra to rotate.
+        printf 'API_SERVER_KEY=%s\n' "$PASSWORD" > "$home/.env"
     done
 
     export HERMES_HOME
