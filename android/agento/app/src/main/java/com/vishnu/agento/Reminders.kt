@@ -109,7 +109,7 @@ class ReminderReceiver : BroadcastReceiver() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(requestCode(id.ifEmpty { title + text }), notification)
+        nm.notify(Reminders.requestCode(id.ifEmpty { title + text }), notification)
 
         if (id.isNotEmpty()) {
             // Store IO must not run on the broadcast main thread.
