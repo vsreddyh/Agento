@@ -171,7 +171,7 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► 
 
 ## Android App API (Chat)
 
-The custom Android app (`android/agento/`, 3 chat tabs + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to Hermes's built-in OpenAI-compatible API server on the gateway (`/p/* → :8642`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`):
+The custom Android app (`android/agento/`, sidebar: God/Story/Resumes chats + Tasks + Storage + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to Hermes's built-in OpenAI-compatible API server on the gateway (`/p/* → :8642`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`):
 
 ```bash
 curl http://<host>:8080/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
@@ -186,8 +186,9 @@ curl http://<host>:8642/p/story/v1/chat/completions \
   -d '{"provider": "opencode-go", "model": "mimo-v2.6-flash", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
 
-- One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
-- Provider + model are picked per tab in app Settings from live dropdowns backed by `GET /p/<profile>/api/model/options` (explicit selection required — no gateway default). The gateway's provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
+- One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default`). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
+- Provider + model are picked per tab from its own model sheet (top-bar button) backed by live dropdowns from `GET /p/<profile>/api/model/options` (explicit selection required — no gateway default). The gateway's provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
+- Chat history is threaded per tab and persisted on-device (survives restarts; the switcher revisits/deletes threads). Tasks, reminders, and threads are included in Settings backup exports.
 - Config lives in `gateway/config.yaml.template` (`platforms.api_server`, key rendered from `PASSWORD`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
 
 ---

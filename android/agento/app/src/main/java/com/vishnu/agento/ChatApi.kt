@@ -18,6 +18,8 @@ import java.util.concurrent.TimeUnit
 data class ChatMessage(
     val role: String, // "user" | "assistant"
     val content: String,
+    /** Epoch millis when the message was created; 0 = unknown (legacy). */
+    val ts: Long = 0L,
 )
 
 sealed interface ChatEvent {

@@ -16,9 +16,18 @@ import org.json.JSONObject
  */
 object SettingsBackup {
 
+    // NOTE: stays 1 — the prefs schema is unchanged and old readers ignore
+    // the additive "files" section, so no MAJOR bump is required.
     const val VERSION = 1
 
     private val TABS = listOf("story", "resumes", "god")
+
+    /** App files mirrored into backups (chat threads, tasks, reminders). */
+    private fun backupFiles(): List<String> = buildList {
+        for (t in TABS) add("chat_threads_$t.json")
+        add("tasks.json")
+        add("reminders.json")
+    }
 
     /** Every string pref the app reads; import ignores anything else. */
     val STRING_KEYS: List<String> = buildList {
@@ -34,13 +43,14 @@ object SettingsBackup {
         }
         add("server_url")
         add("auth_token")
+        add("theme_mode")
         add("last_sync_at")
     }
 
     /** Boolean prefs the app reads. */
     val BOOLEAN_KEYS: List<String> = listOf("first_sync_done")
 
-    /** Serializes all known prefs; absent keys are omitted (not nulled). */
+    /** Serializes all known prefs plus app files; absent keys are omitted (not nulled). */
     fun export(context: Context): JSONObject {
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
         val values = JSONObject()
@@ -50,12 +60,20 @@ object SettingsBackup {
         for (k in BOOLEAN_KEYS) {
             if (prefs.contains(k)) values.put(k, prefs.getBoolean(k, false))
         }
-        return JSONObject().put("version", VERSION).put("values", values)
+        val files = JSONObject()
+        for (name in backupFiles()) {
+            val f = java.io.File(context.filesDir, name)
+            if (f.exists()) {
+                runCatching { files.put(name, f.readText()) }
+            }
+        }
+        return JSONObject().put("version", VERSION).put("values", values).put("files", files)
     }
 
     /**
      * Applies a backup produced by [export]; unknown keys and mistyped values
-     * are skipped. Returns the number of prefs applied.
+     * are skipped. Version 1 backups (prefs only) still import. Returns the
+     * number of prefs + files applied.
      */
     fun importFrom(context: Context, json: JSONObject): Result<Int> {
         return try {
@@ -77,6 +95,23 @@ object SettingsBackup {
                 }
             }
             edit.apply()
+            val files = json.optJSONObject("files")
+            if (files != null) {
+                for (name in backupFiles()) {
+                    val text = files.optString(name, "")
+                    if (text.isEmpty()) continue
+                    // Validate JSON shape before overwriting live state.
+                    val valid = runCatching { org.json.JSONArray(text); true }
+                        .recoverCatching { org.json.JSONObject(text); true }
+                        .getOrDefault(false)
+                    if (valid) {
+                        runCatching {
+                            java.io.File(context.filesDir, name).writeText(text)
+                            applied++
+                        }
+                    }
+                }
+            }
             Result.success(applied)
         } catch (e: Exception) {
             Result.failure(e)

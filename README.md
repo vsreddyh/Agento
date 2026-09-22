@@ -131,6 +131,15 @@ All services read the same root `.env`, so a dev checkout just points `MONGODB_U
 - In the app, **Settings → App updates → Check for updates** diffs `/releases/latest` against the installed build, then **Download & install** streams the release APK and fires the platform installer (grants "install unknown apps" when prompted). Same-package updates keep all Settings + Health Connect grants.
 - Stable signing is required for updates to install: add these repo secrets once (Settings → Secrets → Actions) with your upload keystore — `ANDROID_KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Without them CI signs with a throwaway debug key and those APKs will not install over each other. `versionCode` derives from semver (`MAJOR*1000000+MINOR*1000+PATCH`) so every version bump sorts higher than the last — no build numbers anywhere.
 
+## Android App Screens (2.x)
+
+- **Sidebar**: God / Story / Resumes chats + Tasks + Storage + Reminders + Settings (drawer replaced the bottom bar).
+- **Chat tabs**: threaded conversations persisted on-device (survive restarts; New starts a thread, switcher revisits/deletes old ones), sender labels + timestamps, copy button, retry on failure. Provider/model picked per tab from its own model sheet (top-bar button), saved instantly.
+- **Tasks**: name/status/note table; tap status cycles todo → doing → done; add/edit dialog; persisted locally.
+- **Storage**: browses the VPS `exports/` folder (subfolders supported), downloads to mobile Downloads.
+- **Reminders**: exact-alarm local notifications (falls back to inexact without the system grant); survives reboot.
+- **Settings sections**: Server / Chat backend pointer / Appearance (System/Light/Dark theme) / App updates / Health sync / Settings backup (now includes threads, tasks, reminders files).
+
 ## Settings Backup (Survives Upgrade, Reinstall, Reinstall-After-Gap)
 
 - All config lives in one `SharedPreferences("agento")` file, which Android preserves across same-package upgrades automatically.

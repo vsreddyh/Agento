@@ -36,6 +36,9 @@ services:
     user: "1000:1000"
     ports:
       - "8001:8000"
+    volumes:
+      # VPS exports folder for mobile downloads (#26); read-only is enough.
+      - ../exports:/exports:ro
     environment:
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
