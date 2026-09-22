@@ -80,8 +80,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     private fun persist() {
         val id = _state.value.activeThreadId
+        if (id.isEmpty()) return
         val msgs = _state.value.messages
-        threads = threads.map { t ->
+        // Drop dead rows (empty, non-active threads) so the file can't fill
+        // with blank threads; the active thread is always kept.
+        threads = threads.filter { it.id == id || it.messages.isNotEmpty() }.map { t ->
             if (t.id == id) {
                 t.copy(
                     messages = ChatThreads.toStored(msgs),
@@ -103,14 +106,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun newConversation() {
         streamJob?.cancel()
         streamJob = null
-        persist()
+        // Outgoing thread is already saved (every Done/Error persists), so
+        // set state to the fresh thread FIRST — persisting before the switch
+        // would re-save under the stale id and skip the new row.
         val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
         threads = listOf(fresh) + threads
-        persist()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = threads.map { it.id to it.title }, activeThreadId = fresh.id,
         )
+        persist()
     }
 
     fun switchThread(id: String) {

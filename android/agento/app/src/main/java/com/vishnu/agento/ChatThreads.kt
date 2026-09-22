@@ -3,6 +3,7 @@ package com.vishnu.agento
 import android.content.Context
 import java.io.File
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 /** One persisted message (ChatMessage + timestamp; ts=0 reads as unknown). */
@@ -53,7 +54,7 @@ object ChatThreads {
         val f = file(context, tab)
         if (!f.exists()) return emptyList()
         return runCatching {
-            threadJson.decodeFromString<List<ChatThread>>(f.readText())
+            threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText())
                 .filter { it.id.isNotEmpty() }
                 .take(MAX_THREADS)
         }.getOrDefault(emptyList())
@@ -68,7 +69,7 @@ object ChatThreads {
                     t
                 }
             }
-            file(context, tab).writeText(threadJson.encodeToString(capped))
+            file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), capped))
         }
     }
 
