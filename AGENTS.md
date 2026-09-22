@@ -27,7 +27,7 @@ against Atlas. No host Hermes install, no native processes.
 ```
 god+story+resumes
    └─► ONE `gateway` container (HERMES_HOME=/opt/data = gateway/, official image + custom entrypoint)
-        └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model mimo-v2.5)
+        └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model mimo-v2.6-flash)
 proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)
 MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo vsreddyh/Resume) — separate git repos
@@ -61,7 +61,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
    from the root `.env`; `podman_compose()` always passes `--env-file "$REPO/.env"`
    (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
    silently falls back empty/default).
-- LLM: direct to OpenCode (`https://opencode.ai/zen/go/v1`, model `mimo-v2.5`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` goes to OpenCode Go.
+- LLM: direct to OpenCode (`https://opencode.ai/zen/go/v1`, model `mimo-v2.6-flash`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` goes to OpenCode Go.
 - App API: Hermes built-in OpenAI-compatible server on the gateway
   (`platforms.api_server`, `:8642`, single-password `PASSWORD`); one port, each app
   tab uses its profile path (`/p/story|resumes|default`) and sends per-request
@@ -83,7 +83,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 - CI: `android-apk.yml` (builds debug+release APKs, `main` branch only) and `mcps-test.yml` (`go build` + `go vet` + `go test ./...` over `cmd/`/`internal/`, `main` only; DB tests skip without `MONGODB_URI`). No linter. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
   `podman-compose -f docker/docker-compose.yml config`, then check gateway logs on the live machine.
 - Git identity: every commit as `vsreddyh <shouryanreddyh@gmail.com>` (`git -c user.name=vsreddyh -c user.email=shouryanreddyh@gmail.com commit ...`). Never use another name/email.
-- Agent model: always run agent sessions on `muse-spark-1.3-contributor` ONLY (cheapest; everything else is too expensive). This is the agent-side rule — the Android app default (`mimo-v2.5`) is separate and stays.
+- Agent model: always run agent sessions on `muse-spark-1.3-contributor` ONLY (cheapest; everything else is too expensive). This is the agent-side rule — the Android app default (`mimo-v2.6-flash`) is separate and stays.
 - Git workflow (no exceptions): ALL changes land on `main` via branch + PR — never commit or push directly to `main`, not even one-line fixes. After a PR merges, delete the branch locally AND remotely (`git branch -d <b>` + `git push origin --delete <b>`), then prune (`git fetch --prune`). Wipe any other branches already merged into `main` at the same time.
 
 ## Agento app versioning (semver — MAJOR.MINOR.PATCH)
