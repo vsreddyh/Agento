@@ -527,10 +527,13 @@ private fun RemindersScreen() {
     var loaded by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
     var exactOk by remember { mutableStateOf(Reminders.canScheduleExact(context)) }
+    var pastError by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         items = withContext(Dispatchers.IO) { ReminderStore.load(context) }
         loaded = true
+        // Permission can change while away — refresh on every entry.
+        exactOk = Reminders.canScheduleExact(context)
     }
 
     fun persist(next: List<ReminderItem>) {
@@ -604,15 +607,37 @@ private fun RemindersScreen() {
         ReminderDialog(
             onDismiss = { showAdd = false },
             onSave = { title, text, atEpoch ->
+                if (atEpoch <= System.currentTimeMillis()) {
+                    // Past times are a no-op save — surface it instead of
+                    // silently dropping the reminder.
+                    pastError = true
+                    return@ReminderDialog
+                }
+                pastError = false
                 val item = ReminderItem(
                     id = ReminderStore.newId(), title = title.trim(),
                     text = text.trim(), atEpoch = atEpoch,
                 )
-                if (atEpoch <= System.currentTimeMillis()) return@ReminderDialog
                 Reminders.schedule(context, item)
                 persist(items + item)
                 exactOk = Reminders.canScheduleExact(context)
                 showAdd = false
+            },
+        )
+    }
+    if (pastError) {
+        AlertDialog(
+            onDismissRequest = { pastError = false },
+            title = { Text("Time is in the past") },
+            text = { Text("Pick a future date and time for the reminder.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pastError = false
+                    showAdd = true
+                }) { Text("Pick again") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pastError = false }) { Text("Cancel") }
             },
         )
     }
@@ -665,13 +690,15 @@ private fun ReminderDialog(onDismiss: () -> Unit, onSave: (String, String, Long)
                     1 -> step = if (dateState.selectedDateMillis == null) 1 else 2
                     else -> {
                         val day = dateState.selectedDateMillis ?: return@TextButton
-                        val cal = java.util.Calendar.getInstance().apply {
-                            timeInMillis = day
-                            set(java.util.Calendar.HOUR_OF_DAY, timeState.hour)
-                            set(java.util.Calendar.MINUTE, timeState.minute)
-                            set(java.util.Calendar.SECOND, 0)
-                        }
-                        onSave(title, text, cal.timeInMillis)
+                        // Picker millis are UTC-midnight: convert to a LOCAL
+                        // date first, or timezones behind UTC shift a day.
+                        val zone = java.time.ZoneId.systemDefault()
+                        val localDate = java.time.Instant.ofEpochMilli(day)
+                            .atZone(zone).toLocalDate()
+                        val atEpoch = localDate
+                            .atTime(timeState.hour, timeState.minute)
+                            .atZone(zone).toInstant().toEpochMilli()
+                        onSave(title, text, atEpoch)
                     }
                 }
             }) { Text(when (step) { 2 -> "Save"; else -> "Next" }) }

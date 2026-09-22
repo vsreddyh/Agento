@@ -19,6 +19,11 @@ object Reminders {
     const val EXTRA_TITLE = "reminder_title"
     const val EXTRA_TEXT = "reminder_text"
 
+    /** Stable non-negative request code from a UUID string (hashCode can
+     * collide AND go negative — both break alarm identity). */
+    fun requestCode(id: String): Int =
+        (id.hashCode().toLong() and 0x7fffffffL).toInt()
+
     fun ensureChannel(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {
@@ -49,7 +54,7 @@ object Reminders {
             putExtra(EXTRA_TEXT, item.text)
         }
         val pi = PendingIntent.getBroadcast(
-            context, item.id.hashCode(), intent,
+            context, requestCode(item.id), intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         if (canScheduleExact(context)) {
@@ -66,7 +71,7 @@ object Reminders {
             action = ACTION_FIRE
         }
         val pi = PendingIntent.getBroadcast(
-            context, id.hashCode(), intent,
+            context, requestCode(id), intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         am.cancel(pi)
@@ -104,11 +109,14 @@ class ReminderReceiver : BroadcastReceiver() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(id.hashCode(), notification)
+        nm.notify(requestCode(id.ifEmpty { title + text }), notification)
 
         if (id.isNotEmpty()) {
-            val remaining = ReminderStore.load(context).filterNot { it.id == id }
-            ReminderStore.save(context, remaining)
+            // Store IO must not run on the broadcast main thread.
+            Thread {
+                val remaining = ReminderStore.load(context).filterNot { it.id == id }
+                ReminderStore.save(context, remaining)
+            }.start()
         }
     }
 }
