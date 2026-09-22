@@ -118,3 +118,10 @@ Thumbs.db
 .idea/
 *.pyc
 __pycache__/
+# Go build outputs
+/health-api
+/mongo
+/retention
+/miser-money
+/cookbook
+/health-check
