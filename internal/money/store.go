@@ -99,7 +99,11 @@ func New(uri, dbName string) (*Store, error) {
 		return nil, err
 	}
 	db := c.Database(dbName)
-	return &Store{client: c, db: db, accts: db.Collection(accounts), txns: db.Collection(transactions)}, nil
+	s := &Store{client: c, db: db, accts: db.Collection(accounts), txns: db.Collection(transactions)}
+	if err := s.EnsureSchema(context.Background()); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // FromEnv builds a Store from MONGODB_URI/MONGODB_DB (single root .env).
@@ -197,7 +201,7 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 	if !includeArchived {
 		filt = bson.M{"archived": false}
 	}
-	cur, err := s.accts.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+	cur, err := s.accts.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}).SetProjection(bson.M{"_id": 0}))
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +245,7 @@ func (s *Store) resolve(ctx context.Context, nameOrID string, forWrite bool) (bs
 
 // Balances returns stored balances + total over active accounts.
 func (s *Store) Balances(ctx context.Context) (bson.M, error) {
-	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}).SetProjection(bson.M{"_id": 0}))
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +466,7 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 		}
 		filt["$or"] = []bson.M{{"accountId": acct["_id"]}, {"sending_to": acct["_id"]}}
 	}
-	cur, err := s.txns.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}}))
+	cur, err := s.txns.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}}).SetProjection(bson.M{"_id": 0}))
 	if err != nil {
 		return nil, err
 	}
@@ -606,7 +610,8 @@ func oidHex(v any) string {
 	return fmt.Sprint(v)
 }
 
-// EnsureSchema creates collections + indexes (idempotent) for tests/setup.
+// EnsureSchema creates collections + indexes (idempotent). Called by New
+// so fresh databases get the unique-name and TTL indexes immediately.
 func (s *Store) EnsureSchema(ctx context.Context) error {
 	for _, c := range []struct {
 		name string

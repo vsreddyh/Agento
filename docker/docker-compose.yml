@@ -60,7 +60,7 @@ services:
   # ──────────────────────────────────────────────────────
   gateway:
     <<: *bot-base
-    # s6-overlay starts as root to s6-setuidgid 1000:1000 for services.
+    # Starts as root so bind-mounted state stays host-owned (their s6 tree is bypassed).
     user: "0:0"
     ports:
       - "${API_SERVER_PORT:-8642}:8642"

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"agento/internal/money"
@@ -117,20 +118,12 @@ func main() {
 			if day == "" {
 				day = today()
 			}
-			lower := func(s string) string {
-				b := []byte(s)
-				for i, c := range b {
-					if c >= 'A' && c <= 'Z' {
-						b[i] = c + 32
-					}
-				}
-				return string(b)
-			}
-			tid, err := store.Insert(ctx, day, in.Amount, lower(in.Type), in.Category, in.Account, in.SendingTo, in.Note, "log_transaction")
+			typ := strings.ToLower(in.Type)
+			tid, err := store.Insert(ctx, day, in.Amount, typ, in.Category, in.Account, in.SendingTo, in.Note, "log_transaction")
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "id": tid, "date": day, "type": lower(in.Type), "amount": in.Amount})
+			return result(map[string]any{"ok": true, "id": tid, "date": day, "type": typ, "amount": in.Amount})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_text",

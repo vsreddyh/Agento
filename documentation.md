@@ -21,16 +21,16 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 
 ## System Architecture
 
-The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a health sync API, and a scheduled retention job — **fully in containers**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
+The stack runs god (main) + story/resumes (sides), a health sync API, and a scheduled retention job — **fully in containers**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
 
 ```
                                Remote MongoDB (money, health, cookbook)
                                             ▲
                              Containers
- story ──┐               │
- resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
- default ┘ (multiplexed  │ /hermes-home │   OpenCode Go Direct
-           3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/go/v1)
+  god ────┐               │
+  story   ┤ ONE Gateway   │ HERMES_HOME=  ▼
+  resumes ┘ god + 2 sides │ /opt/data │   OpenCode Go Direct
+           (multiplexed)  │  (gateway +  │  (https://opencode.ai/zen/go/v1)
          └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
@@ -39,7 +39,7 @@ Retention ───────────────► one-shot container (c
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.5`).
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving god + 2 sides from the official image (entrypoint renders templates, then execs the gateway directly — their s6 tree is bypassed).
+- **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving god + 2 sides from the official image (entrypoint renders templates with secret fail-fast, then execs the gateway directly — their s6 tree is bypassed).
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
 - **app API**: Hermes built-in OpenAI-compatible server (`platforms.api_server` in `gateway/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **playwright**: Browser automation via the official `@playwright/mcp` stdio server (headless chromium bundled in the bot image), configured per profile in `mcp_servers`.

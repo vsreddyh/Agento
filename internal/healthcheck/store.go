@@ -12,6 +12,7 @@ import (
 	"agento/internal/validate"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	mongoDrv "go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -80,7 +81,7 @@ func checkItems(items []map[string]any) ([]map[string]any, error) {
 		if err := validate.CheckMacros(conv, fmt.Sprintf("item[%d] '%s'", i, name)); err != nil {
 			return nil, &StoreError{Msg: err.Error()}
 		}
-		qty, _ := it["qty"].(string)
+		qty := fmt.Sprint(it["qty"])
 		if len(qty) > 100 {
 			qty = qty[:100]
 		}
@@ -101,7 +102,7 @@ func (s *Store) LogMeal(ctx context.Context, day, description string, items []ma
 		return nil, err
 	}
 	doc := bson.M{"date": day, "items": checked, "totals": validate.SumTotals(checked),
-		"createdAt": time.Now().UTC().Format(time.RFC3339)}
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 	res, err := s.meals.InsertOne(ctx, doc)
 	if err != nil {
 		return nil, err
@@ -133,11 +134,7 @@ func (s *Store) QueryMeals(ctx context.Context, start, end string) ([]bson.M, er
 	}
 	for _, r := range rows {
 		r["_id"] = mongo.IDString(r["_id"])
-		if c, ok := r["createdAt"]; ok {
-			r["createdAt"] = mongo.IDString(c)
-		} else {
-			r["createdAt"] = ""
-		}
+		r["createdAt"] = fmt.Sprint(r["createdAt"])
 	}
 	return rows, nil
 }
@@ -188,7 +185,7 @@ func (s *Store) LogWeight(ctx context.Context, day string, kg float64) (bson.M, 
 		return nil, fail("implausible weight %v kg", kg)
 	}
 	if _, err := s.weight.UpdateOne(ctx, bson.M{"date": day},
-		bson.M{"$set": bson.M{"kg": kg, "createdAt": time.Now().UTC().Format(time.RFC3339)}},
+		bson.M{"$set": bson.M{"kg": kg, "createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}},
 		options.Update().SetUpsert(true)); err != nil {
 		return nil, err
 	}
@@ -204,7 +201,7 @@ func (s *Store) LogSleep(ctx context.Context, day string, hours float64) (bson.M
 		return nil, fail("implausible sleep %v h", hours)
 	}
 	if _, err := s.days.UpdateOne(ctx, bson.M{"date": day},
-		bson.M{"$set": bson.M{"sleep_hours": hours, "updatedAt": time.Now().UTC().Format(time.RFC3339)}},
+		bson.M{"$set": bson.M{"sleep_hours": hours, "updatedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}},
 		options.Update().SetUpsert(true)); err != nil {
 		return nil, err
 	}
@@ -230,7 +227,7 @@ func (s *Store) LogWorkout(ctx context.Context, day, typ string, minutes, kcal f
 	}
 	w := bson.M{"type": typ, "minutes": minutes, "kcal": kcal}
 	if _, err := s.days.UpdateOne(ctx, bson.M{"date": day},
-		bson.M{"$push": bson.M{"workouts": w}, "$set": bson.M{"updatedAt": time.Now().UTC().Format(time.RFC3339)}},
+		bson.M{"$push": bson.M{"workouts": w}, "$set": bson.M{"updatedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}},
 		options.Update().SetUpsert(true)); err != nil {
 		return nil, err
 	}
@@ -299,6 +296,9 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 }
 
 func (s *Store) Prune(ctx context.Context, days int, dryRun bool) (bson.M, error) {
+	if days <= 0 {
+		days = 30
+	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
 	filt := bson.M{"date": bson.M{"$lt": cutoff}}
 	mc, err := s.meals.CountDocuments(ctx, filt)
@@ -329,18 +329,6 @@ func mustDay(day string) (string, error) {
 }
 
 func fval(v any) float64 {
-	switch n := v.(type) {
-	case float64:
-		return n
-	case float32:
-		return float64(n)
-	case int:
-		return float64(n)
-	case int32:
-		return float64(n)
-	case int64:
-		return float64(n)
-	default:
-		return 0
-	}
+	f, _ := validate.ToFloat(v)
+	return f
 }

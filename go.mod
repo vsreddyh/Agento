@@ -2,14 +2,15 @@ module agento
 
 go 1.26
 
-require go.mongodb.org/mongo-driver v1.17.6
+require (
+	github.com/modelcontextprotocol/go-sdk v1.8.0
+	go.mongodb.org/mongo-driver v1.17.6
+)
 
 require (
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.8.0 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect

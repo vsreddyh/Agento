@@ -6,6 +6,7 @@ package cookbook
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -163,7 +164,7 @@ func (s *Store) resolveIngs(ctx context.Context, qtys map[string]any) ([]bson.M,
 		if err != nil {
 			return nil, fail("unknown ingredient '%s' — add it with add_ingredient first", key)
 		}
-		q, _ := qty.(string)
+		q := fmt.Sprint(qty)
 		if len(q) > 100 {
 			q = q[:100]
 		}
@@ -189,7 +190,7 @@ func checkMacros(perServing map[string]any) (map[string]float64, error) {
 		if f < 0 {
 			return nil, fail("per_serving '%s' must be >= 0", k)
 		}
-		out[k] = float64(int(f*10+0.5)) / 10
+		out[k] = validate.Round1(f)
 	}
 	return out, nil
 }
@@ -262,13 +263,13 @@ func (s *Store) GetRecipe(ctx context.Context, nameOrID string) (bson.M, error) 
 func (s *Store) ListRecipes(ctx context.Context, search, tag, ingredient string) ([]bson.M, error) {
 	filt := bson.M{}
 	if strings.TrimSpace(search) != "" {
-		filt["name"] = bson.M{"$regex": strings.TrimSpace(search), "$options": "i"}
+		filt["name"] = bson.M{"$regex": regexp.QuoteMeta(strings.TrimSpace(search)), "$options": "i"}
 	}
 	if strings.TrimSpace(tag) != "" {
 		filt["tags"] = strings.TrimSpace(tag)
 	}
 	if strings.TrimSpace(ingredient) != "" {
-		filt["quantities.name"] = bson.M{"$regex": strings.TrimSpace(ingredient), "$options": "i"}
+		filt["quantities.name"] = bson.M{"$regex": regexp.QuoteMeta(strings.TrimSpace(ingredient)), "$options": "i"}
 	}
 	cur, err := s.recipes.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}).SetLimit(200))
 	if err != nil {
@@ -370,12 +371,12 @@ func (s *Store) ScaleRecipe(ctx context.Context, nameOrID string, servings float
 	if servings <= 0 {
 		return nil, fail("servings must be > 0")
 	}
-	base, _ := r["servings"].(float64)
+	base, _ := validate.ToFloat(r["servings"])
 	if base == 0 {
-		base = 1
+		return nil, fail("recipe has zero servings — cannot scale")
 	}
 	f := servings / base
-	get := func(k string) float64 { v, _ := r[k].(float64); return v }
+	get := func(k string) float64 { v, _ := validate.ToFloat(r[k]); return v }
 	scaled, total, per := bson.M{}, bson.M{}, bson.M{}
 	for _, k := range RecipeMacros {
 		v := get(k)
@@ -451,22 +452,7 @@ func allOut(ctx context.Context, cur *mongoDrv.Cursor) ([]bson.M, error) {
 	return out, nil
 }
 
-func toFloat(v any) (float64, error) {
-	switch n := v.(type) {
-	case float64:
-		return n, nil
-	case float32:
-		return float64(n), nil
-	case int:
-		return float64(n), nil
-	case int64:
-		return float64(n), nil
-	case int32:
-		return float64(n), nil
-	default:
-		return 0, fmt.Errorf("not a number")
-	}
-}
+func toFloat(v any) (float64, error) { return validate.ToFloat(v) }
 
 func idstr(v any) string { return mongo.IDString(v) }
 

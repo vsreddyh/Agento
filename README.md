@@ -1,6 +1,6 @@
 # Hermes Android stack
 
-Fully containerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully containerized agent stack running god + 2 sides (god main, story/resumes) direct against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
@@ -10,10 +10,10 @@ Fully containerized agent stack running **three Hermes profiles** (story, resume
                                 Remote MongoDB (money, health, cookbook)
                                              ▲
                               Containers
-  story ──┐               │
-  resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
-  default ┘ (multiplexed  │ /opt/data │   OpenCode Go Direct
-            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/go/v1)
+  god ────┐               │
+  story   ┤ ONE Gateway   │ HERMES_HOME=  ▼
+  resumes ┘ god + 2 sides │ /opt/data │   OpenCode Go Direct
+           (multiplexed)  │  (gateway +  │  (https://opencode.ai/zen/go/v1)
           └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
@@ -22,7 +22,7 @@ Retention ───────────────► one-shot container (c
 
 | Service | Container / Process | Published Port | Purpose |
 |---|---|---|---|
-| `gateway` | `gateway` container (`s6` supervised) | `8642` (app API) | Multiplexed gateway for all 3 profiles + OpenAI-compatible API server |
+| `gateway` | `gateway` container (direct exec, PID 1) | `8642` (app API) | Multiplexed gateway for god + 2 sides + OpenAI-compatible API server |
 | `health-api` | `health-api` container | `8001` | Ingests Health Connect sync data from Android and persists to MongoDB |
 | `proxy` | `proxy` container (nginx) | `8080` | Single app URL: routes `/p/*` → gateway chat, `/api/*` → health sync |
 | `retention` | `retention` container (one-shot) | — | Data retention policy runner (`cmd/retention`, Go binary in bot image) |
@@ -46,8 +46,8 @@ Retention ───────────────► one-shot container (c
 | Specification | Minimum Requirement | Recommended (Production) | Notes |
 |---|---|---|---|
 | **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Image build (LaTeX/tectonic, Hermes, Playwright chromium) benefits from multiple cores. |
-| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The multiplexed `gateway` (Python + 3 profiles + bundled chromium) consumes ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
-| **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, pip caches, local repo clones, LaTeX build artifacts, Playwright chromium, and logs. |
+| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The multiplexed `gateway` (hermes + Go MCP binaries + bundled chromium) consumes ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
+| **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, Go build cache, local repo clones, Playwright chromium, and logs. |
 | **OS** | Linux (Ubuntu 22.04+, Debian 12+, Arch, Fedora) | Ubuntu 22.04/24.04 LTS or Debian 12 | Linux kernel 5.10+ with systemd and package manager (`apt`, `pacman`, or `dnf`). |
 
 ### Required Host Tools & Access
@@ -167,7 +167,7 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── health-api/          # Health Connect FastAPI sync service
 ├── test/
 │   ├── Dockerfile           # Derived bot image (official hermes + Go MCP binaries)
-│   └── entrypoint.sh        # Config rendering and s6 service orchestration
+│   └── entrypoint.sh        # Config rendering + secret fail-fast, then execs gateway
 ├── mcps/
 │   ├── common/              # Shared Mongo/validation lib (not an MCP)
 │   ├── money/               # miser-money MCP (accounts + transactions)

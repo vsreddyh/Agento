@@ -15,17 +15,17 @@
 
 ## What this project is
 
-Runs **three Hermes profiles** (story, resumes, default-god) against
+Runs god (main) + story/resumes (sides) against
 OpenCode Go directly (no proxy). ONE multiplexed gateway process
-for all three profiles (Hermes `gateway.multiplex_profiles`, `s6`-supervised),
+for god + 2 sides (Hermes `gateway.multiplex_profiles`, direct exec),
 a built-in OpenAI-compatible API server (:8642) for the custom Android app,
 and remote MongoDB for domain data (money, health, cookbook). **The live stack
-is fully containerized** — one compose file (`docker/docker-compose.yml`): health-api + one `gateway` container (all 3 profiles, direct to `https://opencode.ai/zen/go/v1`, `s6` supervised) +
+is fully containerized** — one compose file (`docker/docker-compose.yml`): health-api + one `gateway` container (god + 2 sides, direct to `https://opencode.ai/zen/go/v1`, direct exec) +
 a one-shot retention job. Development runs the SAME single compose file
 against Atlas. No host Hermes install, no native processes.
 
 ```
-story+resumes+default
+god+story+resumes
    └─► ONE `gateway` container (HERMES_HOME=/opt/data = gateway/, official image + custom entrypoint)
         └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model mimo-v2.5)
 proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)

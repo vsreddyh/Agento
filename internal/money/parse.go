@@ -46,8 +46,6 @@ var monthNames = []string{"", "January", "February", "March", "April", "May", "J
 
 var monthRE = regexp.MustCompile(`(january|february|march|april|may|june|july|august|september|october|november|december)`)
 var yearRE = regexp.MustCompile(`(19|20)\d{2}`)
-var wordRE = func(w string) *regexp.Regexp { return regexp.MustCompile(`\b` + w + `\b`) }
-
 var (
 	deleteRE   = regexp.MustCompile(`\b(remove|delete|undo)\b`)
 	fixRE      = regexp.MustCompile(`\b(fix|correct|change|update)\b.*\b(to|as)\b`)

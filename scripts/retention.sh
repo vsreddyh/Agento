@@ -22,8 +22,8 @@ COMPOSE="$REPO/docker/docker-compose.yml"
 . "$REPO/scripts/lib/common.sh"
 load_root_env
 
-if [[ "${1:-}" == "--dry-run" ]]; then
-    podman_compose -f "$COMPOSE" run --rm retention --dry-run
-else
-    podman_compose -f "$COMPOSE" run --rm retention
-fi
+case "${1:-run}" in
+    --dry-run) podman_compose -f "$COMPOSE" run --rm retention -- --dry-run ;;
+    run|"") podman_compose -f "$COMPOSE" run --rm retention ;;
+    *) echo "usage: $0 [run|--dry-run]" >&2; exit 2 ;;
+esac

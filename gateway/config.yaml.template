@@ -2,7 +2,7 @@ model:
   default: mimo-v2.5
   provider: opencode-go
   base_url: ${HERMES_BASE_URL}
-  api_key: ${OPENCODE_API_KEY}
+  api_key: "${OPENCODE_API_KEY}"
 
 # God = the gateway home = Hermes' built-in "default" profile.
 # Story + resumes are side profiles nested under HERMES_HOME/profiles/.
@@ -24,7 +24,7 @@ platforms:
     extra:
       host: 0.0.0.0
       port: 8642
-      key: ${PASSWORD}
+      key: "${PASSWORD}"
 
 auxiliary:
   vision:

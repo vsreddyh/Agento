@@ -12,9 +12,10 @@ set -euo pipefail
 # compose mounts ../gateway:/opt/data and ../workspace:/workspace,
 # so this renders config.yaml for god (home) + each side profile.
 #
-# The gateway container runs the multiplexed gateway supervised by
-# s6-overlay (`gateway run` is an s6-rc service, mirroring official
-# nousresearch/hermes-agent).
+# The gateway container runs the multiplexed gateway via direct exec
+# (no s6 tree — our entrypoint renders templates then execs hermes, so the
+# gateway process IS PID 1; orphan reaping relies on podman --init behavior
+# of the runtime, same tradeoff as before).
 
 if [[ "${1:-}" == "chown-data" ]]; then
     uid="${HERMES_UID:-1000}"
@@ -71,11 +72,20 @@ do_render() {
     export HERMES_HOME
 }
 
-# render-only is used by s6 cont-init ( /etc/cont-init.d/01-render-config )
+# render-only is used to validate template rendering without starting hermes
 if [[ "${1:-}" == "render-only" ]]; then
     do_render
     exit 0
 fi
+
+# Fail fast when required secrets are missing: an empty key would render
+# as a literal ${VAR} bearer credential (or break YAML on :/#/! chars).
+for _req in OPENCODE_API_KEY PASSWORD; do
+    if [[ -z "${!_req:-}" ]]; then
+        echo "[entrypoint] FATAL: $_req is not set (root .env)" >&2
+        exit 1
+    fi
+done
 
 # Normal startup: render first, then run the multiplexed gateway.
 do_render
