@@ -75,7 +75,6 @@ gateway/**/plugins/
 gateway/**/skills/.hub/
 # Per-profile skill copies are generated from the top-level skills/ on init
 gateway/profiles/*/skills/podman-management/
-gateway/profiles/*/skills/i-have-adhd/
 # Live-gateway curator artifact at the home level — regenerated at runtime,
 # never commit (side-profile .curator_state files ARE committed seed state).
 gateway/skills/.curator_state
