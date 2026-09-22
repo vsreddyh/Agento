@@ -18,8 +18,9 @@ set -euo pipefail
 # of the runtime, same tradeoff as before).
 
 if [[ "${1:-}" == "chown-data" ]]; then
-    uid="${HERMES_UID:-1000}"
-    gid="${HERMES_GID:-1000}"
+    # Official image runs hermes as UID 10000 — bind mounts must belong to it.
+    uid="${HERMES_UID:-10000}"
+    gid="${HERMES_GID:-10000}"
     chown -R "$uid:$gid" "$HERMES_HOME" /workspace
     exit 0
 fi
