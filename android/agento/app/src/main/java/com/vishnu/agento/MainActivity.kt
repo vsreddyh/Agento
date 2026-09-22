@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -69,6 +70,7 @@ private enum class Destination(val title: String) {
     Resumes("Resumes"),
     God("God"),
     Tasks("Tasks"),
+    Storage("Storage"),
     Settings("Settings"),
 }
 
@@ -77,6 +79,7 @@ private fun Destination.icon() = when (this) {
     Destination.Resumes -> Icons.Filled.Description
     Destination.God -> Icons.Filled.Star
     Destination.Tasks -> Icons.Filled.List
+    Destination.Storage -> Icons.Filled.Folder
     Destination.Settings -> Icons.Filled.Settings
 }
 
@@ -158,6 +161,7 @@ class MainActivity : ComponentActivity() {
                                 onMenu = { scope.launch { drawerState.open() } },
                             )
                             Destination.Tasks -> TasksScreen()
+                            Destination.Storage -> StorageScreen()
                             Destination.Settings -> SettingsScreen(
                                 healthModel,
                                 themeMode = themeMode,
@@ -376,6 +380,137 @@ private fun TaskDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+/** VPS exports browser with subfolders + mobile downloads (#26). */
+@Composable
+private fun StorageScreen() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var path by remember { mutableStateOf("") }
+    var dirs by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
+    var files by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
+    var status by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    fun load(p: String) {
+        busy = true
+        status = ""
+        scope.launch {
+            StorageApi(context).list(p).fold(
+                onSuccess = { (cur, d, f) ->
+                    path = cur.ifEmpty { "" }
+                    dirs = d
+                    files = f
+                },
+                onFailure = { e -> status = "FAILED — ${e.message}" },
+            )
+            busy = false
+        }
+    }
+
+    LaunchedEffect(Unit) { load("") }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text(if (path.isEmpty()) "Storage" else "Storage / $path", maxLines = 1) },
+            navigationIcon = if (path.isNotEmpty()) {
+                {
+                    TextButton(onClick = {
+                        val parent = if ("/" in path) path.substringBeforeLast("/") else ""
+                        load(parent)
+                    }) { Text("Up") }
+                }
+            } else {
+                {}
+            },
+            actions = {
+                TextButton(onClick = { load(path) }, enabled = !busy) { Text("Refresh") }
+            },
+        )
+        if (status.isNotEmpty()) {
+            Text(
+                status,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+        if (busy && dirs.isEmpty() && files.isEmpty()) {
+            Text(
+                "Loading…",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(16.dp),
+            )
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            contentPadding = PaddingValues(vertical = 8.dp),
+        ) {
+            items(dirs, key = { "d:" + it.name }) { d ->
+                Card(
+                    onClick = { load(if (path.isEmpty()) d.name else "$path/${d.name}") },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.Folder, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(d.name, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
+            items(files, key = { "f:" + it.name }) { f ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(f.name, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                humanSize(f.size),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(onClick = {
+                            runCatching {
+                                StorageApi(context).download(path, f.name)
+                                status = "Downloading ${f.name}…"
+                            }.onFailure { e ->
+                                status = "FAILED — ${e.message}"
+                            }
+                        }) { Text("Save") }
+                    }
+                }
+            }
+            if (!busy && dirs.isEmpty() && files.isEmpty() && status.isEmpty()) {
+                item {
+                    Text(
+                        "Empty — drop files into the VPS exports/ folder.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun humanSize(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val units = listOf("B", "KB", "MB", "GB")
+    var v = bytes.toDouble()
+    var u = 0
+    while (v >= 1024 && u < units.size - 1) {
+        v /= 1024
+        u++
+    }
+    return if (u == 0) "$bytes B" else "%.1f %s".format(v, units[u])
 }
 
 /** Short HH:mm (plus date when not today); empty for unknown timestamps. */
