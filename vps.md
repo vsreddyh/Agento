@@ -1,6 +1,6 @@
 # VPS sizing — 3-profile Hermes stack (containerized)
 
-Fully containerized stack: three Hermes profiles + app API server in **one multiplexed gateway** (`s6`-supervised) + health-api + retention.
+Fully containerized stack: god + 2 sides + app API server in **one multiplexed gateway** (direct exec) + health-api + retention.
 MongoDB stays **remote** (Atlas) — no Mongo container or storage counted below.
 
 **Key fact: no LLM inference happens on this box.** OpenCode Go runs the models, the
@@ -24,15 +24,15 @@ number of Hermes agents running at the same time (max 3, one single-user session
 ## RAM — the real numbers
 
 Measured live via `podman stats` on a running stack, all bots idle (gateway-based, all bots in one
-process at measure time). The whole stack (bots + health-api via `s6` + remote Mongo)
-sits at **~1.1 GiB**. The multiplexed layout (**all bots in ONE gateway container** via `s6`) merges the bot rows
+process at measure time). The whole stack (bots + health-api + remote Mongo)
+sits at **~1.1 GiB**. The multiplexed layout (**all bots in ONE gateway container**) merges the bot rows
 into a single ~0.58 GiB gateway, i.e. roughly the same total. Per container:
 
 | Container | RAM (idle) |
 |---|---|
 | OpenCode Go (direct) | 0 MiB (no local container) |
 | health-api | ~53 MiB |
-| gateway (multiplexed — all bots via s6) | ~0.58 GiB (all bots, one container) |
+| gateway (multiplexed — god + sides, direct exec) | ~0.58 GiB (all bots, one container) |
 | **Stack total** | **~1.06 GiB** |
 
 + Podman + OS (~0.4 GB) → realistic **floor ≈ 1.1 GB** (remote Mongo).

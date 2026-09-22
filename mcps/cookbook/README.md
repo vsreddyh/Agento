@@ -10,6 +10,5 @@ Collections: `cookbook_ingredients` (name unique + optional note),
 Flow: `add_ingredient` once → `add_recipe` once → `log_cook` per attempt →
 `update_recipe` only when the user approves. `scale_recipe` is pure math.
 
-Run: `PYTHONPATH=mcps pip install -r mcps/cookbook/requirements.txt`,
-needs `MONGODB_URI`/`MONGODB_DB`, then `python mcps/cookbook/server.py` (stdio).
-In-container `PYTHONPATH=/mcps`.
+Run: `go run ./cmd/cookbook` (stdio), needs `MONGODB_URI`/`MONGODB_DB`.
+In-container binary: `/usr/local/bin/cookbook`.

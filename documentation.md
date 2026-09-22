@@ -21,29 +21,29 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 
 ## System Architecture
 
-The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a health sync API, and a scheduled retention job — **fully in containers**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
+The stack runs god (main) + story/resumes (sides), a health sync API, and a scheduled retention job — **fully in containers**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
 
 ```
                                Remote MongoDB (money, health, cookbook)
                                             ▲
                              Containers
- story ──┐               │
- resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
- default ┘ (multiplexed  │ /hermes-home │   OpenCode Go Direct
-           3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/go/v1)
+  god ────┐               │
+  story   ┤ ONE Gateway   │ HERMES_HOME=  ▼
+  resumes ┘ god + 2 sides │ /opt/data │   OpenCode Go Direct
+           (multiplexed)  │  (gateway +  │  (https://opencode.ai/zen/go/v1)
          └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
 
-- **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `glm-5.1`).
-- **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles, supervised by `s6-overlay`.
+- **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.5`).
+- **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001`, writing Health Connect metrics to MongoDB.
+- **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving god + 2 sides from the official image (entrypoint renders templates with secret fail-fast, then execs the gateway directly — their s6 tree is bypassed).
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
 - **app API**: Hermes built-in OpenAI-compatible server (`platforms.api_server` in `gateway/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **playwright**: Browser automation via the official `@playwright/mcp` stdio server (headless chromium bundled in the bot image), configured per profile in `mcp_servers`.
-- **retention**: One-shot retention job executing [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py) via cron or on stack start.
+- **retention**: One-shot retention job executing the `retention` Go binary (`cmd/retention/main.go`) via cron or on stack start.
 - **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched.
 
 ---
@@ -53,7 +53,7 @@ Retention ───────────────► one-shot container (c
 All profiles connect directly to OpenCode Go (`https://opencode.ai/zen/go/v1`) using `OPENCODE_API_KEY` defined in the root `.env`.
 
 - **Config Rendering**: Rendered as `api_key: ${OPENCODE_API_KEY}` in each profile's `config.yaml` from `config.yaml.template` by [`test/entrypoint.sh`](file:///home/vsreddyh/Documents/Discord-bots/test/entrypoint.sh).
-- **Vision Model**: Auxiliary vision queries utilize `glm-5.1` natively over OpenCode Go.
+- **Vision Model**: Auxiliary vision queries utilize `mimo-v2.5` natively over OpenCode Go.
 - **Streaming Support**: Direct SSE passthrough when streaming is enabled in Hermes settings.
 
 ---
@@ -64,7 +64,7 @@ All container management is orchestrated through [`scripts/hermes.sh`](file:///h
 
 ### `init`
 1. Verifies host dependencies (podman, compose, python3, curl, cron) and installs missing requirements.
-2. Builds the shared bot image ([`test/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/test/Dockerfile), baking in `s6-overlay`) and the `health-api` image. Note: podman/buildah has no BuildKit-style pip cache mounts, so rebuilds reinstall Python deps from the network — expect slower `start`/`restart` rebuilds than under Docker.
+2. Builds the derived bot image ([`test/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/test/Dockerfile): official hermes image + in-repo Go MCP binaries) and the `health-api` image.
 3. Initializes root `.env` from `.env.example` if not already present.
 4. Copies skill files from `skills/` into each profile directory.
 5. Installs the daily data retention cron job (runs daily at 03:00).
@@ -90,7 +90,7 @@ Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered con
 
 ## Bot Profiles & Multiplexing
 
-[`gateway/`](file:///home/vsreddyh/Documents/Discord-bots/gateway) IS the god profile — Hermes' built-in `default` profile is the gateway home itself (`HERMES_HOME=/hermes-home`). Story and resumes are side profiles nested under `gateway/profiles/<bot>/`:
+[`gateway/`](file:///home/vsreddyh/Documents/Discord-bots/gateway) IS the god profile — Hermes' built-in `default` profile is the gateway home itself (`HERMES_HOME=/opt/data`). Story and resumes are side profiles nested under `gateway/profiles/<bot>/`:
 
 | Profile | App Tab | Workspace & Domain Data |
 |---|---|---|
@@ -120,19 +120,19 @@ Domain data for `money`, `health-check`, and `cookbook` is managed in MongoDB (d
 | `cookbook_cook_log` | Cookbook | `recipe_id`, `date`, `cooking_note`, `aftertaste_note` — **permanent** |
 
 ### Database Helper CLI
-Bots and scripts interact with MongoDB using [`tools/mongo.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/mongo.py):
+Bots and scripts interact with MongoDB using the `mongo` Go CLI (`cmd/mongo/main.go`, baked into the bot image at `/usr/local/bin/mongo`):
 
 ```bash
-python3 tools/mongo.py count money_transactions '{"type":"expense"}'
-python3 tools/mongo.py insert hc_weight '{"date":"2026-08-08","kg":63.2}'
-python3 tools/mongo.py upsert hc_days '{"date":"2026-08-08"}' '{"steps":8452}'
+go run ./cmd/mongo count money_transactions '{"type":"expense"}'
+go run ./cmd/mongo insert hc_weight '{"date":"2026-08-08","kg":63.2}'
+go run ./cmd/mongo upsert hc_days '{"date":"2026-08-08"}' '{"steps":8452}'
 ```
 
 ---
 
 ## Data Retention & Lifecycle
 
-Automated data pruning is executed by [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py):
+Automated data pruning is executed by the `retention` Go binary (`cmd/retention/main.go`):
 
 | Target | Retention Window | Action |
 |---|---|---|
@@ -183,7 +183,7 @@ Direct (bypassing the proxy):
 curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
 curl http://<host>:8642/p/story/v1/chat/completions \
   -H "Authorization: Bearer <PASSWORD>" -H "Content-Type: application/json" \
-  -d '{"provider": "opencode-go", "model": "glm-5.1", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
+  -d '{"provider": "opencode-go", "model": "mimo-v2.5", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
 
 - One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.

@@ -15,19 +15,19 @@
 
 ## What this project is
 
-Runs **three Hermes profiles** (story, resumes, default-god) against
+Runs god (main) + story/resumes (sides) against
 OpenCode Go directly (no proxy). ONE multiplexed gateway process
-for all three profiles (Hermes `gateway.multiplex_profiles`, `s6`-supervised),
+for god + 2 sides (Hermes `gateway.multiplex_profiles`, direct exec),
 a built-in OpenAI-compatible API server (:8642) for the custom Android app,
 and remote MongoDB for domain data (money, health, cookbook). **The live stack
-is fully containerized** — one compose file (`docker/docker-compose.yml`): health-api + one `gateway` container (all 3 profiles, direct to `https://opencode.ai/zen/go/v1`, `s6` supervised) +
+is fully containerized** — one compose file (`docker/docker-compose.yml`): health-api + one `gateway` container (god + 2 sides, direct to `https://opencode.ai/zen/go/v1`, direct exec) +
 a one-shot retention job. Development runs the SAME single compose file
 against Atlas. No host Hermes install, no native processes.
 
 ```
-story+resumes+default
-   └─► ONE `gateway` container (HERMES_HOME=/hermes-home = gateway/, s6-supervised)
-        └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model glm-5.1)
+god+story+resumes
+   └─► ONE `gateway` container (HERMES_HOME=/opt/data = gateway/, official image + custom entrypoint)
+        └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model mimo-v2.5)
 proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)
 MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo vsreddyh/Resume) — separate git repos
@@ -46,22 +46,22 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   python3, cron** (only git + sudo must pre-exist). Hermes harness only —
   `init` never installs the opencode CLI. health-api (:8001) binds `0.0.0.0` inside its container.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
-  (`podman-compose run --rm retention` → `tools/retention.py`); cron daily 03:00
+  (`podman-compose run --rm retention` → `cmd/retention` Go binary); cron daily 03:00
    installed by `init`, also runs on every `start`. money wipes transactions >90d;
    health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
    permanent; story/resumes (git repos) are no-ops.
-- `tools/mongo.py` = shared pymongo CLI; `tools/retention.py` = data lifecycle.
+- `cmd/mongo` = shared MongoDB CLI; `cmd/retention` = data lifecycle (both Go).
   `MONGODB_URI`/`MONGODB_DB` in root `.env` (Atlas, all environments).
 - Podman: `docker/docker-compose.yml` = the whole stack (health-api
    + gateway + retention) — the ONLY compose file. All environments run the
    same file against the Atlas `MONGODB_URI`. The bot image is built from `test/Dockerfile` +
-   `test/entrypoint.sh` (bakes in `s6-overlay`; `hermes-agent` + `mcp` via pip; nodejs + headless chromium for the Playwright MCP); those are the image source, not
+   `test/entrypoint.sh` (renders templates, execs gateway; in-repo Go MCP servers + CLIs built by a golang stage onto the official image); those are the image source, not
    a mirror stack.
    Provider keys + `PASSWORD` are injected via compose `environment:` interpolation
    from the root `.env`; `podman_compose()` always passes `--env-file "$REPO/.env"`
    (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
    silently falls back empty/default).
-- LLM: direct to OpenCode (`https://opencode.ai/zen/go/v1`, model `glm-5.1`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` goes to OpenCode Go.
+- LLM: direct to OpenCode (`https://opencode.ai/zen/go/v1`, model `mimo-v2.5`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` goes to OpenCode Go.
 - App API: Hermes built-in OpenAI-compatible server on the gateway
   (`platforms.api_server`, `:8642`, single-password `PASSWORD`); one port, each app
   tab uses its profile path (`/p/story|resumes|default`) and sends per-request
@@ -80,10 +80,10 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   and each `SOUL.md` are **committed** so bot personality + learned state
   survives moving between VPSes. Only transient session/log/state files are
   git-ignored (runtime `memories/` are not tracked).
-- CI: `android-apk.yml` (builds debug+release APKs, `main` branch only) and `mcps-test.yml` (pytest over `mcps/`, `main` only; DB tests skip without `MONGODB_URI`). No linter. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
+- CI: `android-apk.yml` (builds debug+release APKs, `main` branch only) and `mcps-test.yml` (`go build` + `go vet` + `go test ./...` over `cmd/`/`internal/`, `main` only; DB tests skip without `MONGODB_URI`). No linter. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
   `podman-compose -f docker/docker-compose.yml config`, then check gateway logs on the live machine.
 - Git identity: every commit as `vsreddyh <shouryanreddyh@gmail.com>` (`git -c user.name=vsreddyh -c user.email=shouryanreddyh@gmail.com commit ...`). Never use another name/email.
-- Agent model: always run agent sessions on `muse-spark-1.3-contributor` ONLY (cheapest; everything else is too expensive). This is the agent-side rule — the Android app default (`glm-5.1`) is separate and stays.
+- Agent model: always run agent sessions on `muse-spark-1.3-contributor` ONLY (cheapest; everything else is too expensive). This is the agent-side rule — the Android app default (`mimo-v2.5`) is separate and stays.
 - Git workflow (no exceptions): ALL changes land on `main` via branch + PR — never commit or push directly to `main`, not even one-line fixes. After a PR merges, delete the branch locally AND remotely (`git branch -d <b>` + `git push origin --delete <b>`), then prune (`git fetch --prune`). Wipe any other branches already merged into `main` at the same time.
 
 ## Agento app versioning (semver — MAJOR.MINOR.PATCH)

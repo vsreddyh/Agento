@@ -3,13 +3,15 @@
 # ──────────────────────────────────────────────────────
 x-bot-base: &bot-base
   build:
-    context: ../test
+    context: ..
+    dockerfile: test/Dockerfile
   user: "1000:1000"
-  volumes:
-    - ../tools:/tools:ro
   environment: &bot-base-environment
-    HERMES_HOME: /hermes-home
-    HOME: /hermes-home
+    HERMES_HOME: /opt/data
+    HOME: /opt/data
+    # Official image refuses root gateways unless explicitly allowed
+    # (we run root so bind-mounted state stays host-owned; same as before).
+    HERMES_ALLOW_ROOT_GATEWAY: 1
     OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
     # hermes-agent resolves provider credentials ONLY from these two names
     # (plugins/model-providers/opencode-zen: env_vars per provider) — same
@@ -29,7 +31,8 @@ services:
   # ──────────────────────────────────────────────────────
   health-api:
     build:
-      context: ../docker/health-api
+      context: ..
+      dockerfile: docker/health-api/Dockerfile
     user: "1000:1000"
     ports:
       - "8001:8000"
@@ -57,22 +60,16 @@ services:
   # ──────────────────────────────────────────────────────
   gateway:
     <<: *bot-base
-    # s6-overlay starts as root to s6-setuidgid 1000:1000 for services.
+    # Starts as root so bind-mounted state stays host-owned (their s6 tree is bypassed).
     user: "0:0"
     ports:
       - "${API_SERVER_PORT:-8642}:8642"
     volumes:
-      - ../gateway:/hermes-home
+      - ../gateway:/opt/data
       - ../workspace:/workspace
-      - ../tools:/tools:ro
-      - ../mcps/common:/mcps/common:ro
-      - ../mcps/cookbook:/mcps/cookbook:ro
-      - ../mcps/health_check:/mcps/health_check:ro
-      - ../mcps/money:/mcps/miser-money:ro
     environment:
       <<: *bot-base-environment
       PASSWORD: ${PASSWORD:-}
-      PYTHONPATH: /mcps
 
   # ──────────────────────────────────────────────────────
   # Proxy — single URL for the Agento app (chat + sync on one port).
@@ -106,12 +103,11 @@ services:
   # ──────────────────────────────────────────────────────
   retention:
     build:
-      context: ../test
+      context: ..
+      dockerfile: test/Dockerfile
     user: "1000:1000"
-    volumes:
-      - ../tools:/tools:ro
     environment:
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
-    entrypoint: ["python3", "/tools/retention.py"]
+    entrypoint: ["/usr/local/bin/retention"]
     restart: "no"

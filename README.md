@@ -1,6 +1,6 @@
 # Hermes Android stack
 
-Fully containerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully containerized agent stack running god + 2 sides (god main, story/resumes) direct against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
@@ -10,10 +10,10 @@ Fully containerized agent stack running **three Hermes profiles** (story, resume
                                 Remote MongoDB (money, health, cookbook)
                                              ▲
                               Containers
-  story ──┐               │
-  resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
-  default ┘ (multiplexed  │ /hermes-home │   OpenCode Go Direct
-            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/go/v1)
+  god ────┐               │
+  story   ┤ ONE Gateway   │ HERMES_HOME=  ▼
+  resumes ┘ god + 2 sides │ /opt/data │   OpenCode Go Direct
+           (multiplexed)  │  (gateway +  │  (https://opencode.ai/zen/go/v1)
           └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
@@ -22,10 +22,10 @@ Retention ───────────────► one-shot container (c
 
 | Service | Container / Process | Published Port | Purpose |
 |---|---|---|---|
-| `gateway` | `gateway` container (`s6` supervised) | `8642` (app API) | Multiplexed gateway for all 3 profiles + OpenAI-compatible API server |
+| `gateway` | `gateway` container (direct exec, PID 1) | `8642` (app API) | Multiplexed gateway for god + 2 sides + OpenAI-compatible API server |
 | `health-api` | `health-api` container | `8001` | Ingests Health Connect sync data from Android and persists to MongoDB |
 | `proxy` | `proxy` container (nginx) | `8080` | Single app URL: routes `/p/*` → gateway chat, `/api/*` → health sync |
-| `retention` | `retention` container (one-shot) | — | Data retention policy runner (`tools/retention.py`) |
+| `retention` | `retention` container (one-shot) | — | Data retention policy runner (`cmd/retention`, Go binary in bot image) |
 
 ---
 
@@ -46,8 +46,8 @@ Retention ───────────────► one-shot container (c
 | Specification | Minimum Requirement | Recommended (Production) | Notes |
 |---|---|---|---|
 | **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Image build (LaTeX/tectonic, Hermes, Playwright chromium) benefits from multiple cores. |
-| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The multiplexed `gateway` (Python + 3 profiles + bundled chromium) consumes ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
-| **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, pip caches, local repo clones, LaTeX build artifacts, Playwright chromium, and logs. |
+| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The multiplexed `gateway` (hermes + Go MCP binaries + bundled chromium) consumes ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
+| **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, Go build cache, local repo clones, Playwright chromium, and logs. |
 | **OS** | Linux (Ubuntu 22.04+, Debian 12+, Arch, Fedora) | Ubuntu 22.04/24.04 LTS or Debian 12 | Linux kernel 5.10+ with systemd and package manager (`apt`, `pacman`, or `dnf`). |
 
 ### Required Host Tools & Access
@@ -58,7 +58,7 @@ Retention ───────────────► one-shot container (c
   - `git@github.com:vsreddyh/Resume.git` (Resumes bot CV repository)
 
 ### Required External Services & API Keys
-- **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai). One key for the single `opencode-go` provider, selected per request in app Settings (model `glm-5.1`).
+- **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai). One key for the single `opencode-go` provider, selected per request in app Settings (model `mimo-v2.5`).
 - **Android App Password**: `PASSWORD` (single bearer credential for chat + sync; generate with `openssl rand -hex 32`). The app takes one Server URL + Password; each tab picks provider/model from the live gateway catalog in Settings dropdowns. Provider keys live only in the VPS `.env`, never in git.
 - **MongoDB Cluster**: MongoDB Atlas connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`) — the single data backend for money/health/cookbook.
 - **App Password**: `PASSWORD` Bearer token matching the Agento Android app Password field (single credential for chat + sync). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password.)
@@ -141,14 +141,14 @@ All services read the same root `.env`, so a dev checkout just points `MONGODB_U
 
 ## Remote MongoDB & Data Retention
 
-The shared CLI tool `tools/mongo.py` provides database operations:
+The shared CLI tool `mongo` (`cmd/mongo/main.go`) provides database operations:
 
 ```bash
-python3 tools/mongo.py insert money_transactions '{"date":"2026-08-08","amount":300,"type":"expense","category":"groceries"}'
-python3 tools/mongo.py aggregate money_transactions '[{"$group":{"_id":"$category","total":{"$sum":"$amount"}}}]'
+go run ./cmd/mongo insert money_transactions '{"date":"2026-08-08","amount":300,"type":"expense","category":"groceries"}'
+go run ./cmd/mongo aggregate money_transactions '[{"$group":{"_id":"$category","total":{"$sum":"$amount"}}}]'
 ```
 
-Data lifecycle is governed by `tools/retention.py` (`scripts/retention.sh run`):
+Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`, `scripts/retention.sh run`):
 - `money_transactions`: Purges records where `date < today - 90d`.
 - `hc_meals`, `hc_days`: Purges records where `date < today - 30d`.
 - `hc_weight`: **Permanent retention** (never pruned).
@@ -164,22 +164,26 @@ Data lifecycle is governed by `tools/retention.py` (`scripts/retention.sh run`):
 ├── documentation.md         # Deep-dive architecture and component documentation
 ├── docker/
 │   ├── docker-compose.yml   # Unified compose configuration (health-api + gateway + retention)
-│   ├── health-api/          # Health Connect FastAPI sync service
+│   ├── health-api/          # Health Connect Go sync service (Dockerfile, binary in bot image)
 ├── test/
-│   ├── Dockerfile           # Shared bot image definition (Debian slim + s6-overlay + Playwright chromium)
-│   └── entrypoint.sh        # Config rendering and s6 service orchestration
+│   ├── Dockerfile           # Derived bot image (official hermes + Go MCP binaries)
+│   └── entrypoint.sh        # Config rendering + secret fail-fast, then execs gateway
 ├── mcps/
-│   ├── common/              # Shared Mongo/validation lib (not an MCP)
-│   ├── money/               # miser-money MCP (accounts + transactions)
-│   ├── cookbook/            # cookbook MCP (permanent recipe library)
-│   └── health_check/        # health-check MCP (meals + days + weight)
+│   ├── money/               # miser-money MCP (accounts + transactions; code in cmd/ + internal/)
+│   ├── cookbook/            # cookbook MCP (permanent recipe library; code in cmd/ + internal/)
+│   └── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
 ├── gateway/               # God = default profile = gateway home (HERMES_HOME)
 │   ├── config.yaml.template # model + platforms.api_server + MCPs
 │   ├── SOUL.md              # god operator
 │   └── profiles/            # Nested side profiles (story, resumes)
-├── tools/
-│   ├── mongo.py             # MongoDB CLI helper for bot toolsets
-│   └── retention.py         # Data lifecycle prune runner
+├── cmd/                 # Go services (each builds to a static binary)
+│   ├── mongo/             # MongoDB CLI helper for bot toolsets
+│   ├── retention/         # Data lifecycle prune runner
+│   ├── health-api/        # Health Connect sync service
+│   ├── miser-money/       # money MCP server (stdio)
+│   ├── cookbook/          # cookbook MCP server (stdio)
+│   └── health-check/      # health-check MCP server (stdio)
+├── internal/              # Shared Go packages (mongo, validate, money, cookbook, healthcheck)
 ├── scripts/
 │   ├── hermes.sh            # Main orchestration CLI
 │   ├── retention.sh         # Retention execution wrapper

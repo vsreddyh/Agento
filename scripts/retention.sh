@@ -5,9 +5,9 @@ set -euo pipefail
 # scripts/hermes.sh init) and once on every start.
 #
 # The live stack is fully containerized (Podman), so this just runs the `retention`
-# one-shot service from docker/docker-compose.yml (same bot image, mounts
-# tools/ read-only, MONGODB_URI/MONGODB_DB injected from the root .env).
-# The actual policy logic lives in tools/retention.py.
+# one-shot service from docker/docker-compose.yml (same bot image, Go
+# `retention` binary baked in, MONGODB_URI/MONGODB_DB injected from the root .env).
+# The actual policy logic lives in cmd/retention/main.go.
 #
 #   story       git repo (workspace/portals)   — no-op
 #   resumes     git repo (workspace/resumes)   — no-op
@@ -22,8 +22,8 @@ COMPOSE="$REPO/docker/docker-compose.yml"
 . "$REPO/scripts/lib/common.sh"
 load_root_env
 
-if [[ "${1:-}" == "--dry-run" ]]; then
-    podman_compose -f "$COMPOSE" run --rm retention --dry-run
-else
-    podman_compose -f "$COMPOSE" run --rm retention
-fi
+case "${1:-run}" in
+    --dry-run) podman_compose -f "$COMPOSE" run --rm retention -- --dry-run ;;
+    run|"") podman_compose -f "$COMPOSE" run --rm retention ;;
+    *) echo "usage: $0 [run|--dry-run]" >&2; exit 2 ;;
+esac
