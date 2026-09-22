@@ -68,12 +68,18 @@ do_render() {
     for home in "$HERMES_HOME"/profiles/*/; do
         [[ -d "$home" ]] || continue
         HERMES_CWD="/workspace/$(basename "$home")" render_config "$home"
-        # Secret scope: hermes 0.21.4 resolves API_SERVER_KEY per profile
-        # from <profile>/.env ONLY (never os.environ under multiplexing),
-        # and the name must literally be API_SERVER_KEY. Render a minimal
-        # file from PASSWORD (fail-fast above guarantees it) — regenerated
-        # every start, git-ignored, nothing extra to rotate.
-        printf 'API_SERVER_KEY=%s\n' "$PASSWORD" > "$home/.env"
+        # Secret scope: hermes 0.21.4 resolves credentials per profile
+        # from <profile>/.env ONLY (never os.environ under multiplexing) —
+        # API_SERVER_KEY for chat auth AND the provider keys for model calls.
+        # Rendered from the shared env (fail-fast above guarantees PASSWORD;
+        # provider keys come from compose); regenerated every start,
+        # git-ignored, nothing extra to rotate.
+        {
+            printf 'API_SERVER_KEY=%s\n' "$PASSWORD"
+            printf 'OPENCODE_API_KEY=%s\n' "${OPENCODE_API_KEY:-}"
+            printf 'OPENCODE_ZEN_API_KEY=%s\n' "${OPENCODE_ZEN_API_KEY:-${OPENCODE_API_KEY:-}}"
+            printf 'OPENCODE_GO_API_KEY=%s\n' "${OPENCODE_GO_API_KEY:-${OPENCODE_API_KEY:-}}"
+        } > "$home/.env"
     done
 
     export HERMES_HOME
