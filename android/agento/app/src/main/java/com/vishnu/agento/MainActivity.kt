@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Refresh
@@ -67,6 +68,7 @@ private enum class Destination(val title: String) {
     Story("Story"),
     Resumes("Resumes"),
     God("God"),
+    Tasks("Tasks"),
     Settings("Settings"),
 }
 
@@ -74,6 +76,7 @@ private fun Destination.icon() = when (this) {
     Destination.Story -> Icons.Filled.MenuBook
     Destination.Resumes -> Icons.Filled.Description
     Destination.God -> Icons.Filled.Star
+    Destination.Tasks -> Icons.Filled.List
     Destination.Settings -> Icons.Filled.Settings
 }
 
@@ -154,6 +157,7 @@ class MainActivity : ComponentActivity() {
                                 app = application, tab = "god", title = "God",
                                 onMenu = { scope.launch { drawerState.open() } },
                             )
+                            Destination.Tasks -> TasksScreen()
                             Destination.Settings -> SettingsScreen(
                                 healthModel,
                                 themeMode = themeMode,
@@ -209,6 +213,169 @@ private fun ChatTab(
         TabModelSheet(app = app, tab = tab, title = title,
             onChanged = vm::refreshConfig, onClose = { showModel = false })
     }
+}
+
+/** Task table: name + status + note rows, persisted locally (#34). */
+@Composable
+private fun TasksScreen() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var tasks by remember { mutableStateOf<List<TaskItem>>(emptyList()) }
+    var editing by remember { mutableStateOf<TaskItem?>(null) }
+    var loaded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        tasks = withContext(Dispatchers.IO) { TaskStore.load(context) }
+        loaded = true
+    }
+
+    fun persist(next: List<TaskItem>) {
+        tasks = next
+        scope.launch(Dispatchers.IO) { TaskStore.save(context, next) }
+    }
+
+    fun cycleStatus(t: TaskItem): String = when (t.status.lowercase()) {
+        "todo" -> "doing"
+        "doing" -> "done"
+        else -> "todo"
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Tasks") },
+            actions = {
+                TextButton(onClick = {
+                    editing = TaskItem(id = TaskStore.newId())
+                }) { Text("Add") }
+            },
+        )
+        if (!loaded) {
+            Text(
+                "Loading…",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(16.dp),
+            )
+        } else if (tasks.isEmpty()) {
+            Text(
+                "No tasks yet. Tap Add to create the first row.",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(16.dp),
+            )
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 8.dp),
+        ) {
+            items(tasks, key = { it.id }) { t ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                t.name.ifEmpty { "(untitled)" },
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            AssistChip(
+                                onClick = { persist(tasks.map {
+                                    if (it.id == t.id) it.copy(status = cycleStatus(it)) else it
+                                }) },
+                                label = { Text(t.status.ifEmpty { "todo" }) },
+                            )
+                        }
+                        if (t.note.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(t.note, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            TextButton(onClick = { editing = t }) { Text("Edit") }
+                            IconButton(onClick = {
+                                persist(tasks.filterNot { it.id == t.id })
+                            }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    val draft = editing
+    if (draft != null) {
+        TaskDialog(
+            initial = draft,
+            isNew = tasks.none { it.id == draft.id },
+            onDismiss = { editing = null },
+            onSave = { saved ->
+                val next = if (tasks.any { it.id == saved.id }) {
+                    tasks.map { if (it.id == saved.id) saved else it }
+                } else {
+                    listOf(saved) + tasks
+                }
+                persist(next)
+                editing = null
+            },
+        )
+    }
+}
+
+/** Add/edit dialog for one task row. */
+@Composable
+private fun TaskDialog(
+    initial: TaskItem,
+    isNew: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (TaskItem) -> Unit,
+) {
+    var name by remember(initial.id) { mutableStateOf(initial.name) }
+    var status by remember(initial.id) { mutableStateOf(initial.status.ifEmpty { "todo" }) }
+    var note by remember(initial.id) { mutableStateOf(initial.note) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isNew) "New task" else "Edit task") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Task name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = status,
+                    onValueChange = { status = it },
+                    label = { Text("Status") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Note") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 4,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onSave(initial.copy(
+                    name = name.trim(),
+                    status = status.trim().ifEmpty { "todo" },
+                    note = note.trim(),
+                    updatedAt = ChatThreads.now(),
+                ))
+            }) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 /** Short HH:mm (plus date when not today); empty for unknown timestamps. */
