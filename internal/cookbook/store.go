@@ -116,7 +116,7 @@ func (s *Store) AddIngredient(ctx context.Context, name, note string) (bson.M, e
 func (s *Store) ListIngredients(ctx context.Context, search string) ([]bson.M, error) {
 	filt := bson.M{}
 	if strings.TrimSpace(search) != "" {
-		filt = bson.M{"name": bson.M{"$regex": search, "$options": "i"}}
+		filt = bson.M{"name": bson.M{"$regex": regexp.QuoteMeta(strings.TrimSpace(search)), "$options": "i"}}
 	}
 	cur, err := s.ings.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}).SetLimit(500))
 	if err != nil {
@@ -132,7 +132,7 @@ func (s *Store) DeleteIngredient(ctx context.Context, nameOrID string) (bool, er
 	}
 	var ref bson.M
 	if err := s.recipes.FindOne(ctx,
-		bson.M{"quantities.ingredient_id": fmt.Sprint(ing["_id"])},
+		bson.M{"quantities.ingredient_id": mongo.IDString(ing["_id"])},
 		options.FindOne().SetProjection(bson.M{"_id": 0, "name": 1})).Decode(&ref); err == nil {
 		return false, fail("ingredient '%v' is used by recipe '%v' — edit the recipe first", ing["name"], ref["name"])
 	}
@@ -168,7 +168,7 @@ func (s *Store) resolveIngs(ctx context.Context, qtys map[string]any) ([]bson.M,
 		if len(q) > 100 {
 			q = q[:100]
 		}
-		out = append(out, bson.M{"ingredient_id": fmt.Sprint(ing["_id"]), "name": ing["name"], "qty": q})
+		out = append(out, bson.M{"ingredient_id": mongo.IDString(ing["_id"]), "name": ing["name"], "qty": q})
 	}
 	if len(out) == 0 {
 		return nil, fail("recipe needs at least one ingredient quantity")

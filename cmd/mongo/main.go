@@ -25,7 +25,6 @@ import (
 	"agento/internal/mongo"
 
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -140,7 +139,7 @@ func run() int {
 		if err != nil {
 			return fail(err.Error(), 1)
 		}
-		return out(bson.M{"inserted_id": fmt.Sprint(res.InsertedID)})
+		return out(bson.M{"inserted_id": mongo.IDString(res.InsertedID)})
 
 	case "insert-many":
 		if len(args) < 1 {
@@ -168,7 +167,7 @@ func run() int {
 		}
 		ids := make([]string, 0, len(res.InsertedIDs))
 		for _, id := range res.InsertedIDs {
-			ids = append(ids, fmt.Sprint(id))
+			ids = append(ids, mongo.IDString(id))
 		}
 		return out(bson.M{"inserted_ids": ids})
 
@@ -197,10 +196,8 @@ func run() int {
 			return fail(err.Error(), 1)
 		}
 		upserted := ""
-		if oid, ok := res.UpsertedID.(primitive.ObjectID); ok {
-			upserted = oid.Hex()
-		} else if res.UpsertedID != nil {
-			upserted = fmt.Sprint(res.UpsertedID)
+		if res.UpsertedID != nil {
+			upserted = mongo.IDString(res.UpsertedID)
 		}
 		return out(bson.M{"matched": res.MatchedCount, "upserted": upserted})
 

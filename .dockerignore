@@ -4,6 +4,7 @@ gateway/sessions/
 gateway/memories/
 gateway/logs/
 gateway/state.db*
+gateway/**/config.yaml
 gateway/*.log
 gateway/*.lock
 android/

@@ -164,15 +164,14 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 ├── documentation.md         # Deep-dive architecture and component documentation
 ├── docker/
 │   ├── docker-compose.yml   # Unified compose configuration (health-api + gateway + retention)
-│   ├── health-api/          # Health Connect FastAPI sync service
+│   ├── health-api/          # Health Connect Go sync service (Dockerfile, binary in bot image)
 ├── test/
 │   ├── Dockerfile           # Derived bot image (official hermes + Go MCP binaries)
 │   └── entrypoint.sh        # Config rendering + secret fail-fast, then execs gateway
 ├── mcps/
-│   ├── common/              # Shared Mongo/validation lib (not an MCP)
-│   ├── money/               # miser-money MCP (accounts + transactions)
-│   ├── cookbook/            # cookbook MCP (permanent recipe library)
-│   └── health_check/        # health-check MCP (meals + days + weight)
+│   ├── money/               # miser-money MCP (accounts + transactions; code in cmd/ + internal/)
+│   ├── cookbook/            # cookbook MCP (permanent recipe library; code in cmd/ + internal/)
+│   └── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
 ├── gateway/               # God = default profile = gateway home (HERMES_HOME)
 │   ├── config.yaml.template # model + platforms.api_server + MCPs
 │   ├── SOUL.md              # god operator
