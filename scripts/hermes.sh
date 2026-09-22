@@ -237,6 +237,10 @@ cmd_init() {
     podman image prune -f 2>&1 | sed 's/^/  /' || true
 
     mkdir -p "$GATEWAY_HOME" "$REPO/workspace"
+    # Official image runs hermes as UID 10000 (hermes user) — bind mounts
+    # must belong to it or the gateway crash-loops on permission errors.
+    # Root on the host still has full access; override with HERMES_UID/GID.
+    chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" "$REPO/workspace" "$GATEWAY_HOME" 2>/dev/null || true
     local b
     for b in "${BOTS[@]}"; do
         mkdir -p "$(profile_home "$b")" "$REPO/workspace/$b"

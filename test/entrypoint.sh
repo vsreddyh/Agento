@@ -18,8 +18,9 @@ set -euo pipefail
 # of the runtime, same tradeoff as before).
 
 if [[ "${1:-}" == "chown-data" ]]; then
-    uid="${HERMES_UID:-1000}"
-    gid="${HERMES_GID:-1000}"
+    # Official image runs hermes as UID 10000 — bind mounts must belong to it.
+    uid="${HERMES_UID:-10000}"
+    gid="${HERMES_GID:-10000}"
     chown -R "$uid:$gid" "$HERMES_HOME" /workspace
     exit 0
 fi
@@ -67,6 +68,12 @@ do_render() {
     for home in "$HERMES_HOME"/profiles/*/; do
         [[ -d "$home" ]] || continue
         HERMES_CWD="/workspace/$(basename "$home")" render_config "$home"
+        # Secret scope: hermes 0.21.4 resolves API_SERVER_KEY per profile
+        # from <profile>/.env ONLY (never os.environ under multiplexing),
+        # and the name must literally be API_SERVER_KEY. Render a minimal
+        # file from PASSWORD (fail-fast above guarantees it) — regenerated
+        # every start, git-ignored, nothing extra to rotate.
+        printf 'API_SERVER_KEY=%s\n' "$PASSWORD" > "$home/.env"
     done
 
     export HERMES_HOME
