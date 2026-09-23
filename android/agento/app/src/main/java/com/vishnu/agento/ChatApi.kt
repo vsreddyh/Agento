@@ -257,3 +257,10 @@ fun defaultProfileFor(tab: String): String = when (tab) {
     "god" -> "default"
     else -> tab
 }
+
+/** Display title for a chat tab key (tab keys differ from profile names). */
+fun tabTitle(tab: String): String = when (tab) {
+    "god" -> "God"
+    "story" -> "Story"
+    else -> "Portfolio"
+}

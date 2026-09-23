@@ -26,9 +26,10 @@ data class ChatThread(
 private val threadJson = Json { ignoreUnknownKeys = true }
 
 /**
- * Per-tab conversation threads persisted as JSON (`#17` history survival,
- * `#26` storage). Threads survive app restarts; New starts a thread instead
- * of wiping. Caps: 20 threads/tab, 200 messages/thread (oldest trimmed).
+ * Per-tab conversation persisted as JSON (`#17` history survival,
+ * `#26` storage). One conversation per tab survives app restarts; +
+ * clears it and starts fresh (#51). Caps: 20 threads/tab file rows,
+ * 200 messages/thread (oldest trimmed) for legacy multi-thread files.
  */
 object ChatThreads {
 

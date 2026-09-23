@@ -6,7 +6,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
-/** One task row: name + status + note (#34). Status is free text. */
+/** One task row: name + fixed status + note (#34, #55). Status is one of
+ * Todo, Ongoing, Paused, Done (legacy free-text values migrate on load). */
 @Serializable
 data class TaskItem(
     val id: String = "",

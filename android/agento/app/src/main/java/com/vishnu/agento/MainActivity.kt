@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,19 +19,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Alarm
-import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -65,26 +67,38 @@ class ChatViewModelFactory(
     }
 }
 
-/** Sidebar destinations; first three map 1:1 to gateway profiles (#18). */
+/** Sidebar destinations; first three map 1:1 to gateway profiles.
+ * Order is God, Story, Portfolio (#53); the resumes profile shows as
+ * "Portfolio" (#54) but the tab key (prefs, files, profile path) is
+ * unchanged so backend mapping never breaks. */
 private enum class Destination(val title: String) {
-    Story("Story"),
-    Resumes("Resumes"),
     God("God"),
+    Story("Story"),
+    Portfolio("Portfolio"),
     Tasks("Tasks"),
     Storage("Storage"),
-    Reminders("Reminders"),
     Settings("Settings"),
 }
 
 private fun Destination.icon() = when (this) {
     Destination.Story -> Icons.Filled.MenuBook
-    Destination.Resumes -> Icons.Filled.Description
+    Destination.Portfolio -> Icons.Filled.Description
     Destination.God -> Icons.Filled.Star
     Destination.Tasks -> Icons.Filled.List
-    Destination.Reminders -> Icons.Filled.Alarm
     Destination.Storage -> Icons.Filled.Folder
     Destination.Settings -> Icons.Filled.Settings
 }
+
+/** Settings subsections; each gets its own drawer entry + screen (#60). */
+private enum class SettingSection(val title: String) {
+    Server("Server"),
+    Appearance("Appearance"),
+    Updates("App updates"),
+    Health("Health sync"),
+    Notifications("Hermes notifications"),
+    Backup("Settings backup"),
+}
+
 
 /** App theme mode keys (prefs `theme_mode`; #28). */
 object ThemeStore {
@@ -122,7 +136,15 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(
                 colorScheme = if (dark) darkColorScheme() else lightColorScheme(),
             ) {
-                var dest by remember { mutableStateOf(Destination.Story) }
+                // #59: paint the Material background over the full window so
+                // dark mode never shows the light window background through.
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background,
+                ) {
+                var dest by remember { mutableStateOf(Destination.God) }
+                var section by remember { mutableStateOf(SettingSection.Server) }
+                var settingsOpen by remember { mutableStateOf(false) }
                 val drawerState = rememberDrawerState(DrawerValue.Closed)
                 val scope = rememberCoroutineScope()
                 ModalNavigationDrawer(
@@ -135,39 +157,81 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.padding(16.dp),
                             )
                             Destination.entries.forEach { d ->
-                                NavigationDrawerItem(
-                                    label = { Text(d.title) },
-                                    icon = { Icon(d.icon(), contentDescription = null) },
-                                    selected = dest == d,
-                                    onClick = {
-                                        dest = d
-                                        scope.launch { drawerState.close() }
-                                    },
-                                    modifier = Modifier.padding(horizontal = 8.dp),
-                                )
+                                if (d == Destination.Settings) {
+                                    NavigationDrawerItem(
+                                        label = { Text(d.title) },
+                                        icon = { Icon(d.icon(), contentDescription = null) },
+                                        badge = {
+                                            Icon(
+                                                if (settingsOpen) Icons.Filled.ExpandLess
+                                                else Icons.Filled.ExpandMore,
+                                                contentDescription = null,
+                                            )
+                                        },
+                                        selected = dest == d,
+                                        onClick = {
+                                            dest = d
+                                            settingsOpen = !settingsOpen
+                                        },
+                                        modifier = Modifier.padding(horizontal = 8.dp),
+                                    )
+                                    // #60: settings subsections live in the
+                                    // sidebar; each opens its own screen.
+                                    if (settingsOpen) {
+                                        SettingSection.entries.forEach { s ->
+                                            NavigationDrawerItem(
+                                                label = { Text(s.title) },
+                                                selected = dest == Destination.Settings && section == s,
+                                                onClick = {
+                                                    dest = Destination.Settings
+                                                    section = s
+                                                    scope.launch { drawerState.close() }
+                                                },
+                                                modifier = Modifier.padding(horizontal = 8.dp)
+                                                    .padding(start = 24.dp),
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    NavigationDrawerItem(
+                                        label = { Text(d.title) },
+                                        icon = { Icon(d.icon(), contentDescription = null) },
+                                        selected = dest == d,
+                                        onClick = {
+                                            dest = d
+                                            scope.launch { drawerState.close() }
+                                        },
+                                        modifier = Modifier.padding(horizontal = 8.dp),
+                                    )
+                                }
                             }
                         }
                     },
                 ) {
                     Box {
                         when (dest) {
-                            Destination.Story -> ChatTab(
-                                app = application, tab = "story", title = "Story",
-                                onMenu = { scope.launch { drawerState.open() } },
-                            )
-                            Destination.Resumes -> ChatTab(
-                                app = application, tab = "resumes", title = "Resumes",
-                                onMenu = { scope.launch { drawerState.open() } },
-                            )
                             Destination.God -> ChatTab(
                                 app = application, tab = "god", title = "God",
                                 onMenu = { scope.launch { drawerState.open() } },
                             )
-                            Destination.Tasks -> TasksScreen()
-                            Destination.Storage -> StorageScreen()
-                            Destination.Reminders -> RemindersScreen()
+                            Destination.Story -> ChatTab(
+                                app = application, tab = "story", title = "Story",
+                                onMenu = { scope.launch { drawerState.open() } },
+                            )
+                            Destination.Portfolio -> ChatTab(
+                                app = application, tab = "resumes", title = "Portfolio",
+                                onMenu = { scope.launch { drawerState.open() } },
+                            )
+                            Destination.Tasks -> TasksScreen(
+                                onMenu = { scope.launch { drawerState.open() } },
+                            )
+                            Destination.Storage -> StorageScreen(
+                                onMenu = { scope.launch { drawerState.open() } },
+                            )
                             Destination.Settings -> SettingsScreen(
                                 healthModel,
+                                section = section,
+                                onMenu = { scope.launch { drawerState.open() } },
                                 themeMode = themeMode,
                                 onTheme = {
                                     themeMode = it
@@ -176,6 +240,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
+                }
                 }
             }
         }
@@ -195,45 +260,68 @@ private fun ChatTab(
     val vm: ChatViewModel = viewModel(key = "chat_$tab", factory = factory)
     val state by vm.state
     LaunchedEffect(Unit) { vm.refreshConfig() }
-    var showThreads by remember { mutableStateOf(false) }
     var showModel by remember { mutableStateOf(false) }
     val subtitle = (if (state.model.isEmpty()) "not set" else state.model) +
         " · " + state.provider.ifEmpty { "not set" }
     ChatScreen(
         title = title, model = subtitle, state = state,
         onMenu = onMenu,
-        onThreads = { showThreads = true },
         onModel = { showModel = true },
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop,
         onNew = vm::newConversation, onRetry = vm::retry,
     )
-    if (showThreads) {
-        ThreadSheet(
-            threads = state.threads,
-            activeId = state.activeThreadId,
-            onSelect = { vm.switchThread(it); showThreads = false },
-            onDelete = vm::deleteThread,
-            onNew = { vm.newConversation(); showThreads = false },
-            onClose = { showThreads = false },
-        )
-    }
     if (showModel) {
         TabModelSheet(app = app, tab = tab, title = title,
             onChanged = vm::refreshConfig, onClose = { showModel = false })
     }
 }
 
-/** Task table: name + status + note rows, persisted locally (#34). */
+/** Fixed task statuses (#55). Order here is the default sort order:
+ * Ongoing → Paused → Todo → Done. */
+private val TASK_STATUSES = listOf("Ongoing", "Paused", "Todo", "Done")
+
+private fun taskRank(status: String): Int =
+    TASK_STATUSES.indexOf(status).let { if (it < 0) 2 else it }
+
+/** Maps legacy free-text statuses onto the fixed set (#55). */
+private fun normalizeStatus(raw: String): String = when (raw.trim().lowercase()) {
+    "doing", "ongoing", "in progress", "in_progress" -> "Ongoing"
+    "paused", "pause", "pasued" -> "Paused"
+    "done", "complete", "completed" -> "Done"
+    else -> "Todo"
+}
+
+private enum class TaskSort(val title: String) {
+    Default("Status"),
+    Name("Name"),
+    Newest("Newest"),
+    Oldest("Oldest"),
+}
+
+/** Task table: fixed statuses, filters + sorts, persisted locally (#34, #55). */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TasksScreen() {
+private fun TasksScreen(onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tasks by remember { mutableStateOf<List<TaskItem>>(emptyList()) }
     var editing by remember { mutableStateOf<TaskItem?>(null) }
     var loaded by remember { mutableStateOf(false) }
+    var filter by remember { mutableStateOf("All") }
+    var sort by remember { mutableStateOf(TaskSort.Default) }
+    var sortOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        tasks = withContext(Dispatchers.IO) { TaskStore.load(context) }
+        val stored = withContext(Dispatchers.IO) { TaskStore.load(context) }
+        // One-time migration of legacy free-text statuses.
+        val migrated = stored.map {
+            val fixed = normalizeStatus(it.status)
+            if (fixed != it.status) it.copy(status = fixed) else it
+        }
+        if (migrated != stored) {
+            withContext(Dispatchers.IO) { TaskStore.save(context, migrated) }
+        }
+        tasks = migrated
         loaded = true
     }
 
@@ -242,72 +330,175 @@ private fun TasksScreen() {
         scope.launch(Dispatchers.IO) { TaskStore.save(context, next) }
     }
 
-    fun cycleStatus(t: TaskItem): String = when (t.status.lowercase()) {
-        "todo" -> "doing"
-        "doing" -> "done"
-        else -> "todo"
+    fun cycleStatus(t: TaskItem): String {
+        val next = when (normalizeStatus(t.status)) {
+            "Todo" -> "Ongoing"
+            "Ongoing" -> "Paused"
+            "Paused" -> "Done"
+            else -> "Todo"
+        }
+        return next
     }
+
+    val visible = tasks
+        .filter { filter == "All" || normalizeStatus(it.status) == filter }
+        .let { list ->
+            when (sort) {
+                TaskSort.Name -> list.sortedBy { it.name.lowercase() }
+                TaskSort.Newest -> list.sortedByDescending { it.updatedAt }
+                TaskSort.Oldest -> list.sortedBy { it.updatedAt }
+                TaskSort.Default -> list.sortedWith(
+                    compareBy({ taskRank(normalizeStatus(it.status)) }, { -it.updatedAt })
+                )
+            }
+        }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
+            navigationIcon = {
+                IconButton(onClick = onMenu) {
+                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                }
+            },
             title = { Text("Tasks") },
             actions = {
-                TextButton(onClick = {
-                    editing = TaskItem(id = TaskStore.newId())
-                }) { Text("Add") }
+                // #62: + starts a new task.
+                IconButton(onClick = {
+                    editing = TaskItem(id = TaskStore.newId(), status = "Todo")
+                }) {
+                    Icon(Icons.Filled.Add, contentDescription = "New task")
+                }
             },
         )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            listOf("All").plus(TASK_STATUSES).forEach { f ->
+                FilterChip(
+                    selected = filter == f,
+                    onClick = { filter = f },
+                    label = { Text(f) },
+                )
+            }
+            Box {
+                TextButton(onClick = { sortOpen = true }) { Text("Sort: ${sort.title}") }
+                DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
+                    TaskSort.entries.forEach { s ->
+                        DropdownMenuItem(
+                            text = { Text(s.title) },
+                            onClick = { sort = s; sortOpen = false },
+                        )
+                    }
+                }
+            }
+        }
         if (!loaded) {
             Text(
                 "Loading…",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(16.dp),
             )
-        } else if (tasks.isEmpty()) {
+        } else if (visible.isEmpty()) {
             Text(
-                "No tasks yet. Tap Add to create the first row.",
+                if (tasks.isEmpty()) "No tasks yet. Tap + to create the first row."
+                else "No tasks match this filter.",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(16.dp),
             )
         }
+        // Table header.
+        if (visible.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    "Task",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "Status",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(96.dp),
+                )
+                Text(
+                    "Updated",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(88.dp),
+                )
+                Spacer(modifier = Modifier.width(48.dp))
+            }
+            HorizontalDivider()
+        }
         LazyColumn(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            contentPadding = PaddingValues(vertical = 4.dp),
         ) {
-            items(tasks, key = { it.id }) { t ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                t.name.ifEmpty { "(untitled)" },
-                                style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.weight(1f),
-                            )
-                            AssistChip(
-                                onClick = { persist(tasks.map {
-                                    if (it.id == t.id) it.copy(status = cycleStatus(it)) else it
-                                }) },
-                                label = { Text(t.status.ifEmpty { "todo" }) },
-                            )
-                        }
+            items(visible, key = { it.id }) { t ->
+                var rowMenu by remember(t.id) { mutableStateOf(false) }
+                val status = normalizeStatus(t.status)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            t.name.ifEmpty { "(untitled)" },
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 2,
+                        )
                         if (t.note.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(t.note, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                t.note,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                            )
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
-                        ) {
-                            TextButton(onClick = { editing = t }) { Text("Edit") }
-                            IconButton(onClick = {
-                                persist(tasks.filterNot { it.id == t.id })
-                            }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Delete")
-                            }
+                    }
+                    AssistChip(
+                        onClick = { persist(tasks.map {
+                            if (it.id == t.id) it.copy(
+                                status = cycleStatus(it),
+                                updatedAt = ChatThreads.now(),
+                            ) else it
+                        }) },
+                        label = { Text(status) },
+                        modifier = Modifier.width(96.dp),
+                    )
+                    Text(
+                        shortTime(t.updatedAt),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(88.dp).padding(start = 8.dp),
+                    )
+                    Box {
+                        IconButton(onClick = { rowMenu = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "Task menu")
+                        }
+                        DropdownMenu(expanded = rowMenu, onDismissRequest = { rowMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Edit") },
+                                onClick = { rowMenu = false; editing = t.copy(status = status) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete") },
+                                onClick = {
+                                    rowMenu = false
+                                    persist(tasks.filterNot { it.id == t.id })
+                                },
+                            )
                         }
                     }
                 }
+                HorizontalDivider()
             }
         }
     }
@@ -331,7 +522,8 @@ private fun TasksScreen() {
     }
 }
 
-/** Add/edit dialog for one task row. */
+/** Add/edit dialog for one task row (status is a fixed picker, #55). */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TaskDialog(
     initial: TaskItem,
@@ -340,8 +532,9 @@ private fun TaskDialog(
     onSave: (TaskItem) -> Unit,
 ) {
     var name by remember(initial.id) { mutableStateOf(initial.name) }
-    var status by remember(initial.id) { mutableStateOf(initial.status.ifEmpty { "todo" }) }
+    var status by remember(initial.id) { mutableStateOf(normalizeStatus(initial.status)) }
     var note by remember(initial.id) { mutableStateOf(initial.note) }
+    var statusOpen by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isNew) "New task" else "Edit task") },
@@ -354,13 +547,30 @@ private fun TaskDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
-                    value = status,
-                    onValueChange = { status = it },
-                    label = { Text("Status") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                ExposedDropdownMenuBox(
+                    expanded = statusOpen,
+                    onExpandedChange = { statusOpen = it },
+                ) {
+                    OutlinedTextField(
+                        value = status,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Status") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = statusOpen) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                    )
+                    ExposedDropdownMenu(
+                        expanded = statusOpen,
+                        onDismissRequest = { statusOpen = false },
+                    ) {
+                        TASK_STATUSES.forEach { s ->
+                            DropdownMenuItem(
+                                text = { Text(s) },
+                                onClick = { status = s; statusOpen = false },
+                            )
+                        }
+                    }
+                }
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
@@ -374,7 +584,7 @@ private fun TaskDialog(
             TextButton(onClick = {
                 onSave(initial.copy(
                     name = name.trim(),
-                    status = status.trim().ifEmpty { "todo" },
+                    status = status,
                     note = note.trim(),
                     updatedAt = ChatThreads.now(),
                 ))
@@ -388,7 +598,7 @@ private fun TaskDialog(
 
 /** VPS exports browser with subfolders + mobile downloads (#26). */
 @Composable
-private fun StorageScreen() {
+private fun StorageScreen(onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var path by remember { mutableStateOf("") }
@@ -418,17 +628,18 @@ private fun StorageScreen() {
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text(if (path.isEmpty()) "Storage" else "Storage / $path", maxLines = 1) },
-            navigationIcon = if (path.isNotEmpty()) {
-                {
+            navigationIcon = {
+                IconButton(onClick = onMenu) {
+                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                }
+            },
+            actions = {
+                if (path.isNotEmpty()) {
                     TextButton(onClick = {
                         val parent = if ("/" in path) path.substringBeforeLast("/") else ""
                         load(parent)
                     }) { Text("Up") }
                 }
-            } else {
-                {}
-            },
-            actions = {
                 TextButton(onClick = { load(path) }, enabled = !busy) { Text("Refresh") }
             },
         )
@@ -517,212 +728,6 @@ private fun humanSize(bytes: Long): String {
     return if (u == 0) "$bytes B" else "%.1f %s".format(v, units[u])
 }
 
-/** Reminders + timers: exact alarms with permission fallback (#31, #32). */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RemindersScreen() {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var items by remember { mutableStateOf<List<ReminderItem>>(emptyList()) }
-    var loaded by remember { mutableStateOf(false) }
-    var showAdd by remember { mutableStateOf(false) }
-    var exactOk by remember { mutableStateOf(Reminders.canScheduleExact(context)) }
-    var pastError by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        items = withContext(Dispatchers.IO) { ReminderStore.load(context) }
-        loaded = true
-        // Permission can change while away — refresh on every entry.
-        exactOk = Reminders.canScheduleExact(context)
-    }
-
-    fun persist(next: List<ReminderItem>) {
-        items = next.sortedBy { it.atEpoch }
-        scope.launch(Dispatchers.IO) { ReminderStore.save(context, next) }
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("Reminders") },
-            actions = {
-                TextButton(onClick = { showAdd = true }) { Text("Add") }
-            },
-        )
-        if (!exactOk) {
-            Text(
-                "Exact alarms not allowed — reminders may arrive late. Enable in system Settings → Apps → Agento → Alarms & reminders.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-        }
-        if (!loaded) {
-            Text("Loading…", modifier = Modifier.padding(16.dp))
-        } else if (items.isEmpty()) {
-            Text(
-                "No reminders. Tap Add to schedule the first one.",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(16.dp),
-            )
-        }
-        val now = System.currentTimeMillis()
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 8.dp),
-        ) {
-            items(items.filter { it.atEpoch > now }, key = { it.id }) { r ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                r.title.ifEmpty { "(untitled)" },
-                                style = MaterialTheme.typography.titleSmall,
-                            )
-                            if (r.text.isNotEmpty()) {
-                                Text(r.text, style = MaterialTheme.typography.bodyMedium)
-                            }
-                            Text(
-                                formatEpoch(r.atEpoch),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        IconButton(onClick = {
-                            Reminders.cancel(context, r.id)
-                            persist(items.filterNot { it.id == r.id })
-                        }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showAdd) {
-        ReminderDialog(
-            onDismiss = { showAdd = false },
-            onSave = { title, text, atEpoch ->
-                if (atEpoch <= System.currentTimeMillis()) {
-                    // Past times are a no-op save — surface it instead of
-                    // silently dropping the reminder.
-                    pastError = true
-                    return@ReminderDialog
-                }
-                pastError = false
-                val item = ReminderItem(
-                    id = ReminderStore.newId(), title = title.trim(),
-                    text = text.trim(), atEpoch = atEpoch,
-                )
-                Reminders.schedule(context, item)
-                persist(items + item)
-                exactOk = Reminders.canScheduleExact(context)
-                showAdd = false
-            },
-        )
-    }
-    if (pastError) {
-        AlertDialog(
-            onDismissRequest = { pastError = false },
-            title = { Text("Time is in the past") },
-            text = { Text("Pick a future date and time for the reminder.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    pastError = false
-                    showAdd = true
-                }) { Text("Pick again") }
-            },
-            dismissButton = {
-                TextButton(onClick = { pastError = false }) { Text("Cancel") }
-            },
-        )
-    }
-}
-
-/** Add-reminder dialog with date + time pickers. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ReminderDialog(onDismiss: () -> Unit, onSave: (String, String, Long) -> Unit) {
-    var title by remember { mutableStateOf("") }
-    var text by remember { mutableStateOf("") }
-    val dateState = rememberDatePickerState()
-    val timeState = rememberTimePickerState(is24Hour = true)
-    var step by remember { mutableStateOf(0) } // 0 fields, 1 date, 2 time
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(when (step) {
-            0 -> "New reminder"
-            1 -> "Pick a date"
-            else -> "Pick a time"
-        }) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                when (step) {
-                    0 -> {
-                        OutlinedTextField(
-                            value = title,
-                            onValueChange = { title = it },
-                            label = { Text("Title") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        OutlinedTextField(
-                            value = text,
-                            onValueChange = { text = it },
-                            label = { Text("Note (optional)") },
-                            modifier = Modifier.fillMaxWidth(),
-                            maxLines = 3,
-                        )
-                    }
-                    1 -> DatePicker(state = dateState)
-                    else -> TimePicker(state = timeState)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                when (step) {
-                    0 -> step = 1
-                    1 -> step = if (dateState.selectedDateMillis == null) 1 else 2
-                    else -> {
-                        val day = dateState.selectedDateMillis ?: return@TextButton
-                        // Picker millis are UTC-midnight: convert to a LOCAL
-                        // date first, or timezones behind UTC shift a day.
-                        val zone = java.time.ZoneId.systemDefault()
-                        val localDate = java.time.Instant.ofEpochMilli(day)
-                            .atZone(zone).toLocalDate()
-                        val atEpoch = localDate
-                            .atTime(timeState.hour, timeState.minute)
-                            .atZone(zone).toInstant().toEpochMilli()
-                        onSave(title, text, atEpoch)
-                    }
-                }
-            }) { Text(when (step) { 2 -> "Save"; else -> "Next" }) }
-        },
-        dismissButton = {
-            if (step == 0) {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-            } else {
-                TextButton(onClick = { step-- }) { Text("Back") }
-            }
-        },
-    )
-}
-
-private fun formatEpoch(epoch: Long): String {
-    return try {
-        val zdt = java.time.Instant.ofEpochMilli(epoch)
-            .atZone(java.time.ZoneId.systemDefault())
-        zdt.format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm"))
-    } catch (e: Exception) {
-        ""
-    }
-}
-
 /** Short HH:mm (plus date when not today); empty for unknown timestamps. */
 private fun shortTime(ts: Long): String {
     if (ts <= 0) return ""
@@ -737,57 +742,6 @@ private fun shortTime(ts: Long): String {
         }
     } catch (e: Exception) {
         ""
-    }
-}
-
-/** Thread switcher: past conversations survive New and restarts (#17). */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ThreadSheet(
-    threads: List<Pair<String, String>>,
-    activeId: String,
-    onSelect: (String) -> Unit,
-    onDelete: (String) -> Unit,
-    onNew: () -> Unit,
-    onClose: () -> Unit,
-) {
-    ModalBottomSheet(onDismissRequest = onClose) {
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("Conversations", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-            LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
-                items(threads, key = { it.first }) { (id, title) ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        TextButton(
-                            onClick = { onSelect(id) },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(8.dp),
-                        ) {
-                            Text(
-                                (if (id == activeId) "● " else "") + title,
-                                maxLines = 1,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                        if (threads.size > 1) {
-                            IconButton(onClick = { onDelete(id) }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Delete")
-                            }
-                        }
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(onClick = onNew, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Filled.Add, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("New conversation")
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
     }
 }
 
@@ -888,7 +842,8 @@ private fun TabModelSheet(
     }
 }
 
-/** Streaming chat surface; auto-scrolls on new tokens, delegates I/O to callbacks. */
+/** Streaming chat surface (#52: conversational bubbles); auto-scrolls on
+ * new tokens, delegates I/O to callbacks. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatScreen(
@@ -896,7 +851,6 @@ private fun ChatScreen(
     model: String,
     state: ChatUiState,
     onMenu: () -> Unit,
-    onThreads: () -> Unit,
     onModel: () -> Unit,
     onPending: (String) -> Unit,
     onSend: () -> Unit,
@@ -918,13 +872,13 @@ private fun ChatScreen(
             },
             title = { Text("$title · $model", maxLines = 1) },
             actions = {
-                IconButton(onClick = onThreads, enabled = !state.streaming) {
-                    Icon(Icons.Filled.History, contentDescription = "Conversations")
-                }
                 IconButton(onClick = onModel, enabled = !state.streaming) {
                     Icon(Icons.Filled.Tune, contentDescription = "Model")
                 }
-                TextButton(onClick = onNew, enabled = !state.streaming) { Text("New") }
+                // #62: + starts a new conversation.
+                IconButton(onClick = onNew, enabled = !state.streaming) {
+                    Icon(Icons.Filled.Add, contentDescription = "New conversation")
+                }
             },
         )
         if (state.error.isNotEmpty()) {
@@ -956,55 +910,62 @@ private fun ChatScreen(
             if (state.messages.isEmpty()) {
                 item {
                     Text(
-                        "No messages yet. Ask anything — threads keep history until you delete them.",
+                        "No messages yet. Ask anything — the conversation is kept until you tap +.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
             }
             items(state.messages) { msg ->
                 val isUser = msg.role == "user"
-                Card(
+                // #52: proper conversational bubbles — user right, assistant left.
+                Box(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = if (isUser) {
-                        CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-                    } else {
-                        CardDefaults.cardColors()
-                    },
+                    contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                if (isUser) "You" else "Assistant",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.weight(1f),
-                            )
-                            val ts = shortTime(msg.ts)
-                            if (ts.isNotEmpty()) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(0.85f),
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isUser) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Text(
-                                    ts,
+                                    if (isUser) "You" else "Assistant",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
                                 )
-                            }
-                            if (!isUser && msg.content.isNotEmpty()) {
-                                IconButton(
-                                    onClick = { clipboard.setText(AnnotatedString(msg.content)) },
-                                    modifier = Modifier.size(28.dp),
-                                ) {
-                                    Icon(Icons.Filled.ContentCopy, contentDescription = "Copy")
+                                val ts = shortTime(msg.ts)
+                                if (ts.isNotEmpty()) {
+                                    Text(
+                                        ts,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                if (!isUser && msg.content.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = { clipboard.setText(AnnotatedString(msg.content)) },
+                                        modifier = Modifier.size(28.dp),
+                                    ) {
+                                        Icon(Icons.Filled.ContentCopy, contentDescription = "Copy")
+                                    }
                                 }
                             }
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        SelectionContainer {
-                            Text(
-                                msg.content.ifEmpty { "…" },
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            SelectionContainer {
+                                Text(
+                                    msg.content.ifEmpty { "…" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
                         }
                     }
                 }
@@ -1099,25 +1060,15 @@ private fun modelOptionsFor(
     if (provider.isBlank()) emptyList()
     else options.firstOrNull { it.slug == provider }?.models.orEmpty()
 
-/** One labeled section card so Settings reads as groups, not a wall (#17). */
-@Composable
-private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Text(title, style = MaterialTheme.typography.titleMedium)
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            content = content,
-        )
-    }
-}
-
-/** Settings hub, grouped into sections (#17); model pickers moved to each
- * tab's own page (#18). Theme toggle lives under Appearance (#28). */
+/** Settings hub (#60): subsections live in the sidebar and each gets its
+ * own screen; model pickers live on each tab's own page (#18). Theme toggle
+ * lives under Appearance (#28). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
+private fun SettingsScreen(
     viewModel: MainViewModel,
+    section: SettingSection = SettingSection.Server,
+    onMenu: () -> Unit = {},
     themeMode: String = ThemeStore.SYSTEM,
     onTheme: (String) -> Unit = {},
 ) {
@@ -1154,16 +1105,24 @@ fun SettingsScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Settings", style = MaterialTheme.typography.headlineMedium)
-
-        SettingsSection("Server") {
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            navigationIcon = {
+                IconButton(onClick = onMenu) {
+                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                }
+            },
+            title = { Text(section.title) },
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            when (section) {
+                SettingSection.Server -> {
             Text(
                 "One URL for chat + sync (reverse proxy routes /p/* to the gateway, /api/* to health sync).",
                 style = MaterialTheme.typography.bodySmall,
@@ -1221,16 +1180,10 @@ fun SettingsScreen(
             if (modelsResult.isNotEmpty()) {
                 Text(modelsResult, style = MaterialTheme.typography.bodySmall)
             }
-        }
-
-        SettingsSection("Chat backend") {
-            Text(
-                "Provider + model are picked on each tab's own page (top bar ⋮ model button).",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-
-        SettingsSection("Appearance") {
+                }
+                // #61: the "Chat backend" subsection is removed (provider +
+                // model are picked on each tab's own page; nothing to show).
+                SettingSection.Appearance -> {
             Text("Theme", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(
@@ -1251,13 +1204,11 @@ fun SettingsScreen(
                     }
                 }
             }
-        }
-
-        SettingsSection("App updates") {
+                }
+                SettingSection.Updates -> {
             AppUpdateSection()
-        }
-
-        SettingsSection("Health sync") {
+                }
+                SettingSection.Health -> {
             HealthStatusCard(state)
 
             /** Three-step gate: install Health Connect, grant permissions, then sync. */
@@ -1333,13 +1284,128 @@ fun SettingsScreen(
                     },
                 )
             }
+                }
+                SettingSection.Notifications -> {
+                    NotificationsSection()
+                }
+                SettingSection.Backup -> {
+                    SettingsBackupSection(onImported = {
+                        viewModel.refresh()
+                        settingsRefresh++
+                    })
+                }
+            }
         }
+    }
+}
 
-        SettingsSection("Settings backup") {
-            SettingsBackupSection(onImported = {
-                viewModel.refresh()
-                settingsRefresh++
-            })
+/** Hermes notifications hub (issue #58).
+ *
+ * 1) Scheduler status: the gateway config has no scheduler/cron section, so
+ *    Hermes currently has NO cronjobs — there is nothing server-side whose
+ *    completion could notify. This text says exactly that.
+ * 2) Completion notifications: when a chat reply finishes while the app is
+ *    in the background, Agento posts a local notification (toggle below).
+ */
+@Composable
+private fun NotificationsSection() {
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(ChatNotifications.isEnabled(context)) }
+    var canPost by remember { mutableStateOf(ChatNotifications.canPost(context)) }
+    var status by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        canPost = ChatNotifications.canPost(context)
+    }
+
+    /** Asks for the runtime notification grant (Android 13+). */
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        canPost = granted
+        status = if (granted) {
+            "Allowed — reply alerts will post."
+        } else {
+            "Denied — enable notifications for Agento in system Settings."
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "Gateway scheduler: no cronjobs configured.",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                "Hermes has no scheduled jobs, so there are no server-side " +
+                    "completions to report. Instead, Agento can notify you " +
+                    "when a chat reply finishes while the app is in the background.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Notify when a reply finishes",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = {
+                        enabled = it
+                        ChatNotifications.setEnabled(context, it)
+                        if (it && !ChatNotifications.canPost(context) &&
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        ) {
+                            permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    },
+                )
+            }
+            if (enabled && !canPost) {
+                Text(
+                    "Notifications are blocked — alerts can't post until allowed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(onClick = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }) {
+                    Text("Allow notifications")
+                }
+            }
+            OutlinedButton(
+                onClick = {
+                    status = if (ChatNotifications.sendTest(context)) {
+                        "Test sent — check the notification shade."
+                    } else if (!ChatNotifications.isEnabled(context)) {
+                        "Toggle is off — enable it first, then test again."
+                    } else {
+                        "Notifications are blocked — allow them first, then test again."
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Send test notification")
+            }
+            if (status.isNotEmpty()) {
+                Text(
+                    status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (status.startsWith("Denied")) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                )
+            }
         }
     }
 }
