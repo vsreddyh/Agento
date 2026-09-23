@@ -17,17 +17,15 @@ data class ChatUiState(
     val streaming: Boolean = false,
     val pending: String = "",
     val error: String = "",
-    /** Threads for the thread switcher (id + title only). */
-    val threads: List<Pair<String, String>> = emptyList(),
-    val activeThreadId: String = "",
-    /** True once persisted threads finish loading; sends wait for it. */
+    /** True once the persisted conversation finishes loading; sends wait for it. */
     val ready: Boolean = false,
 )
 
 /**
- * One instance per chat tab (story / resumes / god). Threads persist to disk
- * (`ChatThreads`) so history survives restarts and New never wipes (#17/#18);
- * the full active history is sent with each request.
+ * One instance per chat tab (story / resumes / god). A single conversation
+ * per tab persists to disk (`ChatThreads`) so history survives restarts;
+ * the + button clears it and starts fresh (#51: no thread switcher).
+ * The full active history is sent with each request.
  */
 class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
@@ -44,23 +42,21 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     val state: State<ChatUiState> = _state
 
     private var streamJob: Job? = null
-    private var threads: List<ChatThread> = emptyList()
+    private var threadId: String = ""
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
+            // Legacy files may hold several threads (pre-#51 switcher);
+            // keep the newest non-empty one and collapse to a single thread.
             val loaded = ChatThreads.load(appCtx, tab)
-            val list = if (loaded.isEmpty()) {
-                listOf(ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now()))
-                    .also { ChatThreads.save(appCtx, tab, it) }
-            } else {
-                loaded
-            }
-            threads = list
-            val active = list.first()
+            val kept = loaded.firstOrNull { it.messages.isNotEmpty() }
+                ?: loaded.firstOrNull()
+                ?: ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
+            threadId = kept.id.ifEmpty { ChatThreads.newId() }
+            val single = listOf(kept.copy(id = threadId))
+            ChatThreads.save(appCtx, tab, single)
             _state.value = _state.value.copy(
-                messages = ChatThreads.toUi(active.messages),
-                threads = list.map { it.id to it.title },
-                activeThreadId = active.id,
+                messages = ChatThreads.toUi(kept.messages),
                 ready = true,
             )
         }
@@ -79,66 +75,28 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     private fun persist() {
-        val id = _state.value.activeThreadId
-        if (id.isEmpty()) return
+        val id = threadId.ifEmpty { return }
         val msgs = _state.value.messages
-        // Drop dead rows (empty, non-active threads) so the file can't fill
-        // with blank threads; the active thread is always kept.
-        threads = threads.filter { it.id == id || it.messages.isNotEmpty() }.map { t ->
-            if (t.id == id) {
-                t.copy(
-                    messages = ChatThreads.toStored(msgs),
-                    updatedAt = ChatThreads.now(),
-                    title = ChatThreads.titleFor(msgs),
-                )
-            } else {
-                t
-            }
-        }.take(ChatThreads.MAX_THREADS)
-        val snapshot = threads
+        val snapshot = listOf(
+            ChatThread(
+                id = id,
+                title = ChatThreads.titleFor(msgs),
+                updatedAt = ChatThreads.now(),
+                messages = ChatThreads.toStored(msgs),
+            )
+        )
         viewModelScope.launch(Dispatchers.IO) {
             ChatThreads.save(appCtx, tab, snapshot)
         }
-        _state.value = _state.value.copy(threads = snapshot.map { it.id to it.title })
     }
 
-    /** New starts a fresh thread; old threads stay in the switcher. */
+    /** + clears the single conversation and starts fresh (#51). */
     fun newConversation() {
         streamJob?.cancel()
         streamJob = null
-        // Outgoing thread is already saved (every Done/Error persists), so
-        // set state to the fresh thread FIRST — persisting before the switch
-        // would re-save under the stale id and skip the new row.
-        val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
-        threads = listOf(fresh) + threads
+        threadId = ChatThreads.newId()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
-            threads = threads.map { it.id to it.title }, activeThreadId = fresh.id,
-        )
-        persist()
-    }
-
-    fun switchThread(id: String) {
-        if (id == _state.value.activeThreadId || _state.value.streaming) return
-        persist()
-        val target = threads.firstOrNull { it.id == id } ?: return
-        _state.value = _state.value.copy(
-            messages = ChatThreads.toUi(target.messages),
-            error = "", pending = "", activeThreadId = id,
-        )
-    }
-
-    fun deleteThread(id: String) {
-        if (_state.value.streaming) return
-        threads = threads.filterNot { it.id == id }
-        if (threads.isEmpty()) {
-            threads = listOf(ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now()))
-        }
-        val active = threads.firstOrNull { it.id == _state.value.activeThreadId } ?: threads.first()
-        _state.value = _state.value.copy(
-            messages = ChatThreads.toUi(active.messages),
-            error = "", activeThreadId = active.id,
-            threads = threads.map { it.id to it.title },
         )
         persist()
     }
@@ -200,6 +158,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             streaming = false,
                         )
                         persist()
+                        // #58: ping the user when a reply lands while the app
+                        // is backgrounded (gateway has no cronjobs to report).
+                        if (!ForegroundTracker.isForeground) {
+                            val snippet = final.ifEmpty { acc.toString() }.trim()
+                                .replace(Regex("\\s+"), " ").take(160)
+                            ChatNotifications.notifyDone(appCtx, tabTitle(tab), snippet)
+                        }
                     }
                     is ChatEvent.Error -> {
                         // Drop the empty placeholder on failure.

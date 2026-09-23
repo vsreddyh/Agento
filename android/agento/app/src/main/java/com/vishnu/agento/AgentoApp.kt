@@ -2,6 +2,7 @@ package com.vishnu.agento
 
 import android.app.Application
 import android.content.Context
+import android.os.Bundle
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -13,6 +14,7 @@ class AgentoApp : Application() {
     /** Re-enqueues hourly sync on every cold start; safe to call repeatedly. */
     override fun onCreate() {
         super.onCreate()
+        ForegroundTracker.install(this)
         scheduleSync(this)
     }
 
@@ -38,5 +40,38 @@ class AgentoApp : Application() {
                 request,
             )
         }
+    }
+}
+
+/**
+ * Tracks whether any activity is in the foreground so reply-done
+ * notifications (#58) only fire when the user isn't looking at the app.
+ */
+object ForegroundTracker {
+
+    @Volatile
+    var isForeground: Boolean = false
+        private set
+
+    private var started = 0
+
+    fun install(app: Application) {
+        app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: android.app.Activity) {
+                started++
+                isForeground = true
+            }
+
+            override fun onActivityStopped(activity: android.app.Activity) {
+                started = (started - 1).coerceAtLeast(0)
+                if (started == 0) isForeground = false
+            }
+
+            override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: Bundle?) {}
+            override fun onActivityResumed(activity: android.app.Activity) {}
+            override fun onActivityPaused(activity: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: android.app.Activity) {}
+        })
     }
 }

@@ -22,11 +22,10 @@ object SettingsBackup {
 
     private val TABS = listOf("story", "resumes", "god")
 
-    /** App files mirrored into backups (chat threads, tasks, reminders). */
+    /** App files mirrored into backups (chat threads, tasks). */
     private fun backupFiles(): List<String> = buildList {
         for (t in TABS) add("chat_threads_$t.json")
         add("tasks.json")
-        add("reminders.json")
     }
 
     /** Every string pref the app reads; import ignores anything else. */
@@ -48,7 +47,7 @@ object SettingsBackup {
     }
 
     /** Boolean prefs the app reads. */
-    val BOOLEAN_KEYS: List<String> = listOf("first_sync_done")
+    val BOOLEAN_KEYS: List<String> = listOf("first_sync_done", "notify_reply_done")
 
     /** Serializes all known prefs plus app files; absent keys are omitted (not nulled). */
     fun export(context: Context): JSONObject {
