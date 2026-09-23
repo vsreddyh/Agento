@@ -1065,7 +1065,7 @@ private fun modelOptionsFor(
  * lives under Appearance (#28). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
+private fun SettingsScreen(
     viewModel: MainViewModel,
     section: SettingSection = SettingSection.Server,
     onMenu: () -> Unit = {},
