@@ -77,12 +77,21 @@ object ChatNotifications {
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID + (tabTitle.hashCode() and 0xFF), notification)
+        // Stable per-tab ID (no 0xFF bucketing) so tabs never overwrite
+        // each other; successive replies on one tab replace the previous.
+        nm.notify(NOTIFICATION_ID + tabTitle.hashCode(), notification)
     }
 
-    /** Manual fire button for Settings → Hermes notifications. */
-    fun sendTest(context: Context) {
+    /**
+     * Manual fire button for Settings → Hermes notifications.
+     * Returns false (nothing posted) when the toggle is off or the
+     * runtime grant is denied, so the caller can say that instead of
+     * claiming success.
+     */
+    fun sendTest(context: Context): Boolean {
+        if (!isEnabled(context) || !canPost(context)) return false
         ensureChannel(context)
         notifyDone(context, "Agento", "Test notification — Hermes reply alerts are working.")
+        return true
     }
 }

@@ -1383,8 +1383,13 @@ private fun NotificationsSection() {
             }
             OutlinedButton(
                 onClick = {
-                    ChatNotifications.sendTest(context)
-                    status = "Test sent — check the notification shade."
+                    status = if (ChatNotifications.sendTest(context)) {
+                        "Test sent — check the notification shade."
+                    } else if (!ChatNotifications.isEnabled(context)) {
+                        "Toggle is off — enable it first, then test again."
+                    } else {
+                        "Notifications are blocked — allow them first, then test again."
+                    }
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) {
