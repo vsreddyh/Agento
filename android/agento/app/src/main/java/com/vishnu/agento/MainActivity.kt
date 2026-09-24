@@ -1501,7 +1501,9 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     LaunchedEffect(profile) { load() }
 
     val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Portfolio")
-    val mcp = remember(toolsets) { mcpServersFrom(toolsets) }
+    // UI shows only enabled toolsets; explicitly-off ones stay hidden.
+    val visibleToolsets = remember(toolsets) { toolsets.filter { it.enabled == true } }
+    val mcp = remember(visibleToolsets) { mcpServersFrom(visibleToolsets) }
     var mcpOpen by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -1635,15 +1637,15 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             HintLine(skillsHint)
                         }
                     }
-                    if (toolsets.isNotEmpty()) {
+                    if (visibleToolsets.isNotEmpty()) {
                         item {
                             Text(
-                                "Toolsets (${toolsets.size})",
+                                "Toolsets (${visibleToolsets.size})",
                                 style = MaterialTheme.typography.titleSmall,
                                 modifier = Modifier.padding(horizontal = 4.dp),
                             )
                         }
-                        items(toolsets, key = { it.name }) { ts ->
+                        items(visibleToolsets, key = { it.name }) { ts ->
                             Card(modifier = Modifier.fillMaxWidth()) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(12.dp),
