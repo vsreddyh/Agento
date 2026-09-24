@@ -86,42 +86,37 @@ class ServerApi(context: Context) {
     }
 
     /** Lists skills for one profile path (e.g. `/p/default`). The server
-     * returns a bare JSON array; object-wrapped shapes fall back gracefully. */
+     * returns a bare JSON array; object-wrapped shapes fall back gracefully.
+     * A valid-but-empty response is success (the UI shows "Nothing listed");
+     * only transport/parse failures are errors. */
     suspend fun listSkills(path: String): Result<List<SkillInfo>> =
         withContext(Dispatchers.IO) {
             get(path, "v1/skills").map { body ->
                 val out = mutableListOf<SkillInfo>()
                 val arr = rootArray(body, "skills", "data", "items")
-                if (arr != null) {
-                    for (i in 0 until arr.length()) {
-                        val item = arr.opt(i)
-                        if (item is String) {
-                            if (item.isNotBlank()) {
-                                out.add(SkillInfo(name = item.trim()))
-                            }
-                            continue
+                    ?: throw RuntimeException("Unexpected response shape")
+                for (i in 0 until arr.length()) {
+                    val item = arr.opt(i)
+                    if (item is String) {
+                        if (item.isNotBlank()) {
+                            out.add(SkillInfo(name = item.trim()))
                         }
-                        val o = item as? JSONObject ?: continue
-                        val name = o.optString("name", "")
-                            .ifEmpty { o.optString("id", "") }
-                            .ifEmpty { o.optString("slug", "") }
-                            .trim()
-                        if (name.isEmpty()) continue
-                        val enabled = when {
-                            o.has("enabled") -> o.optBoolean("enabled")
-                            o.has("active") -> o.optBoolean("active")
-                            else -> null
-                        }
-                        out.add(SkillInfo(
-                            name = name,
-                            description = o.optString("description", "").trim(),
-                            category = o.optString("category", "").trim(),
-                            enabled = enabled,
-                        ))
+                        continue
                     }
+                    val o = item as? JSONObject ?: continue
+                    val name = o.optString("name", "")
+                        .ifEmpty { o.optString("id", "") }
+                        .ifEmpty { o.optString("slug", "") }
+                        .trim()
+                    if (name.isEmpty()) continue
+                    out.add(SkillInfo(
+                        name = name,
+                        description = o.optString("description", "").trim(),
+                        category = o.optString("category", "").trim(),
+                        enabled = optBool(o),
+                    ))
                 }
-                if (out.isEmpty()) throw RuntimeException("No skills listed")
-                out.sortedBy { it.name.lowercase() }
+                out.distinctBy { it.name.lowercase() }.sortedBy { it.name.lowercase() }
             }
         }
 
@@ -132,51 +127,58 @@ class ServerApi(context: Context) {
             get(path, "v1/toolsets").map { body ->
                 val out = mutableListOf<ToolsetInfo>()
                 val arr = rootArray(body, "toolsets", "data", "items")
-                if (arr != null) {
-                    for (i in 0 until arr.length()) {
-                        val item = arr.opt(i)
-                        if (item is String) {
-                            if (item.isNotBlank()) {
-                                out.add(ToolsetInfo(name = item.trim()))
-                            }
-                            continue
+                    ?: throw RuntimeException("Unexpected response shape")
+                for (i in 0 until arr.length()) {
+                    val item = arr.opt(i)
+                    if (item is String) {
+                        if (item.isNotBlank()) {
+                            out.add(ToolsetInfo(name = item.trim()))
                         }
-                        val o = item as? JSONObject ?: continue
-                        val name = o.optString("name", "")
-                            .ifEmpty { o.optString("id", "") }
-                            .trim()
-                        if (name.isEmpty()) continue
-                        val enabled = when {
-                            o.has("enabled") -> o.optBoolean("enabled")
-                            o.has("active") -> o.optBoolean("active")
-                            else -> null
-                        }
-                        val tools = mutableListOf<String>()
-                        val tarr = o.optJSONArray("tools")
-                        if (tarr != null) {
-                            for (j in 0 until tarr.length()) {
-                                when (val t = tarr.opt(j)) {
-                                    is String -> if (t.isNotBlank()) tools.add(t.trim())
-                                    is JSONObject -> {
-                                        val tn = t.optString("name", "").trim()
-                                        if (tn.isNotEmpty()) tools.add(tn)
-                                    }
+                        continue
+                    }
+                    val o = item as? JSONObject ?: continue
+                    val name = o.optString("name", "")
+                        .ifEmpty { o.optString("id", "") }
+                        .trim()
+                    if (name.isEmpty()) continue
+                    val tools = mutableListOf<String>()
+                    val tarr = o.optJSONArray("tools")
+                    if (tarr != null) {
+                        for (j in 0 until tarr.length()) {
+                            when (val t = tarr.opt(j)) {
+                                is String -> if (t.isNotBlank()) tools.add(t.trim())
+                                is JSONObject -> {
+                                    val tn = t.optString("name", "").trim()
+                                    if (tn.isNotEmpty()) tools.add(tn)
                                 }
                             }
                         }
-                        out.add(ToolsetInfo(
-                            name = name,
-                            label = o.optString("label", "").trim(),
-                            description = o.optString("description", "").trim(),
-                            enabled = enabled,
-                            tools = tools,
-                        ))
                     }
+                    out.add(ToolsetInfo(
+                        name = name,
+                        label = o.optString("label", "").trim(),
+                        description = o.optString("description", "").trim(),
+                        enabled = optBool(o),
+                        tools = tools,
+                    ))
                 }
-                if (out.isEmpty()) throw RuntimeException("No toolsets listed")
-                out.sortedBy { it.name.lowercase() }
+                out.distinctBy { it.name.lowercase() }.sortedBy { it.name.lowercase() }
             }
         }
+
+    /**
+     * Strict toggle parse: only real booleans count — strings, numbers and
+     * nulls read as unknown (null) instead of Off.
+     */
+    private fun optBool(o: JSONObject): Boolean? {
+        for (k in listOf("enabled", "active")) {
+            if (!o.isNull(k)) {
+                val v = o.opt(k)
+                if (v is Boolean) return v
+            }
+        }
+        return null
+    }
 
     /**
      * Response root as an array: the documented shape is a bare top-level

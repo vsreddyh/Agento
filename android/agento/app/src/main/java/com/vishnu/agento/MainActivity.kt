@@ -1591,11 +1591,15 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     }
                     if (skills.isEmpty() && skillsError.isNotEmpty() && loaded) {
                         item {
-                            HintLine(
-                                "Skills unavailable " +
-                                    "(${friendlyError(skillsError).title.lowercase()}) — " +
-                                    "tools below still work."
-                            )
+                            val skillsHint = remember(skillsError, toolsets) {
+                                val title = friendlyError(skillsError).title
+                                if (toolsets.isNotEmpty()) {
+                                    "Skills unavailable ($title) — tools below still work."
+                                } else {
+                                    "Skills unavailable ($title)."
+                                }
+                            }
+                            HintLine(skillsHint)
                         }
                     }
                     if (toolsets.isNotEmpty()) {
@@ -1652,6 +1656,19 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                     }
                                 }
                             }
+                        }
+                    }
+                    if (toolsets.isEmpty() && toolsError.isNotEmpty() && loaded) {
+                        item {
+                            val toolsHint = remember(toolsError, skills) {
+                                val title = friendlyError(toolsError).title
+                                if (skills.isNotEmpty()) {
+                                    "Tools unavailable ($title) — skills above still work."
+                                } else {
+                                    "Tools unavailable ($title)."
+                                }
+                            }
+                            HintLine(toolsHint)
                         }
                     }
                     if (mcp.isNotEmpty()) {
