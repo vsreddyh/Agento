@@ -10,46 +10,63 @@ confirm nor establish consistency, so a silently-broken image never builds.
 
 Usage: python3 01-skills-include-editorial.py  (runs against /opt/hermes)
 """
+import os
+import py_compile
 import re
 import sys
 
-SKILLS_TOOL = "/opt/hermes/tools/skills_tool.py"
-API_SERVER = "/opt/hermes/gateway/platforms/api_server.py"
+HERMES_HOME = "/opt/hermes"
+SKILLS_TOOL = f"{HERMES_HOME}/tools/skills_tool.py"
+API_SERVER = f"{HERMES_HOME}/gateway/platforms/api_server.py"
 
 SIG_RE = re.compile(
     r"def _find_all_skills\((?P<params>[^)]*)\)", re.DOTALL
 )
+KWARGS_RE = re.compile(r"\*\*\w+")
 
 
 def main() -> int:
+    if not os.path.exists(HERMES_HOME):
+        print(f"SKIP: no {HERMES_HOME} in this layer.")
+        return 0
     try:
-        src = open(SKILLS_TOOL).read()
+        with open(SKILLS_TOOL, encoding="utf-8") as f:
+            src = f.read()
     except OSError as e:
-        print(f"SKIP: cannot read {SKILLS_TOOL}: {e}")
-        return 0  # retention image layers share this Dockerfile; be lenient
+        print(f"FAIL: cannot read {SKILLS_TOOL}: {e}")
+        return 1
     m = SIG_RE.search(src)
     if not m:
         print("FAIL: _find_all_skills() definition not found; "
               "upstream layout changed — update this shim, do not ship broken.")
         return 1
     params = m.group("params")
-    if "include_editorial" in params or "**" in params:
+    if "include_editorial" in params or KWARGS_RE.search(params):
         print("OK: _find_all_skills already accepts include_editorial; no patch.")
         return 0
-    # Insert the keyword-only-tolerant parameter before the closing paren.
-    # Signature is keyword-only (`*` first), so appending is safe.
+    # Insert the keyword. Signature is keyword-only (`*` first), so appending
+    # is safe; the separator guards a hypothetical bare signature.
+    stripped = params.strip()
+    sep = "" if not stripped or stripped == "*" else ", "
     patched = (
         src[: m.start("params")]
         + params.rstrip()
-        + ", include_editorial: bool = False"
+        + f"{sep}include_editorial: bool = False"
         + src[m.end("params"):]
     )
-    open(SKILLS_TOOL, "w").write(patched)
+    with open(SKILLS_TOOL, "w", encoding="utf-8") as f:
+        f.write(patched)
+    try:
+        py_compile.compile(SKILLS_TOOL, doraise=True)
+    except py_compile.PyCompileError as e:
+        print(f"FAIL: patched file does not compile: {e}")
+        return 1
     print("PATCHED: added include_editorial kwarg to _find_all_skills().")
 
     # Verify the caller passes only kwargs the callee now accepts.
     try:
-        api = open(API_SERVER).read()
+        with open(API_SERVER, encoding="utf-8") as f:
+            api = f.read()
     except OSError:
         api = ""
     if "_find_all_skills(" in api and "include_editorial" in api:
