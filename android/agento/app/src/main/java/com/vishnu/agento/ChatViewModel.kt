@@ -154,7 +154,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         val final = event.fullText.ifEmpty { acc.toString() }
                         val msgs = _state.value.messages
                         _state.value = _state.value.copy(
-                            messages = msgs.dropLast(1) + ChatMessage("assistant", final.ifEmpty { "(empty reply)" }, ChatThreads.now()),
+                            messages = msgs.dropLast(1) + ChatMessage("assistant", final.ifEmpty { "The assistant sent an empty reply. Try asking again." }, ChatThreads.now()),
                             streaming = false,
                         )
                         persist()

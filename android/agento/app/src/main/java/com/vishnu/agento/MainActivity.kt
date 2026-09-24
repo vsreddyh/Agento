@@ -15,22 +15,29 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -45,15 +52,17 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Builds per-tab chat ViewModels so story/resumes/god keep isolated history. */
@@ -122,7 +131,7 @@ class MainActivity : ComponentActivity() {
 
     private val healthModel: MainViewModel by viewModels()
 
-    /** Sidebar drawer navigation (#18); theme from prefs (#28). */
+    /** Adaptive sidebar navigation (#18, #64); theme from prefs (#28). */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -133,116 +142,232 @@ class MainActivity : ComponentActivity() {
                 ThemeStore.DARK -> true
                 else -> isSystemInDarkTheme()
             }
-            MaterialTheme(
-                colorScheme = if (dark) darkColorScheme() else lightColorScheme(),
-            ) {
+            AgentoTheme(dark = dark) {
                 // #59: paint the Material background over the full window so
                 // dark mode never shows the light window background through.
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                var dest by remember { mutableStateOf(Destination.God) }
-                var section by remember { mutableStateOf(SettingSection.Server) }
-                var settingsOpen by remember { mutableStateOf(false) }
-                val drawerState = rememberDrawerState(DrawerValue.Closed)
-                val scope = rememberCoroutineScope()
-                ModalNavigationDrawer(
-                    drawerState = drawerState,
-                    drawerContent = {
-                        ModalDrawerSheet {
-                            Text(
-                                "Agento",
-                                style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.padding(16.dp),
-                            )
-                            Destination.entries.forEach { d ->
-                                if (d == Destination.Settings) {
-                                    NavigationDrawerItem(
-                                        label = { Text(d.title) },
-                                        icon = { Icon(d.icon(), contentDescription = null) },
-                                        badge = {
-                                            Icon(
-                                                if (settingsOpen) Icons.Filled.ExpandLess
-                                                else Icons.Filled.ExpandMore,
-                                                contentDescription = null,
-                                            )
-                                        },
-                                        selected = dest == d,
-                                        onClick = {
-                                            dest = d
-                                            settingsOpen = !settingsOpen
-                                        },
-                                        modifier = Modifier.padding(horizontal = 8.dp),
-                                    )
-                                    // #60: settings subsections live in the
-                                    // sidebar; each opens its own screen.
-                                    if (settingsOpen) {
-                                        SettingSection.entries.forEach { s ->
-                                            NavigationDrawerItem(
-                                                label = { Text(s.title) },
-                                                selected = dest == Destination.Settings && section == s,
-                                                onClick = {
-                                                    dest = Destination.Settings
-                                                    section = s
-                                                    scope.launch { drawerState.close() }
-                                                },
-                                                modifier = Modifier.padding(horizontal = 8.dp)
-                                                    .padding(start = 24.dp),
-                                            )
-                                        }
-                                    }
-                                } else {
-                                    NavigationDrawerItem(
-                                        label = { Text(d.title) },
-                                        icon = { Icon(d.icon(), contentDescription = null) },
-                                        selected = dest == d,
-                                        onClick = {
-                                            dest = d
-                                            scope.launch { drawerState.close() }
-                                        },
-                                        modifier = Modifier.padding(horizontal = 8.dp),
-                                    )
-                                }
+                    var dest by remember { mutableStateOf(Destination.God) }
+                    var section by remember { mutableStateOf(SettingSection.Server) }
+                    var settingsOpen by remember { mutableStateOf(false) }
+                    val drawerState = rememberDrawerState(DrawerValue.Closed)
+                    val scope = rememberCoroutineScope()
+                    fun go(d: Destination, s: SettingSection? = null) {
+                        dest = d
+                        if (s != null) section = s
+                        if (d != Destination.Settings) settingsOpen = false
+                        scope.launch { drawerState.close() }
+                    }
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        val wc = windowClassFor(maxWidth)
+                        val navContent: @Composable () -> Unit = {
+                            when (dest) {
+                                Destination.God -> ChatTab(
+                                    app = application, tab = "god", title = "God", wc = wc,
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                )
+                                Destination.Story -> ChatTab(
+                                    app = application, tab = "story", title = "Story", wc = wc,
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                )
+                                Destination.Portfolio -> ChatTab(
+                                    app = application, tab = "resumes", title = "Portfolio", wc = wc,
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                )
+                                Destination.Tasks -> TasksScreen(
+                                    wc = wc,
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                )
+                                Destination.Storage -> StorageScreen(
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                )
+                                Destination.Settings -> SettingsScreen(
+                                    healthModel,
+                                    section = section,
+                                    wc = wc,
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                    themeMode = themeMode,
+                                    onTheme = {
+                                        themeMode = it
+                                        ThemeStore.save(context, it)
+                                    },
+                                )
                             }
                         }
-                    },
-                ) {
-                    Box {
-                        when (dest) {
-                            Destination.God -> ChatTab(
-                                app = application, tab = "god", title = "God",
-                                onMenu = { scope.launch { drawerState.open() } },
-                            )
-                            Destination.Story -> ChatTab(
-                                app = application, tab = "story", title = "Story",
-                                onMenu = { scope.launch { drawerState.open() } },
-                            )
-                            Destination.Portfolio -> ChatTab(
-                                app = application, tab = "resumes", title = "Portfolio",
-                                onMenu = { scope.launch { drawerState.open() } },
-                            )
-                            Destination.Tasks -> TasksScreen(
-                                onMenu = { scope.launch { drawerState.open() } },
-                            )
-                            Destination.Storage -> StorageScreen(
-                                onMenu = { scope.launch { drawerState.open() } },
-                            )
-                            Destination.Settings -> SettingsScreen(
-                                healthModel,
-                                section = section,
-                                onMenu = { scope.launch { drawerState.open() } },
-                                themeMode = themeMode,
-                                onTheme = {
-                                    themeMode = it
-                                    ThemeStore.save(context, it)
-                                },
-                            )
+                        when (wc) {
+                            WindowClass.Compact -> {
+                                ModalNavigationDrawer(
+                                    drawerState = drawerState,
+                                    drawerContent = {
+                                        DrawerContent(
+                                            dest = dest, section = section,
+                                            settingsOpen = settingsOpen,
+                                            onDest = { go(it) },
+                                            onSection = { go(Destination.Settings, it) },
+                                            onToggleSettings = {
+                                                dest = Destination.Settings
+                                                settingsOpen = !settingsOpen
+                                            },
+                                        )
+                                    },
+                                ) { Box { navContent() } }
+                            }
+                            WindowClass.Medium -> {
+                                Row(modifier = Modifier.fillMaxSize()) {
+                                    NavigationRail {
+                                        RailContent(
+                                            dest = dest, section = section,
+                                            settingsOpen = settingsOpen,
+                                            onDest = { go(it) },
+                                            onSection = { go(Destination.Settings, it) },
+                                            onToggleSettings = {
+                                                dest = Destination.Settings
+                                                settingsOpen = !settingsOpen
+                                            },
+                                        )
+                                    }
+                                    Box(modifier = Modifier.weight(1f)) { navContent() }
+                                }
+                            }
+                            WindowClass.Expanded -> {
+                                PermanentNavigationDrawer(
+                                    drawerContent = {
+                                        DrawerContent(
+                                            dest = dest, section = section,
+                                            settingsOpen = settingsOpen,
+                                            permanent = true,
+                                            onDest = { go(it) },
+                                            onSection = { go(Destination.Settings, it) },
+                                            onToggleSettings = {
+                                                dest = Destination.Settings
+                                                settingsOpen = !settingsOpen
+                                            },
+                                        )
+                                    },
+                                ) { Box { navContent() } }
+                            }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/** Drawer body shared by modal + permanent drawers. */
+@Composable
+private fun DrawerContent(
+    dest: Destination,
+    section: SettingSection,
+    settingsOpen: Boolean,
+    onDest: (Destination) -> Unit,
+    onSection: (SettingSection) -> Unit,
+    onToggleSettings: () -> Unit,
+    permanent: Boolean = false,
+) {
+    if (permanent) {
+        PermanentDrawerSheet(modifier = Modifier.widthIn(max = 280.dp)) {
+            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings)
+        }
+    } else {
+        ModalDrawerSheet {
+            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings)
+        }
+    }
+}
+
+@Composable
+private fun DrawerList(
+    dest: Destination,
+    section: SettingSection,
+    settingsOpen: Boolean,
+    onDest: (Destination) -> Unit,
+    onSection: (SettingSection) -> Unit,
+    onToggleSettings: () -> Unit,
+) {
+    Text(
+        "Agento",
+        style = MaterialTheme.typography.titleLarge,
+        modifier = Modifier.padding(16.dp),
+    )
+    Destination.entries.forEach { d ->
+        if (d == Destination.Settings) {
+            NavigationDrawerItem(
+                label = { Text(d.title) },
+                icon = { Icon(d.icon(), contentDescription = null) },
+                badge = {
+                    Icon(
+                        if (settingsOpen) Icons.Filled.ExpandLess
+                        else Icons.Filled.ExpandMore,
+                        contentDescription = null,
+                    )
+                },
+                selected = dest == d,
+                onClick = onToggleSettings,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
+            // #60: settings subsections live in the
+            // sidebar; each opens its own screen.
+            if (settingsOpen) {
+                SettingSection.entries.forEach { s ->
+                    NavigationDrawerItem(
+                        label = { Text(s.title) },
+                        selected = dest == Destination.Settings && section == s,
+                        onClick = { onSection(s) },
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                            .padding(start = 24.dp),
+                    )
                 }
             }
+        } else {
+            NavigationDrawerItem(
+                label = { Text(d.title) },
+                icon = { Icon(d.icon(), contentDescription = null) },
+                selected = dest == d,
+                onClick = { onDest(d) },
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
+        }
+    }
+}
+
+/** Compact rail for medium windows (icon-only + expandable settings). */
+@Composable
+private fun RailContent(
+    dest: Destination,
+    section: SettingSection,
+    settingsOpen: Boolean,
+    onDest: (Destination) -> Unit,
+    onSection: (SettingSection) -> Unit,
+    onToggleSettings: () -> Unit,
+) {
+    Destination.entries.forEach { d ->
+        if (d == Destination.Settings) {
+            NavigationRailItem(
+                selected = dest == d,
+                onClick = onToggleSettings,
+                icon = { Icon(d.icon(), contentDescription = d.title) },
+                label = { Text(d.title) },
+            )
+            if (settingsOpen) {
+                SettingSection.entries.forEach { s ->
+                    NavigationRailItem(
+                        selected = dest == Destination.Settings && section == s,
+                        onClick = { onSection(s) },
+                        icon = { },
+                        label = { Text(s.title) },
+                    )
+                }
+            }
+        } else {
+            NavigationRailItem(
+                selected = dest == d,
+                onClick = { onDest(d) },
+                icon = { Icon(d.icon(), contentDescription = d.title) },
+                label = { Text(d.title) },
+            )
         }
     }
 }
@@ -253,6 +378,7 @@ private fun ChatTab(
     app: android.app.Application,
     tab: String,
     title: String,
+    wc: WindowClass,
     onMenu: () -> Unit,
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
@@ -261,10 +387,13 @@ private fun ChatTab(
     val state by vm.state
     LaunchedEffect(Unit) { vm.refreshConfig() }
     var showModel by remember { mutableStateOf(false) }
-    val subtitle = (if (state.model.isEmpty()) "not set" else state.model) +
-        " · " + state.provider.ifEmpty { "not set" }
+    val snackbar = remember { SnackbarHostState() }
+    // #64: never show raw "not set" — the header shows the model name when
+    // configured and a setup prompt otherwise.
+    val setupNeeded = state.model.isBlank() || state.provider.isBlank()
     ChatScreen(
-        title = title, model = subtitle, state = state,
+        title = title, modelLabel = state.model.ifBlank { "" },
+        setupNeeded = setupNeeded, state = state, wc = wc, snackbar = snackbar,
         onMenu = onMenu,
         onModel = { showModel = true },
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop,
@@ -298,12 +427,13 @@ private enum class TaskSort(val title: String) {
     Oldest("Oldest"),
 }
 
-/** Task table: fixed statuses, filters + sorts, persisted locally (#34, #55). */
+/** Task board: fixed statuses, filters + sorts, persisted locally (#34, #55). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TasksScreen(onMenu: () -> Unit = {}) {
+private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
     var tasks by remember { mutableStateOf<List<TaskItem>>(emptyList()) }
     var editing by remember { mutableStateOf<TaskItem?>(null) }
     var loaded by remember { mutableStateOf(false) }
@@ -325,9 +455,10 @@ private fun TasksScreen(onMenu: () -> Unit = {}) {
         loaded = true
     }
 
-    fun persist(next: List<TaskItem>) {
+    fun persist(next: List<TaskItem>, toast: String? = null) {
         tasks = next
         scope.launch(Dispatchers.IO) { TaskStore.save(context, next) }
+        if (toast != null) scope.launch { snackbar.showSnackbar(toast) }
     }
 
     fun cycleStatus(t: TaskItem): String {
@@ -353,152 +484,126 @@ private fun TasksScreen(onMenu: () -> Unit = {}) {
             }
         }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            navigationIcon = {
-                IconButton(onClick = onMenu) {
-                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
-                }
-            },
-            title = { Text("Tasks") },
-            actions = {
-                // #62: + starts a new task.
-                IconButton(onClick = {
-                    editing = TaskItem(id = TaskStore.newId(), status = "Todo")
-                }) {
-                    Icon(Icons.Filled.Add, contentDescription = "New task")
-                }
-            },
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            listOf("All").plus(TASK_STATUSES).forEach { f ->
-                FilterChip(
-                    selected = filter == f,
-                    onClick = { filter = f },
-                    label = { Text(f) },
-                )
-            }
-            Box {
-                TextButton(onClick = { sortOpen = true }) { Text("Sort: ${sort.title}") }
-                DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
-                    TaskSort.entries.forEach { s ->
-                        DropdownMenuItem(
-                            text = { Text(s.title) },
-                            onClick = { sort = s; sortOpen = false },
-                        )
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onMenu) {
+                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
                     }
-                }
-            }
-        }
-        if (!loaded) {
-            Text(
-                "Loading…",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(16.dp),
+                },
+                title = { Text("Tasks") },
+                actions = {
+                    // #62: + starts a new task.
+                    IconButton(onClick = {
+                        editing = TaskItem(id = TaskStore.newId(), status = "Todo")
+                    }) {
+                        Icon(Icons.Filled.Add, contentDescription = "New task")
+                    }
+                },
             )
-        } else if (visible.isEmpty()) {
-            Text(
-                if (tasks.isEmpty()) "No tasks yet. Tap + to create the first row."
-                else "No tasks match this filter.",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(16.dp),
-            )
-        }
-        // Table header.
-        if (visible.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            ) {
-                Text(
-                    "Task",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    "Status",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(96.dp),
-                )
-                Text(
-                    "Updated",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(88.dp),
-                )
-                Spacer(modifier = Modifier.width(48.dp))
-            }
-            HorizontalDivider()
-        }
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            contentPadding = PaddingValues(vertical = 4.dp),
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            items(visible, key = { it.id }) { t ->
-                var rowMenu by remember(t.id) { mutableStateOf(false) }
-                val status = normalizeStatus(t.status)
+            Column(modifier = Modifier.contentWidth(wc)) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            t.name.ifEmpty { "(untitled)" },
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 2,
+                    listOf("All").plus(TASK_STATUSES).forEach { f ->
+                        FilterChip(
+                            selected = filter == f,
+                            onClick = { filter = f },
+                            label = { Text(f) },
                         )
-                        if (t.note.isNotEmpty()) {
-                            Text(
-                                t.note,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
+                    }
+                    Box {
+                        TextButton(onClick = { sortOpen = true }) { Text("Sort: ${sort.title}") }
+                        DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
+                            TaskSort.entries.forEach { s ->
+                                DropdownMenuItem(
+                                    text = { Text(s.title) },
+                                    onClick = { sort = s; sortOpen = false },
+                                )
+                            }
+                        }
+                    }
+                }
+                if (!loaded) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                } else if (visible.isEmpty()) {
+                    EmptyState(
+                        icon = Icons.Filled.List,
+                        title = if (tasks.isEmpty()) "No tasks yet" else "Nothing matches this filter",
+                        subtitle = if (tasks.isEmpty()) {
+                            "Capture your first to-do — it stays on this device."
+                        } else {
+                            "Try a different status filter."
+                        },
+                        actionLabel = if (tasks.isEmpty()) "New task" else null,
+                        onAction = if (tasks.isEmpty()) {
+                            { editing = TaskItem(id = TaskStore.newId(), status = "Todo") }
+                        } else null,
+                    )
+                } else if (wc == WindowClass.Expanded) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                    ) {
+                        items(visible, key = { it.id }) { t ->
+                            TaskCard(
+                                task = t,
+                                onCycle = {
+                                    persist(tasks.map {
+                                        if (it.id == t.id) it.copy(
+                                            status = cycleStatus(it),
+                                            updatedAt = ChatThreads.now(),
+                                        ) else it
+                                    }, Toasts.TASK_SAVED)
+                                },
+                                onEdit = { editing = t.copy(status = normalizeStatus(t.status)) },
+                                onDelete = {
+                                    persist(tasks.filterNot { it.id == t.id }, Toasts.TASK_DELETED)
+                                },
                             )
                         }
                     }
-                    AssistChip(
-                        onClick = { persist(tasks.map {
-                            if (it.id == t.id) it.copy(
-                                status = cycleStatus(it),
-                                updatedAt = ChatThreads.now(),
-                            ) else it
-                        }) },
-                        label = { Text(status) },
-                        modifier = Modifier.width(96.dp),
-                    )
-                    Text(
-                        shortTime(t.updatedAt),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(88.dp).padding(start = 8.dp),
-                    )
-                    Box {
-                        IconButton(onClick = { rowMenu = true }) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = "Task menu")
-                        }
-                        DropdownMenu(expanded = rowMenu, onDismissRequest = { rowMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Edit") },
-                                onClick = { rowMenu = false; editing = t.copy(status = status) },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete") },
-                                onClick = {
-                                    rowMenu = false
-                                    persist(tasks.filterNot { it.id == t.id })
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                    ) {
+                        items(visible, key = { it.id }) { t ->
+                            TaskCard(
+                                task = t,
+                                onCycle = {
+                                    persist(tasks.map {
+                                        if (it.id == t.id) it.copy(
+                                            status = cycleStatus(it),
+                                            updatedAt = ChatThreads.now(),
+                                        ) else it
+                                    }, Toasts.TASK_SAVED)
+                                },
+                                onEdit = { editing = t.copy(status = normalizeStatus(t.status)) },
+                                onDelete = {
+                                    persist(tasks.filterNot { it.id == t.id }, Toasts.TASK_DELETED)
                                 },
                             )
                         }
                     }
                 }
-                HorizontalDivider()
             }
         }
     }
@@ -515,10 +620,69 @@ private fun TasksScreen(onMenu: () -> Unit = {}) {
                 } else {
                     listOf(saved) + tasks
                 }
-                persist(next)
+                persist(next, Toasts.TASK_SAVED)
                 editing = null
             },
         )
+    }
+}
+
+/** One task card: title + note + colored status chip + timestamp + menu. */
+@Composable
+private fun TaskCard(
+    task: TaskItem,
+    onCycle: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var rowMenu by remember(task.id) { mutableStateOf(false) }
+    val status = normalizeStatus(task.status)
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    task.name.ifEmpty { "(untitled)" },
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 2,
+                )
+                if (task.note.isNotEmpty()) {
+                    Text(
+                        task.note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                    )
+                }
+                val ts = shortTime(task.updatedAt)
+                if (ts.isNotEmpty()) {
+                    Text(
+                        "Updated $ts",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            StatusChip(status = status, onClick = onCycle)
+            Box {
+                IconButton(onClick = { rowMenu = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "Task menu")
+                }
+                DropdownMenu(expanded = rowMenu, onDismissRequest = { rowMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Edit") },
+                        onClick = { rowMenu = false; onEdit() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete") },
+                        onClick = { rowMenu = false; onDelete() },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -581,14 +745,17 @@ private fun TaskDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                onSave(initial.copy(
-                    name = name.trim(),
-                    status = status,
-                    note = note.trim(),
-                    updatedAt = ChatThreads.now(),
-                ))
-            }) { Text("Save") }
+            TextButton(
+                onClick = {
+                    onSave(initial.copy(
+                        name = name.trim(),
+                        status = status,
+                        note = note.trim(),
+                        updatedAt = ChatThreads.now(),
+                    ))
+                },
+                enabled = name.isNotBlank(),
+            ) { Text("Save") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
@@ -596,20 +763,21 @@ private fun TaskDialog(
     )
 }
 
-/** VPS exports browser with subfolders + mobile downloads (#26). */
+/** VPS exports browser with breadcrumbs + mobile downloads (#26). */
 @Composable
 private fun StorageScreen(onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
     var path by remember { mutableStateOf("") }
     var dirs by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var files by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
-    var status by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
     fun load(p: String) {
         busy = true
-        status = ""
+        error = ""
         scope.launch {
             StorageApi(context).list(p).fold(
                 onSuccess = { (cur, d, f) ->
@@ -617,7 +785,7 @@ private fun StorageScreen(onMenu: () -> Unit = {}) {
                     dirs = d
                     files = f
                 },
-                onFailure = { e -> status = "FAILED — ${e.message}" },
+                onFailure = { e -> error = e.message ?: e.javaClass.simpleName },
             )
             busy = false
         }
@@ -625,91 +793,125 @@ private fun StorageScreen(onMenu: () -> Unit = {}) {
 
     LaunchedEffect(Unit) { load("") }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text(if (path.isEmpty()) "Storage" else "Storage / $path", maxLines = 1) },
-            navigationIcon = {
-                IconButton(onClick = onMenu) {
-                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
-                }
-            },
-            actions = {
-                if (path.isNotEmpty()) {
-                    TextButton(onClick = {
-                        val parent = if ("/" in path) path.substringBeforeLast("/") else ""
-                        load(parent)
-                    }) { Text("Up") }
-                }
-                TextButton(onClick = { load(path) }, enabled = !busy) { Text("Refresh") }
-            },
-        )
-        if (status.isNotEmpty()) {
-            Text(
-                status,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-        }
-        if (busy && dirs.isEmpty() && files.isEmpty()) {
-            Text(
-                "Loading…",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(16.dp),
-            )
-        }
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            contentPadding = PaddingValues(vertical = 8.dp),
-        ) {
-            items(dirs, key = { "d:" + it.name }) { d ->
-                Card(
-                    onClick = { load(if (path.isEmpty()) d.name else "$path/${d.name}") },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Filled.Folder, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(d.name, style = MaterialTheme.typography.bodyLarge)
+    val crumbs = remember(path) {
+        if (path.isEmpty()) emptyList()
+        else path.split("/").scan("") { acc, part ->
+            if (acc.isEmpty()) part else "$acc/$part"
+        }.drop(1)
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Storage", maxLines = 1) },
+                navigationIcon = {
+                    IconButton(onClick = onMenu) {
+                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
                     }
-                }
-            }
-            items(files, key = { "f:" + it.name }) { f ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(f.name, style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                humanSize(f.size),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                },
+                actions = {
+                    if (path.isNotEmpty()) {
                         TextButton(onClick = {
-                            runCatching {
-                                StorageApi(context).download(path, f.name)
-                                status = "Downloading ${f.name}…"
-                            }.onFailure { e ->
-                                status = "FAILED — ${e.message}"
+                            val parent = if ("/" in path) path.substringBeforeLast("/") else ""
+                            load(parent)
+                        }) { Text("Up") }
+                    }
+                    IconButton(onClick = { load(path) }, enabled = !busy) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Column(modifier = Modifier.contentWidth(WindowClass.Compact)) {
+                if (path.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(onClick = { load("") }) { Text("Files") }
+                        crumbs.forEach { c ->
+                            Text(" / ", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            TextButton(onClick = { load(c) }) {
+                                Text(c.substringAfterLast("/"), maxLines = 1)
                             }
-                        }) { Text("Save") }
+                        }
                     }
                 }
-            }
-            if (!busy && dirs.isEmpty() && files.isEmpty() && status.isEmpty()) {
-                item {
-                    Text(
-                        "Empty — drop files into the VPS exports/ folder.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(16.dp),
+                if (busy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                if (error.isNotEmpty()) {
+                    ErrorCard(raw = error, onRetry = { load(path) },
+                        modifier = Modifier.padding(12.dp))
+                }
+                if (!busy && dirs.isEmpty() && files.isEmpty() && error.isEmpty()) {
+                    EmptyState(
+                        icon = Icons.Filled.Folder,
+                        title = "This folder is empty",
+                        subtitle = "Drop files into the VPS exports folder to see them here.",
+                        actionLabel = "Refresh",
+                        onAction = { load(path) },
                     )
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                ) {
+                    items(dirs, key = { "d:" + it.name }) { d ->
+                        Card(
+                            onClick = { load(if (path.isEmpty()) d.name else "$path/${d.name}") },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Filled.Folder, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(d.name, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                    items(files, key = { "f:" + it.name }) { f ->
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Filled.Description, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(f.name, style = MaterialTheme.typography.bodyLarge)
+                                    Text(
+                                        humanSize(f.size),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                TextButton(onClick = {
+                                    runCatching {
+                                        StorageApi(context).download(path, f.name)
+                                        scope.launch { snackbar.showSnackbar("Saving ${f.name}…") }
+                                    }.onFailure { e ->
+                                        scope.launch {
+                                            snackbar.showSnackbar(
+                                                friendlyError(e.message ?: "").title
+                                            )
+                                        }
+                                    }
+                                }) { Text("Save") }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -759,19 +961,25 @@ private fun TabModelSheet(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var provider by remember { mutableStateOf("") }
     var model by remember { mutableStateOf("") }
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
-    var status by remember { mutableStateOf("") }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf("") }
     LaunchedEffect(tab) {
+        loading = true
+        error = ""
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         provider = (prefs.getString("provider_$tab", "") ?: "").trim()
         model = (prefs.getString("model_$tab", "") ?: "").trim()
         val api = ChatApi(context)
         catalog = runCatching {
             api.fetchCatalog(catalogPath(api)).getOrThrow()
-        }.getOrDefault(emptyList())
+        }.getOrElse { e ->
+            error = e.message ?: e.javaClass.simpleName
+            emptyList()
+        }
+        loading = false
     }
     fun save(p: String, m: String) {
         val api = ChatApi(context)
@@ -781,11 +989,16 @@ private fun TabModelSheet(
     ModalBottomSheet(onDismissRequest = onClose) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Text("$title model", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Each assistant keeps its own model. Pick a provider first, then a model.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
             val options = providerOptionsFor(catalog, provider)
             val shownProvider = options.firstOrNull { it.slug == provider }
                 ?.let { providerDisplay(it.slug, it.label) }
-                ?: provider.ifEmpty { "(select provider)" }
+                ?: provider.ifEmpty { "Choose a provider…" }
             OptionMenu(
                 label = "Provider",
                 shown = shownProvider,
@@ -793,49 +1006,45 @@ private fun TabModelSheet(
                 onPick = {
                     if (it != provider) model = ""
                     provider = it
+                    error = ""
                     save(provider, model)
                 },
             )
             Spacer(modifier = Modifier.height(8.dp))
             OptionMenu(
                 label = "Model",
-                shown = model.ifEmpty { "(select model)" },
+                shown = model.ifEmpty { "Choose a model…" },
                 options = modelOptionsFor(options, provider).map { m -> m to m },
                 onPick = {
                     model = it
+                    error = ""
                     save(provider, model)
                 },
             )
-            if (status.isNotEmpty()) {
-                Text(status, style = MaterialTheme.typography.bodySmall)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        status = "Loading providers…"
-                        scope.launch {
-                            val api = ChatApi(context)
-                            api.fetchCatalog(api.pathFor(tab), refresh = true).fold(
-                                onSuccess = { list ->
-                                    catalog = list
-                                    status = list.joinToString("\n") { o ->
-                                        "${o.label}: ${o.models.size} model(s)"
-                                    }
-                                },
-                                onFailure = { e -> status = "FAILED — ${e.message}" },
-                            )
-                        }
-                    },
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Reload catalog")
+            Spacer(modifier = Modifier.height(8.dp))
+            when {
+                loading -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Loading providers…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
-            }
-            if (catalog.isEmpty()) {
-                Text(
-                    "Providers not loaded — check Server URL + Password in Settings, then Reload.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                error.isNotEmpty() -> {
+                    ErrorCard(raw = error)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    HintLine("Check Server URL + Password in Settings, then reopen this picker.")
+                }
+                catalog.isEmpty() -> {
+                    HintLine("No providers found — check Settings → Server.")
+                }
+                provider.isNotBlank() && modelOptionsFor(options, provider).isEmpty() -> {
+                    HintLine("This provider has no models listed — try Reload below.")
+                }
             }
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -848,8 +1057,11 @@ private fun TabModelSheet(
 @Composable
 private fun ChatScreen(
     title: String,
-    model: String,
+    modelLabel: String,
+    setupNeeded: Boolean,
     state: ChatUiState,
+    wc: WindowClass,
+    snackbar: SnackbarHostState,
     onMenu: () -> Unit,
     onModel: () -> Unit,
     onPending: (String) -> Unit,
@@ -863,130 +1075,201 @@ private fun ChatScreen(
         if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size - 1)
     }
     val clipboard = LocalClipboardManager.current
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            navigationIcon = {
-                IconButton(onClick = onMenu) {
-                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
-                }
-            },
-            title = { Text("$title · $model", maxLines = 1) },
-            actions = {
-                IconButton(onClick = onModel, enabled = !state.streaming) {
-                    Icon(Icons.Filled.Tune, contentDescription = "Model")
-                }
-                // #62: + starts a new conversation.
-                IconButton(onClick = onNew, enabled = !state.streaming) {
-                    Icon(Icons.Filled.Add, contentDescription = "New conversation")
-                }
-            },
-        )
+    // Surface send failures as a toast too (the inline card keeps details).
+    LaunchedEffect(state.error) {
         if (state.error.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    state.error,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
-                )
-                if (!state.streaming) {
-                    TextButton(onClick = onRetry) {
-                        Icon(Icons.Filled.Refresh, contentDescription = null)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Retry")
-                    }
-                }
-            }
+            snackbar.showSnackbar(friendlyError(state.error).title)
         }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 8.dp),
-        ) {
-            if (state.messages.isEmpty()) {
-                item {
-                    Text(
-                        "No messages yet. Ask anything — the conversation is kept until you tap +.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
-            items(state.messages) { msg ->
-                val isUser = msg.role == "user"
-                // #52: proper conversational bubbles — user right, assistant left.
-                Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
-                ) {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(0.85f),
-                        shape = RoundedCornerShape(16.dp),
-                        color = if (isUser) {
-                            MaterialTheme.colorScheme.primaryContainer
+    }
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onMenu) {
+                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    }
+                },
+                title = {
+                    Column {
+                        Text(title, maxLines = 1)
+                        if (setupNeeded) {
+                            Text(
+                                "Choose a model to start",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
                         } else {
-                            MaterialTheme.colorScheme.surfaceVariant
-                        },
+                            Text(
+                                modelLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onModel, enabled = !state.streaming) {
+                        Icon(Icons.Filled.Tune, contentDescription = "Model")
+                    }
+                    // #62: + starts a new conversation.
+                    IconButton(onClick = onNew, enabled = !state.streaming) {
+                        Icon(Icons.Filled.Add, contentDescription = "New conversation")
+                    }
+                },
+            )
+        },
+        bottomBar = {
+            Surface(tonalElevation = 2.dp) {
+                Column {
+                    if (state.streaming) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    if (isUser) "You" else "Assistant",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                val ts = shortTime(msg.ts)
-                                if (ts.isNotEmpty()) {
-                                    Text(
-                                        ts,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                if (!isUser && msg.content.isNotEmpty()) {
-                                    IconButton(
-                                        onClick = { clipboard.setText(AnnotatedString(msg.content)) },
-                                        modifier = Modifier.size(28.dp),
-                                    ) {
-                                        Icon(Icons.Filled.ContentCopy, contentDescription = "Copy")
-                                    }
-                                }
+                        OutlinedTextField(
+                            value = state.pending,
+                            onValueChange = onPending,
+                            placeholder = { Text("Ask ${title.lowercase()} anything…") },
+                            modifier = Modifier.weight(1f),
+                            maxLines = 4,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = { onSend() }),
+                            shape = RoundedCornerShape(24.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        if (state.streaming) {
+                            FilledTonalIconButton(onClick = onStop) {
+                                Icon(Icons.Filled.Close, contentDescription = "Stop")
                             }
-                            Spacer(modifier = Modifier.height(2.dp))
-                            SelectionContainer {
-                                Text(
-                                    msg.content.ifEmpty { "…" },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
+                        } else {
+                            FilledIconButton(
+                                onClick = onSend,
+                                enabled = state.pending.isNotBlank() && state.ready,
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
                             }
                         }
                     }
                 }
             }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            OutlinedTextField(
-                value = state.pending,
-                onValueChange = onPending,
-                label = { Text("Message") },
-                modifier = Modifier.weight(1f),
-                maxLines = 4,
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            if (state.streaming) {
-                Button(onClick = onStop) { Text("Stop") }
-            } else {
-                Button(onClick = onSend, enabled = state.pending.isNotBlank()) { Text("Send") }
+            Column(modifier = Modifier.contentWidth(wc).weight(1f)) {
+                if (setupNeeded) {
+                    Card(
+                        onClick = onModel,
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        ),
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                "Set up $title",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                            Text(
+                                "Pick a provider and model to start chatting.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
+                    }
+                }
+                if (state.error.isNotEmpty()) {
+                    ErrorCard(
+                        raw = state.error,
+                        onRetry = if (!state.streaming) onRetry else null,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
+                }
+                if (!state.ready) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                    ) {
+                        if (state.messages.isEmpty() && !setupNeeded) {
+                            item {
+                                EmptyState(
+                                    icon = Icons.Filled.MenuBook,
+                                    title = "Start the conversation",
+                                    subtitle = "Ask anything — history is kept until you tap +.",
+                                )
+                            }
+                        }
+                        items(state.messages) { msg ->
+                            val isUser = msg.role == "user"
+                            // #52: proper conversational bubbles — user right, assistant left.
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
+                            ) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(bubbleFraction(wc)),
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (isUser) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    },
+                                    tonalElevation = if (isUser) 0.dp else 1.dp,
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                if (isUser) "You" else "Assistant",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                            val ts = shortTime(msg.ts)
+                                            if (ts.isNotEmpty()) {
+                                                Text(
+                                                    ts,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                            if (!isUser && msg.content.isNotEmpty()) {
+                                                IconButton(
+                                                    onClick = { clipboard.setText(AnnotatedString(msg.content)) },
+                                                    modifier = Modifier.size(28.dp),
+                                                ) {
+                                                    Icon(Icons.Filled.ContentCopy, contentDescription = "Copy")
+                                                }
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        SelectionContainer {
+                                            Text(
+                                                msg.content.ifEmpty { "…" },
+                                                style = MaterialTheme.typography.bodyMedium,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1018,11 +1301,19 @@ private fun OptionMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {
-            options.forEach { (value, text) ->
+            if (options.isEmpty()) {
                 DropdownMenuItem(
-                    text = { Text(text) },
-                    onClick = { onPick(value); expanded = false },
+                    text = { Text("No options — reload or check Settings") },
+                    onClick = { expanded = false },
+                    enabled = false,
                 )
+            } else {
+                options.forEach { (value, text) ->
+                    DropdownMenuItem(
+                        text = { Text(text) },
+                        onClick = { onPick(value); expanded = false },
+                    )
+                }
             }
         }
     }
@@ -1068,6 +1359,7 @@ private fun modelOptionsFor(
 private fun SettingsScreen(
     viewModel: MainViewModel,
     section: SettingSection = SettingSection.Server,
+    wc: WindowClass = WindowClass.Compact,
     onMenu: () -> Unit = {},
     themeMode: String = ThemeStore.SYSTEM,
     onTheme: (String) -> Unit = {},
@@ -1075,7 +1367,8 @@ private fun SettingsScreen(
     val state by viewModel.state
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var modelsResult by remember { mutableStateOf("") }
+    val snackbar = remember { SnackbarHostState() }
+    var error by remember { mutableStateOf("") }
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     // Bumped after a settings import so the fields below reload from prefs.
@@ -1083,6 +1376,7 @@ private fun SettingsScreen(
 
     /** Preloads the live provider/model catalog (pickers live per tab now). */
     LaunchedEffect(settingsRefresh) {
+        error = ""
         val api = ChatApi(context)
         catalog = runCatching {
             api.fetchCatalog(catalogPath(api)).getOrDefault(emptyList())
@@ -1101,198 +1395,245 @@ private fun SettingsScreen(
     ) {
         viewModel.refresh()
         if (!viewModel.state.value.permissionsGranted) {
-            viewModel.onSyncError("Still not granted — open the Health Connect app manually")
+            viewModel.onSyncError("Permission screen returned without a grant")
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            navigationIcon = {
-                IconButton(onClick = onMenu) {
-                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
-                }
-            },
-            title = { Text(section.title) },
-        )
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onMenu) {
+                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    }
+                },
+                title = { Text(section.title) },
+            )
+        },
+    ) { padding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize().padding(padding),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            when (section) {
-                SettingSection.Server -> {
-            Text(
-                "One URL for chat + sync (reverse proxy routes /p/* to the gateway, /api/* to health sync).",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            OutlinedTextField(
-                value = state.serverUrl,
-                onValueChange = viewModel::onServerUrl,
-                label = { Text("Server URL") },
-                placeholder = { Text("http://192.168.1.10:8080") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = state.password,
-                onValueChange = viewModel::onPassword,
-                label = { Text("Password (sync token)") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            /** Saves server fields (chat config per tab saves from its own page). */
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    val api = ChatApi(context)
-                    val prefs = context.getSharedPreferences(
-                        AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-                    prefs.edit()
-                        .putString("server_base_url", state.serverUrl.trim().trimEnd('/'))
-                        .putString("app_password", state.password.trim())
-                        .remove("api_base_url")
-                        .remove("server_url")
-                        .apply()
-                    modelsResult = "Saved."
-                    scope.launch {
-                        api.fetchCatalog(catalogPath(api), refresh = true).fold(
-                            onSuccess = { list ->
-                                catalog = list
-                                modelsResult = "Saved. Providers:\n" + list.joinToString("\n") { o ->
-                                    "${o.label}: ${o.models.size} model(s)"
-                                }
-                            },
-                            onFailure = { e -> modelsResult = "Saved. Catalog FAILED — ${e.message}" },
-                        )
-                    }
-                }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Save server")
-                }
-            }
-            if (catalog.isEmpty()) {
-                Text(
-                    "Providers not loaded — check Server URL + Password, then Save server.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            if (modelsResult.isNotEmpty()) {
-                Text(modelsResult, style = MaterialTheme.typography.bodySmall)
-            }
-                }
-                // #61: the "Chat backend" subsection is removed (provider +
-                // model are picked on each tab's own page; nothing to show).
-                SettingSection.Appearance -> {
-            Text("Theme", style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(
-                    ThemeStore.SYSTEM to "System",
-                    ThemeStore.LIGHT to "Light",
-                    ThemeStore.DARK to "Dark",
-                ).forEach { (value, text) ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.selectable(
-                            selected = themeMode == value,
-                            onClick = { onTheme(value) },
-                            role = Role.RadioButton,
-                        ),
-                    ) {
-                        RadioButton(selected = themeMode == value, onClick = null)
-                        Text(text, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
-                }
-                SettingSection.Updates -> {
-            AppUpdateSection()
-                }
-                SettingSection.Health -> {
-            HealthStatusCard(state)
-
-            /** Three-step gate: install Health Connect, grant permissions, then sync. */
-            when {
-                !state.healthAvailable -> {
-                    Button(onClick = {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
-                            != PackageManager.PERMISSION_GRANTED
+            Column(
+                modifier = Modifier
+                    .contentWidth(wc)
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                when (section) {
+                    SettingSection.Server -> {
+                        SectionCard(
+                            title = "Connection",
+                            subtitle = "One URL for chat + sync. The proxy routes chat to the gateway and health data to the sync service.",
                         ) {
-                            hcPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            OutlinedTextField(
+                                value = state.serverUrl,
+                                onValueChange = viewModel::onServerUrl,
+                                label = { Text("Server URL") },
+                                placeholder = { Text("http://192.168.1.10:8080") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            var showPassword by remember { mutableStateOf(false) }
+                            OutlinedTextField(
+                                value = state.password,
+                                onValueChange = viewModel::onPassword,
+                                label = { Text("Password") },
+                                singleLine = true,
+                                visualTransformation = if (showPassword) {
+                                    VisualTransformation.None
+                                } else {
+                                    PasswordVisualTransformation()
+                                },
+                                trailingIcon = {
+                                    TextButton(onClick = { showPassword = !showPassword }) {
+                                        Text(if (showPassword) "Hide" else "Show")
+                                    }
+                                },
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = { /* saved via button */ }),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            /** Saves server fields (chat config per tab saves from its own page). */
+                            Button(onClick = {
+                                val api = ChatApi(context)
+                                val prefs = context.getSharedPreferences(
+                                    AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                                prefs.edit()
+                                    .putString("server_base_url", state.serverUrl.trim().trimEnd('/'))
+                                    .putString("app_password", state.password.trim())
+                                    .remove("api_base_url")
+                                    .remove("server_url")
+                                    .apply()
+                                error = ""
+                                scope.launch { snackbar.showSnackbar(Toasts.SERVER_SAVED) }
+                                scope.launch {
+                                    api.fetchCatalog(catalogPath(api), refresh = true).fold(
+                                        onSuccess = { list -> catalog = list },
+                                        onFailure = { e ->
+                                            error = e.message ?: e.javaClass.simpleName
+                                        },
+                                    )
+                                }
+                            }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Save server")
+                            }
                         }
-                        HealthConnectManager(context).openHealthConnectSettings(context)
-                    }) {
-                        Text("Install / Update Health Connect")
-                    }
-                }
-                !state.permissionsGranted -> {
-                    Button(onClick = {
-                        val mgr = HealthConnectManager(context)
-                        val launched = mgr.requestPermissions(hcRequest)
-                        if (!launched) {
-                            viewModel.onSyncError("Permission screen unavailable — opening Health Connect app")
-                            mgr.openHealthConnectSettings(context)
+                        if (error.isNotEmpty()) {
+                            ErrorCard(raw = error)
+                        } else if (catalog.isNotEmpty()) {
+                            val count = catalog.sumOf { it.models.size }
+                            HintLine("Connected — ${catalog.size} provider(s), $count model(s). Pick a model on each assistant's page.")
+                        } else {
+                            HintLine("No providers loaded yet — save the server above first.")
                         }
-                    }) {
-                        Text("Grant Health Connect permissions")
                     }
-                    OutlinedButton(onClick = {
-                        viewModel.onSyncError("Open Health Connect → Permissions → Agento → allow each")
-                        HealthConnectManager(context).openHealthConnectSettings(context)
-                    }) {
-                        Text("Open Health Connect app")
+                    // #61: the "Chat backend" subsection is removed (provider +
+                    // model are picked on each tab's own page; nothing to show).
+                    SettingSection.Appearance -> {
+                        SectionCard(
+                            title = "Theme",
+                            subtitle = "Follow the system or pick a fixed look.",
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf(
+                                    ThemeStore.SYSTEM to "System",
+                                    ThemeStore.LIGHT to "Light",
+                                    ThemeStore.DARK to "Dark",
+                                ).forEach { (value, text) ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.selectable(
+                                            selected = themeMode == value,
+                                            onClick = { onTheme(value) },
+                                            role = Role.RadioButton,
+                                        ),
+                                    ) {
+                                        RadioButton(selected = themeMode == value, onClick = null)
+                                        Text(text, style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                }
+                            }
+                        }
                     }
-                    OutlinedButton(onClick = {
-                        val intent = android.content.Intent(
-                            android.content.Intent.ACTION_VIEW,
-                            android.net.Uri.parse(HealthConnectManager.playStoreUrl()),
-                        )
-                        runCatching { context.startActivity(intent) }
-                    }) {
-                        Text("Install / Update Health Connect (Play Store)")
+                    SettingSection.Updates -> {
+                        AppUpdateSection()
                     }
-                    if (state.healthPackageInfo.isNotEmpty()) {
-                        Text(
-                            "HC package: ${state.healthPackageInfo}",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-                else -> {
-                    Button(
-                        onClick = { viewModel.syncNow() },
-                        enabled = !state.syncing,
-                    ) {
-                        Text(if (state.syncing) "Syncing…" else "Sync now")
-                    }
-                }
-            }
+                    SettingSection.Health -> {
+                        HealthStatusCard(state)
+
+                        /** Three-step gate: install Health Connect, grant permissions, then sync. */
+                        when {
+                            !state.healthAvailable -> {
+                                SectionCard(
+                                    title = "Install Health Connect",
+                                    subtitle = "Health sync needs the Health Connect app before anything else.",
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                                                != PackageManager.PERMISSION_GRANTED
+                                            ) {
+                                                hcPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                            }
+                                            HealthConnectManager(context).openHealthConnectSettings(context)
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("Install / update Health Connect")
+                                    }
+                                }
+                            }
+                            !state.permissionsGranted -> {
+                                SectionCard(
+                                    title = "Allow health data",
+                                    subtitle = "Agento can only sync what you approve in Health Connect.",
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            val mgr = HealthConnectManager(context)
+                                            val launched = mgr.requestPermissions(hcRequest)
+                                            if (!launched) {
+                                                viewModel.onSyncError("Permission screen unavailable")
+                                                mgr.openHealthConnectSettings(context)
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("Grant Health Connect permissions")
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            viewModel.onSyncError("Permissions still needed")
+                                            HealthConnectManager(context).openHealthConnectSettings(context)
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("Open Health Connect app")
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            val intent = android.content.Intent(
+                                                android.content.Intent.ACTION_VIEW,
+                                                android.net.Uri.parse(HealthConnectManager.playStoreUrl()),
+                                            )
+                                            runCatching { context.startActivity(intent) }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("Get Health Connect (Play Store)")
+                                    }
+                                    if (state.healthPackageInfo.isNotEmpty()) {
+                                        HintLine("Health Connect: ${state.healthPackageInfo}")
+                                    }
+                                }
+                            }
+                            else -> {
+                                SectionCard(
+                                    title = "Sync",
+                                    subtitle = "Push the latest health data to your server now. Automatic sync runs hourly.",
+                                ) {
+                                    Button(
+                                        onClick = { viewModel.syncNow() },
+                                        enabled = !state.syncing,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(if (state.syncing) "Syncing…" else "Sync now")
+                                    }
+                                    if (state.syncing) {
+                                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                    }
+                                }
+                            }
+                        }
 
 
-            if (state.lastSyncAt.isNotEmpty()) {
-                Text("Last sync: ${state.lastSyncAt}", style = MaterialTheme.typography.bodySmall)
-            }
-            if (state.lastResult.isNotEmpty()) {
-                Text(
-                    state.lastResult,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (state.lastResult.startsWith("FAILED")) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                )
-            }
-                }
-                SettingSection.Notifications -> {
-                    NotificationsSection()
-                }
-                SettingSection.Backup -> {
-                    SettingsBackupSection(onImported = {
-                        viewModel.refresh()
-                        settingsRefresh++
-                    })
+                        if (state.lastSyncAt.isNotEmpty()) {
+                            HintLine("Last sync: ${state.lastSyncAt}")
+                        }
+                        if (state.lastResult.isNotEmpty() && state.lastResult != "syncing…") {
+                            if (state.lastResult.startsWith("FAILED")) {
+                                ErrorCard(raw = state.lastResult.removePrefix("FAILED — ").removePrefix("FAILED "))
+                            } else {
+                                HintLine(state.lastResult)
+                            }
+                        }
+                    }
+                    SettingSection.Notifications -> {
+                        NotificationsSection()
+                    }
+                    SettingSection.Backup -> {
+                        SettingsBackupSection(onImported = {
+                            viewModel.refresh()
+                            settingsRefresh++
+                            scope.launch { snackbar.showSnackbar(Toasts.SAVED) }
+                        })
+                    }
                 }
             }
         }
@@ -1313,6 +1654,7 @@ private fun NotificationsSection() {
     var enabled by remember { mutableStateOf(ChatNotifications.isEnabled(context)) }
     var canPost by remember { mutableStateOf(ChatNotifications.canPost(context)) }
     var status by remember { mutableStateOf("") }
+    var failed by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         canPost = ChatNotifications.canPost(context)
@@ -1323,89 +1665,72 @@ private fun NotificationsSection() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         canPost = granted
+        failed = !granted
         status = if (granted) {
             "Allowed — reply alerts will post."
         } else {
-            "Denied — enable notifications for Agento in system Settings."
+            "Notifications are still blocked. Allow them for Agento in system Settings."
         }
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+    SectionCard(
+        title = "Reply alerts",
+        subtitle = "The server runs no scheduled jobs, so there are no server-side completions to report. " +
+            "Instead, Agento can notify you when a chat reply finishes while the app is in the background.",
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "Gateway scheduler: no cronjobs configured.",
-                style = MaterialTheme.typography.titleSmall,
+                "Notify when a reply finishes",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
             )
-            Text(
-                "Hermes has no scheduled jobs, so there are no server-side " +
-                    "completions to report. Instead, Agento can notify you " +
-                    "when a chat reply finishes while the app is in the background.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "Notify when a reply finishes",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = {
-                        enabled = it
-                        ChatNotifications.setEnabled(context, it)
-                        if (it && !ChatNotifications.canPost(context) &&
-                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                        ) {
-                            permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }
-                    },
-                )
-            }
-            if (enabled && !canPost) {
-                Text(
-                    "Notifications are blocked — alerts can't post until allowed.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                OutlinedButton(onClick = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Switch(
+                checked = enabled,
+                onCheckedChange = {
+                    enabled = it
+                    ChatNotifications.setEnabled(context, it)
+                    status = ""
+                    failed = false
+                    if (it && !ChatNotifications.canPost(context) &&
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                    ) {
                         permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
-                }) {
-                    Text("Allow notifications")
-                }
-            }
-            OutlinedButton(
-                onClick = {
-                    status = if (ChatNotifications.sendTest(context)) {
-                        "Test sent — check the notification shade."
-                    } else if (!ChatNotifications.isEnabled(context)) {
-                        "Toggle is off — enable it first, then test again."
-                    } else {
-                        "Notifications are blocked — allow them first, then test again."
-                    }
                 },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Send test notification")
+            )
+        }
+        if (enabled && !canPost) {
+            ErrorCard(raw = "Notifications are blocked at the system level.")
+            OutlinedButton(onClick = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }, modifier = Modifier.fillMaxWidth()) {
+                Text("Allow notifications")
             }
-            if (status.isNotEmpty()) {
-                Text(
-                    status,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (status.startsWith("Denied")) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                )
-            }
+        }
+        OutlinedButton(
+            onClick = {
+                failed = false
+                status = if (ChatNotifications.sendTest(context)) {
+                    Toasts.TEST_SENT
+                } else if (!ChatNotifications.isEnabled(context)) {
+                    failed = true
+                    "Turn the toggle on first, then test again."
+                } else {
+                    failed = true
+                    "Notifications are blocked — allow them first, then test again."
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Send test notification")
+        }
+        if (status.isNotEmpty()) {
+            if (failed) ErrorCard(raw = status) else HintLine(status)
         }
     }
 }
@@ -1419,6 +1744,7 @@ private fun SettingsBackupSection(onImported: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     var status by remember { mutableStateOf("") }
+    var failed by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
 
     /** Writes the export JSON to the user-picked location. */
@@ -1427,19 +1753,21 @@ private fun SettingsBackupSection(onImported: () -> Unit) {
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         busy = true
-        status = "Exporting…"
+        status = ""
+        failed = false
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     context.contentResolver.openOutputStream(uri)?.use { out ->
                         out.write(SettingsBackup.export(context).toString(2).toByteArray())
-                    } ?: throw IllegalStateException("Could not open $uri for writing")
+                    } ?: throw IllegalStateException("Could not open the selected file for writing")
                 }
             }
             status = result.fold(
-                onSuccess = { "Exported — keep the file somewhere safe." },
-                onFailure = { e -> "FAILED — ${e.message}" },
+                onSuccess = { Toasts.EXPORTED },
+                onFailure = { e -> e.message ?: e.javaClass.simpleName },
             )
+            failed = result.isFailure
             busy = false
         }
     }
@@ -1450,53 +1778,59 @@ private fun SettingsBackupSection(onImported: () -> Unit) {
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         busy = true
-        status = "Importing…"
+        status = ""
+        failed = false
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val text = context.contentResolver.openInputStream(uri)?.use { input ->
                         input.bufferedReader().readText()
-                    } ?: throw IllegalStateException("Could not open $uri for reading")
+                    } ?: throw IllegalStateException("Could not open the selected file for reading")
                     SettingsBackup.importFrom(context, org.json.JSONObject(text)).getOrThrow()
                 }
             }
             result.fold(
                 onSuccess = { n ->
-                    status = "Imported $n setting(s) — fields reloaded."
+                    status = "Restored $n setting(s)."
                     onImported()
                 },
-                onFailure = { e -> status = "FAILED — ${e.message}" },
+                onFailure = { e -> status = e.message ?: e.javaClass.simpleName },
             )
+            failed = result.isFailure
             busy = false
         }
     }
 
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(
-            onClick = { exportPicker.launch("agento-settings.json") },
-            enabled = !busy,
-            modifier = Modifier.weight(1f),
-        ) {
-            Text("Export settings")
+    SectionCard(
+        title = "Backup",
+        subtitle = "Keep a copy of your settings and conversations somewhere safe. Restoring brings them back after a reinstall.",
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { exportPicker.launch("agento-settings.json") },
+                enabled = !busy,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Export settings")
+            }
+            OutlinedButton(
+                onClick = { importPicker.launch(arrayOf("application/json")) },
+                enabled = !busy,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Import settings")
+            }
         }
-        OutlinedButton(
-            onClick = { importPicker.launch(arrayOf("application/json")) },
-            enabled = !busy,
-            modifier = Modifier.weight(1f),
-        ) {
-            Text("Import settings")
+        if (busy) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Working…", style = MaterialTheme.typography.bodySmall)
+            }
         }
-    }
-    if (status.isNotEmpty()) {
-        Text(
-            status,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (status.startsWith("FAILED")) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-        )
+        if (status.isNotEmpty()) {
+            if (failed) ErrorCard(raw = status) else HintLine(status)
+        }
     }
 }
 
@@ -1510,6 +1844,7 @@ private fun AppUpdateSection() {
         UpdateManager.currentVersion(context)
     }
     var status by remember { mutableStateOf("") }
+    var failed by remember { mutableStateOf(false) }
     var latest by remember { mutableStateOf<AppRelease?>(null) }
     var busy by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(-1f) }
@@ -1519,99 +1854,110 @@ private fun AppUpdateSection() {
         ActivityResultContracts.StartActivityForResult()
     ) {
         if (UpdateManager.canInstallUnknownApps(context)) {
+            failed = false
             status = "Allowed — tap Download & install again."
         } else {
-            status = "Still not allowed — enable \"Allow from this source\", then retry."
+            failed = true
+            status = "Install permission still off. Turn on “Allow from this source”, then retry."
         }
     }
 
-    Text(
-        "Installed: $installedName ($installedCode)",
-        style = MaterialTheme.typography.bodySmall,
-    )
-    /** Checks /releases/latest and diffs the tag against the installed build. */
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-            onClick = {
-                busy = true
-                progress = -1f
-                status = "Checking…"
-                scope.launch {
-                    UpdateManager.fetchLatest()
-                        .onSuccess { rel ->
-                            latest = if (UpdateManager.isNewer(rel.tag, installedName, installedCode)) {
-                                status = "Update available: ${rel.name}"
-                                rel
-                            } else {
-                                status = "Up to date (${rel.tag})."
-                                null
+    SectionCard(
+        title = "Version",
+        subtitle = "Installed: $installedName ($installedCode)",
+    ) {
+        /** Checks /releases/latest and diffs the tag against the installed build. */
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    busy = true
+                    progress = -1f
+                    status = ""
+                    failed = false
+                    scope.launch {
+                        UpdateManager.fetchLatest()
+                            .onSuccess { rel ->
+                                latest = if (UpdateManager.isNewer(rel.tag, installedName, installedCode)) {
+                                    status = "Update available: ${rel.name}"
+                                    rel
+                                } else {
+                                    status = Toasts.UP_TO_DATE
+                                    null
+                                }
                             }
-                        }
-                        .onFailure { e ->
-                            latest = null
-                            status = "FAILED — ${e.message}"
-                        }
-                    busy = false
-                }
-            },
-            enabled = !busy,
-            modifier = Modifier.weight(1f),
-        ) {
-            Text("Check for updates")
-        }
-        Button(
-            onClick = {
-                val rel = latest ?: return@Button
-                if (!UpdateManager.canInstallUnknownApps(context)) {
-                    runCatching { unknownSourcesReturn.launch(UpdateManager.unknownSourcesIntent(context)) }
-                    status = "Allow \"install unknown apps\", then tap again."
-                    return@Button
-                }
-                busy = true
-                progress = 0f
-                status = "Downloading ${rel.tag}…"
-                scope.launch {
-                    val dest = java.io.File(
-                        java.io.File(context.cacheDir, "updates"),
-                        "agento-${rel.tag}.apk",
-                    )
-                    UpdateManager.download(rel.apkUrl, dest) { p -> progress = p }
-                        .onSuccess { apk ->
-                            status = "Downloaded — opening installer…"
-                            runCatching {
-                                context.startActivity(UpdateManager.installIntent(context, apk))
-                            }.onFailure { e ->
-                                status = "FAILED — could not open installer: ${e.message}"
+                            .onFailure { e ->
+                                latest = null
+                                failed = true
+                                status = e.message ?: e.javaClass.simpleName
                             }
-                        }
-                        .onFailure { e ->
-                            status = "FAILED — ${e.message}"
-                        }
-                    busy = false
-                }
-            },
-            enabled = !busy && latest != null,
-            modifier = Modifier.weight(1f),
-        ) {
-            Text("Download & install")
+                        busy = false
+                    }
+                },
+                enabled = !busy,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Check for updates")
+            }
+            Button(
+                onClick = {
+                    val rel = latest ?: return@Button
+                    if (!UpdateManager.canInstallUnknownApps(context)) {
+                        runCatching { unknownSourcesReturn.launch(UpdateManager.unknownSourcesIntent(context)) }
+                        failed = true
+                        status = "Allow “install unknown apps” for Agento, then tap again."
+                        return@Button
+                    }
+                    busy = true
+                    progress = 0f
+                    status = ""
+                    failed = false
+                    scope.launch {
+                        val dest = java.io.File(
+                            java.io.File(context.cacheDir, "updates"),
+                            "agento-${rel.tag}.apk",
+                        )
+                        UpdateManager.download(rel.apkUrl, dest) { p -> progress = p }
+                            .onSuccess { apk ->
+                                status = "Downloaded — opening the installer…"
+                                runCatching {
+                                    context.startActivity(UpdateManager.installIntent(context, apk))
+                                }.onFailure { e ->
+                                    failed = true
+                                    status = e.message ?: e.javaClass.simpleName
+                                }
+                            }
+                            .onFailure { e ->
+                                failed = true
+                                status = e.message ?: e.javaClass.simpleName
+                            }
+                        busy = false
+                    }
+                },
+                enabled = !busy && latest != null,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Download & install")
+            }
         }
-    }
-    if (busy && progress >= 0f) {
-        LinearProgressIndicator(
-            progress = { progress.coerceIn(0f, 1f) },
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-    if (status.isNotEmpty()) {
-        Text(
-            status,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (status.startsWith("FAILED")) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-        )
+        if (busy && progress >= 0f) {
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else if (busy) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+        val rel = latest
+        if (rel != null && rel.notes.isNotBlank()) {
+            Text(
+                rel.notes.take(400),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (status.isNotEmpty()) {
+            if (failed) ErrorCard(raw = status) else HintLine(status)
+        }
     }
 }
 
@@ -1627,16 +1973,20 @@ private fun HealthStatusCard(state: UiState) {
         ) {
             val healthText = when {
                 !state.healthAvailable -> "Health Connect not installed"
-                state.healthUpdateRequired -> "Health Connect update required"
+                state.healthUpdateRequired -> "Health Connect needs an update"
                 else -> "Health Connect ready"
             }
             val permText = if (state.permissionsGranted) {
                 "Permissions granted"
             } else {
-                "Permissions not granted"
+                "Permissions not granted yet"
             }
-            Text(healthText, style = MaterialTheme.typography.bodyLarge)
-            Text(permText, style = MaterialTheme.typography.bodyMedium)
+            Text(healthText, style = MaterialTheme.typography.titleSmall)
+            Text(
+                permText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
