@@ -169,6 +169,94 @@ class ChatApi(context: Context) {
             }
         }
 
+    /** Result of the Settings connection test: both backends behind the
+     * single server URL are probed (gateway chat + health-api sync). */
+    data class ConnectionReport(
+        val gatewayOk: Boolean,
+        val syncOk: Boolean,
+        val providers: Int = 0,
+        val models: Int = 0,
+        val gatewayError: String = "",
+        val syncError: String = "",
+    )
+
+    /** Short-timeout client for probes (never the streaming client). */
+    private fun probeClient(): OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .build()
+
+    /**
+     * Tests the server URL against both backends: the gateway picker
+     * (authenticated, proves chat works) and /health (proves sync works —
+     * served by health-api through the proxy, or the gateway itself on a
+     * direct :8642 URL). Used by Settings → Test connection and the
+     * offline banner. Never throws — failures land in the report.
+     */
+    suspend fun testConnection(path: String): Result<ConnectionReport> =
+        withContext(Dispatchers.IO) {
+            val base = baseUrl()
+            if (base.isEmpty()) {
+                return@withContext Result.failure(
+                    IllegalStateException("Server URL not configured"))
+            }
+            val client = probeClient()
+            var gatewayOk = false
+            var providers = 0
+            var models = 0
+            var gatewayError = ""
+            try {
+                client.newCall(Request.Builder()
+                    .url("$base$path/api/model/options")
+                    .header("Authorization", "Bearer ${password()}")
+                    .get()
+                    .build()).execute().use { response ->
+                    val body = response.body?.string() ?: ""
+                    if (!response.isSuccessful) {
+                        gatewayError = "HTTP ${response.code}: ${body.take(200)}"
+                    } else {
+                        val arr = JSONObject(body).optJSONArray("providers")
+                        if (arr != null) {
+                            for (i in 0 until arr.length()) {
+                                val o = arr.optJSONObject(i) ?: continue
+                                val slug = o.optString("slug", "").trim()
+                                if (slug.isEmpty()) continue
+                                providers++
+                                val marr = o.optJSONArray("models")
+                                if (marr != null) {
+                                    for (j in 0 until marr.length()) {
+                                        if (marr.opt(j) is String) models++
+                                    }
+                                }
+                            }
+                        }
+                        gatewayOk = providers > 0
+                        if (!gatewayOk) gatewayError = "No providers in catalog"
+                    }
+                }
+            } catch (e: Exception) {
+                gatewayError = e.message ?: e.javaClass.simpleName
+            }
+            var syncOk = false
+            var syncError = ""
+            try {
+                client.newCall(Request.Builder()
+                    .url("$base/health")
+                    .get()
+                    .build()).execute().use { response ->
+                    syncOk = response.isSuccessful
+                    if (!syncOk) syncError = "HTTP ${response.code}"
+                }
+            } catch (e: Exception) {
+                syncError = e.message ?: e.javaClass.simpleName
+            }
+            Result.success(ConnectionReport(
+                gatewayOk = gatewayOk, syncOk = syncOk,
+                providers = providers, models = models,
+                gatewayError = gatewayError, syncError = syncError,
+            ))
+    }
     /** Streams reply deltas for [messages]; emits Done(fullText) at `[DONE]`. */
     fun streamChat(
         path: String,
