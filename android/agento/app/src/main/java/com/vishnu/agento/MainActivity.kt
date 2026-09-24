@@ -36,11 +36,13 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
@@ -154,6 +156,23 @@ class MainActivity : ComponentActivity() {
                     var settingsOpen by remember { mutableStateOf(false) }
                     val drawerState = rememberDrawerState(DrawerValue.Closed)
                     val scope = rememberCoroutineScope()
+                    // Per-assistant model subtitles for the drawer: refreshed
+                    // on every navigation so model picks show up immediately.
+                    val prefs = context.getSharedPreferences(
+                        AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                    val tabModels = remember(dest, section) {
+                        mapOf(
+                            "god" to (prefs.getString("model_god", "") ?: "").trim(),
+                            "story" to (prefs.getString("model_story", "") ?: "").trim(),
+                            "resumes" to (prefs.getString("model_resumes", "") ?: "").trim(),
+                        )
+                    }
+                    fun drawerModel(d: Destination): String? = when (d) {
+                        Destination.God -> tabModels["god"]
+                        Destination.Story -> tabModels["story"]
+                        Destination.Portfolio -> tabModels["resumes"]
+                        else -> null
+                    }
                     fun go(d: Destination, s: SettingSection? = null) {
                         dest = d
                         if (s != null) section = s
@@ -204,6 +223,7 @@ class MainActivity : ComponentActivity() {
                                         DrawerContent(
                                             dest = dest, section = section,
                                             settingsOpen = settingsOpen,
+                                            modelFor = ::drawerModel,
                                             onDest = { go(it) },
                                             onSection = { go(Destination.Settings, it) },
                                             onToggleSettings = {
@@ -237,6 +257,7 @@ class MainActivity : ComponentActivity() {
                                         DrawerContent(
                                             dest = dest, section = section,
                                             settingsOpen = settingsOpen,
+                                            modelFor = ::drawerModel,
                                             permanent = true,
                                             onDest = { go(it) },
                                             onSection = { go(Destination.Settings, it) },
@@ -266,14 +287,15 @@ private fun DrawerContent(
     onSection: (SettingSection) -> Unit,
     onToggleSettings: () -> Unit,
     permanent: Boolean = false,
+    modelFor: (Destination) -> String? = { null },
 ) {
     if (permanent) {
         PermanentDrawerSheet(modifier = Modifier.widthIn(max = 280.dp)) {
-            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings)
+            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings, modelFor)
         }
     } else {
         ModalDrawerSheet {
-            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings)
+            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings, modelFor)
         }
     }
 }
@@ -286,6 +308,7 @@ private fun DrawerList(
     onDest: (Destination) -> Unit,
     onSection: (SettingSection) -> Unit,
     onToggleSettings: () -> Unit,
+    modelFor: (Destination) -> String? = { null },
 ) {
     Text(
         "Agento",
@@ -322,8 +345,25 @@ private fun DrawerList(
                 }
             }
         } else {
+            val sub = modelFor(d)
             NavigationDrawerItem(
-                label = { Text(d.title) },
+                label = {
+                    Column {
+                        Text(d.title, maxLines = 1)
+                        if (sub != null) {
+                            Text(
+                                sub.ifEmpty { "Not set up" },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (sub.isEmpty()) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                },
                 icon = { Icon(d.icon(), contentDescription = null) },
                 selected = dest == d,
                 onClick = { onDest(d) },
@@ -385,8 +425,11 @@ private fun ChatTab(
     // Keyed per tab — otherwise all three tabs would share one ViewModel.
     val vm: ChatViewModel = viewModel(key = "chat_$tab", factory = factory)
     val state by vm.state
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { vm.refreshConfig() }
     var showModel by remember { mutableStateOf(false) }
+    var showThreads by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     // #64: never show raw "not set" — the header shows the model name when
     // configured and a setup prompt otherwise.
@@ -396,12 +439,191 @@ private fun ChatTab(
         setupNeeded = setupNeeded, state = state, wc = wc, snackbar = snackbar,
         onMenu = onMenu,
         onModel = { showModel = true },
+        onHistory = { showThreads = true },
+        onCheckConnection = vm::checkReachability,
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop,
         onNew = vm::newConversation, onRetry = vm::retry,
     )
+    if (showThreads) {
+        ThreadSheet(
+            title = title,
+            threads = state.threads,
+            activeId = state.threadId,
+            onSearch = vm::searchThreads,
+            onSwitch = { vm.switchThread(it); showThreads = false },
+            onNew = vm::newConversation,
+            onRename = vm::renameThread,
+            onDelete = {
+                vm.deleteThread(it)
+                scope.launch { snackbar.showSnackbar("Conversation deleted.") }
+            },
+            onExport = { id ->
+                val text = vm.exportMarkdown(id)
+                if (text.isNotEmpty()) {
+                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(android.content.Intent.EXTRA_TEXT, text)
+                    }
+                    runCatching {
+                        context.startActivity(android.content.Intent.createChooser(intent, "Share conversation"))
+                    }
+                }
+            },
+            onClose = { showThreads = false },
+        )
+    }
     if (showModel) {
         TabModelSheet(app = app, tab = tab, title = title,
             onChanged = vm::refreshConfig, onClose = { showModel = false })
+    }
+}
+
+/** Conversation switcher: search, jump, rename, delete, export. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThreadSheet(
+    title: String,
+    threads: List<ThreadSummary>,
+    activeId: String,
+    onSearch: (String) -> List<ThreadSummary>,
+    onSwitch: (String) -> Unit,
+    onNew: () -> Unit,
+    onRename: (String, String) -> Unit,
+    onDelete: (String) -> Unit,
+    onExport: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    var renaming by remember { mutableStateOf<ThreadSummary?>(null) }
+    var deleting by remember { mutableStateOf<ThreadSummary?>(null) }
+    ModalBottomSheet(onDismissRequest = onClose) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "$title conversations",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                FilledTonalButton(onClick = onNew) { Text("New") }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Search conversations…") },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val shown = remember(query, threads) { onSearch(query) }
+            if (shown.isEmpty()) {
+                Text(
+                    if (query.isBlank()) "No conversations yet." else "No matches.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 16.dp),
+                )
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                ) {
+                    items(shown, key = { it.id }) { t ->
+                        var menu by remember(t.id) { mutableStateOf(false) }
+                        Card(
+                            onClick = { onSwitch(t.id) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = if (t.id == activeId) {
+                                CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                                )
+                            } else CardDefaults.cardColors(),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(t.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                                    val ts = shortTime(t.updatedAt)
+                                    Text(
+                                        listOfNotNull(
+                                            if (t.count == 1) "1 message" else "${t.count} messages",
+                                            ts.ifEmpty { null },
+                                        ).joinToString(" · "),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Box {
+                                    IconButton(onClick = { menu = true }) {
+                                        Icon(Icons.Filled.MoreVert, contentDescription = "Conversation menu")
+                                    }
+                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text("Rename") },
+                                            onClick = { menu = false; renaming = t },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Share / export") },
+                                            onClick = { menu = false; onExport(t.id) },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Delete") },
+                                            onClick = { menu = false; deleting = t },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    val renameTarget = renaming
+    if (renameTarget != null) {
+        var name by remember(renameTarget.id) { mutableStateOf(renameTarget.title) }
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            title = { Text("Rename conversation") },
+            text = {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Title") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRename(renameTarget.id, name)
+                    renaming = null
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renaming = null }) { Text("Cancel") }
+            },
+        )
+    }
+    val deleteTarget = deleting
+    if (deleteTarget != null) {
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete conversation?") },
+            text = { Text("“${deleteTarget.title}” and its messages will be removed from this device. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete(deleteTarget.id)
+                    deleting = null
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleting = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -1064,6 +1286,8 @@ private fun ChatScreen(
     snackbar: SnackbarHostState,
     onMenu: () -> Unit,
     onModel: () -> Unit,
+    onHistory: () -> Unit,
+    onCheckConnection: () -> Unit,
     onPending: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -1113,7 +1337,10 @@ private fun ChatScreen(
                     IconButton(onClick = onModel, enabled = !state.streaming) {
                         Icon(Icons.Filled.Tune, contentDescription = "Model")
                     }
-                    // #62: + starts a new conversation.
+                    IconButton(onClick = onHistory, enabled = !state.streaming) {
+                        Icon(Icons.Filled.History, contentDescription = "Conversations")
+                    }
+                    // + starts a new conversation; older ones are kept.
                     IconButton(onClick = onNew, enabled = !state.streaming) {
                         Icon(Icons.Filled.Add, contentDescription = "New conversation")
                     }
@@ -1192,6 +1419,28 @@ private fun ChatScreen(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     )
                 }
+                // Offline banner: local history still works, sends will fail.
+                if (state.online == false && state.error.isEmpty()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        ),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "You're offline — showing saved conversations.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = onCheckConnection) { Text("Retry") }
+                        }
+                    }
+                }
                 if (!state.ready) {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
@@ -1208,7 +1457,7 @@ private fun ChatScreen(
                                 EmptyState(
                                     icon = Icons.Filled.MenuBook,
                                     title = "Start the conversation",
-                                    subtitle = "Ask anything — history is kept until you tap +.",
+                                    subtitle = "Ask anything — past conversations stay under the history button.",
                                 )
                             }
                         }
@@ -1481,6 +1730,52 @@ private fun SettingsScreen(
                                 }
                             }, modifier = Modifier.fillMaxWidth()) {
                                 Text("Save server")
+                            }
+                            var testing by remember { mutableStateOf(false) }
+                            var report by remember { mutableStateOf<ChatApi.ConnectionReport?>(null) }
+                            OutlinedButton(
+                                onClick = {
+                                    testing = true
+                                    report = null
+                                    error = ""
+                                    scope.launch {
+                                        val api = ChatApi(context)
+                                        val r = api.testConnection(catalogPath(api)).getOrNull()
+                                        report = r
+                                        if (r == null) {
+                                            error = "Server URL not configured"
+                                        }
+                                        testing = false
+                                    }
+                                },
+                                enabled = !testing,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(if (testing) "Testing…" else "Test connection")
+                            }
+                            if (testing) {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                            val rep = report
+                            if (rep != null) {
+                                if (rep.gatewayOk && rep.syncOk) {
+                                    HintLine("Connected — chat (${rep.providers} provider(s), ${rep.models} model(s)) and sync both reachable.")
+                                    catalog = catalog.ifEmpty {
+                                        LlmProvider.entries.map {
+                                            ProviderOption(it.id, it.id, emptyList())
+                                        }
+                                    }
+                                } else {
+                                    if (!rep.gatewayOk) {
+                                        ErrorCard(raw = rep.gatewayError.ifEmpty { "Chat backend unreachable" })
+                                    }
+                                    if (!rep.syncOk) {
+                                        ErrorCard(raw = rep.syncError.ifEmpty { "Sync backend unreachable" })
+                                    }
+                                    if (rep.gatewayOk && !rep.syncOk) {
+                                        HintLine("Chat works, but sync is unreachable — health data won't upload.")
+                                    }
+                                }
                             }
                         }
                         if (error.isNotEmpty()) {
