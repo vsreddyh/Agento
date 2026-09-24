@@ -100,6 +100,21 @@ delegation:
 
 skills:
   creation_nudge_interval: 15
+  # Unused bundled skills, switched off (same mechanism as the dashboard
+  # toggle; `hermes-agent` is essential and can never land here). The
+  # /v1/skills endpoint still lists them (it uses skip_disabled=False);
+  # the agent itself no longer loads them.
+  disabled:
+    - claude-code
+    - codex
+    - inspecting-hermes-desktop-dom
+    - meeting-action-items
+    - notion
+    - songsee
+    - songwriting-and-ai-music
+    - teams-meeting-pipeline
+    - weekly-review-planning
+    - youtube-content
 
 security:
   redact_secrets: true
