@@ -1528,9 +1528,11 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp),
                 ) {
-                    // Fully-empty screen: one error card with retry, fed by
-                    // whichever source failed (tools first, else skills).
-                    val bothEmptyError = toolsError.ifEmpty { skillsError }
+                    // Fully-empty screen: one error card with retry, joining both
+                    // raws when both sources failed so Details keeps everything.
+                    val bothEmptyError = listOf(toolsError, skillsError)
+                        .filter { it.isNotEmpty() }
+                        .joinToString("\n\n")
                     if (skills.isEmpty() && toolsets.isEmpty()
                         && bothEmptyError.isNotEmpty() && loaded
                     ) {
