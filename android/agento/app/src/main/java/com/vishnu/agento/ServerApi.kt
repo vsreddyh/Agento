@@ -38,8 +38,8 @@ data class McpServer(
  * Read-only view of the gateway's skills + toolsets (dashboard Skills/MCP
  * pages, slimmed for mobile). Same bearer auth as chat; per-profile paths
  * so each assistant shows its own inventory. Parsing is lenient — shapes
- * differ across gateway versions, so unknown fields are ignored and empty
- * results are failures the UI renders as hints, never raw dumps.
+ * differ across gateway versions, so unknown fields are ignored; valid
+ * empty results are success and only transport/parse failures are errors.
  */
 class ServerApi(context: Context) {
 
@@ -208,7 +208,7 @@ fun mcpServersFrom(toolsets: List<ToolsetInfo>): List<McpServer> {
     for (ts in toolsets) {
         for (t in ts.tools) {
             val parts = t.split("__")
-            if (parts.size >= 3 && parts[0] == "mcp") {
+            if (parts.size >= 3 && parts[0] == "mcp" && parts[1].isNotBlank()) {
                 byServer.getOrPut(parts[1]) { mutableListOf() }
                     .add(parts.drop(2).joinToString("__"))
             }

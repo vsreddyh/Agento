@@ -75,6 +75,7 @@ import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
@@ -1473,15 +1474,22 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 supervisorScope {
                     val s = async { ServerApi(context).listSkills(path) }
                     val t = async { ServerApi(context).listToolsets(path) }
-                    skills = s.await().getOrDefault(emptyList())
-                    toolsets = t.await().getOrDefault(emptyList())
-                    skillsError = s.await().exceptionOrNull()?.let {
-                        it.message ?: it.javaClass.simpleName
-                    } ?: ""
-                    toolsError = t.await().exceptionOrNull()?.let {
-                        it.message ?: it.javaClass.simpleName
-                    } ?: ""
-                    loaded = true
+                    // Await into locals first: a cancel landing between the
+                    // two awaits must not leave half-stale state behind.
+                    val sr = s.await()
+                    val tr = t.await()
+                    ensureActive()
+                    if (loadJob == job) {
+                        skills = sr.getOrDefault(emptyList())
+                        toolsets = tr.getOrDefault(emptyList())
+                        skillsError = sr.exceptionOrNull()?.let {
+                            it.message ?: it.javaClass.simpleName
+                        } ?: ""
+                        toolsError = tr.exceptionOrNull()?.let {
+                            it.message ?: it.javaClass.simpleName
+                        } ?: ""
+                        loaded = true
+                    }
                 }
             } finally {
                 if (loadJob == job) busy = false
@@ -1535,6 +1543,15 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
+                }
+                // Hoisted above the list so memoization isn't position-keyed.
+                val skillsHint = remember(skillsError) {
+                    "Skills unavailable (${friendlyError(skillsError).title}) — " +
+                        "tools below still work."
+                }
+                val toolsHint = remember(toolsError) {
+                    "Tools unavailable (${friendlyError(toolsError).title}) — " +
+                        "skills above still work."
                 }
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -1615,10 +1632,6 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         && toolsets.isNotEmpty() && loaded
                     ) {
                         item {
-                            val skillsHint = remember(skillsError) {
-                                "Skills unavailable (${friendlyError(skillsError).title}) — " +
-                                    "tools below still work."
-                            }
                             HintLine(skillsHint)
                         }
                     }
@@ -1682,10 +1695,6 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         && skills.isNotEmpty() && loaded
                     ) {
                         item {
-                            val toolsHint = remember(toolsError) {
-                                "Tools unavailable (${friendlyError(toolsError).title}) — " +
-                                    "skills above still work."
-                            }
                             HintLine(toolsHint)
                         }
                     }
