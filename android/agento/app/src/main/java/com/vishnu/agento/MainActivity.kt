@@ -1732,7 +1732,7 @@ private fun SettingsScreen(
                                 Text("Save server")
                             }
                             var testing by remember { mutableStateOf(false) }
-                            var report by remember { mutableStateOf<ConnectionReport?>(null) }
+                            var report by remember { mutableStateOf<ChatApi.ConnectionReport?>(null) }
                             OutlinedButton(
                                 onClick = {
                                     testing = true
