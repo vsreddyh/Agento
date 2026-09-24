@@ -153,6 +153,15 @@ platform_toolsets:
   cli:
     - file
     - terminal
+  # api_server (Android app + /v1/toolsets): composite default first so the
+  # native set resolves normally, plus explicit MCP passthrough (the
+  # endpoint excludes default MCP servers for non-composite lists, so both
+  # parts are needed). Add future MCP servers to the passthrough tail.
+  api_server:
+    - hermes-api-server
+    - mcp-miser-money
+    - mcp-cookbook
+    - mcp-health-check
 
 # God tool backend: money + cookbook + health-check (in-repo Go MCP servers,
 # baked into the bot image at /usr/local/bin by test/Dockerfile).

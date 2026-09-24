@@ -35,7 +35,7 @@ COPY docker/gateway-patches/ /tmp/gateway-patches/
 RUN set -e; \
     PY="$(command -v python3 || true)"; \
     if [ -z "$PY" ]; then PY=/opt/hermes/.venv/bin/python; fi; \
-    "$PY" /tmp/gateway-patches/01-skills-include-editorial.py && \
+    for s in /tmp/gateway-patches/*.py; do "$PY" "$s"; done && \
     rm -rf /tmp/gateway-patches
 
 WORKDIR /workspace
