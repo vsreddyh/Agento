@@ -73,7 +73,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 
 /** Builds per-tab chat ViewModels so story/resumes/god keep isolated history. */
@@ -1453,28 +1456,38 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var toolsError by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
+    // Cancelled + replaced on every load() so rapid profile taps can't
+    // let a stale response win; only the latest job may clear busy.
+    var loadJob by remember { mutableStateOf<Job?>(null) }
 
     fun load() {
+        loadJob?.cancel()
         busy = true
         skillsError = ""
         toolsError = ""
         loaded = false
-        scope.launch {
-            val api = ServerApi(context)
-            val path = ChatApi(context).pathFor(profile)
-            val s = api.listSkills(path)
-            val t = api.listToolsets(path)
-            skills = s.getOrDefault(emptyList())
-            toolsets = t.getOrDefault(emptyList())
-            skillsError = s.exceptionOrNull()?.let {
-                it.message ?: it.javaClass.simpleName
-            } ?: ""
-            toolsError = t.exceptionOrNull()?.let {
-                it.message ?: it.javaClass.simpleName
-            } ?: ""
-            loaded = true
-            busy = false
+        val path = ChatApi(context).pathFor(profile)
+        var job: Job? = null
+        job = scope.launch {
+            try {
+                supervisorScope {
+                    val s = async { ServerApi(context).listSkills(path) }
+                    val t = async { ServerApi(context).listToolsets(path) }
+                    skills = s.await().getOrDefault(emptyList())
+                    toolsets = t.await().getOrDefault(emptyList())
+                    skillsError = s.await().exceptionOrNull()?.let {
+                        it.message ?: it.javaClass.simpleName
+                    } ?: ""
+                    toolsError = t.await().exceptionOrNull()?.let {
+                        it.message ?: it.javaClass.simpleName
+                    } ?: ""
+                    loaded = true
+                }
+            } finally {
+                if (loadJob == job) busy = false
+            }
         }
+        loadJob = job
     }
 
     LaunchedEffect(profile) { load() }
