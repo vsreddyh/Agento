@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit
 data class SkillInfo(
     val name: String,
     val description: String = "",
+    val category: String = "",
     /** Null when the server doesn't report toggle state. */
     val enabled: Boolean? = null,
 )
@@ -80,12 +81,13 @@ class ServerApi(context: Context) {
         }
     }
 
-    /** Lists skills for one profile path (e.g. `/p/default`). */
+    /** Lists skills for one profile path (e.g. `/p/default`). The server
+     * returns a bare JSON array; object-wrapped shapes fall back gracefully. */
     suspend fun listSkills(path: String): Result<List<SkillInfo>> =
         withContext(Dispatchers.IO) {
             get(path, "v1/skills").map { body ->
                 val out = mutableListOf<SkillInfo>()
-                val arr = firstArray(JSONObject(body), "skills", "data", "items")
+                val arr = rootArray(body, "skills", "data", "items")
                 if (arr != null) {
                     for (i in 0 until arr.length()) {
                         val o = arr.optJSONObject(i) ?: continue
@@ -102,6 +104,7 @@ class ServerApi(context: Context) {
                         out.add(SkillInfo(
                             name = name,
                             description = o.optString("description", "").trim(),
+                            category = o.optString("category", "").trim(),
                             enabled = enabled,
                         ))
                     }
@@ -111,12 +114,13 @@ class ServerApi(context: Context) {
             }
         }
 
-    /** Lists toolsets for one profile path; MCP servers derive from tool names. */
+    /** Lists toolsets for one profile path; MCP servers derive from tool names.
+     * The server returns a bare JSON array; object-wrapped shapes fall back. */
     suspend fun listToolsets(path: String): Result<List<ToolsetInfo>> =
         withContext(Dispatchers.IO) {
             get(path, "v1/toolsets").map { body ->
                 val out = mutableListOf<ToolsetInfo>()
-                val arr = firstArray(JSONObject(body), "toolsets", "data", "items")
+                val arr = rootArray(body, "toolsets", "data", "items")
                 if (arr != null) {
                     for (i in 0 until arr.length()) {
                         val o = arr.optJSONObject(i) ?: continue
@@ -145,11 +149,23 @@ class ServerApi(context: Context) {
             }
         }
 
-    private fun firstArray(o: JSONObject, vararg keys: String): JSONArray? {
-        // Some versions return the bare array.
+    /**
+     * Response root as an array: the documented shape is a bare top-level
+     * array, with object-wrapped variants (`{skills:[...]}` etc.) as fallback.
+     * Null when the body is neither.
+     */
+    private fun rootArray(body: String, vararg keys: String): JSONArray? {
+        try {
+            return JSONArray(body)
+        } catch (_: Exception) {
+        }
+        val o = try {
+            JSONObject(body)
+        } catch (_: Exception) {
+            return null
+        }
         for (k in keys) {
-            val a = o.optJSONArray(k)
-            if (a != null) return a
+            o.optJSONArray(k)?.let { return it }
         }
         return null
     }

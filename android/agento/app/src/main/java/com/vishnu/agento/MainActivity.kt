@@ -1541,9 +1541,10 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(s.name, style = MaterialTheme.typography.bodyLarge)
-                                        if (s.description.isNotEmpty()) {
+                                        val blurb = s.description.ifEmpty { s.category }
+                                        if (blurb.isNotEmpty()) {
                                             Text(
-                                                s.description,
+                                                blurb,
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 maxLines = 3,
