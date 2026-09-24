@@ -1156,7 +1156,7 @@ private fun StorageScreen(onMenu: () -> Unit = {}) {
 }
 
 /** Gateway scheduler: native cron jobs over the Jobs API (same auth as
- * chat, through the proxy's /p/* route — no server changes needed). */
+ * chat, through the proxy's /p/ route — no server changes needed). */
 @Composable
 private fun SchedulerScreen(onMenu: () -> Unit = {}) {
     val context = LocalContext.current

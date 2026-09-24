@@ -25,7 +25,7 @@ data class CronJob(
 
 /**
  * Scheduler client over the gateway's native Jobs API (same bearer auth as
- * chat, served through the proxy's /p/* route — no server changes needed).
+ * chat, served through the proxy's /p/ route — no server changes needed).
  * Parsing is lenient across gateway versions; missing fields show as blank
  * rather than failing the whole list.
  */
