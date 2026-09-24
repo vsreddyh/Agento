@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -31,17 +32,22 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
@@ -107,15 +113,17 @@ private fun Destination.icon() = when (this) {
     Destination.Settings -> Icons.Filled.Settings
 }
 
-/** Settings subsections; each gets its own drawer entry + screen (#60). */
+/** Settings subsections; each gets its own drawer entry + screen (#60).
+ * Taxonomy follows Android conventions (General/Notifications/Data & sync,
+ * Storage, About): connection setup first, feature areas next, device data
+ * and app info last. */
 private enum class SettingSection(val title: String) {
-    Server("Server"),
-    Appearance("Appearance"),
-    Updates("App updates"),
+    Connection("Connection"),
     Health("Health sync"),
-    Notifications("Hermes notifications"),
-    Backup("Settings backup"),
-    Usage("Usage"),
+    Appearance("Appearance"),
+    Notifications("Notifications"),
+    Storage("Storage"),
+    About("About"),
 }
 
 
@@ -160,7 +168,9 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     var dest by remember { mutableStateOf(Destination.God) }
-                    var section by remember { mutableStateOf(SettingSection.Server) }
+                    // Null section = the settings hub overview; a non-null
+                    // section opens that subsection directly.
+                    var section by remember { mutableStateOf<SettingSection?>(null) }
                     var settingsOpen by remember { mutableStateOf(false) }
                     val drawerState = rememberDrawerState(DrawerValue.Closed)
                     val scope = rememberCoroutineScope()
@@ -183,7 +193,7 @@ class MainActivity : ComponentActivity() {
                     }
                     fun go(d: Destination, s: SettingSection? = null) {
                         dest = d
-                        if (s != null) section = s
+                        section = s
                         if (d != Destination.Settings) settingsOpen = false
                         scope.launch { drawerState.close() }
                     }
@@ -222,6 +232,7 @@ class MainActivity : ComponentActivity() {
                                     section = section,
                                     wc = wc,
                                     onMenu = { scope.launch { drawerState.open() } },
+                                    onPick = { section = it },
                                     themeMode = themeMode,
                                     onTheme = {
                                         themeMode = it
@@ -243,6 +254,7 @@ class MainActivity : ComponentActivity() {
                                             onSection = { go(Destination.Settings, it) },
                                             onToggleSettings = {
                                                 dest = Destination.Settings
+                                                section = null
                                                 settingsOpen = !settingsOpen
                                             },
                                         )
@@ -259,6 +271,7 @@ class MainActivity : ComponentActivity() {
                                             onSection = { go(Destination.Settings, it) },
                                             onToggleSettings = {
                                                 dest = Destination.Settings
+                                                section = null
                                                 settingsOpen = !settingsOpen
                                             },
                                         )
@@ -278,6 +291,7 @@ class MainActivity : ComponentActivity() {
                                             onSection = { go(Destination.Settings, it) },
                                             onToggleSettings = {
                                                 dest = Destination.Settings
+                                                section = null
                                                 settingsOpen = !settingsOpen
                                             },
                                         )
@@ -296,7 +310,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun DrawerContent(
     dest: Destination,
-    section: SettingSection,
+    section: SettingSection?,
     settingsOpen: Boolean,
     onDest: (Destination) -> Unit,
     onSection: (SettingSection) -> Unit,
@@ -318,7 +332,7 @@ private fun DrawerContent(
 @Composable
 private fun DrawerList(
     dest: Destination,
-    section: SettingSection,
+    section: SettingSection?,
     settingsOpen: Boolean,
     onDest: (Destination) -> Unit,
     onSection: (SettingSection) -> Unit,
@@ -392,7 +406,7 @@ private fun DrawerList(
 @Composable
 private fun RailContent(
     dest: Destination,
-    section: SettingSection,
+    section: SettingSection?,
     settingsOpen: Boolean,
     onDest: (Destination) -> Unit,
     onSection: (SettingSection) -> Unit,
@@ -1541,9 +1555,10 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(s.name, style = MaterialTheme.typography.bodyLarge)
-                                        if (s.description.isNotEmpty()) {
+                                        val blurb = s.description.ifEmpty { s.category }
+                                        if (blurb.isNotEmpty()) {
                                             Text(
-                                                s.description,
+                                                blurb,
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 maxLines = 3,
@@ -2088,9 +2103,10 @@ private fun modelOptionsFor(
 @Composable
 private fun SettingsScreen(
     viewModel: MainViewModel,
-    section: SettingSection = SettingSection.Server,
+    section: SettingSection?,
     wc: WindowClass = WindowClass.Compact,
     onMenu: () -> Unit = {},
+    onPick: (SettingSection) -> Unit = {},
     themeMode: String = ThemeStore.SYSTEM,
     onTheme: (String) -> Unit = {},
 ) {
@@ -2138,7 +2154,7 @@ private fun SettingsScreen(
                         Icon(Icons.Filled.Menu, contentDescription = "Menu")
                     }
                 },
-                title = { Text(section.title) },
+                title = { Text(section?.title ?: "Settings") },
             )
         },
     ) { padding ->
@@ -2154,7 +2170,35 @@ private fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 when (section) {
-                    SettingSection.Server -> {
+                    null -> {
+                        SettingsHub(
+                            serverStatus = if (state.serverUrl.isBlank()) {
+                                "Not set up"
+                            } else if (catalog.isNotEmpty()) {
+                                "Connected"
+                            } else {
+                                state.serverUrl
+                            },
+                            healthStatus = when {
+                                !state.healthAvailable -> "Not installed"
+                                !state.permissionsGranted -> "Setup needed"
+                                state.syncing -> "Syncing…"
+                                state.lastSyncAt.isNotEmpty() -> "Synced"
+                                else -> "Ready"
+                            },
+                            themeStatus = when (themeMode) {
+                                ThemeStore.LIGHT -> "Light"
+                                ThemeStore.DARK -> "Dark"
+                                else -> "System"
+                            },
+                            notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
+                            appVersion = remember(context) {
+                                UpdateManager.currentVersion(context).first
+                            },
+                            onPick = onPick,
+                        )
+                    }
+                    SettingSection.Connection -> {
                         SectionCard(
                             title = "Connection",
                             subtitle = "One URL for chat + sync. The proxy routes chat to the gateway and health data to the sync service.",
@@ -2296,7 +2340,7 @@ private fun SettingsScreen(
                             }
                         }
                     }
-                    SettingSection.Updates -> {
+                    SettingSection.About -> {
                         AppUpdateSection()
                     }
                     SettingSection.Health -> {
@@ -2403,15 +2447,13 @@ private fun SettingsScreen(
                     SettingSection.Notifications -> {
                         NotificationsSection()
                     }
-                    SettingSection.Usage -> {
-                        UsageSection()
-                    }
-                    SettingSection.Backup -> {
+                    SettingSection.Storage -> {
                         SettingsBackupSection(onImported = {
                             viewModel.refresh()
                             settingsRefresh++
                             scope.launch { snackbar.showSnackbar(Toasts.SAVED) }
                         })
+                        UsageSection()
                     }
                 }
             }
@@ -2497,6 +2539,75 @@ private fun formatTokens(chars: Long): String {
         tokens >= 1_000 -> "%.1fk".format(tokens / 1_000.0)
         else -> "$tokens"
     }
+}
+
+/** Settings hub overview: every subsection with its live status, opening
+ * the matching subscreen on tap (titles match 1:1 per platform convention). */
+@Composable
+private fun SettingsHub(
+    serverStatus: String,
+    healthStatus: String,
+    themeStatus: String,
+    notificationsStatus: String,
+    appVersion: String,
+    onPick: (SettingSection) -> Unit,
+) {
+    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, appVersion) {
+        listOf(
+            HubRow(SettingSection.Connection, serverStatus),
+            HubRow(SettingSection.Health, healthStatus),
+            HubRow(SettingSection.Appearance, themeStatus),
+            HubRow(SettingSection.Notifications, notificationsStatus),
+            HubRow(SettingSection.Storage, "Backup and usage"),
+            HubRow(SettingSection.About, appVersion),
+        )
+    }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            rows.forEachIndexed { i, row ->
+                if (i > 0) HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .clickable(
+                            role = Role.Button,
+                            onClickLabel = "Open ${row.section.title}",
+                            onClick = { onPick(row.section) },
+                        )
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        row.section.hubIcon(),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(row.section.title, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            row.status,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                    TextButton(onClick = { onPick(row.section) }) { Text("Open") }
+                }
+            }
+        }
+    }
+    HintLine("Connection first — nothing else works until the server is set.")
+}
+
+private data class HubRow(val section: SettingSection, val status: String)
+
+private fun SettingSection.hubIcon() = when (this) {
+    SettingSection.Connection -> Icons.Filled.Cloud
+    SettingSection.Health -> Icons.Filled.Favorite
+    SettingSection.Appearance -> Icons.Filled.DarkMode
+    SettingSection.Notifications -> Icons.Filled.Notifications
+    SettingSection.Storage -> Icons.Filled.Folder
+    SettingSection.About -> Icons.Filled.Info
 }
 
 /** Hermes notifications hub (issue #58).
