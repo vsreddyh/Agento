@@ -22,6 +22,9 @@ data class SkillInfo(
 /** One toolset from `GET {profile}/v1/toolsets` with its concrete tools. */
 data class ToolsetInfo(
     val name: String,
+    val label: String = "",
+    val description: String = "",
+    val enabled: Boolean? = null,
     val tools: List<String> = emptyList(),
 )
 
@@ -91,7 +94,14 @@ class ServerApi(context: Context) {
                 val arr = rootArray(body, "skills", "data", "items")
                 if (arr != null) {
                     for (i in 0 until arr.length()) {
-                        val o = arr.optJSONObject(i) ?: continue
+                        val item = arr.opt(i)
+                        if (item is String) {
+                            if (item.isNotBlank()) {
+                                out.add(SkillInfo(name = item.trim()))
+                            }
+                            continue
+                        }
+                        val o = item as? JSONObject ?: continue
                         val name = o.optString("name", "")
                             .ifEmpty { o.optString("id", "") }
                             .ifEmpty { o.optString("slug", "") }
@@ -124,11 +134,23 @@ class ServerApi(context: Context) {
                 val arr = rootArray(body, "toolsets", "data", "items")
                 if (arr != null) {
                     for (i in 0 until arr.length()) {
-                        val o = arr.optJSONObject(i) ?: continue
+                        val item = arr.opt(i)
+                        if (item is String) {
+                            if (item.isNotBlank()) {
+                                out.add(ToolsetInfo(name = item.trim()))
+                            }
+                            continue
+                        }
+                        val o = item as? JSONObject ?: continue
                         val name = o.optString("name", "")
                             .ifEmpty { o.optString("id", "") }
                             .trim()
                         if (name.isEmpty()) continue
+                        val enabled = when {
+                            o.has("enabled") -> o.optBoolean("enabled")
+                            o.has("active") -> o.optBoolean("active")
+                            else -> null
+                        }
                         val tools = mutableListOf<String>()
                         val tarr = o.optJSONArray("tools")
                         if (tarr != null) {
@@ -142,7 +164,13 @@ class ServerApi(context: Context) {
                                 }
                             }
                         }
-                        out.add(ToolsetInfo(name, tools))
+                        out.add(ToolsetInfo(
+                            name = name,
+                            label = o.optString("label", "").trim(),
+                            description = o.optString("description", "").trim(),
+                            enabled = enabled,
+                            tools = tools,
+                        ))
                     }
                 }
                 if (out.isEmpty()) throw RuntimeException("No toolsets listed")

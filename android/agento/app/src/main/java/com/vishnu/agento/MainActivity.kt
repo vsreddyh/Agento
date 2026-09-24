@@ -1449,13 +1449,15 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var profile by remember { mutableStateOf("god") }
     var skills by remember { mutableStateOf<List<SkillInfo>>(emptyList()) }
     var toolsets by remember { mutableStateOf<List<ToolsetInfo>>(emptyList()) }
-    var error by remember { mutableStateOf("") }
+    var skillsError by remember { mutableStateOf("") }
+    var toolsError by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
 
     fun load() {
         busy = true
-        error = ""
+        skillsError = ""
+        toolsError = ""
         loaded = false
         scope.launch {
             val api = ServerApi(context)
@@ -1464,9 +1466,12 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             val t = api.listToolsets(path)
             skills = s.getOrDefault(emptyList())
             toolsets = t.getOrDefault(emptyList())
-            val firstFailure = s.exceptionOrNull() ?: t.exceptionOrNull()
-            error = firstFailure?.message ?: firstFailure?.javaClass?.simpleName ?: ""
-            if (skills.isNotEmpty() || toolsets.isNotEmpty()) error = ""
+            skillsError = s.exceptionOrNull()?.let {
+                it.message ?: it.javaClass.simpleName
+            } ?: ""
+            toolsError = t.exceptionOrNull()?.let {
+                it.message ?: it.javaClass.simpleName
+            } ?: ""
             loaded = true
             busy = false
         }
@@ -1523,12 +1528,14 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp),
                 ) {
-                    if (error.isNotEmpty() && skills.isEmpty() && toolsets.isEmpty() && loaded) {
+                    if (toolsError.isNotEmpty() && skills.isEmpty() && toolsets.isEmpty() && loaded) {
                         item {
-                            ErrorCard(raw = error, onRetry = { load() })
+                            ErrorCard(raw = toolsError, onRetry = { load() })
                         }
                     }
-                    if (loaded && skills.isEmpty() && toolsets.isEmpty() && error.isEmpty()) {
+                    if (loaded && skills.isEmpty() && toolsets.isEmpty()
+                        && skillsError.isEmpty() && toolsError.isEmpty()
+                    ) {
                         item {
                             EmptyState(
                                 icon = Icons.Filled.Extension,
@@ -1566,6 +1573,71 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                         }
                                     }
                                     when (s.enabled) {
+                                        true -> Text(
+                                            "On",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                        false -> Text(
+                                            "Off",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        null -> { }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (skills.isEmpty() && skillsError.isNotEmpty() && loaded) {
+                        item {
+                            HintLine(
+                                "Skills unavailable " +
+                                    "(${friendlyError(skillsError).title.lowercase()}) — " +
+                                    "tools below still work."
+                            )
+                        }
+                    }
+                    if (toolsets.isNotEmpty()) {
+                        item {
+                            Text(
+                                "Toolsets (${toolsets.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                            )
+                        }
+                        items(toolsets, key = { it.name }) { ts ->
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(ts.label.ifEmpty { ts.name },
+                                            style = MaterialTheme.typography.bodyLarge)
+                                        if (ts.label.isNotEmpty()) {
+                                            Text(
+                                                ts.name,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        val blurb = ts.description.ifEmpty {
+                                            if (ts.tools.isEmpty()) "" else
+                                                "${ts.tools.size} tool(s): " +
+                                                    ts.tools.take(10).joinToString(", ") +
+                                                    if (ts.tools.size > 10) "…" else ""
+                                        }
+                                        if (blurb.isNotEmpty()) {
+                                            Text(
+                                                blurb,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 4,
+                                            )
+                                        }
+                                    }
+                                    when (ts.enabled) {
                                         true -> Text(
                                             "On",
                                             style = MaterialTheme.typography.labelMedium,

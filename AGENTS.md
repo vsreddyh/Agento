@@ -1,17 +1,25 @@
 # AGENTS.md
 
-## Hard rule: this is a sandbox project
+## Hard rule: this repo on this machine IS the live stack
 
-- NEVER modify, restart, or touch live Hermes state on this machine:
-  - `~/.hermes/` (config.yaml, .env, logs, skills, state)
-  - `hermes` CLI, `hermes-gateway` systemd unit, `hermes dashboard`
-  - Container stack on this machine (compose services) — compose files in
-    this repo are the source of truth, but do NOT run `podman-compose` or
-    `./scripts/hermes.sh start|stop|restart|init` against the live daemons
-    while working here.
-- Work only inside this repo. Preview/validate changes here; the user applies
-  them to the live machine themselves.
-- If a task requires live Hermes action, STOP and ask the user first.
+- This checkout is the live deployment: `gateway/` is bind-mounted into the
+  running gateway container (`HERMES_HOME=/opt/data`), and the container
+  stack (`docker/docker-compose.yml`) runs from here. There is no separate
+  "live machine" — changes here affect production.
+- `gateway/` holds live runtime state (pids, heartbeats, logs, sqlite WALs,
+  cache). NEVER commit runtime state: only edit source files (templates,
+  scripts, compose, code, docs). Check `git status` before staging and leave
+  state files (`.pid`, `.heartbeat`, `logs/`, `*.db*`, `cache/`,
+  `.curator_state` churn) uncommitted.
+- Read-only live inspection is always fine: `podman ps/logs`,
+  `scripts/hermes.sh status`, reading logs/config, `curl` against
+  localhost ports, rendering templates to /tmp.
+- Disruptive actions need explicit user go-ahead first (STOP and ask):
+  `start|stop|restart|init|clean`, recreating containers, editing the live
+  `.env`, touching MongoDB data. No surprise restarts.
+- No host Hermes install exists here (`~/.hermes/`, `hermes` CLI, systemd
+  unit, `hermes dashboard` are not used) — everything runs in the one
+  compose stack below.
 
 ## What this project is
 
