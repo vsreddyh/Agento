@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -157,11 +158,11 @@ class ServerApi(context: Context) {
     private fun rootArray(body: String, vararg keys: String): JSONArray? {
         try {
             return JSONArray(body)
-        } catch (_: Exception) {
+        } catch (_: JSONException) {
         }
         val o = try {
             JSONObject(body)
-        } catch (_: Exception) {
+        } catch (_: JSONException) {
             return null
         }
         for (k in keys) {

@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -192,7 +193,7 @@ class MainActivity : ComponentActivity() {
                     }
                     fun go(d: Destination, s: SettingSection? = null) {
                         dest = d
-                        if (s != null) section = s
+                        section = s
                         if (d != Destination.Settings) settingsOpen = false
                         scope.launch { drawerState.close() }
                     }
@@ -2191,7 +2192,7 @@ private fun SettingsScreen(
                                 else -> "System"
                             },
                             notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
-                            appVersion = remember {
+                            appVersion = remember(context) {
                                 UpdateManager.currentVersion(context).first
                             },
                             onPick = onPick,
@@ -2551,20 +2552,27 @@ private fun SettingsHub(
     appVersion: String,
     onPick: (SettingSection) -> Unit,
 ) {
-    data class HubRow(val section: SettingSection, val status: String)
+    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, appVersion) {
+        listOf(
+            HubRow(SettingSection.Connection, serverStatus),
+            HubRow(SettingSection.Health, healthStatus),
+            HubRow(SettingSection.Appearance, themeStatus),
+            HubRow(SettingSection.Notifications, notificationsStatus),
+            HubRow(SettingSection.Storage, "Backup and usage"),
+            HubRow(SettingSection.About, appVersion),
+        )
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
-            listOf(
-                HubRow(SettingSection.Connection, serverStatus),
-                HubRow(SettingSection.Health, healthStatus),
-                HubRow(SettingSection.Appearance, themeStatus),
-                HubRow(SettingSection.Notifications, notificationsStatus),
-                HubRow(SettingSection.Storage, "Backup and usage"),
-                HubRow(SettingSection.About, appVersion),
-            ).forEachIndexed { i, row ->
+            rows.forEachIndexed { i, row ->
                 if (i > 0) HorizontalDivider()
                 Row(
                     modifier = Modifier.fillMaxWidth()
+                        .clickable(
+                            role = Role.Button,
+                            onClickLabel = "Open ${row.section.title}",
+                            onClick = { onPick(row.section) },
+                        )
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -2590,6 +2598,8 @@ private fun SettingsHub(
     }
     HintLine("Connection first — nothing else works until the server is set.")
 }
+
+private data class HubRow(val section: SettingSection, val status: String)
 
 private fun SettingSection.hubIcon() = when (this) {
     SettingSection.Connection -> Icons.Filled.Cloud
