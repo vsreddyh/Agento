@@ -101,9 +101,9 @@ delegation:
 skills:
   creation_nudge_interval: 15
   # Unused bundled skills, switched off (same mechanism as the dashboard
-  # toggle; `hermes-agent` is essential and can never land here). The
-  # /v1/skills endpoint still lists them (it uses skip_disabled=False);
-  # the agent itself no longer loads them.
+  # toggle; `hermes-agent` is essential and can never land here). Disabled
+  # skills are excluded from /v1/skills (53 -> 43 verified live); the agent
+  # itself no longer loads them either.
   disabled:
     - claude-code
     - codex
@@ -181,12 +181,8 @@ mcp_servers:
       MONGODB_DB: "${MONGODB_DB}"
     timeout: 120
     connect_timeout: 60
-  # Browser automation (Playwright MCP, headless chromium bundled in the bot
-  # image). Same stdio server on every bot profile.
-  playwright:
-    command: "npx"
-    args: ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--headless"]
-    timeout: 120
-    connect_timeout: 60
+
+# NOTE: no Playwright MCP — the native browser toolset covers automation
+# (the npx stdio server was redundant weight on every profile).
 
 _config_version: 33

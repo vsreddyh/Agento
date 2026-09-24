@@ -42,14 +42,8 @@ platform_toolsets:
     - file
     - terminal
 
-# Browser automation (Playwright MCP, headless chromium bundled in the bot
-# image). Same stdio server on every bot profile.
-mcp_servers:
-  playwright:
-    command: "npx"
-    args: ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--headless"]
-    timeout: 120
-    connect_timeout: 60
+# NOTE: no Playwright MCP — the native browser toolset covers automation.
+mcp_servers: {}
 
 _config_version: 34
 
