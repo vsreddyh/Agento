@@ -1528,9 +1528,14 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp),
                 ) {
-                    if (toolsError.isNotEmpty() && skills.isEmpty() && toolsets.isEmpty() && loaded) {
+                    // Fully-empty screen: one error card with retry, fed by
+                    // whichever source failed (tools first, else skills).
+                    val bothEmptyError = toolsError.ifEmpty { skillsError }
+                    if (skills.isEmpty() && toolsets.isEmpty()
+                        && bothEmptyError.isNotEmpty() && loaded
+                    ) {
                         item {
-                            ErrorCard(raw = toolsError, onRetry = { load() })
+                            ErrorCard(raw = bothEmptyError, onRetry = { load() })
                         }
                     }
                     if (loaded && skills.isEmpty() && toolsets.isEmpty()
@@ -1589,15 +1594,15 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             }
                         }
                     }
-                    if (skills.isEmpty() && skillsError.isNotEmpty() && loaded) {
+                    // Partial failure with the other side intact: slim hint only
+                    // (the full-empty card above already covers both-empty).
+                    if (skills.isEmpty() && skillsError.isNotEmpty()
+                        && toolsets.isNotEmpty() && loaded
+                    ) {
                         item {
-                            val skillsHint = remember(skillsError, toolsets) {
-                                val title = friendlyError(skillsError).title
-                                if (toolsets.isNotEmpty()) {
-                                    "Skills unavailable ($title) — tools below still work."
-                                } else {
-                                    "Skills unavailable ($title)."
-                                }
+                            val skillsHint = remember(skillsError) {
+                                "Skills unavailable (${friendlyError(skillsError).title}) — " +
+                                    "tools below still work."
                             }
                             HintLine(skillsHint)
                         }
@@ -1658,15 +1663,13 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             }
                         }
                     }
-                    if (toolsets.isEmpty() && toolsError.isNotEmpty() && loaded) {
+                    if (toolsets.isEmpty() && toolsError.isNotEmpty()
+                        && skills.isNotEmpty() && loaded
+                    ) {
                         item {
-                            val toolsHint = remember(toolsError, skills) {
-                                val title = friendlyError(toolsError).title
-                                if (skills.isNotEmpty()) {
-                                    "Tools unavailable ($title) — skills above still work."
-                                } else {
-                                    "Tools unavailable ($title)."
-                                }
+                            val toolsHint = remember(toolsError) {
+                                "Tools unavailable (${friendlyError(toolsError).title}) — " +
+                                    "skills above still work."
                             }
                             HintLine(toolsHint)
                         }
