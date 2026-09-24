@@ -73,7 +73,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 
 /** Builds per-tab chat ViewModels so story/resumes/god keep isolated history. */
@@ -1449,27 +1453,49 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var profile by remember { mutableStateOf("god") }
     var skills by remember { mutableStateOf<List<SkillInfo>>(emptyList()) }
     var toolsets by remember { mutableStateOf<List<ToolsetInfo>>(emptyList()) }
-    var error by remember { mutableStateOf("") }
+    var skillsError by remember { mutableStateOf("") }
+    var toolsError by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
+    // Cancelled + replaced on every load() so rapid profile taps can't
+    // let a stale response win; only the latest job may clear busy.
+    var loadJob by remember { mutableStateOf<Job?>(null) }
 
     fun load() {
+        loadJob?.cancel()
         busy = true
-        error = ""
+        skillsError = ""
+        toolsError = ""
         loaded = false
-        scope.launch {
-            val api = ServerApi(context)
-            val path = ChatApi(context).pathFor(profile)
-            val s = api.listSkills(path)
-            val t = api.listToolsets(path)
-            skills = s.getOrDefault(emptyList())
-            toolsets = t.getOrDefault(emptyList())
-            val firstFailure = s.exceptionOrNull() ?: t.exceptionOrNull()
-            error = firstFailure?.message ?: firstFailure?.javaClass?.simpleName ?: ""
-            if (skills.isNotEmpty() || toolsets.isNotEmpty()) error = ""
-            loaded = true
-            busy = false
+        val path = ChatApi(context).pathFor(profile)
+        var job: Job? = null
+        job = scope.launch {
+            try {
+                supervisorScope {
+                    val s = async { ServerApi(context).listSkills(path) }
+                    val t = async { ServerApi(context).listToolsets(path) }
+                    // Await into locals first: a cancel landing between the
+                    // two awaits must not leave half-stale state behind.
+                    val sr = s.await()
+                    val tr = t.await()
+                    ensureActive()
+                    if (loadJob == job) {
+                        skills = sr.getOrDefault(emptyList())
+                        toolsets = tr.getOrDefault(emptyList())
+                        skillsError = sr.exceptionOrNull()?.let {
+                            it.message ?: it.javaClass.simpleName
+                        } ?: ""
+                        toolsError = tr.exceptionOrNull()?.let {
+                            it.message ?: it.javaClass.simpleName
+                        } ?: ""
+                        loaded = true
+                    }
+                }
+            } finally {
+                if (loadJob == job) busy = false
+            }
         }
+        loadJob = job
     }
 
     LaunchedEffect(profile) { load() }
@@ -1518,17 +1544,35 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         CircularProgressIndicator()
                     }
                 }
+                // Hoisted above the list so memoization isn't position-keyed.
+                val skillsHint = remember(skillsError) {
+                    "Skills unavailable (${friendlyError(skillsError).title}) — " +
+                        "tools below still work."
+                }
+                val toolsHint = remember(toolsError) {
+                    "Tools unavailable (${friendlyError(toolsError).title}) — " +
+                        "skills above still work."
+                }
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp),
                 ) {
-                    if (error.isNotEmpty() && skills.isEmpty() && toolsets.isEmpty() && loaded) {
+                    // Fully-empty screen: one error card with retry, joining both
+                    // raws when both sources failed so Details keeps everything.
+                    val bothEmptyError = listOf(toolsError, skillsError)
+                        .filter { it.isNotEmpty() }
+                        .joinToString("\n\n")
+                    if (skills.isEmpty() && toolsets.isEmpty()
+                        && bothEmptyError.isNotEmpty() && loaded
+                    ) {
                         item {
-                            ErrorCard(raw = error, onRetry = { load() })
+                            ErrorCard(raw = bothEmptyError, onRetry = { load() })
                         }
                     }
-                    if (loaded && skills.isEmpty() && toolsets.isEmpty() && error.isEmpty()) {
+                    if (loaded && skills.isEmpty() && toolsets.isEmpty()
+                        && skillsError.isEmpty() && toolsError.isEmpty()
+                    ) {
                         item {
                             EmptyState(
                                 icon = Icons.Filled.Extension,
@@ -1580,6 +1624,78 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                     }
                                 }
                             }
+                        }
+                    }
+                    // Partial failure with the other side intact: slim hint only
+                    // (the full-empty card above already covers both-empty).
+                    if (skills.isEmpty() && skillsError.isNotEmpty()
+                        && toolsets.isNotEmpty() && loaded
+                    ) {
+                        item {
+                            HintLine(skillsHint)
+                        }
+                    }
+                    if (toolsets.isNotEmpty()) {
+                        item {
+                            Text(
+                                "Toolsets (${toolsets.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                            )
+                        }
+                        items(toolsets, key = { it.name }) { ts ->
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(ts.label.ifEmpty { ts.name },
+                                            style = MaterialTheme.typography.bodyLarge)
+                                        if (ts.label.isNotEmpty()) {
+                                            Text(
+                                                ts.name,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        val blurb = ts.description.ifEmpty {
+                                            if (ts.tools.isEmpty()) "" else
+                                                "${ts.tools.size} tool(s): " +
+                                                    ts.tools.take(10).joinToString(", ") +
+                                                    if (ts.tools.size > 10) "…" else ""
+                                        }
+                                        if (blurb.isNotEmpty()) {
+                                            Text(
+                                                blurb,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 4,
+                                            )
+                                        }
+                                    }
+                                    when (ts.enabled) {
+                                        true -> Text(
+                                            "On",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                        false -> Text(
+                                            "Off",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        null -> { }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (toolsets.isEmpty() && toolsError.isNotEmpty()
+                        && skills.isNotEmpty() && loaded
+                    ) {
+                        item {
+                            HintLine(toolsHint)
                         }
                     }
                     if (mcp.isNotEmpty()) {
