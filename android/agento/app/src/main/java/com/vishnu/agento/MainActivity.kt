@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.List
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -63,6 +65,7 @@ import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -88,6 +91,8 @@ private enum class Destination(val title: String) {
     Portfolio("Portfolio"),
     Tasks("Tasks"),
     Storage("Storage"),
+    Scheduler("Scheduler"),
+    Skills("Skills"),
     Settings("Settings"),
 }
 
@@ -97,6 +102,8 @@ private fun Destination.icon() = when (this) {
     Destination.God -> Icons.Filled.Star
     Destination.Tasks -> Icons.Filled.List
     Destination.Storage -> Icons.Filled.Folder
+    Destination.Scheduler -> Icons.Filled.Schedule
+    Destination.Skills -> Icons.Filled.Extension
     Destination.Settings -> Icons.Filled.Settings
 }
 
@@ -108,6 +115,7 @@ private enum class SettingSection(val title: String) {
     Health("Health sync"),
     Notifications("Hermes notifications"),
     Backup("Settings backup"),
+    Usage("Usage"),
 }
 
 
@@ -200,6 +208,13 @@ class MainActivity : ComponentActivity() {
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
                                 Destination.Storage -> StorageScreen(
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                )
+                                Destination.Scheduler -> SchedulerScreen(
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                )
+                                Destination.Skills -> SkillsScreen(
+                                    wc = wc,
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
                                 Destination.Settings -> SettingsScreen(
@@ -1140,6 +1155,463 @@ private fun StorageScreen(onMenu: () -> Unit = {}) {
     }
 }
 
+/** Gateway scheduler: native cron jobs over the Jobs API (same auth as
+ * chat, through the proxy's /p/* route — no server changes needed). */
+@Composable
+private fun SchedulerScreen(onMenu: () -> Unit = {}) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    var jobs by remember { mutableStateOf<List<CronJob>>(emptyList()) }
+    var error by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var loaded by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<CronJob?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<CronJob?>(null) }
+
+    fun path(): String = ChatApi(context).pathFor("god")
+
+    fun load(silent: Boolean = false) {
+        if (!silent) { busy = true; error = "" }
+        scope.launch {
+            JobsApi(context).list(path()).fold(
+                onSuccess = { jobs = it; loaded = true },
+                onFailure = { e ->
+                    error = e.message ?: e.javaClass.simpleName
+                    loaded = true
+                },
+            )
+            busy = false
+        }
+    }
+
+    fun mutate(work: suspend () -> Result<Unit>, okToast: String) {
+        scope.launch {
+            work().fold(
+                onSuccess = {
+                    load(silent = true)
+                    snackbar.showSnackbar(okToast)
+                },
+                onFailure = { e ->
+                    snackbar.showSnackbar(friendlyError(e.message ?: "").title)
+                },
+            )
+        }
+    }
+
+    LaunchedEffect(Unit) { load() }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Scheduler") },
+                navigationIcon = {
+                    IconButton(onClick = onMenu) {
+                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { creating = true }) {
+                        Icon(Icons.Filled.Add, contentDescription = "New job")
+                    }
+                    IconButton(onClick = { load() }, enabled = !busy) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            if (error.isNotEmpty() && jobs.isEmpty()) {
+                ErrorCard(raw = error, onRetry = { load() },
+                    modifier = Modifier.padding(12.dp))
+            }
+            if (loaded && jobs.isEmpty() && error.isEmpty()) {
+                EmptyState(
+                    icon = Icons.Filled.Schedule,
+                    title = "No scheduled jobs",
+                    subtitle = "Jobs run prompts on a schedule, even when the app is closed.",
+                    actionLabel = "New job",
+                    onAction = { creating = true },
+                )
+            }
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(vertical = 8.dp),
+            ) {
+                items(jobs, key = { it.id }) { job ->
+                    var menu by remember(job.id) { mutableStateOf(false) }
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        job.name.ifEmpty { "(unnamed job)" },
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        maxLines = 1,
+                                    )
+                                    if (job.schedule.isNotEmpty()) {
+                                        Text(
+                                            job.schedule,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                                val paused = job.paused
+                                AssistChip(
+                                    onClick = {
+                                        if (paused == true) {
+                                            mutate({ JobsApi(context).resume(path(), job.id) }, "Job resumed.")
+                                        } else {
+                                            mutate({ JobsApi(context).pause(path(), job.id) }, "Job paused.")
+                                        }
+                                    },
+                                    label = { Text(when (paused) { true -> "Paused"; false -> "Active"; null -> "—" }) },
+                                )
+                                Box {
+                                    IconButton(onClick = { menu = true }) {
+                                        Icon(Icons.Filled.MoreVert, contentDescription = "Job menu")
+                                    }
+                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text("Run now") },
+                                            onClick = {
+                                                menu = false
+                                                mutate({ JobsApi(context).runNow(path(), job.id) }, "Job started.")
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Edit") },
+                                            onClick = { menu = false; editing = job },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Delete") },
+                                            onClick = { menu = false; deleting = job },
+                                        )
+                                    }
+                                }
+                            }
+                            if (job.prompt.isNotEmpty()) {
+                                Text(
+                                    job.prompt,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 3,
+                                )
+                            }
+                            val meta = listOfNotNull(
+                                job.nextRun.takeIf { it.isNotEmpty() }?.let { "Next: $it" },
+                                job.lastRun.takeIf { it.isNotEmpty() }?.let { "Last: $it" },
+                                job.delivery.takeIf { it.isNotEmpty() }?.let { "To: $it" },
+                            ).joinToString(" · ")
+                            if (meta.isNotEmpty()) {
+                                Text(
+                                    meta,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (creating) {
+        JobDialog(
+            initial = null,
+            onDismiss = { creating = false },
+            onSave = { name, prompt, schedule, delivery ->
+                creating = false
+                mutate(
+                    { JobsApi(context).create(path(), name, prompt, schedule, delivery) },
+                    "Job created.",
+                )
+            },
+        )
+    }
+    val editTarget = editing
+    if (editTarget != null) {
+        JobDialog(
+            initial = editTarget,
+            onDismiss = { editing = null },
+            onSave = { name, prompt, schedule, delivery ->
+                editing = null
+                mutate(
+                    { JobsApi(context).update(path(), editTarget.id, name, prompt, schedule, delivery) },
+                    "Job updated.",
+                )
+            },
+        )
+    }
+    val deleteTarget = deleting
+    if (deleteTarget != null) {
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete job?") },
+            text = { Text("“${deleteTarget.name.ifEmpty { deleteTarget.schedule.ifEmpty { "Unnamed job" } }}” will stop running. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleting = null
+                    mutate({ JobsApi(context).delete(path(), deleteTarget.id) }, "Job deleted.")
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleting = null }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+/** Create/edit dialog for one scheduled job. */
+@Composable
+private fun JobDialog(
+    initial: CronJob?,
+    onDismiss: () -> Unit,
+    onSave: (name: String, prompt: String, schedule: String, delivery: String) -> Unit,
+) {
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var prompt by remember { mutableStateOf(initial?.prompt ?: "") }
+    var schedule by remember { mutableStateOf(initial?.schedule ?: "") }
+    var delivery by remember { mutableStateOf(initial?.delivery ?: "local") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial == null) "New job" else "Edit job") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = prompt,
+                    onValueChange = { prompt = it },
+                    label = { Text("Prompt") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 4,
+                )
+                OutlinedTextField(
+                    value = schedule,
+                    onValueChange = { schedule = it },
+                    label = { Text("Schedule (cron, e.g. 0 9 * * *)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = delivery,
+                    onValueChange = { delivery = it },
+                    label = { Text("Deliver to (local, telegram, …)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(name.trim(), prompt.trim(), schedule.trim(), delivery.trim()) },
+                enabled = prompt.isNotBlank() && schedule.isNotBlank(),
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+/** Read-only skills + MCP inventory per assistant (dashboard pages, slimmed). */
+@Composable
+private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var profile by remember { mutableStateOf("god") }
+    var skills by remember { mutableStateOf<List<SkillInfo>>(emptyList()) }
+    var toolsets by remember { mutableStateOf<List<ToolsetInfo>>(emptyList()) }
+    var error by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var loaded by remember { mutableStateOf(false) }
+
+    fun load() {
+        busy = true
+        error = ""
+        loaded = false
+        scope.launch {
+            val api = ServerApi(context)
+            val path = ChatApi(context).pathFor(profile)
+            val s = api.listSkills(path)
+            val t = api.listToolsets(path)
+            skills = s.getOrDefault(emptyList())
+            toolsets = t.getOrDefault(emptyList())
+            val firstFailure = s.exceptionOrNull() ?: t.exceptionOrNull()
+            error = firstFailure?.message ?: firstFailure?.javaClass?.simpleName ?: ""
+            if (skills.isNotEmpty() || toolsets.isNotEmpty()) error = ""
+            loaded = true
+            busy = false
+        }
+    }
+
+    LaunchedEffect(profile) { load() }
+
+    val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Portfolio")
+    val mcp = remember(toolsets) { mcpServersFrom(toolsets) }
+    var mcpOpen by remember { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Skills & tools") },
+                navigationIcon = {
+                    IconButton(onClick = onMenu) {
+                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { load() }, enabled = !busy) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Column(modifier = Modifier.contentWidth(wc)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    tabs.forEach { (key, label) ->
+                        FilterChip(
+                            selected = profile == key,
+                            onClick = { profile = key },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                if (busy && !loaded) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                ) {
+                    if (error.isNotEmpty() && skills.isEmpty() && toolsets.isEmpty() && loaded) {
+                        item {
+                            ErrorCard(raw = error, onRetry = { load() })
+                        }
+                    }
+                    if (loaded && skills.isEmpty() && toolsets.isEmpty() && error.isEmpty()) {
+                        item {
+                            EmptyState(
+                                icon = Icons.Filled.Extension,
+                                title = "Nothing listed",
+                                subtitle = "This assistant reports no skills or toolsets.",
+                                actionLabel = "Refresh",
+                                onAction = { load() },
+                            )
+                        }
+                    }
+                    if (skills.isNotEmpty()) {
+                        item {
+                            Text(
+                                "Skills (${skills.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                            )
+                        }
+                        items(skills, key = { it.name }) { s ->
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(s.name, style = MaterialTheme.typography.bodyLarge)
+                                        if (s.description.isNotEmpty()) {
+                                            Text(
+                                                s.description,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 3,
+                                            )
+                                        }
+                                    }
+                                    when (s.enabled) {
+                                        true -> Text(
+                                            "On",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                        false -> Text(
+                                            "Off",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        null -> { }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (mcp.isNotEmpty()) {
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "MCP servers (${mcp.size})",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = { mcpOpen = !mcpOpen }) {
+                                    Text(if (mcpOpen) "Hide" else "Show")
+                                }
+                            }
+                        }
+                        item {
+                            Text(
+                                "Read-only — servers are configured on the gateway.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (mcpOpen) {
+                            items(mcp, key = { it.name }) { server ->
+                                Card(modifier = Modifier.fillMaxWidth()) {
+                                    Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                                        Text(server.name, style = MaterialTheme.typography.bodyLarge)
+                                        Text(
+                                            "${server.tools.size} tool(s): ${server.tools.take(8).joinToString(", ")}" +
+                                                if (server.tools.size > 8) "…" else "",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun humanSize(bytes: Long): String {
     if (bytes <= 0) return "0 B"
     val units = listOf("B", "KB", "MB", "GB")
@@ -1507,10 +1979,19 @@ private fun ChatScreen(
                                             }
                                         }
                                         Spacer(modifier = Modifier.height(2.dp))
-                                        SelectionContainer {
-                                            Text(
-                                                msg.content.ifEmpty { "…" },
-                                                style = MaterialTheme.typography.bodyMedium,
+                                        if (isUser) {
+                                            SelectionContainer {
+                                                Text(
+                                                    msg.content.ifEmpty { "…" },
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                )
+                                            }
+                                        } else {
+                                            // Assistant messages render Markdown
+                                            // (code blocks, lists); copy keeps the source.
+                                            Markdown(
+                                                content = msg.content.ifEmpty { "…" },
+                                                modifier = Modifier.fillMaxWidth(),
                                             )
                                         }
                                     }
@@ -1922,6 +2403,9 @@ private fun SettingsScreen(
                     SettingSection.Notifications -> {
                         NotificationsSection()
                     }
+                    SettingSection.Usage -> {
+                        UsageSection()
+                    }
                     SettingSection.Backup -> {
                         SettingsBackupSection(onImported = {
                             viewModel.refresh()
@@ -1932,6 +2416,86 @@ private fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+/** Local usage estimates: per-assistant traffic measured on-device.
+ * The gateway exposes no aggregate endpoint, so tokens are approximated
+ * from characters (≈4 chars/token) — good enough for a sense of scale. */
+@Composable
+private fun UsageSection() {
+    val context = LocalContext.current
+    var rows by remember { mutableStateOf<List<UsageRow>>(emptyList()) }
+    var loaded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val data = withContext(Dispatchers.IO) {
+            val prefs = context.getSharedPreferences(
+                AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            listOf(
+                Triple("god", "God", "default"),
+                Triple("story", "Story", "story"),
+                Triple("resumes", "Portfolio", "resumes"),
+            ).map { (tab, label, _) ->
+                val threads = ChatThreads.load(context, tab)
+                UsageRow(
+                    label = label,
+                    conversations = threads.size,
+                    messages = threads.sumOf { it.messages.size },
+                    sentChars = prefs.getLong("usage_sent_$tab", 0L),
+                    recvChars = prefs.getLong("usage_recv_$tab", 0L),
+                )
+            }
+        }
+        rows = data
+        loaded = true
+    }
+
+    if (!loaded) {
+        Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+    val totalChars = rows.sumOf { it.sentChars + it.recvChars }
+    SectionCard(
+        title = "Total",
+        subtitle = "Across all assistants, measured on this device.",
+    ) {
+        Text(
+            "≈ ${formatTokens(totalChars)} tokens · " +
+                "${rows.sumOf { it.messages }} messages · " +
+                "${rows.sumOf { it.conversations }} conversations",
+            style = MaterialTheme.typography.bodyLarge,
+        )
+    }
+    rows.forEach { r ->
+        SectionCard(title = r.label) {
+            Text(
+                "≈ ${formatTokens(r.sentChars + r.recvChars)} tokens · " +
+                    "${r.messages} messages · ${r.conversations} conversations",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            HintLine("Sent ≈ ${formatTokens(r.sentChars)} · received ≈ ${formatTokens(r.recvChars)}")
+        }
+    }
+    HintLine("Estimates only — the server reports no totals, so these are character-based approximations.")
+}
+
+private data class UsageRow(
+    val label: String,
+    val conversations: Int,
+    val messages: Int,
+    val sentChars: Long,
+    val recvChars: Long,
+)
+
+private fun formatTokens(chars: Long): String {
+    val tokens = chars / 4
+    return when {
+        tokens >= 1_000_000 -> "%.1fM".format(tokens / 1_000_000.0)
+        tokens >= 1_000 -> "%.1fk".format(tokens / 1_000.0)
+        else -> "$tokens"
     }
 }
 

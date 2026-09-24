@@ -35,3 +35,7 @@
 
 # Coroutines
 -dontwarn kotlinx.coroutines.**
+
+# Markdown renderer (reflection-free, but keep the parser + components for R8)
+-keep class com.mikepenz.markdown.** { *; }
+-dontwarn com.mikepenz.markdown.**

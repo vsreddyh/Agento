@@ -114,6 +114,12 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // Markdown chat bubbles (assistant messages). Pinned to 0.33.0: the last
+    // release on Compose 1.7.x matching compose-bom 2024.12.01 (0.34.0 moved
+    // to Compose 1.8). Bump together with the BOM.
+    implementation("com.mikepenz:multiplatform-markdown-renderer-android:0.33.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m3-android:0.33.0")
+
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
 }

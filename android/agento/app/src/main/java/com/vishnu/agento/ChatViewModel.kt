@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.app.Application
+import android.content.Context
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
@@ -225,6 +226,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
+    /** Adds character counts for the Usage screen (estimates, local only). */
+    private fun addUsage(sent: Int = 0, recv: Int = 0) {
+        if (sent <= 0 && recv <= 0) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit()
+                    .putLong("usage_sent_$tab", prefs.getLong("usage_sent_$tab", 0L) + sent)
+                    .putLong("usage_recv_$tab", prefs.getLong("usage_recv_$tab", 0L) + recv)
+                    .apply()
+            }
+        }
+    }
+
     fun stop() {
         streamJob?.cancel()
         streamJob = null
@@ -250,6 +265,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val history = _state.value.messages +
             ChatMessage("user", text, ChatThreads.now())
         _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+        addUsage(sent = text.length)
         doSend(history, path, provider, model)
     }
 
@@ -287,6 +303,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             streaming = false,
                             online = true,
                         )
+                        addUsage(recv = final.length)
                         upsertActive(finished)
                         persist()
                         // #58: ping the user when a reply lands while the app
