@@ -28,6 +28,15 @@ COPY --from=gobuild /out/miser-money /out/cookbook /out/health-check /out/retent
 RUN chmod 755 /usr/local/bin/miser-money /usr/local/bin/cookbook /usr/local/bin/health-check /usr/local/bin/retention /usr/local/bin/mongo
 COPY test/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+# Compat shims for upstream skew in the official image (each script is a
+# no-op once upstream ships a consistent image, and fails the build if it
+# can neither confirm nor establish consistency).
+COPY docker/gateway-patches/ /tmp/gateway-patches/
+RUN set -e; \
+    PY="$(command -v python3 || true)"; \
+    if [ -z "$PY" ]; then PY=/opt/hermes/.venv/bin/python; fi; \
+    "$PY" /tmp/gateway-patches/01-skills-include-editorial.py && \
+    rm -rf /tmp/gateway-patches
 
 WORKDIR /workspace
 
