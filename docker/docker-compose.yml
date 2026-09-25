@@ -70,6 +70,10 @@ services:
     volumes:
       - ../gateway:/opt/data
       - ../workspace:/workspace
+      # VPS SSH keys (read-only): side profiles push/pull their repos
+      # (resumes, portals) as the VPS GitHub identity. known_hosts already
+      # covers github.com, so no host-key writes are needed at runtime.
+      - ${HOME:-/root}/.ssh:/root/.ssh:ro
     environment:
       <<: *bot-base-environment
       PASSWORD: ${PASSWORD:-}
