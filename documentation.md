@@ -42,7 +42,7 @@ Retention ───────────────► one-shot container (c
 - **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving god + 2 sides from the official image (entrypoint renders templates with secret fail-fast, then execs the gateway directly — their s6 tree is bypassed).
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
 - **app API**: Hermes built-in OpenAI-compatible server (`platforms.api_server` in `gateway/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
-- **playwright**: Browser automation via the official `@playwright/mcp` stdio server (headless chromium bundled in the bot image), configured per profile in `mcp_servers`.
+- **browser**: Web automation via the native built-in browser toolset (`browser_*` tools); no MCP server needed.
 - **retention**: One-shot retention job executing the `retention` Go binary (`cmd/retention/main.go`) via cron or on stack start.
 - **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched.
 

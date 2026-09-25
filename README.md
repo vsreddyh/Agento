@@ -1,6 +1,6 @@
 # Hermes Android stack
 
-Fully containerized agent stack running god + 2 sides (god main, story/resumes) direct against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Playwright browser automation (bundled chromium MCP on every profile), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully containerized agent stack running god + 2 sides (god main, story/resumes) direct against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), native browser automation via the built-in browser toolset, Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
