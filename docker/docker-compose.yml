@@ -70,13 +70,22 @@ services:
     volumes:
       - ../gateway:/opt/data
       - ../workspace:/workspace
-      # VPS SSH keys (read-only): side profiles push/pull their repos
-      # (resumes, portals) as the VPS GitHub identity. known_hosts already
-      # covers github.com, so no host-key writes are needed at runtime.
-      - ${HOME:-/root}/.ssh:/root/.ssh:ro
+      # VPS SSH keys, least-privilege file mounts (read-only): side profiles
+      # push/pull their repos (resumes, portals) as the VPS GitHub identity.
+      # Only the keypair + known_hosts are visible — never authorized_keys or
+      # other keys. Missing sources fail container creation (fail fast);
+      # override the source dir via VPS_SSH_DIR in the root .env when the
+      # VPS user isn't root.
+      - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519:/root/.ssh/id_ed25519:ro
+      - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519.pub:/root/.ssh/id_ed25519.pub:ro
+      - ${VPS_SSH_DIR:-/root/.ssh}/known_hosts:/root/.ssh/known_hosts:ro
     environment:
       <<: *bot-base-environment
       PASSWORD: ${PASSWORD:-}
+      # Fail-closed SSH for agent-run git: only the mounted key is ever
+      # offered, never prompt, never trust unknown hosts (a GitHub key
+      # rotation fails loudly until known_hosts is updated on the VPS).
+      GIT_SSH_COMMAND: "ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes"
 
   # ──────────────────────────────────────────────────────
   # Proxy — single URL for the Agento app (chat + sync on one port).

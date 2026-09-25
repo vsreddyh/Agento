@@ -31,7 +31,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # Git runs as root (compose `user: "0:0"`) while bind-mounted repos are
 # owned by UID 10000 (entrypoint `chown-data`) — without this exception
 # every git op in /workspace/* fails with "detected dubious ownership".
-RUN git config --system --add safe.directory '/workspace/*'
+RUN git config --system --add safe.directory '/workspace' \
+ && git config --system --add safe.directory '/workspace/*'
+# SSH landing dir for the ro-mounted VPS keys (compose): pre-created with
+# strict perms so file bind-mounts never auto-create it loosely.
+RUN mkdir -p -m 700 /root/.ssh
 # Compat shims for upstream skew in the official image (each script is a
 # no-op once upstream ships a consistent image, and fails the build if it
 # can neither confirm nor establish consistency).
