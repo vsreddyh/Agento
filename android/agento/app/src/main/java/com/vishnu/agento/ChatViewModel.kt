@@ -19,6 +19,9 @@ data class ThreadSummary(
     val count: Int,
 )
 
+/** Fallback title for threads without a custom title. */
+private const val UNTITLED = "New conversation"
+
 data class ChatUiState(
     val provider: String = "",
     val model: String = "",
@@ -65,9 +68,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val loaded = ChatThreads.load(appCtx, tab)
                 .filter { it.id.isNotEmpty() }
                 .sortedByDescending { it.updatedAt }
-            threads = loaded
-            var active = threads.firstOrNull { it.messages.isNotEmpty() }
-                ?: threads.firstOrNull()
+            // Empty threads never enter history: drop persisted drafts, keep chats.
+            threads = loaded.filter { it.messages.isNotEmpty() }
+            var active = threads.firstOrNull()
             if (active == null) {
                 active = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
                 threads = listOf(active)
@@ -96,17 +99,21 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(pending = v)
     }
 
-    private fun summaries(): List<ThreadSummary> = threads.map {
-        ThreadSummary(
-            id = it.id,
-            title = it.title.ifBlank { "New conversation" },
-            updatedAt = it.updatedAt,
-            count = it.messages.size,
-        )
-    }
+    /** History rows: only threads with actual chats, newest first. */
+    private fun summaries(): List<ThreadSummary> = threads
+        .filter { it.messages.isNotEmpty() }
+        .map {
+            ThreadSummary(
+                id = it.id,
+                title = it.title.ifBlank { UNTITLED },
+                updatedAt = it.updatedAt,
+                count = it.messages.size,
+            )
+        }
 
     private fun persist() {
-        val snapshot = threads
+        // Drafts never hit disk: only threads with chats are worth keeping.
+        val snapshot = threads.filter { it.messages.isNotEmpty() }
         viewModelScope.launch(Dispatchers.IO) {
             ChatThreads.save(appCtx, tab, snapshot)
         }
@@ -114,7 +121,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     private fun upsertActive(messages: List<ChatMessage>) {
         val customTitle = threads.firstOrNull { it.id == threadId }
-            ?.title?.takeIf { it.isNotBlank() && it != "New conversation" }
+            ?.title?.takeIf { it.isNotBlank() && it != UNTITLED }
         val title = customTitle ?: ChatThreads.titleFor(messages)
         threads = threads.map {
             if (it.id == threadId) {
@@ -142,19 +149,22 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
     }
 
-    /** + starts a new conversation; existing ones are kept. */
+    /** + starts a new conversation; threads with chats are kept, empty
+     * drafts are dropped so they never pile up in history. */
     fun newConversation() {
         if (!_state.value.ready) return
         streamJob?.cancel()
         streamJob = null
         val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
-        threads = listOf(fresh) + threads
+        threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
         threadId = fresh.id
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
         )
-        persist()
+        // Skip the write when nothing has been chatted yet — a pure-empty
+        // list carries no information and is dropped on next launch anyway.
+        if (threads.any { it.messages.isNotEmpty() }) persist()
     }
 
     /** Renames a conversation (auto-titles stop once renamed). */
@@ -165,14 +175,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         persist()
     }
 
-    /** Deletes a conversation; if it was active, falls back to the newest. */
+    /** Deletes a conversation; if it was active, falls back to the newest
+     * thread with chats (never a blank draft). */
     fun deleteThread(id: String) {
         if (!_state.value.ready) return
         streamJob?.cancel()
         streamJob = null
         threads = threads.filterNot { it.id == id }
         if (threadId == id) {
-            val next = threads.firstOrNull()
+            // `id` is already filtered out above, so the second fallback is
+            // just the newest remaining thread, whatever it is.
+            val next = threads.firstOrNull { it.messages.isNotEmpty() }
+                ?: threads.firstOrNull()
                 ?: ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
             if (threads.none { it.id == next.id }) threads = listOf(next) + threads
             threadId = next.id
@@ -190,12 +204,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val q = query.trim().lowercase()
         if (q.isEmpty()) return _state.value.threads
         return threads.filter { t ->
-            t.title.lowercase().contains(q) ||
-                t.messages.any { it.content.lowercase().contains(q) }
+            t.messages.isNotEmpty() && (
+                // Same untitled fallback as summaries() so "new
+                // conversation" finds threads without a custom title.
+                t.title.ifBlank { UNTITLED }.lowercase().contains(q) ||
+                    t.messages.any { it.content.lowercase().contains(q) }
+                )
         }.map {
             ThreadSummary(
                 id = it.id,
-                title = it.title.ifBlank { "New conversation" },
+                title = it.title.ifBlank { UNTITLED },
                 updatedAt = it.updatedAt,
                 count = it.messages.size,
             )
@@ -205,7 +223,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Renders a conversation as Markdown for the sharesheet export. */
     fun exportMarkdown(id: String): String {
         val t = threads.firstOrNull { it.id == id } ?: return ""
-        val title = t.title.ifBlank { "New conversation" }
+        val title = t.title.ifBlank { UNTITLED }
         val sb = StringBuilder("# $title\n\n")
         for (m in t.messages) {
             val who = if (m.role == "user") "You" else "Assistant"
