@@ -28,6 +28,10 @@ COPY --from=gobuild /out/miser-money /out/cookbook /out/health-check /out/retent
 RUN chmod 755 /usr/local/bin/miser-money /usr/local/bin/cookbook /usr/local/bin/health-check /usr/local/bin/retention /usr/local/bin/mongo
 COPY test/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+# Git runs as root (compose `user: "0:0"`) while bind-mounted repos are
+# owned by UID 10000 (entrypoint `chown-data`) — without this exception
+# every git op in /workspace/* fails with "detected dubious ownership".
+RUN git config --system --add safe.directory '/workspace/*'
 # Compat shims for upstream skew in the official image (each script is a
 # no-op once upstream ships a consistent image, and fails the build if it
 # can neither confirm nor establish consistency).
