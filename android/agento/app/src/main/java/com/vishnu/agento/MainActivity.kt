@@ -1957,10 +1957,10 @@ private fun ChatScreen(
             scope.launch { snackbar.showSnackbar("Voice output unavailable.") }
         }
     }
-    // Auto-read: when a reply finishes while the toggle is on, speak it.
+    // Auto-read: when a reply finishes cleanly while the toggle is on, speak it.
     var wasStreaming by remember { mutableStateOf(false) }
     LaunchedEffect(state.streaming) {
-        if (wasStreaming && !state.streaming && autoSpeak) {
+        if (wasStreaming && !state.streaming && autoSpeak && state.error.isEmpty()) {
             val last = state.messages.lastOrNull()
             if (last != null && last.role == "assistant" && last.content.isNotBlank()) {
                 speakMessage(ttsKeyFor(last), last.content)
@@ -2220,8 +2220,11 @@ private fun ChatScreen(
                                             if (!isUser && msg.content.isNotEmpty()) {
                                                 val key = ttsKeyFor(msg)
                                                 val speaking = speakingKey == key
+                                                // Disabled mid-stream: the key is content-based,
+                                                // so a partial snapshot would speak stale text.
                                                 IconButton(
                                                     onClick = { speakMessage(key, msg.content) },
+                                                    enabled = !state.streaming,
                                                     modifier = Modifier.size(28.dp),
                                                 ) {
                                                     Icon(

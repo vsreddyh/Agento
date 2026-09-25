@@ -6,7 +6,6 @@ import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.Locale
-import java.util.UUID
 
 /**
  * Built-in Android text-to-speech for the three chats (no permission,
@@ -29,6 +28,8 @@ class ChatTts(context: Context) {
     private var ready = false
     private var failed = false
     private var pending: Pair<String, String>? = null
+    /** Utterance ID of the last queued chunk; only its completion clears state. */
+    private var lastUtteranceId = ""
 
     init {
         engine = TextToSpeech(appCtx) { status ->
@@ -46,16 +47,18 @@ class ChatTts(context: Context) {
         }
         engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String) = Unit
-            override fun onDone(utteranceId: String) {
-                if (_speakingKey.value == utteranceId) _speakingKey.value = null
+            // Only the last chunk's completion clears state — earlier
+            // chunks finishing must not flip the UI back mid-speech.
+            private fun finished(utteranceId: String) {
+                if (utteranceId == lastUtteranceId) {
+                    lastUtteranceId = ""
+                    _speakingKey.value = null
+                }
             }
+            override fun onDone(utteranceId: String) = finished(utteranceId)
             @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String) {
-                if (_speakingKey.value == utteranceId) _speakingKey.value = null
-            }
-            override fun onError(utteranceId: String, errorCode: Int) {
-                if (_speakingKey.value == utteranceId) _speakingKey.value = null
-            }
+            override fun onError(utteranceId: String) = finished(utteranceId)
+            override fun onError(utteranceId: String, errorCode: Int) = finished(utteranceId)
         })
     }
 
@@ -104,20 +107,24 @@ class ChatTts(context: Context) {
         val tts = engine ?: return
         _speakingKey.value = key
         // ~3500-char chunks at sentence boundaries (engine limit is ~4000).
-        var first = true
-        for (chunk in chunk(text)) {
+        // Only the last chunk's ID is tracked: its completion is what
+        // clears the speaking state.
+        val chunks = chunk(text)
+        chunks.forEachIndexed { i, part ->
+            val id = if (i == 0) key else "$key#$i"
+            if (i == chunks.lastIndex) lastUtteranceId = id
             tts.speak(
-                chunk,
-                if (first) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
+                part,
+                if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
                 null,
-                if (first) key else "$key#${UUID.randomUUID()}",
+                id,
             )
-            first = false
         }
     }
 
     fun stop() {
         pending = null
+        lastUtteranceId = ""
         runCatching { engine?.stop() }
         _speakingKey.value = null
     }
@@ -162,6 +169,9 @@ class ChatTts(context: Context) {
             s = s.replace(Regex("\\[([^\\]]*)]\\([^)]*\\)"), "$1")
             s = s.replace(Regex("(?m)^\\s{0,3}#{1,6}\\s+"), "")
             s = s.replace(Regex("[*_~]{1,3}"), "")
+            s = s.replace(Regex("(?m)^\\s*>\\s?"), "")
+            s = s.replace("|", " ")
+            s = s.replace(Regex("&(amp|lt|gt|quot|#39);"), " ")
             s = s.replace(Regex("(?m)^\\s*[-*+]\\s+"), "")
             s = s.replace(Regex("(?m)^\\s*\\d+[.)]\\s+"), "")
             s = s.replace(Regex("\\s+"), " ").trim()
