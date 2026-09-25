@@ -11,6 +11,7 @@ Usage: python3 02-mcp-toolsets-rows.py  (runs against /opt/hermes)
 import ast
 import os
 import py_compile
+import re
 import sys
 
 HERMES_HOME = "/opt/hermes"
@@ -155,6 +156,15 @@ def main() -> int:
         print("FAIL: _handle_toolsets anchor not found; upstream layout "
               "changed — update this shim, do not ship broken.")
         return 1
+    # Insert BEFORE any decorators above the def: splicing between a
+    # decorator (e.g. @_require_auth) and the def would reattach the
+    # decorator to the helper and leave the handler unauthenticated.
+    block_start = hstart
+    prefix_lines = src[:hstart].split("\n")
+    while prefix_lines and not prefix_lines[-1].strip():
+        block_start -= len(prefix_lines.pop()) + 1
+    while prefix_lines and prefix_lines[-1].strip().startswith("@"):
+        block_start -= len(prefix_lines.pop()) + 1
     body_start = hstart + len(HANDLER_ANCHOR)
     next_m = src.find(NEXT_METHOD_ANCHOR, body_start)
     hend = next_m if next_m >= 0 else len(src)
@@ -169,7 +179,13 @@ def main() -> int:
                   "changed — update this shim, do not ship broken.")
             return 1
 
-    src = src[:hstart] + HELPER + "\n" + src[hstart:]
+    src = src[:block_start] + HELPER + "\n" + src[block_start:]
+    # The auth decorator must still attach to the handler, not the helper.
+    if not re.search(r"@_require_auth\s*\n\s*async def _handle_toolsets",
+                     src):
+        print("FAIL: @_require_auth no longer decorates _handle_toolsets "
+              "after insert — aborting, do not ship an unauthenticated endpoint.")
+        return 1
     # Re-locate the return (offsets shifted by the helper insert).
     hstart2 = src.find(HANDLER_ANCHOR)
     body_start2 = hstart2 + len(HANDLER_ANCHOR)
