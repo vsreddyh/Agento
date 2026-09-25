@@ -53,12 +53,16 @@ import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -187,6 +191,14 @@ class MainActivity : ComponentActivity() {
                     // on every navigation so model picks show up immediately.
                     val prefs = context.getSharedPreferences(
                         AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                    // Built-in TTS: one engine shared by God/Story/Portfolio,
+                    // shut down with the activity. Auto-read is a single
+                    // global toggle (prefs `tts_auto`) in each chat's bar.
+                    val tts = remember { ChatTts(context) }
+                    DisposableEffect(Unit) { onDispose { tts.shutdown() } }
+                    var autoSpeak by remember {
+                        mutableStateOf(prefs.getBoolean("tts_auto", false))
+                    }
                     val tabModels = remember(dest, section) {
                         mapOf(
                             "god" to (prefs.getString("model_god", "") ?: "").trim(),
@@ -212,14 +224,29 @@ class MainActivity : ComponentActivity() {
                             when (dest) {
                                 Destination.God -> ChatTab(
                                     app = application, tab = "god", title = "God", wc = wc,
+                                    tts = tts, autoSpeak = autoSpeak,
+                                    onAutoSpeak = {
+                                        autoSpeak = it
+                                        prefs.edit().putBoolean("tts_auto", it).apply()
+                                    },
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
                                 Destination.Story -> ChatTab(
                                     app = application, tab = "story", title = "Story", wc = wc,
+                                    tts = tts, autoSpeak = autoSpeak,
+                                    onAutoSpeak = {
+                                        autoSpeak = it
+                                        prefs.edit().putBoolean("tts_auto", it).apply()
+                                    },
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
                                 Destination.Portfolio -> ChatTab(
                                     app = application, tab = "resumes", title = "Portfolio", wc = wc,
+                                    tts = tts, autoSpeak = autoSpeak,
+                                    onAutoSpeak = {
+                                        autoSpeak = it
+                                        prefs.edit().putBoolean("tts_auto", it).apply()
+                                    },
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
                                 Destination.Tasks -> TasksScreen(
@@ -457,6 +484,9 @@ private fun ChatTab(
     tab: String,
     title: String,
     wc: WindowClass,
+    tts: ChatTts,
+    autoSpeak: Boolean,
+    onAutoSpeak: (Boolean) -> Unit,
     onMenu: () -> Unit,
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
@@ -475,6 +505,7 @@ private fun ChatTab(
     ChatScreen(
         title = title, modelLabel = state.model.ifBlank { "" },
         setupNeeded = setupNeeded, state = state, wc = wc, snackbar = snackbar,
+        tts = tts, autoSpeak = autoSpeak, onAutoSpeak = onAutoSpeak,
         onMenu = onMenu,
         onModel = { showModel = true },
         onHistory = { showThreads = true },
@@ -488,10 +519,11 @@ private fun ChatTab(
             threads = state.threads,
             activeId = state.threadId,
             onSearch = vm::searchThreads,
-            onSwitch = { vm.switchThread(it); showThreads = false },
-            onNew = vm::newConversation,
+            onSwitch = { tts.stop(); vm.switchThread(it); showThreads = false },
+            onNew = { tts.stop(); vm.newConversation() },
             onRename = vm::renameThread,
             onDelete = {
+                tts.stop()
                 vm.deleteThread(it)
                 scope.launch { snackbar.showSnackbar("Conversation deleted.") }
             },
@@ -1777,6 +1809,10 @@ private fun shortTime(ts: Long): String {
     }
 }
 
+/** Stable TTS key per message (timestamp + content hash; ms precision
+ * alone could theoretically collide across regenerate/retry). */
+private fun ttsKeyFor(msg: ChatMessage): String = "${msg.ts}:${msg.content.hashCode()}"
+
 /**
  * Per-tab provider/model picker (#18: model selection lives on each
  * profile's own page). Saves immediately on pick; blanks mean not set.
@@ -1892,6 +1928,9 @@ private fun ChatScreen(
     state: ChatUiState,
     wc: WindowClass,
     snackbar: SnackbarHostState,
+    tts: ChatTts,
+    autoSpeak: Boolean,
+    onAutoSpeak: (Boolean) -> Unit,
     onMenu: () -> Unit,
     onModel: () -> Unit,
     onHistory: () -> Unit,
@@ -1908,6 +1947,27 @@ private fun ChatScreen(
     }
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
+    val speakingKey by tts.speakingKey.collectAsState()
+    // Leaving the tab cuts speech (one shared engine for all three tabs).
+    DisposableEffect(Unit) { onDispose { tts.stop() } }
+    /** Every send-type action cuts speech first. */
+    fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
+    fun speakMessage(key: String, text: String) {
+        if (!tts.toggle(key, text)) {
+            scope.launch { snackbar.showSnackbar("Voice output unavailable.") }
+        }
+    }
+    // Auto-read: when a reply finishes while the toggle is on, speak it.
+    var wasStreaming by remember { mutableStateOf(false) }
+    LaunchedEffect(state.streaming) {
+        if (wasStreaming && !state.streaming && autoSpeak) {
+            val last = state.messages.lastOrNull()
+            if (last != null && last.role == "assistant" && last.content.isNotBlank()) {
+                speakMessage(ttsKeyFor(last), last.content)
+            }
+        }
+        wasStreaming = state.streaming
+    }
     // Built-in Android speech-to-text (RecognizerIntent — no extra
     // permission or dependency). Shared by God/Story/Portfolio: all three
     // tabs render this one ChatScreen, so one mic covers all chats.
@@ -1983,8 +2043,19 @@ private fun ChatScreen(
                     IconButton(onClick = onHistory, enabled = !state.streaming) {
                         Icon(Icons.Filled.History, contentDescription = "Conversations")
                     }
+                    // Auto-read: speak each finished reply aloud.
+                    IconButton(onClick = { onAutoSpeak(!autoSpeak) }) {
+                        Icon(
+                            if (autoSpeak) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff,
+                            contentDescription = if (autoSpeak) {
+                                "Auto-read on"
+                            } else {
+                                "Auto-read off"
+                            },
+                        )
+                    }
                     // + starts a new conversation; older ones are kept.
-                    IconButton(onClick = onNew, enabled = !state.streaming) {
+                    IconButton(onClick = stopThen(onNew), enabled = !state.streaming) {
                         Icon(Icons.Filled.Add, contentDescription = "New conversation")
                     }
                 },
@@ -2007,7 +2078,7 @@ private fun ChatScreen(
                             modifier = Modifier.weight(1f),
                             maxLines = 4,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                            keyboardActions = KeyboardActions(onSend = { onSend() }),
+                            keyboardActions = KeyboardActions(onSend = { stopThen(onSend)() }),
                             shape = RoundedCornerShape(24.dp),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -2023,7 +2094,7 @@ private fun ChatScreen(
                             }
                         } else {
                             FilledIconButton(
-                                onClick = onSend,
+                                onClick = stopThen(onSend),
                                 enabled = state.pending.isNotBlank() && state.ready,
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
@@ -2064,7 +2135,7 @@ private fun ChatScreen(
                 if (state.error.isNotEmpty()) {
                     ErrorCard(
                         raw = state.error,
-                        onRetry = if (!state.streaming) onRetry else null,
+                        onRetry = if (!state.streaming) stopThen(onRetry) else null,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     )
                 }
@@ -2147,6 +2218,21 @@ private fun ChatScreen(
                                                 )
                                             }
                                             if (!isUser && msg.content.isNotEmpty()) {
+                                                val key = ttsKeyFor(msg)
+                                                val speaking = speakingKey == key
+                                                IconButton(
+                                                    onClick = { speakMessage(key, msg.content) },
+                                                    modifier = Modifier.size(28.dp),
+                                                ) {
+                                                    Icon(
+                                                        if (speaking) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                                                        contentDescription = if (speaking) {
+                                                            "Stop reading"
+                                                        } else {
+                                                            "Read aloud"
+                                                        },
+                                                    )
+                                                }
                                                 IconButton(
                                                     onClick = { clipboard.setText(AnnotatedString(msg.content)) },
                                                     modifier = Modifier.size(28.dp),
