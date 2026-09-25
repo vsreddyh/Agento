@@ -28,6 +28,12 @@
 
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
+        <!-- Voice input (chat mic): package visibility for the system
+             speech recognizer on Android 11+ (API 30+); without this,
+             resolveActivity-style checks always fail. -->
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
     </queries>
 
     <application

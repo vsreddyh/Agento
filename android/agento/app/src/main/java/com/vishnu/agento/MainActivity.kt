@@ -1907,7 +1907,6 @@ private fun ChatScreen(
         if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size - 1)
     }
     val clipboard = LocalClipboardManager.current
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // Built-in Android speech-to-text (RecognizerIntent — no extra
     // permission or dependency). Shared by God/Story/Portfolio: all three
@@ -1921,7 +1920,7 @@ private fun ChatScreen(
                 ?.firstOrNull()?.trim().orEmpty()
             if (heard.isNotEmpty()) {
                 val cur = state.pending
-                onPending(if (cur.isBlank()) heard else "$cur $heard")
+                onPending(if (cur.isBlank()) heard else "${cur.trimEnd()} $heard")
             }
         }
     }
@@ -1934,12 +1933,11 @@ private fun ChatScreen(
             putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak now")
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
+        // No resolveActivity pre-check: on Android 11+ it needs a
+        // <queries> declaration to see the recognizer, and the launch
+        // try/catch below already covers a missing handler.
         try {
-            if (intent.resolveActivity(context.packageManager) != null) {
-                voiceLauncher.launch(intent)
-            } else {
-                scope.launch { snackbar.showSnackbar("No voice input app found.") }
-            }
+            voiceLauncher.launch(intent)
         } catch (e: ActivityNotFoundException) {
             scope.launch { snackbar.showSnackbar("No voice input app found.") }
         }
