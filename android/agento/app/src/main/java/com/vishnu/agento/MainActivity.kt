@@ -74,6 +74,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.health.connect.client.PermissionController
@@ -2025,6 +2026,8 @@ private fun ChatScreen(
                                 "Choose a model to start",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         } else {
                             Text(
@@ -2032,6 +2035,7 @@ private fun ChatScreen(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -2062,7 +2066,10 @@ private fun ChatScreen(
             )
         },
         bottomBar = {
-            Surface(tonalElevation = 2.dp) {
+            // imePadding: belt-and-braces above adjustResize — a no-op when
+            // the window already resized, but lifts the input above the
+            // keyboard on any soft-input mode that pans instead.
+            Surface(tonalElevation = 2.dp, modifier = Modifier.imePadding()) {
                 Column {
                     if (state.streaming) {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
