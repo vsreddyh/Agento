@@ -113,12 +113,18 @@ class ChatTts(context: Context) {
         chunks.forEachIndexed { i, part ->
             val id = if (i == 0) key else "$key#$i"
             if (i == chunks.lastIndex) lastUtteranceId = id
-            tts.speak(
+            val rc = tts.speak(
                 part,
                 if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
                 null,
                 id,
             )
+            if (rc == TextToSpeech.ERROR) {
+                // A rejected chunk never fires onDone — clear state now
+                // instead of sticking on the stop icon.
+                stop()
+                return
+            }
         }
     }
 
@@ -160,7 +166,7 @@ class ChatTts(context: Context) {
             return out
         }
 
-        /** Strips Markdown formatting so it isn't read aloud literally. */
+        /** Strips Markdown/HTML formatting so it isn't read aloud literally. */
         fun cleanForSpeech(raw: String): String {
             var s = raw
             s = s.replace(Regex("(?s)```.*?```"), " code ")
@@ -171,7 +177,14 @@ class ChatTts(context: Context) {
             s = s.replace(Regex("[*_~]{1,3}"), "")
             s = s.replace(Regex("(?m)^\\s*>\\s?"), "")
             s = s.replace("|", " ")
-            s = s.replace(Regex("&(amp|lt|gt|quot|#39);"), " ")
+            // Decode (not drop) entities so words survive; strip real HTML
+            // tags — the leading-letter guard keeps "a < b" prose intact.
+            s = s.replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'")
+            s = s.replace(Regex("</?[A-Za-z][^>]*>"), " ")
             s = s.replace(Regex("(?m)^\\s*[-*+]\\s+"), "")
             s = s.replace(Regex("(?m)^\\s*\\d+[.)]\\s+"), "")
             s = s.replace(Regex("\\s+"), " ").trim()
