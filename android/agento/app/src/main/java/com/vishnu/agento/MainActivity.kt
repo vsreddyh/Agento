@@ -3,9 +3,13 @@
 package com.vishnu.agento
 
 import android.Manifest
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -46,6 +50,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
@@ -1902,6 +1907,41 @@ private fun ChatScreen(
         if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size - 1)
     }
     val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    // Built-in Android speech-to-text (RecognizerIntent — no extra
+    // permission or dependency). Shared by God/Story/Portfolio: all three
+    // tabs render this one ChatScreen, so one mic covers all chats.
+    val voiceLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val heard = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()?.trim().orEmpty()
+            if (heard.isNotEmpty()) {
+                val cur = state.pending
+                onPending(if (cur.isBlank()) heard else "${cur.trimEnd()} $heard")
+            }
+        }
+    }
+    fun startVoice() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+            )
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak now")
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
+        // No resolveActivity pre-check: on Android 11+ it needs a
+        // <queries> declaration to see the recognizer, and the launch
+        // try/catch below already covers a missing handler.
+        try {
+            voiceLauncher.launch(intent)
+        } catch (e: ActivityNotFoundException) {
+            scope.launch { snackbar.showSnackbar("No voice input app found.") }
+        }
+    }
     // Surface send failures as a toast too (the inline card keeps details).
     LaunchedEffect(state.error) {
         if (state.error.isNotEmpty()) {
@@ -1971,6 +2011,12 @@ private fun ChatScreen(
                             shape = RoundedCornerShape(24.dp),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
+                            onClick = ::startVoice,
+                            enabled = !state.streaming,
+                        ) {
+                            Icon(Icons.Filled.Mic, contentDescription = "Voice input")
+                        }
                         if (state.streaming) {
                             FilledTonalIconButton(onClick = onStop) {
                                 Icon(Icons.Filled.Close, contentDescription = "Stop")
