@@ -158,7 +158,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
         )
-        persist()
+        // Skip the write when nothing has been chatted yet — a pure-empty
+        // list carries no information and is dropped on next launch anyway.
+        if (threads.any { it.messages.isNotEmpty() }) persist()
     }
 
     /** Renames a conversation (auto-titles stop once renamed). */
@@ -195,7 +197,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (q.isEmpty()) return _state.value.threads
         return threads.filter { t ->
             t.messages.isNotEmpty() && (
-                t.title.lowercase().contains(q) ||
+                // Same untitled fallback as summaries() so "new
+                // conversation" finds threads without a custom title.
+                t.title.ifBlank { "New conversation" }.lowercase().contains(q) ||
                     t.messages.any { it.content.lowercase().contains(q) }
                 )
         }.map {
