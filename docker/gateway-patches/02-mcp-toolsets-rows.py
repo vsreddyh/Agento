@@ -93,10 +93,11 @@ RETURN_PATCHED = '''try:
 
 
 def _funcdef_params(path, func):
-    """Parameter names of a module-level def, via AST (no import)."""
+    """Parameter names of a def, via AST (no import). Walks the whole tree
+    so methods and nested defs are found even if upstream moves them."""
     with open(path, encoding="utf-8") as f:
         tree = ast.parse(f.read())
-    for node in tree.body:
+    for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
                 and node.name == func:
             args = node.args
@@ -174,7 +175,10 @@ def main() -> int:
     next_m2 = src.find(NEXT_METHOD_ANCHOR, body_start2)
     hend2 = next_m2 if next_m2 >= 0 else len(src)
     body2 = src[body_start2:hend2]
-    assert body2.count(RETURN_ANCHOR) == 1
+    if body2.count(RETURN_ANCHOR) != 1:
+        print(f"FAIL: return anchor count {body2.count(RETURN_ANCHOR)} != 1 "
+              "after helper insert — aborting, do not ship broken.")
+        return 1
     body2 = body2.replace(RETURN_ANCHOR, RETURN_PATCHED, 1)
     src = src[:body_start2] + body2 + src[hend2:]
     with open(API_SERVER, "w", encoding="utf-8") as f:
