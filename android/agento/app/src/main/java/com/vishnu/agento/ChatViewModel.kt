@@ -65,9 +65,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val loaded = ChatThreads.load(appCtx, tab)
                 .filter { it.id.isNotEmpty() }
                 .sortedByDescending { it.updatedAt }
-            threads = loaded
-            var active = threads.firstOrNull { it.messages.isNotEmpty() }
-                ?: threads.firstOrNull()
+            // Empty threads never enter history: drop persisted drafts, keep chats.
+            threads = loaded.filter { it.messages.isNotEmpty() }
+            var active = threads.firstOrNull()
             if (active == null) {
                 active = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
                 threads = listOf(active)
@@ -96,14 +96,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(pending = v)
     }
 
-    private fun summaries(): List<ThreadSummary> = threads.map {
-        ThreadSummary(
-            id = it.id,
-            title = it.title.ifBlank { "New conversation" },
-            updatedAt = it.updatedAt,
-            count = it.messages.size,
-        )
-    }
+    /** History rows: only threads with actual chats, newest first. */
+    private fun summaries(): List<ThreadSummary> = threads
+        .filter { it.messages.isNotEmpty() }
+        .map {
+            ThreadSummary(
+                id = it.id,
+                title = it.title.ifBlank { "New conversation" },
+                updatedAt = it.updatedAt,
+                count = it.messages.size,
+            )
+        }
 
     private fun persist() {
         val snapshot = threads
@@ -142,13 +145,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
     }
 
-    /** + starts a new conversation; existing ones are kept. */
+    /** + starts a new conversation; threads with chats are kept, empty
+     * drafts are dropped so they never pile up in history. */
     fun newConversation() {
         if (!_state.value.ready) return
         streamJob?.cancel()
         streamJob = null
         val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
-        threads = listOf(fresh) + threads
+        threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
         threadId = fresh.id
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
@@ -190,8 +194,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val q = query.trim().lowercase()
         if (q.isEmpty()) return _state.value.threads
         return threads.filter { t ->
-            t.title.lowercase().contains(q) ||
-                t.messages.any { it.content.lowercase().contains(q) }
+            t.messages.isNotEmpty() && (
+                t.title.lowercase().contains(q) ||
+                    t.messages.any { it.content.lowercase().contains(q) }
+                )
         }.map {
             ThreadSummary(
                 id = it.id,
