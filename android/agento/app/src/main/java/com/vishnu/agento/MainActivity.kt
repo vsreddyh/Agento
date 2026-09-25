@@ -1501,8 +1501,9 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     LaunchedEffect(profile) { load() }
 
     val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Portfolio")
-    // UI shows only enabled toolsets; explicitly-off ones stay hidden.
-    val visibleToolsets = remember(toolsets) { toolsets.filter { it.enabled == true } }
+    // UI hides explicitly-off toolsets only; unknown toggle state (null)
+    // stays visible so flag-less server shapes never blank the section.
+    val visibleToolsets = remember(toolsets) { toolsets.filter { it.enabled != false } }
     val mcp = remember(visibleToolsets) { mcpServersFrom(visibleToolsets) }
     var mcpOpen by remember { mutableStateOf(false) }
 
@@ -1565,14 +1566,14 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     val bothEmptyError = listOf(toolsError, skillsError)
                         .filter { it.isNotEmpty() }
                         .joinToString("\n\n")
-                    if (skills.isEmpty() && toolsets.isEmpty()
+                    if (skills.isEmpty() && visibleToolsets.isEmpty()
                         && bothEmptyError.isNotEmpty() && loaded
                     ) {
                         item {
                             ErrorCard(raw = bothEmptyError, onRetry = { load() })
                         }
                     }
-                    if (loaded && skills.isEmpty() && toolsets.isEmpty()
+                    if (loaded && skills.isEmpty() && visibleToolsets.isEmpty()
                         && skillsError.isEmpty() && toolsError.isEmpty()
                     ) {
                         item {
@@ -1631,7 +1632,7 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     // Partial failure with the other side intact: slim hint only
                     // (the full-empty card above already covers both-empty).
                     if (skills.isEmpty() && skillsError.isNotEmpty()
-                        && toolsets.isNotEmpty() && loaded
+                        && visibleToolsets.isNotEmpty() && loaded
                     ) {
                         item {
                             HintLine(skillsHint)
@@ -1676,24 +1677,21 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                             )
                                         }
                                     }
+                                    // Off items are filtered above; unknown
+                                    // state shows no badge rather than Off.
                                     when (ts.enabled) {
                                         true -> Text(
                                             "On",
                                             style = MaterialTheme.typography.labelMedium,
                                             color = MaterialTheme.colorScheme.primary,
                                         )
-                                        false -> Text(
-                                            "Off",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                        null -> { }
+                                        else -> { }
                                     }
                                 }
                             }
                         }
                     }
-                    if (toolsets.isEmpty() && toolsError.isNotEmpty()
+                    if (visibleToolsets.isEmpty() && toolsError.isNotEmpty()
                         && skills.isNotEmpty() && loaded
                     ) {
                         item {
