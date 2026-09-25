@@ -22,7 +22,7 @@ HANDLER_ANCHOR = '    async def _handle_toolsets(self, request: "web.Request") -
 NEXT_METHOD_ANCHOR = "\n    async def "
 # Scoped to the handler body at patch time (count asserted == 1 there).
 RETURN_ANCHOR = 'return web.json_response({"object": "list", "platform": "api_server", "data": data})'
-MARKER = "def _mcp_toolset_rows(config)"
+MARKER = "Compat shim (repo docker/gateway-patches/02)"
 
 # Locals the patched return block relies on; py_compile cannot catch a
 # renamed variable (NameError at runtime, swallowed by except -> silent
@@ -101,7 +101,8 @@ def _funcdef_params(path, func):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
                 and node.name == func:
             args = node.args
-            params = [a.arg for a in args.args] + [a.arg for a in args.kwonlyargs]
+            params = [a.arg for a in list(args.posonlyargs) + list(args.args)] \
+                + [a.arg for a in args.kwonlyargs]
             if args.vararg:
                 params.append(args.vararg.arg)
             if args.kwarg:

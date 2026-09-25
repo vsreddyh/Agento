@@ -35,7 +35,7 @@ COPY docker/gateway-patches/ /tmp/gateway-patches/
 RUN set -e; \
     PY="$(command -v python3 || true)"; \
     if [ -z "$PY" ]; then PY=/opt/hermes/.venv/bin/python; fi; \
-    for s in /tmp/gateway-patches/*.py; do "$PY" "$s" || exit 1; done && \
+    for s in /tmp/gateway-patches/*.py; do [ -e "$s" ] || continue; "$PY" "$s" || exit 1; done && \
     rm -rf /tmp/gateway-patches
 
 WORKDIR /workspace
