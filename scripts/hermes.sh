@@ -255,7 +255,7 @@ cmd_init() {
     # auth needs a key on this host — set it up before init). The container
     # commits locally only; pull/push happen here on the host. Both repos stay
     # as separate git remotes; this repo does NOT vendor their files.
-    #  - vsreddyh/portals → workspace/portals (story bot lore vault; story cwd is workspace/story)
+    #  - vsreddyh/portals → workspace/portals (story bot lore vault AND story cwd)
     #  - vsreddyh/Resume  → workspace/resumes  (resumes bot cwd IS the repo)
     # The host key at ~/.ssh (or $SUDO_USER's ~/.ssh when run with sudo)
     # is reused — no key generation. Add the deploy key to ~/.ssh before

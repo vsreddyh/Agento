@@ -67,7 +67,16 @@ do_render() {
     # ── Side profiles (story, resumes) ───────
     for home in "$HERMES_HOME"/profiles/*/; do
         [[ -d "$home" ]] || continue
-        HERMES_CWD="/workspace/$(basename "$home")" render_config "$home"
+        # Story works directly in its lore vault, not an empty per-profile
+        # dir (workspace/story is retired); every other profile keeps the
+        # /workspace/<name> convention. The cwd is created so a missing
+        # bind-mount dir can never break the terminal backend.
+        case "$(basename "$home")" in
+            story) HERMES_CWD="/workspace/portals" ;;
+            *) HERMES_CWD="/workspace/$(basename "$home")" ;;
+        esac
+        mkdir -p "$HERMES_CWD"
+        HERMES_CWD="$HERMES_CWD" render_config "$home"
         # Secret scope: hermes 0.21.4 resolves credentials per profile
         # from <profile>/.env ONLY (never os.environ under multiplexing) —
         # API_SERVER_KEY for chat auth AND the provider keys for model calls.
