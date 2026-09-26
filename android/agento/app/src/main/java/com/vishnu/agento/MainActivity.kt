@@ -89,6 +89,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 /** Builds per-tab chat ViewModels so story/resumes/god keep isolated history. */
 class ChatViewModelFactory(
@@ -706,7 +707,7 @@ private fun taskRank(status: String): Int =
     TASK_STATUSES.indexOf(status).let { if (it < 0) 2 else it }
 
 /** Maps legacy free-text statuses onto the fixed set (#55). */
-private fun normalizeStatus(raw: String): String = when (raw.trim().lowercase()) {
+private fun normalizeStatus(raw: String): String = when (raw.trim().lowercase(Locale.ROOT)) {
     "doing", "ongoing", "in progress", "in_progress" -> "Ongoing"
     "paused", "pause", "pasued" -> "Paused"
     "done", "complete", "completed" -> "Done"
@@ -768,7 +769,7 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         .filter { filter == "All" || normalizeStatus(it.status) == filter }
         .let { list ->
             when (sort) {
-                TaskSort.Name -> list.sortedBy { it.name.lowercase() }
+                TaskSort.Name -> list.sortedBy { it.name.lowercase(Locale.ROOT) }
                 TaskSort.Newest -> list.sortedByDescending { it.updatedAt }
                 TaskSort.Oldest -> list.sortedBy { it.updatedAt }
                 TaskSort.Default -> list.sortedWith(
@@ -1483,7 +1484,141 @@ private fun JobDialog(
     )
 }
 
-/** Read-only skills + MCP inventory per assistant (dashboard pages, slimmed). */
+/** Origin filter for the Skills section (default = bundled Hermes). */
+private enum class SkillsOrigin(val title: String) {
+    All("All"),
+    Default("Default"),
+    Custom("Custom"),
+}
+
+/** Sort order for the Skills section lists. */
+private enum class SkillsSort(val title: String) {
+    NameAz("Name A–Z"),
+    NameZa("Name Z–A"),
+    Category("Category"),
+}
+
+/** Origin filter for the Tools section (custom = project MCP servers). */
+private enum class ToolsOrigin(val title: String) {
+    All("All"),
+    Default("Default"),
+    CustomMcp("Custom MCP"),
+}
+
+/** Sort order for the Tools section lists. */
+private enum class ToolsSort(val title: String) {
+    NameAz("Name A–Z"),
+    NameZa("Name Z–A"),
+    MostTools("Most tools"),
+}
+
+/** One skill row: name + description/category + On/Off badge. */
+@Composable
+private fun SkillCard(s: SkillInfo) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(s.name, style = MaterialTheme.typography.bodyLarge)
+                val blurb = s.description.ifEmpty { s.category }
+                if (blurb.isNotEmpty()) {
+                    Text(
+                        blurb,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                    )
+                }
+            }
+            when (s.enabled) {
+                true -> Text(
+                    "On",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                false -> Text(
+                    "Off",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                null -> { }
+            }
+        }
+    }
+}
+
+/** One toolset row: label + name + description/tool list + On badge. */
+@Composable
+private fun ToolsetCard(ts: ToolsetInfo) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(ts.label.ifEmpty { ts.name },
+                    style = MaterialTheme.typography.bodyLarge)
+                if (ts.label.isNotEmpty()) {
+                    Text(
+                        ts.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                val blurb = ts.description.ifEmpty {
+                    if (ts.tools.isEmpty()) "" else
+                        "${ts.tools.size} tool(s): " +
+                            ts.tools.take(10).joinToString(", ") +
+                            if (ts.tools.size > 10) "…" else ""
+                }
+                if (blurb.isNotEmpty()) {
+                    Text(
+                        blurb,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 4,
+                    )
+                }
+            }
+            // Off items are filtered above; unknown
+            // state shows no badge rather than Off.
+            when (ts.enabled) {
+                true -> Text(
+                    "On",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                else -> { }
+            }
+        }
+    }
+}
+
+/** One derived MCP server row: name + tool list. */
+@Composable
+private fun McpCard(server: McpServer) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(server.name, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                if (server.tools.isEmpty()) "No tools listed"
+                else "${server.tools.size} tool(s): ${server.tools.take(8).joinToString(", ")}" +
+                    if (server.tools.size > 8) "…" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Read-only skills + tools inventory per assistant, in two sections —
+ * Skills (Default vs Custom) and Tools (Default vs Custom MCP) — each with
+ * Tasks-style search filtering, origin FilterChips and a sort dropdown.
+ * Origin rule: in-the-box Hermes skills/toolsets are default, everything
+ * else (project skills, money/cookbook/health-check MCP, `mcp-*`) is custom.
+ */
 @Composable
 private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val context = LocalContext.current
@@ -1543,7 +1678,71 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // stays visible so flag-less server shapes never blank the section.
     val visibleToolsets = remember(toolsets) { toolsets.filter { it.enabled != false } }
     val mcp = remember(visibleToolsets) { mcpServersFrom(visibleToolsets) }
-    var mcpOpen by remember { mutableStateOf(false) }
+
+    // Per-section search + origin filter + sort (Tasks-style).
+    var query by remember { mutableStateOf("") }
+    var skillsOrigin by remember { mutableStateOf(SkillsOrigin.All) }
+    var skillsSort by remember { mutableStateOf(SkillsSort.NameAz) }
+    var skillsSortOpen by remember { mutableStateOf(false) }
+    var toolsOrigin by remember { mutableStateOf(ToolsOrigin.All) }
+    var toolsSort by remember { mutableStateOf(ToolsSort.NameAz) }
+    var toolsSortOpen by remember { mutableStateOf(false) }
+
+    fun sortSkills(list: List<SkillInfo>): List<SkillInfo> = when (skillsSort) {
+        SkillsSort.NameZa -> list.sortedByDescending { it.name.lowercase(Locale.ROOT) }
+        SkillsSort.Category -> list.sortedWith(
+            // Empty category sorts last so custom skills trail defaults.
+            compareBy({ it.category.ifEmpty { "\uFFFF" }.lowercase(Locale.ROOT) }, { it.name.lowercase(Locale.ROOT) })
+        )
+        SkillsSort.NameAz -> list.sortedBy { it.name.lowercase(Locale.ROOT) }
+    }
+    // Origin rule (see ServerApi): bundled Hermes skills carry a category,
+    // project skills don't — so non-blank category means default. If the
+    // server omits categories entirely, everything counts as default
+    // rather than silently emptying the Default section.
+    val anyCategorized = remember(skills) { skills.any { it.category.isNotBlank() } }
+    val defaultSkills = remember(skills, query, skillsSort, anyCategorized) {
+        sortSkills(skills.filter { (it.isDefault() || !anyCategorized) && it.matches(query) })
+    }
+    val customSkills = remember(skills, query, skillsSort, anyCategorized) {
+        // Mirrors the defaultSkills fallback: with no categories anywhere,
+        // everything is default, so Custom stays empty (never duplicated).
+        if (!anyCategorized) emptyList()
+        else sortSkills(skills.filter { !it.isDefault() && it.matches(query) })
+    }
+    val shownDefaultSkills = if (skillsOrigin == SkillsOrigin.Custom) emptyList() else defaultSkills
+    val shownCustomSkills = if (skillsOrigin == SkillsOrigin.Default) emptyList() else customSkills
+
+    fun sortToolsets(list: List<ToolsetInfo>): List<ToolsetInfo> = when (toolsSort) {
+        ToolsSort.NameZa -> list.sortedByDescending { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
+        ToolsSort.MostTools -> list.sortedWith(
+            compareByDescending<ToolsetInfo> { it.tools.size }
+                .thenBy { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
+        )
+        ToolsSort.NameAz -> list.sortedBy { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
+    }
+    val defaultTools = remember(visibleToolsets, query, toolsSort) {
+        sortToolsets(visibleToolsets.filter { !it.isCustomMcp() && it.matches(query) })
+    }
+    val customMcpToolsets = remember(visibleToolsets, query, toolsSort) {
+        sortToolsets(visibleToolsets.filter { it.isCustomMcp() && it.matches(query) })
+    }
+    val customMcpServers = remember(mcp, query, toolsSort) {
+        val filtered = mcp.filter { it.matches(query) }
+        if (toolsSort == ToolsSort.NameZa) {
+            filtered.sortedByDescending { it.name.lowercase(Locale.ROOT) }
+        } else {
+            filtered.sortedWith(
+                compareBy({ if (toolsSort == ToolsSort.MostTools) -it.tools.size else 0 },
+                    { it.name.lowercase(Locale.ROOT) })
+            )
+        }
+    }
+    val shownDefaultTools = if (toolsOrigin == ToolsOrigin.CustomMcp) emptyList() else defaultTools
+    val shownCustomMcpToolsets =
+        if (toolsOrigin == ToolsOrigin.Default) emptyList() else customMcpToolsets
+    val shownCustomMcpServers =
+        if (toolsOrigin == ToolsOrigin.Default) emptyList() else customMcpServers
 
     Scaffold(
         topBar = {
@@ -1580,6 +1779,19 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         )
                     }
                 }
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search skills & tools…") },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    trailingIcon = if (query.isEmpty()) null else ({
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Clear search")
+                        }
+                    }),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                )
                 if (busy && !loaded) {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
@@ -1624,47 +1836,68 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                     }
-                    if (skills.isNotEmpty()) {
+                    // ── SECTION 1: Skills (Default vs Custom) ──
+                    item {
+                        Text(
+                            "Skills",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                        )
+                    }
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            SkillsOrigin.entries.forEach { o ->
+                                FilterChip(
+                                    selected = skillsOrigin == o,
+                                    onClick = { skillsOrigin = o },
+                                    label = { Text(o.title) },
+                                )
+                            }
+                            Box {
+                                TextButton(onClick = { skillsSortOpen = true }) {
+                                    Text("Sort: ${skillsSort.title}")
+                                }
+                                DropdownMenu(
+                                    expanded = skillsSortOpen,
+                                    onDismissRequest = { skillsSortOpen = false },
+                                ) {
+                                    SkillsSort.entries.forEach { s ->
+                                        DropdownMenuItem(
+                                            text = { Text(s.title) },
+                                            onClick = { skillsSort = s; skillsSortOpen = false },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (shownDefaultSkills.isNotEmpty()) {
                         item {
                             Text(
-                                "Skills (${skills.size})",
+                                "Default skills (${shownDefaultSkills.size})",
                                 style = MaterialTheme.typography.titleSmall,
                                 modifier = Modifier.padding(horizontal = 4.dp),
                             )
                         }
-                        items(skills, key = { it.name }) { s ->
-                            Card(modifier = Modifier.fillMaxWidth()) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(s.name, style = MaterialTheme.typography.bodyLarge)
-                                        val blurb = s.description.ifEmpty { s.category }
-                                        if (blurb.isNotEmpty()) {
-                                            Text(
-                                                blurb,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 3,
-                                            )
-                                        }
-                                    }
-                                    when (s.enabled) {
-                                        true -> Text(
-                                            "On",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.primary,
-                                        )
-                                        false -> Text(
-                                            "Off",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                        null -> { }
-                                    }
-                                }
-                            }
+                        items(shownDefaultSkills, key = { "ds:" + it.name }) { s ->
+                            SkillCard(s)
+                        }
+                    }
+                    if (shownCustomSkills.isNotEmpty()) {
+                        item {
+                            Text(
+                                "Custom skills (${shownCustomSkills.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                            )
+                        }
+                        items(shownCustomSkills, key = { "cs:" + it.name }) { s ->
+                            SkillCard(s)
                         }
                     }
                     // Partial failure with the other side intact: slim hint only
@@ -1676,57 +1909,87 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             HintLine(skillsHint)
                         }
                     }
-                    if (visibleToolsets.isNotEmpty()) {
+                    if (loaded && skills.isNotEmpty()
+                        && shownDefaultSkills.isEmpty() && shownCustomSkills.isEmpty()
+                        && skillsError.isEmpty()
+                    ) {
+                        item {
+                            HintLine("No skills match this search or filter.")
+                        }
+                    }
+                    // ── SECTION 2: Tools (Default vs Custom MCP) ──
+                    item {
+                        Text(
+                            "Tools",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                        )
+                    }
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ToolsOrigin.entries.forEach { o ->
+                                FilterChip(
+                                    selected = toolsOrigin == o,
+                                    onClick = { toolsOrigin = o },
+                                    label = { Text(o.title) },
+                                )
+                            }
+                            Box {
+                                TextButton(onClick = { toolsSortOpen = true }) {
+                                    Text("Sort: ${toolsSort.title}")
+                                }
+                                DropdownMenu(
+                                    expanded = toolsSortOpen,
+                                    onDismissRequest = { toolsSortOpen = false },
+                                ) {
+                                    ToolsSort.entries.forEach { s ->
+                                        DropdownMenuItem(
+                                            text = { Text(s.title) },
+                                            onClick = { toolsSort = s; toolsSortOpen = false },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (shownDefaultTools.isNotEmpty()) {
                         item {
                             Text(
-                                "Toolsets (${visibleToolsets.size})",
+                                "Default tools (${shownDefaultTools.size})",
                                 style = MaterialTheme.typography.titleSmall,
                                 modifier = Modifier.padding(horizontal = 4.dp),
                             )
                         }
-                        items(visibleToolsets, key = { it.name }) { ts ->
-                            Card(modifier = Modifier.fillMaxWidth()) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(ts.label.ifEmpty { ts.name },
-                                            style = MaterialTheme.typography.bodyLarge)
-                                        if (ts.label.isNotEmpty()) {
-                                            Text(
-                                                ts.name,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
-                                        }
-                                        val blurb = ts.description.ifEmpty {
-                                            if (ts.tools.isEmpty()) "" else
-                                                "${ts.tools.size} tool(s): " +
-                                                    ts.tools.take(10).joinToString(", ") +
-                                                    if (ts.tools.size > 10) "…" else ""
-                                        }
-                                        if (blurb.isNotEmpty()) {
-                                            Text(
-                                                blurb,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 4,
-                                            )
-                                        }
-                                    }
-                                    // Off items are filtered above; unknown
-                                    // state shows no badge rather than Off.
-                                    when (ts.enabled) {
-                                        true -> Text(
-                                            "On",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.primary,
-                                        )
-                                        else -> { }
-                                    }
-                                }
-                            }
+                        items(shownDefaultTools, key = { "dt:" + it.name }) { ts ->
+                            ToolsetCard(ts)
+                        }
+                    }
+                    if (shownCustomMcpToolsets.isNotEmpty() || shownCustomMcpServers.isNotEmpty()) {
+                        item {
+                            Text(
+                                "Custom MCP (${shownCustomMcpToolsets.size + shownCustomMcpServers.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                            )
+                        }
+                        item {
+                            Text(
+                                "Read-only — servers are configured on the gateway; " +
+                                    "derived rows may repeat their toolset.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        items(shownCustomMcpToolsets, key = { "cm:" + it.name }) { ts ->
+                            ToolsetCard(ts)
+                        }
+                        items(shownCustomMcpServers, key = { "ms:" + it.name }) { server ->
+                            McpCard(server)
                         }
                     }
                     if (visibleToolsets.isEmpty() && toolsError.isNotEmpty()
@@ -1736,43 +1999,13 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             HintLine(toolsHint)
                         }
                     }
-                    if (mcp.isNotEmpty()) {
+                    if (loaded && visibleToolsets.isNotEmpty()
+                        && shownDefaultTools.isEmpty()
+                        && shownCustomMcpToolsets.isEmpty() && shownCustomMcpServers.isEmpty()
+                        && toolsError.isEmpty()
+                    ) {
                         item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    "MCP servers (${mcp.size})",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                TextButton(onClick = { mcpOpen = !mcpOpen }) {
-                                    Text(if (mcpOpen) "Hide" else "Show")
-                                }
-                            }
-                        }
-                        item {
-                            Text(
-                                "Read-only — servers are configured on the gateway.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (mcpOpen) {
-                            items(mcp, key = { it.name }) { server ->
-                                Card(modifier = Modifier.fillMaxWidth()) {
-                                    Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                                        Text(server.name, style = MaterialTheme.typography.bodyLarge)
-                                        Text(
-                                            "${server.tools.size} tool(s): ${server.tools.take(8).joinToString(", ")}" +
-                                                if (server.tools.size > 8) "…" else "",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                }
-                            }
+                            HintLine("No tools match this search or filter.")
                         }
                     }
                 }
@@ -2081,7 +2314,7 @@ private fun ChatScreen(
                         OutlinedTextField(
                             value = state.pending,
                             onValueChange = onPending,
-                            placeholder = { Text("Ask ${title.lowercase()} anything…") },
+                            placeholder = { Text("Ask ${title.lowercase(Locale.ROOT)} anything…") },
                             modifier = Modifier.weight(1f),
                             maxLines = 4,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
