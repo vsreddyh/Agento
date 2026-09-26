@@ -350,5 +350,5 @@ fun defaultProfileFor(tab: String): String = when (tab) {
 fun tabTitle(tab: String): String = when (tab) {
     "god" -> "God"
     "story" -> "Story"
-    else -> "Portfolio"
+    else -> "Resume and Portfolio"
 }
