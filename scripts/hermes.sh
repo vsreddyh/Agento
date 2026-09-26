@@ -243,7 +243,14 @@ cmd_init() {
     chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" "$REPO/workspace" "$GATEWAY_HOME" 2>/dev/null || true
     local b
     for b in "${BOTS[@]}"; do
-        mkdir -p "$(profile_home "$b")" "$REPO/workspace/$b"
+        mkdir -p "$(profile_home "$b")"
+        # Story lives in the portals vault, not workspace/story (retired) —
+        # never recreate it; every other bot keeps workspace/<name>.
+        if [[ "$b" == "story" ]]; then
+            mkdir -p "$REPO/workspace/portals"
+        else
+            mkdir -p "$REPO/workspace/$b"
+        fi
     done
     # Fix ownership before cloning: when run via sudo, dirs are root-owned and
     # clone as $SUDO_USER would get Permission denied. Do it now, not after.
