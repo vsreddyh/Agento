@@ -248,6 +248,9 @@ cmd_init() {
         # never recreate it; every other bot keeps workspace/<name>.
         if [[ "$b" == "story" ]]; then
             mkdir -p "$REPO/workspace/portals"
+            # Retired dir: rmdir only removes it when empty, so this can
+            # never delete real content — manual deletion also stays safe.
+            rmdir "$REPO/workspace/story" 2>/dev/null || true
         else
             mkdir -p "$REPO/workspace/$b"
         fi

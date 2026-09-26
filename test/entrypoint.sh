@@ -60,6 +60,7 @@ warning() { echo "[entrypoint] WARN: $*" >&2; }
 info() { echo "[entrypoint] $*"; }
 
 do_render() {
+    local home profile cwd
     # ── God (gateway home = Hermes' built-in "default" profile) ──
     export HERMES_CWD="${HERMES_CWD:-/workspace}"
     render_config "$HERMES_HOME"
@@ -81,7 +82,7 @@ do_render() {
         esac
         mkdir -p "$cwd"
         if [[ -z "$(ls -A "$cwd" 2>/dev/null)" ]]; then
-            warning "cwd $cwd is empty — check the host clone (workspace/portals)"
+            warning "cwd $cwd is empty — check the host clone"
         fi
         HERMES_CWD="$cwd" render_config "$home"
         # Secret scope: hermes 0.21.4 resolves credentials per profile
