@@ -171,17 +171,24 @@ class MainActivity : ComponentActivity() {
      * via onNewIntent, and the God tab consumes each generation once.
      */
     private val liveGen = mutableIntStateOf(0)
+    private var liveTab: String = "god"
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.action == LiveWidget.ACTION_LIVE) liveGen.intValue++
+        if (intent.action == LiveWidget.ACTION_LIVE) {
+            liveTab = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
+            liveGen.intValue++
+        }
     }
 
     /** Adaptive sidebar navigation (#18, #64); theme from prefs (#28). */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (intent?.action == LiveWidget.ACTION_LIVE && liveGen.intValue == 0) {
+        // Widget live tap: same intent redelivered on rotation/recreation
+        // must not start a second session — only a fresh launch counts.
+        if (savedInstanceState == null && intent?.action == LiveWidget.ACTION_LIVE && liveGen.intValue == 0) {
+            liveTab = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
             liveGen.intValue = 1
         }
         setContent {
@@ -200,10 +207,17 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     var dest by remember { mutableStateOf(Destination.God) }
-                    // Widget live tap (#85): always land on God; its ChatTab
-                    // consumes the liveGen generation and starts the session.
+                    // Widget live tap (#85): land on the requested tab; its
+                    // ChatTab consumes the liveGen generation and starts
+                    // the session. Retaps renavigate (singleTop) and refire.
                     LaunchedEffect(liveGen.intValue) {
-                        if (liveGen.intValue > 0) dest = Destination.God
+                        if (liveGen.intValue > 0) {
+                            dest = when (liveTab) {
+                                "story" -> Destination.Story
+                                "resumes" -> Destination.Portfolio
+                                else -> Destination.God
+                            }
+                        }
                     }
                     // Null section = the settings hub overview; a non-null
                     // section opens that subsection directly.
@@ -259,6 +273,7 @@ class MainActivity : ComponentActivity() {
                                 Destination.Story -> ChatTab(
                                     app = application, tab = "story", title = "Story", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
+                                    autoLiveGen = liveGen.intValue,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -268,6 +283,7 @@ class MainActivity : ComponentActivity() {
                                 Destination.Portfolio -> ChatTab(
                                     app = application, tab = "resumes", title = "Resume and Portfolio", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
+                                    autoLiveGen = liveGen.intValue,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -529,7 +545,7 @@ private fun ChatTab(
     // configured and a setup prompt otherwise.
     val setupNeeded = state.model.isBlank() || state.provider.isBlank()
     ChatScreen(
-        title = title, modelLabel = state.model.ifBlank { "" },
+        title = title, tab = tab, modelLabel = state.model.ifBlank { "" },
         setupNeeded = setupNeeded, state = state, wc = wc, snackbar = snackbar,
         tts = tts, autoSpeak = autoSpeak, onAutoSpeak = onAutoSpeak,
         onMenu = onMenu, autoLiveGen = autoLiveGen,
@@ -2181,6 +2197,7 @@ private fun TabModelSheet(
 @Composable
 private fun ChatScreen(
     title: String,
+    tab: String,
     modelLabel: String,
     setupNeeded: Boolean,
     state: ChatUiState,
@@ -2211,8 +2228,10 @@ private fun ChatScreen(
     // readout into a continuous talk-listen-talk loop. The system
     // recognizer handles silence cutoff per turn; LiveInterrupt only
     // detects talk-over during readout (no transcription).
-    var liveMode by remember { mutableStateOf(false) }
-    var silentRounds by remember { mutableIntStateOf(0) }
+    // Live state is keyed by tab: whatever the when(dest) branch reuse
+    // semantics are, a session can never bleed into another tab's screen.
+    var liveMode by remember(tab) { mutableStateOf(false) }
+    var silentRounds by remember(tab) { mutableIntStateOf(0) }
     // Hands-free interrupt (#85): background mic watches for speech while
     // the readout plays; on trigger just cut TTS — the speakingKey effect
     // below starts the recognizer. Needs RECORD_AUDIO; without it the loop
@@ -2230,15 +2249,17 @@ private fun ChatScreen(
             }
         }
     }
-    DisposableEffect(Unit) {
-        onDispose { liveMode = false; interrupt.stop(); tts.stop() }
+    DisposableEffect(tab) {
+        onDispose { interrupt.stop(); tts.stop() }
     }
     /** Every send-type action cuts speech first. */
     fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
-    fun speakMessage(key: String, text: String) {
+    fun speakMessage(key: String, text: String): Boolean {
         if (!tts.toggle(key, text)) {
             scope.launch { snackbar.showSnackbar("Voice output unavailable.") }
+            return false
         }
+        return true
     }
     fun endLive(reason: String? = null) {
         liveMode = false
@@ -2296,11 +2317,13 @@ private fun ChatScreen(
             voiceLauncher.launch(intent)
         } catch (e: ActivityNotFoundException) {
             scope.launch { snackbar.showSnackbar("No voice input app found.") }
+            // No recognizer = no loop: end loudly instead of sticking ON.
+            if (liveMode) endLive("Live session ended (no voice input app).")
         }
     }
     // Auto-read: when a reply finishes cleanly while the toggle is on, speak it.
     // In live mode the reply is always spoken (independent of the toggle).
-    var wasStreaming by remember { mutableStateOf(false) }
+    var wasStreaming by remember(tab) { mutableStateOf(false) }
     LaunchedEffect(state.streaming) {
         if (wasStreaming && !state.streaming) {
             if (liveMode) {
@@ -2308,7 +2331,11 @@ private fun ChatScreen(
                     silentRounds = 0
                     val last = state.messages.lastOrNull()
                     if (last != null && last.role == "assistant" && last.content.isNotBlank()) {
-                        speakMessage(ttsKeyFor(last), last.content)
+                        if (!speakMessage(ttsKeyFor(last), last.content)) {
+                            // Engine dead: speakingKey never sets, so the
+                            // loop effect can't re-listen — end it loudly.
+                            endLive("Live session ended (voice output unavailable).")
+                        }
                     } else {
                         startVoice()
                     }
@@ -2326,7 +2353,7 @@ private fun ChatScreen(
     }
     // Widget live request (#85): each generation starts the session once.
     // Same steps as the toggle (kill turn, arm, listen).
-    var consumedLiveGen by remember { mutableIntStateOf(0) }
+    var consumedLiveGen by remember(tab) { mutableIntStateOf(0) }
     LaunchedEffect(autoLiveGen) {
         if (autoLiveGen > consumedLiveGen) {
             consumedLiveGen = autoLiveGen
@@ -2344,7 +2371,7 @@ private fun ChatScreen(
     }
     // Live loop driver: when the spoken reply fully finishes, listen again.
     // While it plays, the interrupt detector listens for talk-over.
-    var wasSpeaking by remember { mutableStateOf(false) }
+    var wasSpeaking by remember(tab) { mutableStateOf(false) }
     LaunchedEffect(speakingKey, liveMode, micArmed) {
         if (liveMode && speakingKey != null && micArmed) {
             interrupt.start(this)

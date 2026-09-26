@@ -11,6 +11,8 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
@@ -30,6 +32,7 @@ import kotlin.math.sqrt
 class LiveInterrupt(private val onSpeech: () -> Unit) {
 
     private var job: Job? = null
+    private var aec: AcousticEchoCanceler? = null
 
     fun hasPermission(context: Context): Boolean =
         ContextCompat.checkSelfPermission(
@@ -61,7 +64,7 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
         }
         if (AcousticEchoCanceler.isAvailable()) {
             runCatching {
-                AcousticEchoCanceler.create(rec.audioSessionId)?.enabled = true
+                aec = AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true }
             }
         }
         job = scope.launch(Dispatchers.IO) {
@@ -74,9 +77,18 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
                 val calEnd = System.currentTimeMillis() + CALIBRATE_MS
                 var threshold = ABSOLUTE_MIN
                 var loudSince = 0L
-                while (true) {
+                var badReads = 0
+                while (isActive) {
                     val n = rec.read(buf, 0, buf.size)
-                    if (n <= 0) continue
+                    if (n <= 0) {
+                        // Mic error path: rec.read() blocks and ignores
+                        // cancellation, so bail after a few bad reads
+                        // instead of busy-spinning forever.
+                        if (++badReads >= MAX_BAD_READS) return@launch
+                        delay(50)
+                        continue
+                    }
+                    badReads = 0
                     var sum = 0.0
                     for (i in 0 until n) {
                         val s = buf[i].toDouble()
@@ -92,6 +104,10 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
                         continue
                     }
                     if (rms >= threshold) {
+                        // 600ms sustained: a short readout burst or a loud
+                        // calibration tail must not cut the speech that
+                        // produced it (self-interrupt). Combined with the
+                        // raised ABSOLUTE_MIN floor.
                         if (loudSince == 0L) loudSince = now
                         if (now - loudSince >= SUSTAIN_MS) {
                             onSpeech()
@@ -100,12 +116,15 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
                     } else {
                         loudSince = 0L
                     }
+                    ensureActive()
                 }
             } catch (e: SecurityException) {
                 // Permission revoked mid-listen: drop out silently.
             } finally {
                 runCatching { rec.stop() }
                 rec.release()
+                aec?.let { runCatching { it.release() } }
+                aec = null
             }
         }
         return true
@@ -114,13 +133,16 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
     fun stop() {
         job?.cancel()
         job = null
+        aec?.let { runCatching { it.release() } }
+        aec = null
     }
 
     private companion object {
         const val CALIBRATE_MS = 400L
-        const val SUSTAIN_MS = 300L
+        const val SUSTAIN_MS = 600L
         const val FLOOR_MULT = 4.0
-        const val ABSOLUTE_MIN = 600.0
+        const val ABSOLUTE_MIN = 1200.0
         const val ABSOLUTE_MAX = 3500.0
+        const val MAX_BAD_READS = 20
     }
 }
