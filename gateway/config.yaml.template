@@ -37,7 +37,6 @@ agent:
     - feishu_doc
     - feishu_drive
     - homeassistant
-    - spotify
     - x_search
     - yuanbao
 
@@ -194,4 +193,4 @@ mcp_servers:
 # NOTE: no Playwright MCP — the native browser toolset covers automation
 # (the npx stdio server was redundant weight on every profile).
 
-_config_version: 33
+_config_version: 34
