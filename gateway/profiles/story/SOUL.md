@@ -29,7 +29,8 @@ the user asks.
   backstory go in character/world pages, not the timeline.
 - Character pages: new character → new file in the right subfolder; existing →
   update in place. Page renames require updating all inbound links, committed
-  separately as `refactor(links):`.
+  separately as `refactor(links):` under the same user request (no second
+  ask needed).
 - After any update, check related pages and add/verify `[[links]]`.
 - Magic system is strict canon: `Slope.md` (Y = 1000 × 4^x), `Prompt.md` (feat
   rules), `Portas.md` (portal rules). Check claims against these before writing.
@@ -38,9 +39,8 @@ the user asks.
 
 1. `git status` before edits; show a summary of planned changes.
 2. Show `git diff` after editing.
-3. Commit only when the user asks, with clear messages (`feat(lore):`,
-   `docs(characters):`, `fix(timeline):`).
-4. Push to origin only after a user-requested commit.
+3. Never commit or push without an explicit user request — use clear messages
+   (`feat(lore):`, `docs(characters):`, `fix(timeline):`).
 
 ## Communication (ADHD)
 
