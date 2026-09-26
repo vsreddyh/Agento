@@ -167,11 +167,51 @@ class ServerApi(context: Context) {
             }
         }
 
+    /** Tools + skills used during one server-side turn, read back from the
+     * gateway session the app pinned via `X-Hermes-Session-Id`. Assistant
+     * messages carry `tool_calls` (name + arguments JSON); tool-result rows
+     * carry `tool_name`. Skill names come from [skillNamesFromToolCall].
+     * Unknown/empty sessions are success-with-empty (the live tool frames
+     * already attached at Done stay); only transport/parse failures error. */
+    suspend fun fetchSessionUsage(path: String, sessionId: String): Result<SessionUsage> =
+        withContext(Dispatchers.IO) {
+            if (sessionId.isBlank()) {
+                return@withContext Result.failure(IllegalStateException("Session id not set"))
+            }
+            get(path, "api/sessions/$sessionId/messages").map { body ->
+                val calls = mutableListOf<SessionToolCall>()
+                val arr = rootArray(body, "messages", "data", "items")
+                    ?: throw RuntimeException("Unexpected response shape")
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    when (o.optString("role", "")) {
+                        "assistant" -> {
+                            val tarr = o.optJSONArray("tool_calls") ?: continue
+                            for (j in 0 until tarr.length()) {
+                                val tc = tarr.optJSONObject(j) ?: continue
+                                val fn = tc.optJSONObject("function") ?: continue
+                                val name = fn.optString("name", "").trim()
+                                if (name.isEmpty()) continue
+                                calls.add(SessionToolCall(
+                                    name = name,
+                                    arguments = fn.optString("arguments", ""),
+                                ))
+                            }
+                        }
+                        "tool" -> {
+                            val name = o.optString("tool_name", "").trim()
+                            if (name.isNotEmpty()) calls.add(SessionToolCall(name = name))
+                        }
+                    }
+                }
+                usageFromToolCalls(calls)
+            }
+        }
+
     /**
      * Strict toggle parse: only real booleans count — strings, numbers and
      * nulls read as unknown (null) instead of Off.
-     */
-    private fun optBool(o: JSONObject): Boolean? {
+     */    private fun optBool(o: JSONObject): Boolean? {
         for (k in listOf("enabled", "active")) {
             if (!o.isNull(k)) {
                 val v = o.opt(k)
@@ -201,6 +241,46 @@ class ServerApi(context: Context) {
         }
         return null
     }
+}
+
+/** One tool call recorded on a gateway session message. */
+data class SessionToolCall(
+    val name: String,
+    val arguments: String = "",
+)
+
+/** Tools + skills used during one server-side turn. */
+data class SessionUsage(
+    val tools: List<String> = emptyList(),
+    val skills: List<String> = emptyList(),
+)
+
+/** `skills/<name>/SKILL.md` paths inside tool arguments mark skill use. */
+private val SKILL_MD_PATH = Regex("""skills/([A-Za-z0-9_-]+)/SKILL\.md""", RegexOption.IGNORE_CASE)
+
+/** Named skill reference inside `skill_*` tool arguments (key shape varies). */
+private val SKILL_ARG_NAME = Regex(""""(?:skill|name|id|slug)"\s*:\s*"([A-Za-z0-9_-]+)"""")
+
+/**
+ * Heuristic skill attribution for one tool call: the gateway has no
+ * first-class "skill used" signal, so a skill counts as used when the agent
+ * read its SKILL.md (via read_file/search_files/skill_view/...) or invoked
+ * a `skill_*` tool naming it. Pure for testability.
+ */
+fun skillNamesFromToolCall(tool: String, args: String): List<String> {
+    val out = mutableListOf<String>()
+    SKILL_MD_PATH.findAll(args).forEach { out.add(it.groupValues[1]) }
+    if (tool.startsWith("skill", ignoreCase = true)) {
+        SKILL_ARG_NAME.findAll(args).forEach { out.add(it.groupValues[1]) }
+    }
+    return out.distinct()
+}
+
+/** Distinct tool names + attributed skills across [calls], order preserved. */
+fun usageFromToolCalls(calls: List<SessionToolCall>): SessionUsage {
+    val tools = calls.mapNotNull { it.name.trim().ifEmpty { null } }.distinct()
+    val skills = calls.flatMap { skillNamesFromToolCall(it.name, it.arguments) }.distinct()
+    return SessionUsage(tools = tools.take(20), skills = skills.take(20))
 }
 
 /** Groups `mcp__<server>__<tool>` tools into per-server rows. */
