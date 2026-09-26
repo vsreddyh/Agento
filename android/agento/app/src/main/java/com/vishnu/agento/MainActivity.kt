@@ -31,7 +31,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.KeyboardType
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -892,10 +892,16 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 },
                 title = { Text("Task Manager") },
                 actions = {
-                    IconButton(onClick = { editing = ServerTaskDraft() }) {
+                    IconButton(
+                        onClick = { editing = ServerTaskDraft() },
+                        enabled = !busy,
+                    ) {
                         Icon(Icons.Filled.Add, contentDescription = "New task")
                     }
-                    IconButton(onClick = { refreshTick++ }) {
+                    IconButton(
+                        onClick = { refreshTick++ },
+                        enabled = !busy,
+                    ) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }
                 },

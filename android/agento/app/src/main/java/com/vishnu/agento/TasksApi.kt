@@ -9,6 +9,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
@@ -98,7 +99,7 @@ class TasksApi(context: Context) {
             if (base.isEmpty()) {
                 return@withContext Result.failure(IllegalStateException("Server URL not configured"))
             }
-            val s = state.trim().lowercase()
+            val s = state.trim().lowercase(Locale.ROOT)
             if (s != "open" && s != "done" && s != "all") {
                 return@withContext Result.failure(IllegalArgumentException("Unknown state: $state"))
             }
@@ -115,16 +116,6 @@ class TasksApi(context: Context) {
                 }
                 out
             }
-        }
-
-    /** Fetches one task by id. */
-    suspend fun get(id: String): Result<ServerTask> =
-        withContext(Dispatchers.IO) {
-            val clean = encodeId(id)
-            if (clean.isEmpty()) {
-                return@withContext Result.failure(IllegalArgumentException("Missing task id"))
-            }
-            call("GET", "/api/tasks/$clean").map { parseOne(it) }
         }
 
     /** Creates an open task; name required, the rest validated server-side.
