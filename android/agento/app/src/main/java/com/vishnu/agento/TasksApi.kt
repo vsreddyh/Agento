@@ -224,6 +224,17 @@ class TasksApi(context: Context) {
             http.newCall(builder.build()).execute().use { response ->
                 val text = response.body?.string() ?: ""
                 if (!response.isSuccessful) {
+                    // A 404 on an /api/* route almost always means the app's
+                    // Server URL points at the gateway (:8642) instead of the
+                    // proxy (:8080) — the gateway serves chat only, while
+                    // /api/* lives on health-api behind the proxy. Say so
+                    // instead of surfacing a bare "Not Found".
+                    if (response.code == 404 && url.startsWith("/api/")) {
+                        throw RuntimeException(
+                            "HTTP 404: ${text.take(200)} (is the Server URL " +
+                                "the :8080 proxy? Direct :8642 serves chat only)"
+                        )
+                    }
                     throw RuntimeException("HTTP ${response.code}: ${text.take(200)}")
                 }
                 text
