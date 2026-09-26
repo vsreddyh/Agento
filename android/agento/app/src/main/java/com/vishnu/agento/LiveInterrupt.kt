@@ -145,11 +145,10 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
     fun stop() {
         job?.cancel()
         job = null
-        // Wake a thread blocked in read(); release stays in the coroutine's
-        // finally (which the cancel triggers once read() returns).
+        // Wake a thread blocked in read(); release happens in the
+        // coroutine's finally (myAec) — releasing here too double-frees
+        // and races a rapid restart.
         runCatching { rec?.stop() }
-        aec?.let { runCatching { it.release() } }
-        aec = null
     }
 
     private companion object {

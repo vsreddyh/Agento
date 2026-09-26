@@ -171,13 +171,13 @@ class MainActivity : ComponentActivity() {
      * via onNewIntent, and the God tab consumes each generation once.
      */
     private val liveGen = mutableIntStateOf(0)
-    private var liveTab: String = "god"
+    private val liveTab = mutableStateOf("god")
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == LiveWidget.ACTION_LIVE) {
-            liveTab = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
+            liveTab.value = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
             liveGen.intValue++
         }
     }
@@ -188,7 +188,7 @@ class MainActivity : ComponentActivity() {
         // Widget live tap: same intent redelivered on rotation/recreation
         // must not start a second session — only a fresh launch counts.
         if (savedInstanceState == null && intent?.action == LiveWidget.ACTION_LIVE && liveGen.intValue == 0) {
-            liveTab = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
+            liveTab.value = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
             liveGen.intValue = 1
         }
         setContent {
@@ -212,7 +212,7 @@ class MainActivity : ComponentActivity() {
                     // the session. Retaps renavigate (singleTop) and refire.
                     LaunchedEffect(liveGen.intValue) {
                         if (liveGen.intValue > 0) {
-                            dest = when (liveTab) {
+                            dest = when (liveTab.value) {
                                 "story" -> Destination.Story
                                 "resumes" -> Destination.Portfolio
                                 else -> Destination.God
@@ -267,7 +267,7 @@ class MainActivity : ComponentActivity() {
                                     // per-tab consumed counters would
                                     // otherwise auto-start sessions on
                                     // tabs the user merely switches to.
-                                    autoLiveGen = if (liveTab == "god") liveGen.intValue else 0,
+                                    autoLiveGen = if (liveTab.value == "god") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -277,7 +277,7 @@ class MainActivity : ComponentActivity() {
                                 Destination.Story -> ChatTab(
                                     app = application, tab = "story", title = "Story", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
-                                    autoLiveGen = if (liveTab == "story") liveGen.intValue else 0,
+                                    autoLiveGen = if (liveTab.value == "story") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -287,7 +287,7 @@ class MainActivity : ComponentActivity() {
                                 Destination.Portfolio -> ChatTab(
                                     app = application, tab = "resumes", title = "Resume and Portfolio", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
-                                    autoLiveGen = if (liveTab == "resumes") liveGen.intValue else 0,
+                                    autoLiveGen = if (liveTab.value == "resumes") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -2272,6 +2272,9 @@ private fun ChatScreen(
     fun endLive(reason: String? = null) {
         liveMode = false
         silentRounds = 0
+        // Stop the detector now — don't rely on the liveMode=false effect
+        // round-trip to get around to it.
+        interrupt.stop()
         tts.stop()
         if (reason != null) scope.launch { snackbar.showSnackbar(reason) }
     }
