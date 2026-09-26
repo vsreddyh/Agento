@@ -118,3 +118,43 @@ func TestTaskItemGuard(t *testing.T) {
 		t.Fatalf("bad json: got %d", w.Code)
 	}
 }
+
+func TestTaskFieldValidation(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	post := func(target, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-secret-12345678")
+		w := httptest.NewRecorder()
+		if strings.HasPrefix(target, "/api/tasks/") {
+			taskItem(w, req)
+		} else {
+			tasksRoot(w, req)
+		}
+		return w
+	}
+	// Mistyped / fractional values fail before any MongoDB touch.
+	for _, body := range []string{
+		`{"name":"x","estimated_minutes":"lots"}`,
+		`{"name":"x","estimated_minutes":1.5}`,
+		`{"name":"x","estimated_minutes":-3}`,
+		`{"name":"x","description":42}`,
+		`{"name":"x","due_date":20260926}`,
+	} {
+		if w := post("/api/tasks", body); w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: got %d (%s)", body, w.Code, w.Body.String())
+		}
+	}
+	// Trailing slash with no id behaves like the collection root: GET is
+	// auth-gated (tested) and would list; POST create validates first.
+	if w := post("/api/tasks/", `{"estimated_minutes":"lots"}`); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("trailing slash create: got %d", w.Code)
+	}
+	// PATCH validation also runs before any MongoDB touch.
+	req := httptest.NewRequest(http.MethodPatch, "/api/tasks/abc", strings.NewReader(`{"estimated_minutes":2.5}`))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	taskItem(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("patch fractional: got %d (%s)", w.Code, w.Body.String())
+	}
+}

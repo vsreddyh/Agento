@@ -15,11 +15,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	syncpkg "sync"
 	"time"
 
 	"agento/internal/mongo"
@@ -361,7 +363,7 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
 		return
 	}
-	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	state := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("state")))
 	if state == "" {
 		state = "open"
 	}
@@ -383,12 +385,26 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 // taskStore opens the shared tasks collection (same rows the agent manages).
+// The client is cached process-wide: connecting + ensuring indexes on every
+// request would fan a fresh connection out of each list/refresh. Failures
+// are not cached, so a bad env recovers without a restart.
+var (
+	tasksStoreMu syncpkg.Mutex
+	tasksCache   *tasks.Store
+)
+
 func taskStore(w http.ResponseWriter) (*tasks.Store, bool) {
+	tasksStoreMu.Lock()
+	defer tasksStoreMu.Unlock()
+	if tasksCache != nil {
+		return tasksCache, true
+	}
 	store, err := tasks.FromEnv()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, bson.M{"detail": "MONGODB_URI not set"})
 		return nil, false
 	}
+	tasksCache = store
 	return store, true
 }
 
@@ -429,16 +445,47 @@ func taskStrField(fields map[string]any, key string) string {
 	return ""
 }
 
-func taskIntField(fields map[string]any, key string) (int, bool) {
-	switch n := fields[key].(type) {
+// checkTaskFields rejects mistyped values loudly. The store silently
+// ignores non-string fields and truncates fractional minutes, which would
+// turn client bugs into mystery no-ops — the HTTP layer validates first so
+// mistakes come back as 422. JSON null counts as absent (no change).
+func checkTaskFields(fields map[string]any) error {
+	for _, k := range []string{"name", "description", "due_date", "due_time", "repeat_rule"} {
+		if v, ok := fields[k]; ok && v != nil {
+			if _, ok := v.(string); !ok {
+				return &tasks.StoreError{Msg: k + " must be a string"}
+			}
+		}
+	}
+	if v, ok := fields["estimated_minutes"]; ok && v != nil {
+		if _, ok := taskMinutes(v); !ok {
+			return &tasks.StoreError{Msg: "estimated_minutes must be an integer >= 0"}
+		}
+	}
+	return nil
+}
+
+// taskMinutes converts a JSON number to whole minutes, rejecting
+// fractionals, negatives, and non-numbers (store.toInt truncates).
+func taskMinutes(v any) (int, bool) {
+	switch n := v.(type) {
 	case float64:
+		if n != math.Trunc(n) || n < 0 {
+			return 0, false
+		}
 		return int(n), true
 	case int:
+		if n < 0 {
+			return 0, false
+		}
 		return n, true
 	case int64:
+		if n < 0 {
+			return 0, false
+		}
 		return int(n), true
 	case json.Number:
-		if i, err := n.Int64(); err == nil {
+		if i, err := n.Int64(); err == nil && i >= 0 {
 			return int(i), true
 		}
 	}
@@ -452,15 +499,19 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if err := checkTaskFields(fields); err != nil {
+		writeTaskErr(w, err)
+		return
+	}
 	store, ok := taskStore(w)
 	if !ok {
 		return
 	}
 	minutes := 0
-	if _, present := fields["estimated_minutes"]; present {
-		n, ok := taskIntField(fields, "estimated_minutes")
+	if _, present := fields["estimated_minutes"]; present && fields["estimated_minutes"] != nil {
+		n, ok := taskMinutes(fields["estimated_minutes"])
 		if !ok {
-			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "estimated_minutes must be a number >= 0"})
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "estimated_minutes must be an integer >= 0"})
 			return
 		}
 		minutes = n
@@ -492,7 +543,8 @@ func taskItem(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/tasks/"), "/")
 	parts := strings.Split(rest, "/")
 	if len(parts) == 0 || parts[0] == "" {
-		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
+		// Trailing slash with no id behaves like the collection root.
+		tasksRoot(w, r)
 		return
 	}
 	id, action := parts[0], ""
@@ -543,6 +595,10 @@ func getTask(w http.ResponseWriter, r *http.Request, id string) {
 func updateTask(w http.ResponseWriter, r *http.Request, id string) {
 	fields, ok := decodeTaskBody(w, r)
 	if !ok {
+		return
+	}
+	if err := checkTaskFields(fields); err != nil {
+		writeTaskErr(w, err)
 		return
 	}
 	store, ok := taskStore(w)

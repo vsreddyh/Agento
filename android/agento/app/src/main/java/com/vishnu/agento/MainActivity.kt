@@ -1040,7 +1040,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             title = { Text("Delete task?") },
             text = { Text("“${target.name}” will be permanently deleted.") },
             confirmButton = {
-                TextButton(onClick = { doDelete(target) }) { Text("Delete") }
+                TextButton(onClick = { doDelete(target) }, enabled = !busy) { Text("Delete") }
             },
             dismissButton = {
                 TextButton(onClick = { deleting = null }) { Text("Cancel") }
