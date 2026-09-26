@@ -1704,8 +1704,11 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val defaultSkills = remember(skills, query, skillsSort, anyCategorized) {
         sortSkills(skills.filter { (it.isDefault() || !anyCategorized) && it.matches(query) })
     }
-    val customSkills = remember(skills, query, skillsSort) {
-        sortSkills(skills.filter { !it.isDefault() && it.matches(query) })
+    val customSkills = remember(skills, query, skillsSort, anyCategorized) {
+        // Mirrors the defaultSkills fallback: with no categories anywhere,
+        // everything is default, so Custom stays empty (never duplicated).
+        if (!anyCategorized) emptyList()
+        else sortSkills(skills.filter { !it.isDefault() && it.matches(query) })
     }
     val shownDefaultSkills = if (skillsOrigin == SkillsOrigin.Custom) emptyList() else defaultSkills
     val shownCustomSkills = if (skillsOrigin == SkillsOrigin.Default) emptyList() else customSkills

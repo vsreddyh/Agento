@@ -250,7 +250,7 @@ fun ToolsetInfo.isCustomMcp(): Boolean {
     val n = name.trim().lowercase(Locale.ROOT)
     if (n == "mcp" || n.startsWith("mcp-") || n.startsWith("mcp_")) return true
     if (n in CUSTOM_MCP_TOOLSET_NAMES) return true
-    if (tools.any { it.startsWith("mcp__") }) return true
+    if (tools.any { it.lowercase(Locale.ROOT).startsWith("mcp__") }) return true
     return false
 }
 
