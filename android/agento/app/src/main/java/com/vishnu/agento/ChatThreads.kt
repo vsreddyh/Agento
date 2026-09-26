@@ -6,12 +6,15 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
-/** One persisted message (ChatMessage + timestamp; ts=0 reads as unknown). */
+/** One persisted message (ChatMessage + timestamp; ts=0 reads as unknown).
+ * tools/skills default empty so pre-visibility history reads as unknown. */
 @Serializable
 data class StoredMessage(
     val role: String = "",
     val content: String = "",
     val ts: Long = 0L,
+    val tools: List<String> = emptyList(),
+    val skills: List<String> = emptyList(),
 )
 
 /** One conversation thread inside a tab. */
@@ -75,8 +78,8 @@ object ChatThreads {
     }
 
     fun toUi(messages: List<StoredMessage>): List<ChatMessage> =
-        messages.map { ChatMessage(it.role, it.content, it.ts) }
+        messages.map { ChatMessage(it.role, it.content, it.ts, it.tools, it.skills) }
 
     fun toStored(messages: List<ChatMessage>): List<StoredMessage> =
-        messages.map { StoredMessage(it.role, it.content, it.ts) }
+        messages.map { StoredMessage(it.role, it.content, it.ts, it.tools, it.skills) }
 }

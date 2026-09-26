@@ -37,6 +37,10 @@ data class ChatUiState(
     val threadId: String = "",
     /** Reachability of the server; null = not checked yet. */
     val online: Boolean? = null,
+    /** Distinct tool names seen live this turn (hermes.tool.progress frames). */
+    val activeTools: List<String> = emptyList(),
+    /** Label of the latest live tool frame, e.g. what the tool is doing. */
+    val activeToolLabel: String = "",
 )
 
 /**
@@ -146,6 +150,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             threadId = id,
             error = "",
             pending = "",
+            activeTools = emptyList(),
+            activeToolLabel = "",
         )
     }
 
@@ -161,6 +167,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
+            activeTools = emptyList(), activeToolLabel = "",
         )
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
@@ -228,6 +235,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         for (m in t.messages) {
             val who = if (m.role == "user") "You" else "Assistant"
             sb.append("**$who:** ${m.content.trim()}\n\n")
+            if (m.role != "user" && (m.tools.isNotEmpty() || m.skills.isNotEmpty())) {
+                val used = listOf(
+                    m.tools.takeIf { it.isNotEmpty() }?.let { "tools: ${it.joinToString(", ")}" },
+                    m.skills.takeIf { it.isNotEmpty() }?.let { "skills: ${it.joinToString(", ")}" },
+                ).filterNotNull().joinToString(" · ")
+                sb.append("_Used $used._\n\n")
+            }
         }
         return sb.toString().trim()
     }
@@ -261,7 +275,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun stop() {
         streamJob?.cancel()
         streamJob = null
-        _state.value = _state.value.copy(streaming = false)
+        _state.value = _state.value.copy(
+            streaming = false, activeTools = emptyList(), activeToolLabel = ""
+        )
     }
 
     /** Resends the current history (used after a failed request). */
@@ -293,14 +309,29 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         provider: String = api.providerFor(tab),
         model: String = api.modelFor(tab),
     ) {
-        _state.value = _state.value.copy(streaming = true, error = "")
+        _state.value = _state.value.copy(
+            streaming = true, error = "",
+            activeTools = emptyList(), activeToolLabel = "",
+        )
         // Placeholder assistant message that deltas append to.
         _state.value = _state.value.copy(messages = history + ChatMessage("assistant", "", ChatThreads.now()))
         val acc = StringBuilder()
+        // Fresh id per send: pins this turn to one server session for the
+        // post-turn usage fetch, without changing the stateless agent loop.
+        val runSessionId = ChatThreads.newId()
+        val liveTools = mutableListOf<String>()
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
-            api.streamChat(path, provider, model, history).collect { event ->
+            api.streamChat(path, provider, model, history, runSessionId).collect { event ->
                 when (event) {
+                    is ChatEvent.ToolProgress -> {
+                        val name = event.tool.trim()
+                        if (name.isNotEmpty() && name !in liveTools) liveTools.add(name)
+                        _state.value = _state.value.copy(
+                            activeTools = liveTools.toList(),
+                            activeToolLabel = event.label,
+                        )
+                    }
                     is ChatEvent.Delta -> {
                         acc.append(event.text)
                         val msgs = _state.value.messages
@@ -310,20 +341,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     }
                     is ChatEvent.Done -> {
                         val final = event.fullText.ifEmpty { acc.toString() }
-                        val msgs = _state.value.messages
-                        val finished = msgs.dropLast(1) + ChatMessage(
-                            "assistant",
-                            final.ifEmpty { "The assistant sent an empty reply. Try asking again." },
-                            ChatThreads.now(),
-                        )
+                        val finishedAt = ChatThreads.now()
+                        val finished = msgsDropLastPlusAssistant(final, finishedAt, liveTools.toList())
                         _state.value = _state.value.copy(
                             messages = finished,
                             streaming = false,
                             online = true,
+                            activeTools = emptyList(),
+                            activeToolLabel = "",
                         )
                         addUsage(recv = final.length)
                         upsertActive(finished)
                         persist()
+                        backfillUsage(path, runSessionId, finishedAt, final)
                         // #58: ping the user when a reply lands while the app
                         // is backgrounded (gateway has no cronjobs to report).
                         if (!ForegroundTracker.isForeground) {
@@ -335,11 +365,59 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     is ChatEvent.Error -> {
                         // Drop the empty placeholder on failure.
                         val msgs = _state.value.messages.dropLast(1)
-                        _state.value = _state.value.copy(messages = msgs, streaming = false, error = event.message)
+                        _state.value = _state.value.copy(
+                            messages = msgs, streaming = false, error = event.message,
+                            activeTools = emptyList(), activeToolLabel = "",
+                        )
                         persist()
                         checkReachability()
                     }
                 }
+            }
+        }
+    }
+
+    /** Finished assistant message with the live-seen tools attached. */
+    private fun msgsDropLastPlusAssistant(
+        final: String,
+        finishedAt: Long,
+        tools: List<String>,
+    ): List<ChatMessage> {
+        val msgs = _state.value.messages
+        return msgs.dropLast(1) + ChatMessage(
+            "assistant",
+            final.ifEmpty { "The assistant sent an empty reply. Try asking again." },
+            finishedAt,
+            tools = tools.distinct().take(20),
+        )
+    }
+
+    /** Post-turn usage fetch: merges server-recorded tools + skills into the
+     * finished message so they persist and render as chips. Silent on
+     * failure — the live tools attached at Done stay. The patch applies to
+     * the fresh state (matched by timestamp) so a send made mid-fetch is
+     * never clobbered; a thread switch simply finds no match. */
+    private fun backfillUsage(path: String, sessionId: String, finishedAt: Long, final: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val usage = runCatching {
+                ServerApi(appCtx).fetchSessionUsage(path, sessionId).getOrThrow()
+            }.getOrNull() ?: return@launch
+            if (usage.tools.isEmpty() && usage.skills.isEmpty()) return@launch
+            val expected = final.ifEmpty { "The assistant sent an empty reply. Try asking again." }
+            withContext(Dispatchers.Main) {
+                val fresh = _state.value.messages.toMutableList()
+                val idx = fresh.indexOfLast {
+                    it.role == "assistant" && it.ts == finishedAt && it.content == expected
+                }
+                if (idx < 0) return@withContext
+                val prev = fresh[idx]
+                fresh[idx] = prev.copy(
+                    tools = (prev.tools + usage.tools).distinct().take(20),
+                    skills = (prev.skills + usage.skills).distinct().take(20),
+                )
+                _state.value = _state.value.copy(messages = fresh)
+                upsertActive(fresh)
+                persist()
             }
         }
     }

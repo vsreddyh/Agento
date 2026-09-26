@@ -20,12 +20,22 @@ data class ChatMessage(
     val content: String,
     /** Epoch millis when the message was created; 0 = unknown (legacy). */
     val ts: Long = 0L,
+    /** Tool names the assistant used for this reply (persisted, [] = unknown). */
+    val tools: List<String> = emptyList(),
+    /** Skill names the assistant used for this reply (heuristic, see ServerApi). */
+    val skills: List<String> = emptyList(),
 )
 
 sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
     data class Done(val fullText: String) : ChatEvent
     data class Error(val message: String) : ChatEvent
+    /** Live tool-start signal from `hermes.tool.progress` SSE frames. */
+    data class ToolProgress(
+        val tool: String,
+        val label: String = "",
+        val status: String = "",
+    ) : ChatEvent
 }
 
 /** Known provider slugs: offline fallback for the dynamic picker (the live
@@ -257,12 +267,18 @@ class ChatApi(context: Context) {
                 gatewayError = gatewayError, syncError = syncError,
             ))
     }
-    /** Streams reply deltas for [messages]; emits Done(fullText) at `[DONE]`. */
+    /** Streams reply deltas for [messages]; emits Done(fullText) at `[DONE]`.
+     * Tool-start visibility comes through as [ChatEvent.ToolProgress] parsed
+     * from the gateway's `hermes.tool.progress` SSE frames. [sessionId] is
+     * sent as `X-Hermes-Session-Id` (blank = omitted) so the turn can be
+     * correlated with `GET api/sessions/{id}/messages` afterwards; the agent
+     * loop itself is unchanged (full history is still sent per request). */
     fun streamChat(
         path: String,
         provider: String,
         model: String,
         messages: List<ChatMessage>,
+        sessionId: String = "",
     ): Flow<ChatEvent> = callbackFlow {
         val base = baseUrl()
         if (base.isEmpty()) {
@@ -282,13 +298,13 @@ class ChatApi(context: Context) {
         payload.put("messages", arr)
         payload.put("stream", true)
         val body = payload.toString().toRequestBody(JSON)
-        val request = Request.Builder()
+        val reqBuilder = Request.Builder()
             .url("$base$path/v1/chat/completions")
             .header("Authorization", "Bearer ${password()}")
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
-            .post(body)
-            .build()
+        if (sessionId.isNotBlank()) reqBuilder.header("X-Hermes-Session-Id", sessionId.trim())
+        val request = reqBuilder.post(body).build()
         val call = http.newCall(request)
         val job = launch(Dispatchers.IO) {
             try {
@@ -305,12 +321,47 @@ class ChatApi(context: Context) {
                     }
                     val full = StringBuilder()
                     // OkHttp in this project has no sse module; parse SSE lines manually.
+                    // Named events (e.g. `event: hermes.tool.progress`) apply to the
+                    // data line that follows; `: keepalive` comments are ignored.
+                    var pendingEvent = ""
                     while (!source.exhausted()) {
                         val line = source.readUtf8Line() ?: break
+                        if (line.startsWith(":")) continue
+                        if (line.startsWith("event:")) {
+                            pendingEvent = line.removePrefix("event:").trim()
+                            continue
+                        }
+                        if (line.isBlank()) {
+                            pendingEvent = ""
+                            continue
+                        }
                         if (!line.startsWith("data:")) continue
                         val data = line.removePrefix("data:").trim()
-                        if (data.isEmpty()) continue
+                        if (data.isEmpty()) {
+                            pendingEvent = ""
+                            continue
+                        }
                         if (data == "[DONE]") break
+                        // Tool-progress frames carry {"tool","label",...} and no
+                        // choices array — surface them instead of dropping them.
+                        val progress = runCatching {
+                            val o = JSONObject(data)
+                            if (o.optJSONArray("choices") != null) return@runCatching null
+                            val tool = o.optString("tool", "").trim()
+                            if (tool.isEmpty() && pendingEvent != "hermes.tool.progress") {
+                                return@runCatching null
+                            }
+                            ChatEvent.ToolProgress(
+                                tool = tool.ifEmpty { pendingEvent },
+                                label = o.optString("label", "").trim(),
+                                status = o.optString("status", "").trim(),
+                            )
+                        }.getOrNull()
+                        pendingEvent = ""
+                        if (progress != null) {
+                            trySend(progress)
+                            continue
+                        }
                         val delta = runCatching {
                             val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
                             val choice = choices.optJSONObject(0) ?: return@runCatching ""

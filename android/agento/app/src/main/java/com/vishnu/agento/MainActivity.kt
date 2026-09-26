@@ -2307,6 +2307,17 @@ private fun ChatScreen(
                     if (state.streaming) {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
+                    if (state.streaming && state.activeTools.isNotEmpty()) {
+                        Text(
+                            "Using ${state.activeTools.joinToString(", ")}…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 2.dp),
+                        )
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -2499,6 +2510,24 @@ private fun ChatScreen(
                                                 content = msg.content.ifEmpty { "…" },
                                                 modifier = Modifier.fillMaxWidth(),
                                             )
+                                            // Persisted tool/skill usage for this
+                                            // reply (live frames + post-turn fetch).
+                                            val usedLine = listOf(
+                                                msg.tools.takeIf { it.isNotEmpty() }
+                                                    ?.let { "Tools: ${it.joinToString(", ")}" },
+                                                msg.skills.takeIf { it.isNotEmpty() }
+                                                    ?.let { "Skills: ${it.joinToString(", ")}" },
+                                            ).filterNotNull().joinToString(" · ")
+                                            if (usedLine.isNotEmpty()) {
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    usedLine,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
                                         }
                                     }
                                 }
