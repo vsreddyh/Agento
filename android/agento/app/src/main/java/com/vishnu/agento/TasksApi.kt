@@ -8,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
@@ -39,13 +40,21 @@ fun ServerTask.isOpen(): Boolean = completedAt.isBlank()
  */
 class TasksApi(context: Context) {
 
+    companion object {
+        // One shared client: each OkHttpClient owns a connection pool and
+        // dispatcher threads, so per-call instances would leak both.
+        private val sharedHttp: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .build()
+        }
+    }
+
     private val appCtx = context.applicationContext
     private val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val http: OkHttpClient get() = sharedHttp
 
     private fun base(): String {
         for (k in listOf("server_base_url", "server_url", "api_base_url")) {
@@ -111,14 +120,15 @@ class TasksApi(context: Context) {
     /** Fetches one task by id. */
     suspend fun get(id: String): Result<ServerTask> =
         withContext(Dispatchers.IO) {
-            val clean = id.trim()
+            val clean = encodeId(id)
             if (clean.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
             call("GET", "/api/tasks/$clean").map { parseOne(it) }
         }
 
-    /** Creates an open task; name required, the rest validated server-side. */
+    /** Creates an open task; name required, the rest validated server-side.
+     * Blank optionals are omitted (the store treats absent and "" alike). */
     suspend fun create(
         name: String,
         description: String = "",
@@ -130,12 +140,11 @@ class TasksApi(context: Context) {
         if (name.trim().isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Name is required"))
         }
-        val body = JSONObject()
-            .put("name", name.trim())
-            .put("description", description)
-            .put("due_date", dueDate)
-            .put("due_time", dueTime)
-            .put("repeat_rule", repeatRule)
+        val body = JSONObject().put("name", name.trim())
+        if (description.isNotEmpty()) body.put("description", description)
+        if (dueDate.isNotEmpty()) body.put("due_date", dueDate)
+        if (dueTime.isNotEmpty()) body.put("due_time", dueTime)
+        if (repeatRule.isNotEmpty()) body.put("repeat_rule", repeatRule)
         if (estimatedMinutes != null) body.put("estimated_minutes", estimatedMinutes)
         call("POST", "/api/tasks", body).map { parseOne(it) }
     }
@@ -151,7 +160,7 @@ class TasksApi(context: Context) {
         estimatedMinutes: Int? = null,
         repeatRule: String? = null,
     ): Result<ServerTask> = withContext(Dispatchers.IO) {
-        val clean = id.trim()
+        val clean = encodeId(id)
         if (clean.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Missing task id"))
         }
@@ -168,7 +177,7 @@ class TasksApi(context: Context) {
     /** Marks a task done (server starts the 3-day retention clock). */
     suspend fun complete(id: String): Result<ServerTask> =
         withContext(Dispatchers.IO) {
-            val clean = id.trim()
+            val clean = encodeId(id)
             if (clean.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
@@ -178,7 +187,7 @@ class TasksApi(context: Context) {
     /** Reopens a done task. */
     suspend fun reopen(id: String): Result<ServerTask> =
         withContext(Dispatchers.IO) {
-            val clean = id.trim()
+            val clean = encodeId(id)
             if (clean.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
@@ -188,7 +197,7 @@ class TasksApi(context: Context) {
     /** Permanently deletes a task. */
     suspend fun delete(id: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            val clean = id.trim()
+            val clean = encodeId(id)
             if (clean.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
@@ -198,6 +207,12 @@ class TasksApi(context: Context) {
     private fun parseOne(body: String): ServerTask =
         parseTask(JSONObject(body))
             ?: throw RuntimeException("Unexpected response shape")
+
+    /** Ids are hex today, but encoded defensively so a malformed id can
+     * never break the request path (the `+` fix-up mirrors ServerApi:
+     * form-encoding emits `+` for space, valid only in query strings). */
+    private fun encodeId(id: String): String =
+        URLEncoder.encode(id.trim(), Charsets.UTF_8.name()).replace("+", "%20")
 
     private fun call(method: String, url: String, body: JSONObject? = null): Result<String> {
         val base = base()
@@ -213,7 +228,7 @@ class TasksApi(context: Context) {
                 "POST" -> builder.post((body?.toString() ?: "{}").toRequestBody(JSON_MEDIA))
                 "PATCH" -> builder.patch((body?.toString() ?: "{}").toRequestBody(JSON_MEDIA))
                 "DELETE" -> builder.delete()
-                else -> builder.get()
+                else -> throw IllegalArgumentException("Unknown method: $method")
             }
             http.newCall(builder.build()).execute().use { response ->
                 val text = response.body?.string() ?: ""
@@ -227,12 +242,15 @@ class TasksApi(context: Context) {
 }
 
 /** Pulls the server's `{"detail": "..."}` message out of an HTTP error so
- * validation failures (bad due date, unknown id) read as plain sentences. */
+ * validation failures (bad due date, unknown id) read as plain sentences.
+ * Unescaping runs through org.json itself, so `\n`, `\/`, `\uXXXX` all
+ * decode; anything unparseable falls back to the raw message. */
 fun serverDetail(message: String): String {
     val m = Regex(""""detail"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(message)
-    val detail = m?.groupValues?.getOrNull(1)
-        ?.replace("\\\"", "\"")
-        ?.replace("\\\\", "\\")
-        ?.trim().orEmpty()
-    return detail.ifEmpty { message }
+        ?: return message
+    val raw = "\"" + m.groupValues[1] + "\""
+    val detail = runCatching {
+        JSONObject("{\"v\":$raw}").optString("v", "")
+    }.getOrDefault("")
+    return detail.trim().ifEmpty { message }
 }

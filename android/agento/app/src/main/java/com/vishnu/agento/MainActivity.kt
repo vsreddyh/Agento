@@ -800,6 +800,8 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    // One client for the screen (its OkHttpClient is shared process-wide).
+    val api = remember(context) { TasksApi(context) }
     var tasks by remember { mutableStateOf<List<ServerTask>>(emptyList()) }
     var filter by remember { mutableStateOf(ServerTaskFilter.Open) }
     var loading by remember { mutableStateOf(true) }
@@ -816,7 +818,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     LaunchedEffect(filter, refreshTick) {
         loading = true
         error = ""
-        TasksApi(context).list(filter.state).fold(
+        api.list(filter.state).fold(
             onSuccess = { tasks = it },
             onFailure = { e -> error = serverDetail(e.message ?: e.javaClass.simpleName) },
         )
@@ -832,7 +834,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     fun doComplete(t: ServerTask) {
         busy = true
         scope.launch {
-            TasksApi(context).complete(t.id).fold(
+            api.complete(t.id).fold(
                 onSuccess = {
                     // Done tasks vanish server-side after 3 days, so offer
                     // to spin the same task up again right away.
@@ -855,7 +857,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     fun doReopen(t: ServerTask) {
         busy = true
         scope.launch {
-            TasksApi(context).reopen(t.id).fold(
+            api.reopen(t.id).fold(
                 onSuccess = { refreshTick++ },
                 onFailure = ::fail,
             )
@@ -866,7 +868,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     fun doDelete(t: ServerTask) {
         busy = true
         scope.launch {
-            TasksApi(context).delete(t.id).fold(
+            api.delete(t.id).fold(
                 onSuccess = {
                     deleting = null
                     editing = null
@@ -911,7 +913,8 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     ServerTaskFilter.entries.forEach { f ->
@@ -956,6 +959,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     tasks.forEach { t ->
                         ServerTaskRow(
                             task = t,
+                            actionsEnabled = !busy,
                             onEdit = { editing = t.toDraft() },
                             onComplete = { doComplete(t) },
                             onReopen = { doReopen(t) },
@@ -992,7 +996,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         return@launch
                     }
                     if (next.id.isEmpty()) {
-                        TasksApi(context).create(
+                        api.create(
                             name = next.name,
                             description = next.description,
                             dueDate = next.dueDate,
@@ -1004,7 +1008,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             onFailure = ::fail,
                         )
                     } else {
-                        TasksApi(context).update(
+                        api.update(
                             id = next.id,
                             name = next.name,
                             description = next.description,
@@ -1049,7 +1053,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     recreate = null
                     busy = true
                     scope.launch {
-                        TasksApi(context).create(
+                        api.create(
                             name = again.name,
                             description = again.description,
                             dueDate = again.dueDate,
@@ -1094,10 +1098,12 @@ private fun ServerTask.toDraft() = ServerTaskDraft(
     repeatRule = repeatRule,
 )
 
-/** One server task row: tap to edit, quick complete/reopen at the edge. */
+/** One server task row: tap to edit, quick complete/reopen at the edge
+ * (gated while an operation is in flight so double-taps can't race). */
 @Composable
 private fun ServerTaskRow(
     task: ServerTask,
+    actionsEnabled: Boolean,
     onEdit: () -> Unit,
     onComplete: () -> Unit,
     onReopen: () -> Unit,
@@ -1165,11 +1171,11 @@ private fun ServerTaskRow(
                 }
             }
             if (task.isOpen()) {
-                IconButton(onClick = onComplete) {
+                IconButton(onClick = onComplete, enabled = actionsEnabled) {
                     Icon(Icons.Filled.CheckCircle, contentDescription = "Complete task")
                 }
             } else {
-                IconButton(onClick = onReopen) {
+                IconButton(onClick = onReopen, enabled = actionsEnabled) {
                     Icon(Icons.Filled.Undo, contentDescription = "Reopen task")
                 }
             }

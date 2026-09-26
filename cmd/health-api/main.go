@@ -393,6 +393,8 @@ func taskStore(w http.ResponseWriter) (*tasks.Store, bool) {
 }
 
 // writeTaskErr maps store domain errors: unknown ids 404, validation 422.
+// Anything else is logged with full detail but returns a generic message
+// (the endpoint is auth-gated, still no reason to leak DB internals).
 func writeTaskErr(w http.ResponseWriter, err error) {
 	var se *tasks.StoreError
 	if errors.As(err, &se) {
@@ -403,7 +405,8 @@ func writeTaskErr(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": se.Msg})
 		return
 	}
-	writeJSON(w, http.StatusInternalServerError, bson.M{"detail": err.Error()})
+	log.Printf("tasks: internal error: %v", err)
+	writeJSON(w, http.StatusInternalServerError, bson.M{"detail": "internal error"})
 }
 
 // decodeTaskBody reads a small JSON object body into a field map.
