@@ -12,7 +12,7 @@
         android:layout_height="48dp"
         android:layout_gravity="center"
         android:src="@android:drawable/ic_btn_speak_now"
-        android:background="?attr/selectableItemBackgroundBorderless"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
         android:contentDescription="@string/live_widget_desc" />
 
 </FrameLayout>

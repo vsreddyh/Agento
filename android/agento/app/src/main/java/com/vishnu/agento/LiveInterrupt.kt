@@ -33,6 +33,9 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
 
     private var job: Job? = null
     private var aec: AcousticEchoCanceler? = null
+    // Held so stop() can unblock a thread stuck in rec.read() (a Job
+    // cancel alone can't — read() ignores cancellation).
+    private var rec: AudioRecord? = null
 
     fun hasPermission(context: Context): Boolean =
         ContextCompat.checkSelfPermission(
@@ -47,7 +50,7 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
             rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
         )
         if (minBuf <= 0) return false
-        val rec = try {
+        val recorder = try {
             AudioRecord(
                 MediaRecorder.AudioSource.VOICE_RECOGNITION,
                 rate, AudioFormat.CHANNEL_IN_MONO,
@@ -58,18 +61,19 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
         } catch (e: IllegalArgumentException) {
             return false
         }
-        if (rec.state != AudioRecord.STATE_INITIALIZED) {
-            runCatching { rec.release() }
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            runCatching { recorder.release() }
             return false
         }
+        rec = recorder
         if (AcousticEchoCanceler.isAvailable()) {
             runCatching {
-                aec = AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true }
+                aec = AcousticEchoCanceler.create(recorder.audioSessionId)?.apply { enabled = true }
             }
         }
         job = scope.launch(Dispatchers.IO) {
             try {
-                rec.startRecording()
+                recorder.startRecording()
                 val buf = ShortArray(minBuf / 2)
                 // Calibrate: ~400ms of readout+room as the floor.
                 var floorSum = 0.0
@@ -79,9 +83,9 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
                 var loudSince = 0L
                 var badReads = 0
                 while (isActive) {
-                    val n = rec.read(buf, 0, buf.size)
+                    val n = recorder.read(buf, 0, buf.size)
                     if (n <= 0) {
-                        // Mic error path: rec.read() blocks and ignores
+                        // Mic error path: read() blocks and ignores
                         // cancellation, so bail after a few bad reads
                         // instead of busy-spinning forever.
                         if (++badReads >= MAX_BAD_READS) return@launch
@@ -121,8 +125,9 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
             } catch (e: SecurityException) {
                 // Permission revoked mid-listen: drop out silently.
             } finally {
-                runCatching { rec.stop() }
-                rec.release()
+                runCatching { recorder.stop() }
+                recorder.release()
+                if (rec === recorder) rec = null
                 aec?.let { runCatching { it.release() } }
                 aec = null
             }
@@ -133,6 +138,9 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
     fun stop() {
         job?.cancel()
         job = null
+        // Wake a thread blocked in read(); release stays in the coroutine's
+        // finally (which the cancel triggers once read() returns).
+        runCatching { rec?.stop() }
         aec?.let { runCatching { it.release() } }
         aec = null
     }

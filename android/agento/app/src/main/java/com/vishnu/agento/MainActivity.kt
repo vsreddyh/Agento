@@ -2357,6 +2357,9 @@ private fun ChatScreen(
     LaunchedEffect(autoLiveGen) {
         if (autoLiveGen > consumedLiveGen) {
             consumedLiveGen = autoLiveGen
+            // Same handoff rule as the toggle: an effect drives the first
+            // listen when speaking/streaming ends.
+            val handoff = speakingKey != null || state.streaming
             tts.stop()
             if (state.streaming) onStop()
             liveMode = true
@@ -2366,7 +2369,7 @@ private fun ChatScreen(
             } else {
                 micArmed = true
             }
-            startVoice()
+            if (!handoff) startVoice()
         }
     }
     // Live loop driver: when the spoken reply fully finishes, listen again.
@@ -2374,7 +2377,9 @@ private fun ChatScreen(
     var wasSpeaking by remember(tab) { mutableStateOf(false) }
     LaunchedEffect(speakingKey, liveMode, micArmed) {
         if (liveMode && speakingKey != null && micArmed) {
-            interrupt.start(this)
+            // start() false = no mic after all: degrade visibly to
+            // tap-to-talk instead of retrying silently every re-listen.
+            if (!interrupt.start(this)) micArmed = false
         } else {
             interrupt.stop()
         }
@@ -2499,6 +2504,10 @@ private fun ChatScreen(
                         } else {
                             IconButton(
                                 onClick = {
+                                    // speaking-stop and stream-end effects
+                                    // drive the first listen when they fire —
+                                    // launching here too stacks dialogs.
+                                    val handoff = speakingKey != null || state.streaming
                                     tts.stop()
                                     if (state.streaming) onStop()
                                     liveMode = true
@@ -2508,7 +2517,7 @@ private fun ChatScreen(
                                     } else {
                                         micArmed = true
                                     }
-                                    startVoice()
+                                    if (!handoff) startVoice()
                                 },
                                 enabled = state.ready,
                             ) {
