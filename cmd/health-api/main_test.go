@@ -58,3 +58,63 @@ func TestMinutesBetween(t *testing.T) {
 		t.Fatal("expected failure")
 	}
 }
+
+func TestListTasksGuard(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	// No token → 401 without touching MongoDB.
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks?state=open", nil)
+	w := httptest.NewRecorder()
+	listTasks(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token: got %d", w.Code)
+	}
+	// Wrong method → 405 without touching MongoDB.
+	req = httptest.NewRequest(http.MethodPost, "/api/tasks", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	listTasks(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("post: got %d", w.Code)
+	}
+}
+
+func TestTaskItemGuard(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	// No token → 401 without touching MongoDB.
+	for _, target := range []string{"/api/tasks/abc", "/api/tasks/abc/complete", "/api/tasks"} {
+		req := httptest.NewRequest(http.MethodPost, target, nil)
+		w := httptest.NewRecorder()
+		if strings.Contains(target, "/abc") {
+			taskItem(w, req)
+		} else {
+			tasksRoot(w, req)
+		}
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s missing token: got %d", target, w.Code)
+		}
+	}
+	// Unknown action → 404 without touching MongoDB.
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/abc/frobnicate", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	taskItem(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown action: got %d", w.Code)
+	}
+	// Wrong method on a known action → 405 without touching MongoDB.
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks/abc/complete", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	taskItem(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("get on complete: got %d", w.Code)
+	}
+	// Invalid JSON body → 422 without touching MongoDB.
+	req = httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader("{oops"))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	tasksRoot(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad json: got %d", w.Code)
+	}
+}

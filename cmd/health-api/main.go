@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"agento/internal/mongo"
+	"agento/internal/tasks"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -294,7 +296,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		hours := float64(s.TotalMinutes) / 60.0
 		hours = float64(int(hours*100+0.5)) / 100
 		if _, err := days.UpdateOne(ctx, bson.M{"date": wakeDate}, bson.M{
-			"$inc": bson.M{"sleep_hours": hours},
+			"$inc":  bson.M{"sleep_hours": hours},
 			"$push": bson.M{"sleep_sessions": bson.M{"start": s.StartISO, "minutes": s.TotalMinutes}},
 			"$set":  bson.M{"updatedAt": now},
 		}, upsert()); err != nil {
@@ -347,12 +349,285 @@ func upsert() *options.UpdateOptions {
 	return options.Update().SetUpsert(true)
 }
 
+// listTasks serves the app's Task Manager screen: the user's own tasks from
+// the shared `tasks` collection (the same rows the agent manages over MCP).
+// `?state=open|done|all` (default open).
+func listTasks(w http.ResponseWriter, r *http.Request) {
+	if code, detail := authorize(r); code != 0 {
+		writeJSON(w, code, bson.M{"detail": detail})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+		return
+	}
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	if state == "" {
+		state = "open"
+	}
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	rows, err := store.List(ctx, state, false, "")
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	if rows == nil {
+		rows = []map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, bson.M{"tasks": rows})
+}
+
+// taskStore opens the shared tasks collection (same rows the agent manages).
+func taskStore(w http.ResponseWriter) (*tasks.Store, bool) {
+	store, err := tasks.FromEnv()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, bson.M{"detail": "MONGODB_URI not set"})
+		return nil, false
+	}
+	return store, true
+}
+
+// writeTaskErr maps store domain errors: unknown ids 404, validation 422.
+func writeTaskErr(w http.ResponseWriter, err error) {
+	var se *tasks.StoreError
+	if errors.As(err, &se) {
+		if strings.HasPrefix(se.Msg, "unknown task") {
+			writeJSON(w, http.StatusNotFound, bson.M{"detail": se.Msg})
+			return
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": se.Msg})
+		return
+	}
+	writeJSON(w, http.StatusInternalServerError, bson.M{"detail": err.Error()})
+}
+
+// decodeTaskBody reads a small JSON object body into a field map.
+func decodeTaskBody(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
+	var fields map[string]any
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&fields); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + err.Error()})
+		return nil, false
+	}
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	return fields, true
+}
+
+func taskStrField(fields map[string]any, key string) string {
+	if v, ok := fields[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func taskIntField(fields map[string]any, key string) (int, bool) {
+	switch n := fields[key].(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int(i), true
+		}
+	}
+	return 0, false
+}
+
+// createTask inserts one open task. Name required; due/estimate/repeat
+// validated by the store (same rules as the agent's create_task).
+func createTask(w http.ResponseWriter, r *http.Request) {
+	fields, ok := decodeTaskBody(w, r)
+	if !ok {
+		return
+	}
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	minutes := 0
+	if _, present := fields["estimated_minutes"]; present {
+		n, ok := taskIntField(fields, "estimated_minutes")
+		if !ok {
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "estimated_minutes must be a number >= 0"})
+			return
+		}
+		minutes = n
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	doc, err := store.Create(ctx,
+		taskStrField(fields, "name"),
+		taskStrField(fields, "description"),
+		taskStrField(fields, "due_date"),
+		taskStrField(fields, "due_time"),
+		minutes,
+		taskStrField(fields, "repeat_rule"),
+	)
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, doc)
+}
+
+// taskItem dispatches /api/tasks/{id}[/{action}]: get + patch + delete on
+// the id, post on complete/reopen. Auth first; unknown shapes 404.
+func taskItem(w http.ResponseWriter, r *http.Request) {
+	if code, detail := authorize(r); code != 0 {
+		writeJSON(w, code, bson.M{"detail": detail})
+		return
+	}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/tasks/"), "/")
+	parts := strings.Split(rest, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
+		return
+	}
+	id, action := parts[0], ""
+	if len(parts) > 2 {
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
+		return
+	}
+	if len(parts) == 2 {
+		action = parts[1]
+	}
+	switch {
+	case action == "" && r.Method == http.MethodGet:
+		getTask(w, r, id)
+	case action == "" && r.Method == http.MethodPatch:
+		updateTask(w, r, id)
+	case action == "" && r.Method == http.MethodDelete:
+		deleteTask(w, r, id)
+	case action == "complete" && r.Method == http.MethodPost:
+		completeTask(w, r, id)
+	case action == "reopen" && r.Method == http.MethodPost:
+		reopenTask(w, r, id)
+	default:
+		if action != "" && action != "complete" && action != "reopen" {
+			writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
+			return
+		}
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+	}
+}
+
+func getTask(w http.ResponseWriter, r *http.Request, id string) {
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	doc, err := store.Get(ctx, id)
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
+// updateTask applies a partial edit (only sent keys change; empty
+// repeat_rule clears the rule — same semantics as the agent's update_task).
+func updateTask(w http.ResponseWriter, r *http.Request, id string) {
+	fields, ok := decodeTaskBody(w, r)
+	if !ok {
+		return
+	}
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	doc, err := store.Update(ctx, id, fields)
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
+func deleteTask(w http.ResponseWriter, r *http.Request, id string) {
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	found, err := store.Delete(ctx, id)
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown task '" + id + "'"})
+		return
+	}
+	writeJSON(w, http.StatusOK, bson.M{"deleted": true})
+}
+
+// completeTask marks a task done (3-day retention starts server-side).
+func completeTask(w http.ResponseWriter, r *http.Request, id string) {
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	doc, err := store.Complete(ctx, id)
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
+// reopenTask clears completion, making a done task open again.
+func reopenTask(w http.ResponseWriter, r *http.Request, id string) {
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	doc, err := store.Reopen(ctx, id)
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
+// tasksRoot serves the collection endpoint: GET lists, POST creates.
+func tasksRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if code, detail := authorize(r); code != 0 {
+			writeJSON(w, code, bson.M{"detail": detail})
+			return
+		}
+		createTask(w, r)
+		return
+	}
+	listTasks(w, r)
+}
+
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", health)
 	mux.HandleFunc("/api/health/sync", sync)
 	mux.HandleFunc("/api/files", listFiles)
 	mux.HandleFunc("/api/files/download", downloadFile)
+	mux.HandleFunc("/api/tasks", tasksRoot)
+	mux.HandleFunc("/api/tasks/", taskItem)
 	log.Print("health-api listening on :8000")
 	if err := http.ListenAndServe(":8000", mux); err != nil {
 		log.Fatal(err)
