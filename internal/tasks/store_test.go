@@ -8,7 +8,6 @@ import (
 	"agento/internal/mongo"
 
 	"go.mongodb.org/mongo-driver/bson"
-	mongoDrv "go.mongodb.org/mongo-driver/mongo"
 	"os"
 )
 
@@ -64,6 +63,9 @@ func TestValidation(t *testing.T) {
 	}
 	if _, err := s.Create(ctx, "x", "", "10-01", "", 0, ""); err == nil {
 		t.Fatal("bad due_date must fail")
+	}
+	if _, err := s.Create(ctx, "x", "", "2026-13-99", "", 0, ""); err == nil {
+		t.Fatal("non-calendar due_date must fail")
 	}
 	if _, err := s.Create(ctx, "x", "", "", "9am", 0, ""); err == nil {
 		t.Fatal("bad due_time must fail")
@@ -121,6 +123,41 @@ func TestCompleteReopenDelete(t *testing.T) {
 	}
 }
 
+func TestReopenedExcludedFromDone(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	doc, _ := s.Create(ctx, "reopen me", "", "", "", 0, "")
+	id := doc["id"].(string)
+	if _, err := s.Complete(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Reopen(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	// Reopen $unsets completedAt (field missing); bare $ne:null would
+	// still match it — the done filter must exclude it.
+	rows, err := s.List(ctx, "done", false, "")
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("reopened task must not be in done list: %v %v", rows, err)
+	}
+	rows, err = s.List(ctx, "open", false, "")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("reopened task must be in open list: %v %v", rows, err)
+	}
+}
+
+func TestSearchRegexCharsLiteral(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.Create(ctx, "fix (auth) [urgent]", "", "", "", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.List(ctx, "open", false, "(auth) [urgent]")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("regex metachars must match literally: %v %v", rows, err)
+	}
+}
+
 func TestOverdueAndTTLIndex(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -140,6 +177,7 @@ func TestOverdueAndTTLIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer cur.Close(ctx)
 	var names []string
 	for cur.Next(ctx) {
 		var idx bson.M
@@ -157,5 +195,4 @@ func TestOverdueAndTTLIndex(t *testing.T) {
 			t.Fatalf("missing index %s (have %v)", want, names)
 		}
 	}
-	_ = mongoDrv.ErrNoDocuments
 }

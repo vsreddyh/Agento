@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"agento/internal/mongo"
+	"agento/internal/validate"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -35,10 +36,7 @@ const (
 	RetentionDays = 3
 )
 
-var (
-	dateRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-	timeRE = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
-)
+var timeRE = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
 // StoreError is the domain error: servers catch it and return {ok: false, error}.
 type StoreError struct{ Msg string }
@@ -93,8 +91,10 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 }
 
 func checkDue(dueDate, dueTime string) error {
-	if dueDate != "" && !dateRE.MatchString(dueDate) {
-		return fail("due_date must be YYYY-MM-DD, got '%s'", dueDate)
+	if dueDate != "" {
+		if _, err := validate.CheckDay(dueDate); err != nil {
+			return fail("due_date: %s", err.Error())
+		}
 	}
 	if dueTime != "" && !timeRE.MatchString(dueTime) {
 		return fail("due_time must be HH:MM (24h), got '%s'", dueTime)
@@ -162,7 +162,9 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 	case "open":
 		filt["completedAt"] = nil
 	case "done":
-		filt["completedAt"] = bson.M{"$ne": nil}
+		// $exists: reopened tasks have the field $unset (missing), and
+		// bare $ne:null matches missing fields — both guards needed.
+		filt["completedAt"] = bson.M{"$ne": nil, "$exists": true}
 	case "all":
 	default:
 		return nil, fail("state must be open|done|all, got '%s'", state)
@@ -172,9 +174,11 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 		filt["due_date"] = bson.M{"$ne": "", "$lt": time.Now().Format("2006-01-02")}
 	}
 	if search = strings.TrimSpace(search); search != "" {
+		// QuoteMeta: raw user input must never reach the regex engine.
+		rx := regexp.QuoteMeta(search)
 		filt["$or"] = []bson.M{
-			{"name": bson.M{"$regex": search, "$options": "i"}},
-			{"description": bson.M{"$regex": search, "$options": "i"}},
+			{"name": bson.M{"$regex": rx, "$options": "i"}},
+			{"description": bson.M{"$regex": rx, "$options": "i"}},
 		}
 	}
 	cur, err := s.tasks.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "due_date", Value: 1}, {Key: "createdAt", Value: 1}}))
@@ -224,37 +228,51 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		return nil, err
 	}
 	set := bson.M{}
+	strField := func(key string) (string, bool) {
+		v, ok := fields[key]
+		if !ok {
+			return "", false
+		}
+		str, ok := v.(string)
+		if !ok {
+			return "", false
+		}
+		return str, true
+	}
 	if v, ok := fields["name"]; ok {
-		name := strings.TrimSpace(v.(string))
-		if name == "" {
+		name, _ := v.(string)
+		if strings.TrimSpace(name) == "" {
 			return nil, fail("name is required")
 		}
-		set["name"] = name
+		set["name"] = strings.TrimSpace(name)
 	}
-	if v, ok := fields["description"]; ok {
-		set["description"] = v.(string)
+	if str, ok := strField("description"); ok {
+		set["description"] = str
 	}
+	// Due fields flow through only when the caller sent them, so a
+	// no-change update stays a no-op and the len(set)==0 path can fire.
 	dueDate, _ := cur["due_date"].(string)
 	dueTime, _ := cur["due_time"].(string)
-	if v, ok := fields["due_date"]; ok {
-		dueDate = v.(string)
+	if str, ok := strField("due_date"); ok {
+		dueDate = str
+		set["due_date"] = str
 	}
-	if v, ok := fields["due_time"]; ok {
-		dueTime = v.(string)
+	if str, ok := strField("due_time"); ok {
+		dueTime = str
+		set["due_time"] = str
 	}
 	if err := checkDue(dueDate, dueTime); err != nil {
 		return nil, err
 	}
-	set["due_date"], set["due_time"] = dueDate, dueTime
 	if v, ok := fields["estimated_minutes"]; ok {
-		n := toInt(v)
-		if n < 0 {
+		n, ok := toInt(v)
+		if !ok || n < 0 {
 			return nil, fail("estimated_minutes must be >= 0")
 		}
 		set["estimated_minutes"] = n
 	}
-	if v, ok := fields["repeat_rule"]; ok {
-		set["repeat_rule"] = strings.TrimSpace(v.(string))
+	if str, ok := strField("repeat_rule"); ok {
+		set["repeat_rule"] = strings.TrimSpace(str)
 	}
 	if len(set) == 0 {
 		return toDoc(cur), nil
@@ -323,16 +341,16 @@ func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 	return res.DeletedCount > 0, nil
 }
 
-func toInt(v any) int {
+func toInt(v any) (int, bool) {
 	switch n := v.(type) {
 	case int:
-		return n
+		return n, true
 	case int32:
-		return int(n)
+		return int(n), true
 	case int64:
-		return int(n)
+		return int(n), true
 	case float64:
-		return int(n)
+		return int(n), true
 	}
-	return 0
+	return 0, false
 }
