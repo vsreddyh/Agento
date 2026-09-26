@@ -165,9 +165,25 @@ class MainActivity : ComponentActivity() {
 
     private val healthModel: MainViewModel by viewModels()
 
+    /**
+     * Widget live-session requests (#85). Generation counter (not boolean)
+     * so retaps while the app is open retrigger: singleTop delivers them
+     * via onNewIntent, and the God tab consumes each generation once.
+     */
+    private val liveGen = mutableIntStateOf(0)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == LiveWidget.ACTION_LIVE) liveGen.intValue++
+    }
+
     /** Adaptive sidebar navigation (#18, #64); theme from prefs (#28). */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (intent?.action == LiveWidget.ACTION_LIVE && liveGen.intValue == 0) {
+            liveGen.intValue = 1
+        }
         setContent {
             val context = LocalContext.current
             var themeMode by remember { mutableStateOf(ThemeStore.load(context)) }
@@ -184,6 +200,11 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     var dest by remember { mutableStateOf(Destination.God) }
+                    // Widget live tap (#85): always land on God; its ChatTab
+                    // consumes the liveGen generation and starts the session.
+                    LaunchedEffect(liveGen.intValue) {
+                        if (liveGen.intValue > 0) dest = Destination.God
+                    }
                     // Null section = the settings hub overview; a non-null
                     // section opens that subsection directly.
                     var section by remember { mutableStateOf<SettingSection?>(null) }
@@ -228,6 +249,7 @@ class MainActivity : ComponentActivity() {
                                 Destination.God -> ChatTab(
                                     app = application, tab = "god", title = "God", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
+                                    autoLiveGen = liveGen.intValue,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -491,6 +513,7 @@ private fun ChatTab(
     autoSpeak: Boolean,
     onAutoSpeak: (Boolean) -> Unit,
     onMenu: () -> Unit,
+    autoLiveGen: Int = 0,
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
     // Keyed per tab — otherwise all three tabs would share one ViewModel.
@@ -509,7 +532,7 @@ private fun ChatTab(
         title = title, modelLabel = state.model.ifBlank { "" },
         setupNeeded = setupNeeded, state = state, wc = wc, snackbar = snackbar,
         tts = tts, autoSpeak = autoSpeak, onAutoSpeak = onAutoSpeak,
-        onMenu = onMenu,
+        onMenu = onMenu, autoLiveGen = autoLiveGen,
         onModel = { showModel = true },
         onHistory = { showThreads = true },
         onCheckConnection = vm::checkReachability,
@@ -2175,6 +2198,7 @@ private fun ChatScreen(
     onStop: () -> Unit,
     onNew: () -> Unit,
     onRetry: () -> Unit,
+    autoLiveGen: Int = 0,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(state.messages.size, state.messages.lastOrNull()?.content?.length) {
@@ -2299,6 +2323,24 @@ private fun ChatScreen(
             }
         }
         wasStreaming = state.streaming
+    }
+    // Widget live request (#85): each generation starts the session once.
+    // Same steps as the toggle (kill turn, arm, listen).
+    var consumedLiveGen by remember { mutableIntStateOf(0) }
+    LaunchedEffect(autoLiveGen) {
+        if (autoLiveGen > consumedLiveGen) {
+            consumedLiveGen = autoLiveGen
+            tts.stop()
+            if (state.streaming) onStop()
+            liveMode = true
+            silentRounds = 0
+            if (!interrupt.hasPermission(context)) {
+                micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            } else {
+                micArmed = true
+            }
+            startVoice()
+        }
     }
     // Live loop driver: when the spoken reply fully finishes, listen again.
     // While it plays, the interrupt detector listens for talk-over.
