@@ -13,6 +13,7 @@ COPY internal/ ./internal/
 RUN go build -trimpath -ldflags="-s -w" -o /out/miser-money ./cmd/miser-money \
  && go build -trimpath -ldflags="-s -w" -o /out/cookbook ./cmd/cookbook \
  && go build -trimpath -ldflags="-s -w" -o /out/health-check ./cmd/health-check \
+ && go build -trimpath -ldflags="-s -w" -o /out/task-manager ./cmd/task-manager \
  && go build -trimpath -ldflags="-s -w" -o /out/retention ./cmd/retention \
  && go build -trimpath -ldflags="-s -w" -o /out/mongo ./cmd/mongo
 
@@ -24,8 +25,8 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/miser-money ./cmd/miser-money \
 FROM docker.io/nousresearch/hermes-agent:latest
 USER root
 # In-repo Go binaries (MCP servers + CLIs).
-COPY --from=gobuild /out/miser-money /out/cookbook /out/health-check /out/retention /out/mongo /usr/local/bin/
-RUN chmod 755 /usr/local/bin/miser-money /usr/local/bin/cookbook /usr/local/bin/health-check /usr/local/bin/retention /usr/local/bin/mongo
+COPY --from=gobuild /out/miser-money /out/cookbook /out/health-check /out/task-manager /out/retention /out/mongo /usr/local/bin/
+RUN chmod 755 /usr/local/bin/miser-money /usr/local/bin/cookbook /usr/local/bin/health-check /usr/local/bin/task-manager /usr/local/bin/retention /usr/local/bin/mongo
 COPY test/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 # Git runs as root (compose `user: "0:0"`) while bind-mounted repos are

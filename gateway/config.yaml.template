@@ -161,8 +161,9 @@ platform_toolsets:
     - mcp-miser-money
     - mcp-cookbook
     - mcp-health-check
+    - mcp-task-manager
 
-# God tool backend: money + cookbook + health-check (in-repo Go MCP servers,
+# God tool backend: money + cookbook + health-check + task-manager (in-repo Go MCP servers,
 # baked into the bot image at /usr/local/bin by test/Dockerfile).
 mcp_servers:
   miser-money:
@@ -189,8 +190,16 @@ mcp_servers:
       MONGODB_DB: "${MONGODB_DB}"
     timeout: 120
     connect_timeout: 60
+  task-manager:
+    command: "/usr/local/bin/task-manager"
+    args: []
+    env:
+      MONGODB_URI: "${MONGODB_URI}"
+      MONGODB_DB: "${MONGODB_DB}"
+    timeout: 120
+    connect_timeout: 60
 
 # NOTE: no Playwright MCP — the native browser toolset covers automation
 # (the npx stdio server was redundant weight on every profile).
 
-_config_version: 34
+_config_version: 35

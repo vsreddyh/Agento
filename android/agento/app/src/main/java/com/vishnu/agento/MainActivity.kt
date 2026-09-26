@@ -110,7 +110,7 @@ private enum class Destination(val title: String) {
     God("God"),
     Story("Story"),
     Portfolio("Resume and Portfolio"),
-    Tasks("Tasks"),
+    Tasks("Projects"),
     Storage("Storage"),
     Scheduler("Scheduler"),
     Skills("Skills"),
@@ -787,7 +787,7 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         Icon(Icons.Filled.Menu, contentDescription = "Menu")
                     }
                 },
-                title = { Text("Tasks") },
+                title = { Text("Projects") },
                 actions = {
                     // #62: + starts a new task.
                     IconButton(onClick = {
