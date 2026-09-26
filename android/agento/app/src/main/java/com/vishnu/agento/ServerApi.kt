@@ -178,7 +178,7 @@ class ServerApi(context: Context) {
             if (sessionId.isBlank()) {
                 return@withContext Result.failure(IllegalStateException("Session id not set"))
             }
-            get(path, "api/sessions/$sessionId/messages").map { body ->
+            get(path, "api/sessions/${urlEncode(sessionId)}/messages").map { body ->
                 val calls = mutableListOf<SessionToolCall>()
                 val arr = rootArray(body, "messages", "data", "items")
                     ?: throw RuntimeException("Unexpected response shape")
@@ -211,7 +211,8 @@ class ServerApi(context: Context) {
     /**
      * Strict toggle parse: only real booleans count — strings, numbers and
      * nulls read as unknown (null) instead of Off.
-     */    private fun optBool(o: JSONObject): Boolean? {
+     */
+    private fun optBool(o: JSONObject): Boolean? {
         for (k in listOf("enabled", "active")) {
             if (!o.isNull(k)) {
                 val v = o.opt(k)
@@ -258,8 +259,10 @@ data class SessionUsage(
 /** `skills/<name>/SKILL.md` paths inside tool arguments mark skill use. */
 private val SKILL_MD_PATH = Regex("""skills/([A-Za-z0-9_-]+)/SKILL\.md""", RegexOption.IGNORE_CASE)
 
-/** Named skill reference inside `skill_*` tool arguments (key shape varies). */
-private val SKILL_ARG_NAME = Regex(""""(?:skill|name|id|slug)"\s*:\s*"([A-Za-z0-9_-]+)"""")
+/** Named skill reference inside `skill_*` tool arguments. Keys are
+ * deliberately skill-specific: generic `name`/`id` keys (e.g.
+ * `{"name": "read_file"}`) must never become "skills". */
+private val SKILL_ARG_NAME = Regex(""""(?:skill|skill_name|skill_id)"\s*:\s*"([A-Za-z0-9_-]+)"""")
 
 /**
  * Heuristic skill attribution for one tool call: the gateway has no
@@ -284,6 +287,11 @@ fun usageFromToolCalls(calls: List<SessionToolCall>): SessionUsage {
 }
 
 /** Groups `mcp__<server>__<tool>` tools into per-server rows. */
+/** URL-encodes one path segment (session ids are UUIDs today, encoded
+ * defensively so a malformed id can never break the request path). */
+private fun urlEncode(segment: String): String =
+    java.net.URLEncoder.encode(segment, Charsets.UTF_8.name())
+
 fun mcpServersFrom(toolsets: List<ToolsetInfo>): List<McpServer> {
     val byServer = linkedMapOf<String, MutableList<String>>()
     for (ts in toolsets) {

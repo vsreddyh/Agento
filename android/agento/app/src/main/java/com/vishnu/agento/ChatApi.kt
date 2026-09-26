@@ -321,43 +321,30 @@ class ChatApi(context: Context) {
                     }
                     val full = StringBuilder()
                     // OkHttp in this project has no sse module; parse SSE lines manually.
-                    // Named events (e.g. `event: hermes.tool.progress`) apply to the
-                    // data line that follows; `: keepalive` comments are ignored.
-                    var pendingEvent = ""
+                    // `: keepalive` comments and `event:` lines carry no payload.
                     while (!source.exhausted()) {
                         val line = source.readUtf8Line() ?: break
-                        if (line.startsWith(":")) continue
-                        if (line.startsWith("event:")) {
-                            pendingEvent = line.removePrefix("event:").trim()
-                            continue
-                        }
-                        if (line.isBlank()) {
-                            pendingEvent = ""
-                            continue
-                        }
+                        if (line.startsWith(":") || line.startsWith("event:")) continue
                         if (!line.startsWith("data:")) continue
                         val data = line.removePrefix("data:").trim()
-                        if (data.isEmpty()) {
-                            pendingEvent = ""
-                            continue
-                        }
+                        if (data.isEmpty()) continue
                         if (data == "[DONE]") break
                         // Tool-progress frames carry {"tool","label",...} and no
                         // choices array — surface them instead of dropping them.
                         val progress = runCatching {
                             val o = JSONObject(data)
                             if (o.optJSONArray("choices") != null) return@runCatching null
+                            // A real tool name is required: label-only frames
+                            // can't be attributed, so they are skipped rather
+                            // than surfaced under a bogus name.
                             val tool = o.optString("tool", "").trim()
-                            if (tool.isEmpty() && pendingEvent != "hermes.tool.progress") {
-                                return@runCatching null
-                            }
+                            if (tool.isEmpty()) return@runCatching null
                             ChatEvent.ToolProgress(
-                                tool = tool.ifEmpty { pendingEvent },
+                                tool = tool,
                                 label = o.optString("label", "").trim(),
                                 status = o.optString("status", "").trim(),
                             )
                         }.getOrNull()
-                        pendingEvent = ""
                         if (progress != null) {
                             trySend(progress)
                             continue
