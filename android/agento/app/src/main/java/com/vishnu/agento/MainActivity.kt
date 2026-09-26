@@ -15,6 +15,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -2258,18 +2259,26 @@ private fun ChatScreen(
     val context = LocalContext.current
     val interrupt = remember(tab) { LiveInterrupt({ scope.launch { tts.stop() } }) }
     var micArmed by remember(tab) { mutableStateOf(interrupt.hasPermission(context)) }
+    // In-app recognizer for live mode (#85): headless, so our overlay
+    // (status + End button) stays visible — the system dialog would cover it.
+    val liveRec = remember(tab) { LiveRecognizer(context) }
+    var livePartial by remember(tab) { mutableStateOf("") }
+    var pendingLiveStart by remember(tab) { mutableStateOf(false) }
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         micArmed = granted
+        // Granted + pending start is consumed by an effect after startLive;
+        // denied clears the pending start with a hint.
         if (!granted) {
+            pendingLiveStart = false
             scope.launch {
-                snackbar.showSnackbar("Live interrupt needs mic access — tap to interrupt instead.")
+                snackbar.showSnackbar("Live mode needs microphone access.")
             }
         }
     }
     DisposableEffect(tab) {
-        onDispose { interrupt.stop(); tts.stop() }
+        onDispose { interrupt.stop(); liveRec.destroy(); tts.stop() }
     }
     /** Every send-type action cuts speech first. */
     fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
@@ -2284,9 +2293,12 @@ private fun ChatScreen(
         liveMode = false
         silentRounds = 0
         liveLostOnRotate = false
+        livePartial = ""
+        pendingLiveStart = false
         // Stop the detector now — don't rely on the liveMode=false effect
         // round-trip to get around to it.
         interrupt.stop()
+        liveRec.cancel()
         tts.stop()
         if (reason != null) scope.launch { snackbar.showSnackbar(reason) }
     }
@@ -2340,8 +2352,63 @@ private fun ChatScreen(
             voiceLauncher.launch(intent)
         } catch (e: ActivityNotFoundException) {
             scope.launch { snackbar.showSnackbar("No voice input app found.") }
-            // No recognizer = no loop: end loudly instead of sticking ON.
-            if (liveMode) endLive("Live session ended (no voice input app).")
+        }
+    }
+    /** One in-app listen cycle for the live loop (overlay stays visible). */
+    fun liveListen() {
+        liveRec.listen()
+    }
+    /** Begins (or resumes) the live session: kill turn, arm, listen. */
+    fun startLive() {
+        if (!liveRec.available()) {
+            endLive("Voice recognition unavailable on this device.")
+            return
+        }
+        pendingLiveStart = false
+        liveRec.cancel()
+        tts.stop()
+        if (state.streaming) onStop()
+        liveMode = true
+        liveLostOnRotate = true
+        silentRounds = 0
+        livePartial = ""
+        micArmed = true
+        val handoff = speakingKey != null || state.streaming
+        if (!handoff) liveListen()
+    }
+    // Recognizer callbacks: assigned here (after every local fun they call).
+    // One-shot mic results flow through voiceLauncher above; only live
+    // cycles arrive here. Reassigned each composition so closures stay fresh.
+    fun bindLiveListener() {
+        liveRec.listener = object : LiveRecognizer.Listener {
+            override fun onBegin() = Unit
+            override fun onPartial(text: String) {
+                livePartial = text
+            }
+            override fun onResult(heard: String) {
+                livePartial = ""
+                if (!liveMode) {
+                    onPending(heard)
+                    return
+                }
+                if (heard.trimEnd('.', '!', '?').equals("stop", ignoreCase = true)) {
+                    endLive()
+                } else {
+                    silentRounds = 0
+                    onPending(heard)
+                    onSend()
+                }
+            }
+            override fun onNoSpeech() {
+                if (!liveMode) return
+                livePartial = ""
+                silentRounds++
+                if (silentRounds >= 3) endLive("Live session ended (no speech).")
+                else liveListen()
+            }
+            override fun onFatal(message: String) {
+                if (liveMode) endLive(message)
+            }
         }
     }
     // Auto-read: when a reply finishes cleanly while the toggle is on, speak it.
@@ -2360,7 +2427,7 @@ private fun ChatScreen(
                             endLive("Live session ended (voice output unavailable).")
                         }
                     } else {
-                        startVoice()
+                        liveListen()
                     }
                 } else {
                     endLive("Live session ended (reply failed).")
@@ -2381,20 +2448,20 @@ private fun ChatScreen(
     LaunchedEffect(autoLiveGen) {
         if (autoLiveGen > consumedLiveGen) {
             consumedLiveGen = autoLiveGen
-            val handoff = speakingKey != null || state.streaming
-            tts.stop()
-            if (state.streaming) onStop()
-            liveMode = true
-            liveLostOnRotate = true
-            silentRounds = 0
             if (!interrupt.hasPermission(context)) {
+                pendingLiveStart = true
                 micPermission.launch(Manifest.permission.RECORD_AUDIO)
             } else {
-                micArmed = true
+                startLive()
             }
-            if (!handoff) startVoice()
         }
     }
+    // Granted mic permission with a pending start fires the session.
+    LaunchedEffect(micArmed) {
+        if (micArmed && pendingLiveStart) startLive()
+    }
+    // Bind recognizer callbacks (after all local funs).
+    bindLiveListener()
     // Live loop driver: when the spoken reply fully finishes, listen again.
     // While it plays, the interrupt detector listens for talk-over.
     var wasSpeaking by remember(tab) { mutableStateOf(false) }
@@ -2407,12 +2474,12 @@ private fun ChatScreen(
             interrupt.stop()
         }
         if (wasSpeaking && speakingKey == null && liveMode) {
-            startVoice()
+            liveListen()
         }
         wasSpeaking = speakingKey != null
     }
     LaunchedEffect(listenNonce) {
-        if (listenNonce > 0) startVoice()
+        if (listenNonce > 0) liveListen()
     }
     // Surface send failures as a toast too (the inline card keeps details).
     LaunchedEffect(state.error) {
@@ -2530,21 +2597,14 @@ private fun ChatScreen(
                         } else {
                             IconButton(
                                 onClick = {
-                                    // speaking-stop and stream-end effects
-                                    // drive the first listen when they fire —
-                                    // launching here too stacks dialogs.
-                                    val handoff = speakingKey != null || state.streaming
-                                    tts.stop()
-                                    if (state.streaming) onStop()
-                                    liveMode = true
-                                    liveLostOnRotate = true
-                                    silentRounds = 0
+                                    // Mic permission gates the session: the
+                                    // in-app recognizer cannot run without it.
                                     if (!interrupt.hasPermission(context)) {
+                                        pendingLiveStart = true
                                         micPermission.launch(Manifest.permission.RECORD_AUDIO)
                                     } else {
-                                        micArmed = true
+                                        startLive()
                                     }
-                                    if (!handoff) startVoice()
                                 },
                                 enabled = state.ready,
                             ) {
@@ -2552,11 +2612,14 @@ private fun ChatScreen(
                             }
                         }
                         IconButton(
-                            // In a live readout the loop effect starts the
-                            // listen after the cut — launching here too would
-                            // stack two recognizer dialogs.
-                            onClick = if (liveMode && speakingKey != null) {
-                                { tts.stop() }
+                            // Live: cut speech, drop the current listen, start
+                            // fresh (no system dialog exists to stack).
+                            onClick = if (liveMode) {
+                                {
+                                    tts.stop()
+                                    liveRec.cancel()
+                                    if (speakingKey == null) liveListen()
+                                }
                             } else {
                                 stopThen(::startVoice)
                             },
@@ -2759,6 +2822,75 @@ private fun ChatScreen(
                             }
                         }
                     }
+                }
+            }
+        }
+        // Live overlay (#85): status + transcript + an End button that stays
+        // reachable — the in-app recognizer has no system dialog to cover it.
+        if (liveMode) {
+            LiveOverlay(
+                speaking = speakingKey != null,
+                thinking = state.streaming,
+                partial = livePartial,
+                onEnd = { endLive() },
+            )
+        }
+    }
+}
+
+/** Live voice overlay (#85): status + live transcript + a big End button.
+ * Drawn in the Scaffold BoxScope over the chat, so it stays tappable —
+ * the in-app recognizer shows no system dialog to cover it. Taps outside
+ * the card fall through to the chat behind (typing mid-live is allowed). */
+@Composable
+private fun LiveOverlay(
+    speaking: Boolean,
+    thinking: Boolean,
+    partial: String,
+    onEnd: () -> Unit,
+) {
+    val status = when {
+        speaking -> "Speaking…"
+        thinking -> "Thinking…"
+        else -> "Listening…"
+    }
+    Box(
+        modifier = Modifier.fillMaxSize()
+            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(
+                    Icons.Filled.Equalizer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(40.dp),
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(status, style = MaterialTheme.typography.titleLarge)
+                if (partial.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "“$partial”",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(modifier = Modifier.height(20.dp))
+                Button(
+                    onClick = onEnd,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) {
+                    Text("End live session", style = MaterialTheme.typography.titleMedium)
                 }
             }
         }
