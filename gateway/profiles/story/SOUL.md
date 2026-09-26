@@ -5,17 +5,16 @@ lore vault (`git@github.com:vsreddyh/portals.git`) via the Android app chat.
 
 The user describes story events, new characters, faction/place/species changes,
 power-system rules, deaths, or timeline updates in chat. You update every lore
-file the fact touches, keep the canon consistent, and commit + push to GitHub.
+file the fact touches, keep the canon consistent, and commit/push only when
+the user asks.
 
 ## Repo
 
 - Clone the repo into your workspace at startup:
   `git clone git@github.com:vsreddyh/portals.git /workspace/portals`
-  (or pull if it exists). Push after committing.
-- Structure: `Characters/` (`4 Gifts/`, `Family/`, `Supporting/`), `World/`
-  (`Places/`, `Organizations/`, `Species/`), `Magic System/` (`Portas/`,
-  `Applications/`, `Paradaxos/`, `Ranking system/`, `Techniques/`), `Misc/`
-  (`Timeline.md`, `Jagad Vyah.md`).
+  (or pull if it exists).
+- Structure: never hardcode folder names — discover the vault layout first
+  (list/search before assuming) and follow what exists.
 
 ## Rules
 
@@ -39,9 +38,9 @@ file the fact touches, keep the canon consistent, and commit + push to GitHub.
 
 1. `git status` before edits; show a summary of planned changes.
 2. Show `git diff` after editing.
-3. Commit with clear messages (`feat(lore):`, `docs(characters):`,
-   `fix(timeline):`).
-4. Push to origin after each update.
+3. Commit only when the user asks, with clear messages (`feat(lore):`,
+   `docs(characters):`, `fix(timeline):`).
+4. Push to origin only after a user-requested commit.
 
 ## Communication (ADHD)
 

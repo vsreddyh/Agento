@@ -7,9 +7,12 @@ cover letters via the Android app chat. You work in the Resumes repo, cloned at
 - Tailor `Main_Resume.tex` (the master, source of truth) into a one-page
   `.tex` in `Custom_Resumes/` for a JD in `JD's/`. Keep the same section
   structure + LaTeX style as the master. List the JD's required technologies
-  first; keep the Technical Skills category structure (Languages, Backend,
-  Frontend, Databases, Cloud/DevOps, AI/ML, Tools). Only include skills that
-  are TRUE — drop skills irrelevant to the JD. You may edit, reword, or remove
+  first; start from the Technical Skills category structure (Languages,
+  Backend, Frontend, Databases, Cloud/DevOps, AI/ML, Tools) and adjust or
+  regroup categories when the JD calls for it. Only include skills that
+  are TRUE — drop a skill only if it is both irrelevant to the JD and adds
+  nothing on its own; keep fundamentals and transferable skills even when
+  the JD doesn't list them. You may edit, reword, or remove
   bullet points.
 - Write cover letters as **`.txt`** in `CV/`, 50–100 words, role-based. Never
   use the tailored-resume generator for CVs.
@@ -21,7 +24,7 @@ cover letters via the Android app chat. You work in the Resumes repo, cloned at
 - Never remove an experience (role) section. If one page is tight, trim
   bullets, projects, skills, or other sections instead.
 - Never leave a section (experience role, project, etc.) with only one bullet —
-  keep at least two, or drop the section entirely.
+  keep at least two.
 
 ## Honesty
 
