@@ -31,11 +31,15 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
@@ -115,6 +119,7 @@ private enum class Destination(val title: String) {
     Story("Story"),
     Portfolio("Resume and Portfolio"),
     Tasks("Projects"),
+    TaskManager("Task Manager"),
     Storage("Storage"),
     Scheduler("Scheduler"),
     Skills("Skills"),
@@ -126,6 +131,7 @@ private fun Destination.icon() = when (this) {
     Destination.Portfolio -> Icons.Filled.Description
     Destination.God -> Icons.Filled.Star
     Destination.Tasks -> Icons.Filled.List
+    Destination.TaskManager -> Icons.Filled.Assignment
     Destination.Storage -> Icons.Filled.Folder
     Destination.Scheduler -> Icons.Filled.Schedule
     Destination.Skills -> Icons.Filled.Extension
@@ -320,6 +326,10 @@ class MainActivity : ComponentActivity() {
                                     onConfigChanged = { drawerTick++ },
                                 )
                                 Destination.Tasks -> TasksScreen(
+                                    wc = wc,
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                )
+                                Destination.TaskManager -> TaskManagerScreen(
                                     wc = wc,
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
@@ -773,6 +783,514 @@ private fun ThreadSheet(
 /** Fixed task statuses (#55). Order here is the default sort order:
  * Ongoing → Paused → Todo → Done. */
 private val TASK_STATUSES = listOf("Ongoing", "Paused", "Todo", "Done")
+
+/** Server task states for the Task Manager filter (match `GET /api/tasks`). */
+private enum class ServerTaskFilter(val state: String, val title: String) {
+    Open("open", "Open"),
+    Done("done", "Done"),
+    All("all", "All"),
+}
+
+/** Task Manager: the user's own tasks from the shared `tasks` collection
+ * (the same rows the assistant manages over MCP). Full CRUD here; the
+ * assistant stays a second writer through chat, same as before. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    // One client for the screen (its OkHttpClient is shared process-wide).
+    val api = remember(context) { TasksApi(context) }
+    var tasks by remember { mutableStateOf<List<ServerTask>>(emptyList()) }
+    var filter by remember { mutableStateOf(ServerTaskFilter.Open) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf("") }
+    // Bumped after every load/mutation so the loader below reruns.
+    var refreshTick by remember { mutableIntStateOf(0) }
+    // Editor draft (id empty = new task), delete target, and the
+    // post-complete recreate prompt (snapshot of the finished task).
+    var editing by remember { mutableStateOf<ServerTaskDraft?>(null) }
+    var deleting by remember { mutableStateOf<ServerTask?>(null) }
+    var recreate by remember { mutableStateOf<ServerTaskDraft?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    LaunchedEffect(filter, refreshTick) {
+        loading = true
+        error = ""
+        api.list(filter.state).fold(
+            onSuccess = { tasks = it },
+            onFailure = { e -> error = serverDetail(e.message ?: e.javaClass.simpleName) },
+        )
+        loading = false
+    }
+
+    fun fail(e: Throwable) {
+        scope.launch {
+            snackbar.showSnackbar(serverDetail(e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    fun doComplete(t: ServerTask) {
+        busy = true
+        scope.launch {
+            api.complete(t.id).fold(
+                onSuccess = {
+                    // Done tasks vanish server-side after 3 days, so offer
+                    // to spin the same task up again right away.
+                    recreate = ServerTaskDraft(
+                        name = t.name,
+                        description = t.description,
+                        dueDate = t.dueDate,
+                        dueTime = t.dueTime,
+                        estimatedMinutes = t.estimatedMinutes.takeIf { it > 0 }?.toString().orEmpty(),
+                        repeatRule = t.repeatRule,
+                    )
+                    refreshTick++
+                },
+                onFailure = ::fail,
+            )
+            busy = false
+        }
+    }
+
+    fun doReopen(t: ServerTask) {
+        busy = true
+        scope.launch {
+            api.reopen(t.id).fold(
+                onSuccess = { refreshTick++ },
+                onFailure = ::fail,
+            )
+            busy = false
+        }
+    }
+
+    fun doDelete(t: ServerTask) {
+        busy = true
+        scope.launch {
+            api.delete(t.id).fold(
+                onSuccess = {
+                    deleting = null
+                    editing = null
+                    refreshTick++
+                    snackbar.showSnackbar("Task deleted.")
+                },
+                onFailure = ::fail,
+            )
+            busy = false
+        }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onMenu) {
+                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    }
+                },
+                title = { Text("Task Manager") },
+                actions = {
+                    IconButton(
+                        onClick = { editing = ServerTaskDraft() },
+                        enabled = !busy,
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = "New task")
+                    }
+                    IconButton(
+                        onClick = { refreshTick++ },
+                        enabled = !busy,
+                    ) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Column(
+                modifier = Modifier.contentWidth(wc)
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ServerTaskFilter.entries.forEach { f ->
+                        FilterChip(
+                            selected = filter == f,
+                            onClick = { filter = f },
+                            label = { Text(f.title) },
+                        )
+                    }
+                }
+                if (busy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                if (loading) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else if (error.isNotEmpty()) {
+                    ErrorCard(raw = error)
+                    OutlinedButton(
+                        onClick = { refreshTick++ },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Retry")
+                    }
+                } else if (tasks.isEmpty()) {
+                    EmptyState(
+                        icon = Icons.Filled.Assignment,
+                        title = when (filter) {
+                            ServerTaskFilter.Done -> "Nothing completed yet"
+                            ServerTaskFilter.All -> "No tasks yet"
+                            else -> "No open tasks"
+                        },
+                        subtitle = "Capture your first to-do.",
+                        actionLabel = "New task",
+                        onAction = { editing = ServerTaskDraft() },
+                    )
+                } else {
+                    tasks.forEach { t ->
+                        ServerTaskRow(
+                            task = t,
+                            actionsEnabled = !busy,
+                            onEdit = { editing = t.toDraft() },
+                            onComplete = { doComplete(t) },
+                            onReopen = { doReopen(t) },
+                        )
+                    }
+                }
+                HintLine("Your tasks, shared with your assistant — changes here and in chat land in the same list.")
+            }
+        }
+    }
+
+    val draft = editing
+    if (draft != null) {
+        ServerTaskDialog(
+            initial = draft,
+            isNew = draft.id.isEmpty(),
+            busy = busy,
+            onDismiss = { editing = null },
+            onDelete = if (draft.id.isEmpty()) null else ({
+                editing = null
+                deleting = tasks.firstOrNull { it.id == draft.id }
+            }),
+            onSave = { next ->
+                busy = true
+                scope.launch {
+                    val minsText = next.estimatedMinutes.trim()
+                    val mins = when {
+                        minsText.isEmpty() -> null
+                        else -> minsText.toIntOrNull()
+                    }
+                    if (minsText.isNotEmpty() && (mins == null || mins < 0)) {
+                        snackbar.showSnackbar("Estimated minutes must be a number 0 or above.")
+                        busy = false
+                        return@launch
+                    }
+                    if (next.id.isEmpty()) {
+                        api.create(
+                            name = next.name,
+                            description = next.description,
+                            dueDate = next.dueDate,
+                            dueTime = next.dueTime,
+                            estimatedMinutes = mins,
+                            repeatRule = next.repeatRule,
+                        ).fold(
+                            onSuccess = { editing = null; refreshTick++ },
+                            onFailure = ::fail,
+                        )
+                    } else {
+                        api.update(
+                            id = next.id,
+                            name = next.name,
+                            description = next.description,
+                            dueDate = next.dueDate,
+                            dueTime = next.dueTime,
+                            estimatedMinutes = mins,
+                            repeatRule = next.repeatRule,
+                        ).fold(
+                            onSuccess = { editing = null; refreshTick++ },
+                            onFailure = ::fail,
+                        )
+                    }
+                    busy = false
+                }
+            },
+        )
+    }
+
+    val target = deleting
+    if (target != null) {
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete task?") },
+            text = { Text("“${target.name}” will be permanently deleted.") },
+            confirmButton = {
+                TextButton(onClick = { doDelete(target) }, enabled = !busy) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleting = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    val again = recreate
+    if (again != null) {
+        AlertDialog(
+            onDismissRequest = { recreate = null },
+            title = { Text("Task completed") },
+            text = { Text("Completed tasks are removed after 3 days. Create “${again.name}” again as a new task?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    recreate = null
+                    busy = true
+                    scope.launch {
+                        api.create(
+                            name = again.name,
+                            description = again.description,
+                            dueDate = again.dueDate,
+                            dueTime = again.dueTime,
+                            estimatedMinutes = again.estimatedMinutes.trim()
+                                .takeIf { it.isNotEmpty() }?.toIntOrNull(),
+                            repeatRule = again.repeatRule,
+                        ).fold(
+                            onSuccess = { refreshTick++ },
+                            onFailure = ::fail,
+                        )
+                        busy = false
+                    }
+                }) { Text("Recreate") }
+            },
+            dismissButton = {
+                TextButton(onClick = { recreate = null }) { Text("Not now") }
+            },
+        )
+    }
+}
+
+/** Editor draft for a server task (id empty = new). Text fields stay strings
+ * so half-typed input (e.g. minutes) survives; parsed on save. */
+private data class ServerTaskDraft(
+    val id: String = "",
+    val name: String = "",
+    val description: String = "",
+    val dueDate: String = "",
+    val dueTime: String = "",
+    val estimatedMinutes: String = "",
+    val repeatRule: String = "",
+)
+
+private fun ServerTask.toDraft() = ServerTaskDraft(
+    id = id,
+    name = name,
+    description = description,
+    dueDate = dueDate,
+    dueTime = dueTime,
+    estimatedMinutes = estimatedMinutes.takeIf { it > 0 }?.toString().orEmpty(),
+    repeatRule = repeatRule,
+)
+
+/** One server task row: tap to edit, quick complete/reopen at the edge
+ * (gated while an operation is in flight so double-taps can't race). */
+@Composable
+private fun ServerTaskRow(
+    task: ServerTask,
+    actionsEnabled: Boolean,
+    onEdit: () -> Unit,
+    onComplete: () -> Unit,
+    onReopen: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onEdit,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (!task.isOpen()) {
+                        Icon(
+                            Icons.Filled.CheckCircle,
+                            contentDescription = "Completed",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text(
+                        task.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (task.description.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        task.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 4,
+                    )
+                }
+                val meta = buildList {
+                    if (task.dueDate.isNotEmpty()) {
+                        add(
+                            "Due ${task.dueDate}" +
+                                (if (task.dueTime.isNotEmpty()) " ${task.dueTime}" else "")
+                        )
+                    }
+                    if (task.estimatedMinutes > 0) add("~${task.estimatedMinutes} min")
+                    if (!task.isOpen() && task.completedAt.isNotEmpty()) {
+                        add("Done ${task.completedAt.take(10)}")
+                    }
+                }
+                if (meta.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        meta.joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (task.repeatRule.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Repeats: ${task.repeatRule}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (task.isOpen()) {
+                IconButton(onClick = onComplete, enabled = actionsEnabled) {
+                    Icon(Icons.Filled.CheckCircle, contentDescription = "Complete task")
+                }
+            } else {
+                IconButton(onClick = onReopen, enabled = actionsEnabled) {
+                    Icon(Icons.Filled.Undo, contentDescription = "Reopen task")
+                }
+            }
+        }
+    }
+}
+
+/** New/edit dialog for a server task. Name required; due/estimate formats
+ * are validated server-side and reported back on save. */
+@Composable
+private fun ServerTaskDialog(
+    initial: ServerTaskDraft,
+    isNew: Boolean,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onDelete: (() -> Unit)?,
+    onSave: (ServerTaskDraft) -> Unit,
+) {
+    var name by remember(initial) { mutableStateOf(initial.name) }
+    var description by remember(initial) { mutableStateOf(initial.description) }
+    var dueDate by remember(initial) { mutableStateOf(initial.dueDate) }
+    var dueTime by remember(initial) { mutableStateOf(initial.dueTime) }
+    var minutes by remember(initial) { mutableStateOf(initial.estimatedMinutes) }
+    var repeatRule by remember(initial) { mutableStateOf(initial.repeatRule) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isNew) "New task" else "Edit task") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text("Details (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = dueDate,
+                        onValueChange = { dueDate = it },
+                        label = { Text("Due date") },
+                        placeholder = { Text("YYYY-MM-DD") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = dueTime,
+                        onValueChange = { dueTime = it },
+                        label = { Text("Time") },
+                        placeholder = { Text("HH:MM") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = minutes,
+                        onValueChange = { minutes = it.filter { c -> c.isDigit() } },
+                        label = { Text("Minutes") },
+                        placeholder = { Text("30") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = repeatRule,
+                        onValueChange = { repeatRule = it },
+                        label = { Text("Repeats") },
+                        placeholder = { Text("weekly") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSave(
+                        initial.copy(
+                            name = name.trim(),
+                            description = description.trim(),
+                            dueDate = dueDate.trim(),
+                            dueTime = dueTime.trim(),
+                            estimatedMinutes = minutes.trim(),
+                            repeatRule = repeatRule.trim(),
+                        )
+                    )
+                },
+                enabled = !busy && name.trim().isNotEmpty(),
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            Row {
+                if (onDelete != null) {
+                    TextButton(onClick = onDelete) { Text("Delete") }
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    )
+}
 
 private fun taskRank(status: String): Int =
     TASK_STATUSES.indexOf(status).let { if (it < 0) 2 else it }

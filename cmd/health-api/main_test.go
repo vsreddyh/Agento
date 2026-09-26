@@ -58,3 +58,103 @@ func TestMinutesBetween(t *testing.T) {
 		t.Fatal("expected failure")
 	}
 }
+
+func TestListTasksGuard(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	// No token → 401 without touching MongoDB.
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks?state=open", nil)
+	w := httptest.NewRecorder()
+	listTasks(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token: got %d", w.Code)
+	}
+	// Wrong method → 405 without touching MongoDB.
+	req = httptest.NewRequest(http.MethodPost, "/api/tasks", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	listTasks(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("post: got %d", w.Code)
+	}
+}
+
+func TestTaskItemGuard(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	// No token → 401 without touching MongoDB.
+	for _, target := range []string{"/api/tasks/abc", "/api/tasks/abc/complete", "/api/tasks"} {
+		req := httptest.NewRequest(http.MethodPost, target, nil)
+		w := httptest.NewRecorder()
+		if strings.Contains(target, "/abc") {
+			taskItem(w, req)
+		} else {
+			tasksRoot(w, req)
+		}
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s missing token: got %d", target, w.Code)
+		}
+	}
+	// Unknown action → 404 without touching MongoDB.
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/abc/frobnicate", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	taskItem(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown action: got %d", w.Code)
+	}
+	// Wrong method on a known action → 405 without touching MongoDB.
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks/abc/complete", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	taskItem(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("get on complete: got %d", w.Code)
+	}
+	// Invalid JSON body → 422 without touching MongoDB.
+	req = httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader("{oops"))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	tasksRoot(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad json: got %d", w.Code)
+	}
+}
+
+func TestTaskFieldValidation(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	post := func(target, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-secret-12345678")
+		w := httptest.NewRecorder()
+		if strings.HasPrefix(target, "/api/tasks/") {
+			taskItem(w, req)
+		} else {
+			tasksRoot(w, req)
+		}
+		return w
+	}
+	// Mistyped / fractional values fail before any MongoDB touch.
+	for _, body := range []string{
+		`{"name":"x","estimated_minutes":"lots"}`,
+		`{"name":"x","estimated_minutes":1.5}`,
+		`{"name":"x","estimated_minutes":-3}`,
+		`{"name":"x","description":42}`,
+		`{"name":"x","due_date":20260926}`,
+	} {
+		if w := post("/api/tasks", body); w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: got %d (%s)", body, w.Code, w.Body.String())
+		}
+	}
+	// Trailing slash with no id behaves like the collection root: GET is
+	// auth-gated (tested) and would list; POST create validates first.
+	if w := post("/api/tasks/", `{"estimated_minutes":"lots"}`); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("trailing slash create: got %d", w.Code)
+	}
+	// PATCH validation also runs before any MongoDB touch.
+	req := httptest.NewRequest(http.MethodPatch, "/api/tasks/abc", strings.NewReader(`{"estimated_minutes":2.5}`))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	taskItem(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("patch fractional: got %d (%s)", w.Code, w.Body.String())
+	}
+}

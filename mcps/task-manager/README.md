@@ -1,6 +1,9 @@
 # Task Manager MCP Server
 
-Personal task tracking for the agent. No app UI — agent-only via MCP.
+Personal task tracking for the user. The agent manages tasks over MCP;
+the Agento Android app's Task Manager screen offers the same list with
+full CRUD over `GET/POST/PATCH/DELETE /api/tasks` on health-api (same
+store, same validation — see `cmd/health-api/main.go`).
 
 ## Tools
 
