@@ -239,15 +239,23 @@ class MainActivity : ComponentActivity() {
                     var autoSpeak by remember {
                         mutableStateOf(prefs.getBoolean("tts_auto", false))
                     }
-                    val tabModels = remember(dest, section) {
+                    // Bumped whenever a model/effort pick saves, so the
+                    // drawer subtitles below recompute without waiting for
+                    // a navigation (remember(dest, section) alone goes stale).
+                    var drawerTick by remember { mutableIntStateOf(0) }
+                    val tabModels = remember(dest, section, drawerTick) {
                         // Drawer subtitles: model plus its effort pick, so the
                         // active reasoning level is visible without reopening
                         // the picker. Blank effort = server default (medium).
                         fun sub(tab: String): String {
                             val m = (prefs.getString("model_$tab", "") ?: "").trim()
                             if (m.isEmpty()) return ""
+                            // Clamped like effortFor: a pick saved for another
+                            // model never leaks into this model's subtitle.
                             val e = (prefs.getString("effort_${tab}_$m", "") ?: "").trim()
                                 .ifEmpty { (prefs.getString("effort_$tab", "") ?: "").trim() }
+                                .lowercase()
+                                .takeIf { it in EffortCatalog.optionsFor(m) }.orEmpty()
                             return if (e.isEmpty()) m else "$m · $e"
                         }
                         mapOf(
@@ -285,6 +293,7 @@ class MainActivity : ComponentActivity() {
                                         prefs.edit().putBoolean("tts_auto", it).apply()
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
+                                    onConfigChanged = { drawerTick++ },
                                 )
                                 Destination.Story -> ChatTab(
                                     app = application, tab = "story", title = "Story", wc = wc,
@@ -295,6 +304,7 @@ class MainActivity : ComponentActivity() {
                                         prefs.edit().putBoolean("tts_auto", it).apply()
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
+                                    onConfigChanged = { drawerTick++ },
                                 )
                                 Destination.Portfolio -> ChatTab(
                                     app = application, tab = "resumes", title = "Resume and Portfolio", wc = wc,
@@ -305,6 +315,7 @@ class MainActivity : ComponentActivity() {
                                         prefs.edit().putBoolean("tts_auto", it).apply()
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
+                                    onConfigChanged = { drawerTick++ },
                                 )
                                 Destination.Tasks -> TasksScreen(
                                     wc = wc,
@@ -546,6 +557,7 @@ private fun ChatTab(
     onAutoSpeak: (Boolean) -> Unit,
     onMenu: () -> Unit,
     autoLiveGen: Int = 0,
+    onConfigChanged: () -> Unit = {},
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
     // Keyed per tab — otherwise all three tabs would share one ViewModel.
@@ -602,7 +614,8 @@ private fun ChatTab(
     }
     if (showModel) {
         TabModelSheet(app = app, tab = tab, title = title,
-            onChanged = vm::refreshConfig, onClose = { showModel = false })
+            onChanged = { vm.refreshConfig(); onConfigChanged() },
+            onClose = { showModel = false })
     }
 }
 
@@ -2186,10 +2199,14 @@ private fun TabModelSheet(
             Spacer(modifier = Modifier.height(8.dp))
             // Reasoning effort: options depend on the selected model
             // (toggle families offer none/high, graded families offer levels).
+            // The shown value is clamped: a pick restored for another model
+            // never displays as valid here.
             val effortOptions = EffortCatalog.optionsFor(model)
+            val shownEffort = effort.takeIf { it in effortOptions }
+                ?: EffortCatalog.defaultFor(model)
             OptionMenu(
                 label = "Effort",
-                shown = effort.ifEmpty { EffortCatalog.defaultFor(model) },
+                shown = shownEffort,
                 options = effortOptions.map { e -> e to EffortCatalog.labelFor(e) },
                 onPick = {
                     effort = it
@@ -2272,6 +2289,9 @@ private fun ChatScreen(
     // semantics are, a session can never bleed into another tab's screen.
     var liveMode by remember(tab) { mutableStateOf(false) }
     var silentRounds by remember(tab) { mutableIntStateOf(0) }
+    // Transient recognizer faults (busy/audio/client overlap) retry without
+    // costing a silent round; capped so a wedged recognizer still ends loudly.
+    var transientRetries by remember(tab) { mutableIntStateOf(0) }
     // Rotation silently kills a live session (remember(tab) state is lost
     // and the rotation guard deliberately doesn't restart it). This flag
     // survives recreation so the user gets told instead of silence.
@@ -2282,10 +2302,6 @@ private fun ChatScreen(
             snackbar.showSnackbar("Live session ended on rotation.")
         }
     }
-    // Deferred listen: the recognizer result handler below runs before
-    // startVoice is declared, so it nudges via nonce and the effect after
-    // startVoice performs the actual listen.
-    var listenNonce by remember(tab) { mutableIntStateOf(0) }
     // Hands-free interrupt (#85): background mic watches for speech while
     // the readout plays; on trigger just cut TTS — the speakingKey effect
     // below starts the recognizer. Needs RECORD_AUDIO; without it the loop
@@ -2326,6 +2342,7 @@ private fun ChatScreen(
     fun endLive(reason: String? = null) {
         liveMode = false
         silentRounds = 0
+        transientRetries = 0
         liveLostOnRotate = false
         livePartial = ""
         pendingLiveStart = false
@@ -2350,22 +2367,9 @@ private fun ChatScreen(
         } else {
             ""
         }
-        if (liveMode) {
-            // Checked at result time: toggling live off mid-listen just
-            // drops back to the plain pending-text path below.
-            if (heard.isEmpty()) {
-                // Silent round (no speech or cancelled): 3 strikes ends it.
-                silentRounds++
-                if (silentRounds >= 3) endLive("Live session ended (no speech).")
-                else listenNonce++
-            } else if (heard.trimEnd('.', '!', '?').equals("stop", ignoreCase = true)) {
-                endLive()
-            } else {
-                silentRounds = 0
-                onPending(heard)
-                onSend()
-            }
-        } else if (heard.isNotEmpty()) {
+        // One-shot mic only: live sessions listen headless via LiveRecognizer,
+        // so there is no live branch here (its retry path is onNoSpeech/onRetry).
+        if (heard.isNotEmpty()) {
             val cur = state.pending
             onPending(if (cur.isBlank()) heard else "${cur.trimEnd()} $heard")
         }
@@ -2405,22 +2409,25 @@ private fun ChatScreen(
         liveMode = true
         liveLostOnRotate = true
         silentRounds = 0
+        transientRetries = 0
         livePartial = ""
         micArmed = true
         val handoff = speakingKey != null || state.streaming
         if (!handoff) liveListen()
     }
-    // Recognizer callbacks: assigned here (after every local fun they call).
-    // One-shot mic results flow through voiceLauncher above; only live
+    // One-shot mic results flow through voiceLauncher below; only live
     // cycles arrive here. Reassigned each composition so closures stay fresh.
     fun bindLiveListener() {
         liveRec.listener = object : LiveRecognizer.Listener {
-            override fun onBegin() = Unit
+            override fun onBegin() {
+                transientRetries = 0
+            }
             override fun onPartial(text: String) {
                 livePartial = text
             }
             override fun onResult(heard: String) {
                 livePartial = ""
+                transientRetries = 0
                 if (!liveMode) {
                     onPending(heard)
                     return
@@ -2436,9 +2443,19 @@ private fun ChatScreen(
             override fun onNoSpeech() {
                 if (!liveMode) return
                 livePartial = ""
+                transientRetries = 0
                 silentRounds++
                 if (silentRounds >= 3) endLive("Live session ended (no speech).")
                 else liveListen()
+            }
+            override fun onRetry() {
+                if (!liveMode) return
+                transientRetries++
+                if (transientRetries > 5) {
+                    endLive("Voice recognition unavailable — live session ended.")
+                } else {
+                    liveListen()
+                }
             }
             override fun onFatal(message: String) {
                 if (liveMode) endLive(message)
@@ -2511,9 +2528,6 @@ private fun ChatScreen(
             liveListen()
         }
         wasSpeaking = speakingKey != null
-    }
-    LaunchedEffect(listenNonce) {
-        if (listenNonce > 0) liveListen()
     }
     // Surface send failures as a toast too (the inline card keeps details).
     LaunchedEffect(state.error) {

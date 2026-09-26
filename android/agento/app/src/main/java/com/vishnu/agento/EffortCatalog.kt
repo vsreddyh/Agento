@@ -23,7 +23,7 @@ object EffortCatalog {
 
     /** Full-ladder fallback for models with no specific entry. */
     val FALLBACK: List<String> = listOf(
-        "none", "minimal", "low", "medium", "high", "xhigh", "max",
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
     )
 
     /** Toggle-only families (reasoning off/on): "none" = off, "high" = on. */

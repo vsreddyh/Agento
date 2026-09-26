@@ -53,13 +53,25 @@ object SettingsBackup {
     val BOOLEAN_KEYS: List<String> = listOf("first_sync_done", "notify_reply_done")
 
     /**
-     * Dynamic per-model effort memory keys (`effort_<tab>_<model>`): present
-     * in prefs but unknowable statically, so they are enumerated live. Only
-     * string values are exported.
+     * True for per-model effort memory keys (`effort_<tab>_<model>` with tab
+     * in [TABS]). Shaped tight so a hand-edited backup can't pollute prefs
+     * with arbitrary `effort_*` keys.
+     */
+    fun isEffortMemoryKey(k: String): Boolean {
+        if (!k.startsWith("effort_")) return false
+        for (t in TABS) {
+            if (k.startsWith("effort_${t}_") && k.length > "effort_${t}_".length) return true
+        }
+        return false
+    }
+
+    /**
+     * Dynamic per-model effort memory keys: present in prefs but unknowable
+     * statically, so they are enumerated live. Only string values are exported.
      */
     private fun effortKeys(prefs: android.content.SharedPreferences): List<String> =
         prefs.all.keys.filter { k ->
-            k.startsWith("effort_") && k !in STRING_KEYS && prefs.all[k] is String
+            isEffortMemoryKey(k) && prefs.all[k] is String
         }.sorted()
 
     /** Serializes all known prefs plus app files; absent keys are omitted (not nulled). */
@@ -110,11 +122,11 @@ object SettingsBackup {
                 }
             }
             // Per-model effort memory: same allowlist shape as export
-            // (`effort_<tab>_<model>`, string values only). Unknown keys and
+            // (isEffortMemoryKey, string values only). Unknown keys and
             // mistyped values are still skipped.
             val names = values.keys().asSequence().toList()
             for (k in names) {
-                if (k.startsWith("effort_") && k !in STRING_KEYS && values.opt(k) is String) {
+                if (isEffortMemoryKey(k) && values.opt(k) is String) {
                     edit.putString(k, values.optString(k, ""))
                     applied++
                 }

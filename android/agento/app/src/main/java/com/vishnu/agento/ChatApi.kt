@@ -113,15 +113,23 @@ class ChatApi(context: Context) {
      * Reasoning effort for a tab+model pair; blank means unset (the gateway
      * applies its own default). Per-model memory first
      * (`effort_<tab>_<model>`), falling back to the tab's last pick
-     * (`effort_<tab>`) so a stored value survives a model catalog refresh.
+     * (`effort_<tab>`). The stored value is clamped to the model's own
+     * vocabulary — a pick saved for a graded model (e.g. `max`) is invalid
+     * on a toggle model (`none`/`high`) and reads back as blank so callers
+     * fall through to the model's default instead of showing/sending a
+     * level the model can't speak.
      */
     fun effortFor(tab: String, model: String): String {
         val m = model.trim()
+        var stored = ""
         if (m.isNotEmpty()) {
-            val perModel = (prefs.getString("effort_${tab}_$m", "") ?: "").trim()
-            if (perModel.isNotEmpty()) return perModel
+            stored = (prefs.getString("effort_${tab}_$m", "") ?: "").trim().lowercase()
         }
-        return (prefs.getString("effort_$tab", "") ?: "").trim()
+        if (stored.isEmpty()) {
+            stored = (prefs.getString("effort_$tab", "") ?: "").trim().lowercase()
+        }
+        if (stored.isEmpty() || m.isEmpty()) return stored
+        return stored.takeIf { it in EffortCatalog.optionsFor(m) } ?: ""
     }
 
     fun setChatConfig(
@@ -142,8 +150,15 @@ class ChatApi(context: Context) {
             .putString("model_$tab", model.trim())
         val e = effort.trim().lowercase()
         if (e.isNotEmpty()) {
-            edit.putString("effort_$tab", e)
-            if (model.trim().isNotEmpty()) edit.putString("effort_${tab}_${model.trim()}", e)
+            // Clamp to the model's vocabulary so a stale tab pick can never
+            // be persisted under a model that can't speak it (reads back via
+            // effortFor, which clamps the same way).
+            val valid = if (model.trim().isEmpty()) e
+                else e.takeIf { it in EffortCatalog.optionsFor(model.trim()) }
+            if (valid != null) {
+                edit.putString("effort_$tab", valid)
+                if (model.trim().isNotEmpty()) edit.putString("effort_${tab}_${model.trim()}", valid)
+            }
         }
         edit.apply()
     }

@@ -23,6 +23,9 @@ class LiveRecognizer(context: Context) {
         fun onPartial(text: String)
         fun onResult(text: String)
         fun onNoSpeech()
+        /** Transient recognizer fault (busy/audio/client overlap): retry now
+         * without costing a silent round. */
+        fun onRetry()
         fun onFatal(message: String)
     }
 
@@ -51,7 +54,14 @@ class LiveRecognizer(context: Context) {
         }
         rec.setRecognitionListener(Inner())
         runCatching { rec.startListening(intent) }
-            .onFailure { listener?.onFatal("Could not start listening.") }
+            .onFailure { e ->
+                // Revoked mid-session surfaces here, not via onError.
+                if (e is SecurityException) {
+                    listener?.onFatal("Microphone unavailable — live session ended.")
+                } else {
+                    listener?.onFatal("Could not start listening.")
+                }
+            }
     }
 
     /** Cancels the current cycle silently (no callbacks). */
@@ -91,11 +101,15 @@ class LiveRecognizer(context: Context) {
                 // No usable speech: the loop counts a silent round and retries.
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+                -> listener?.onNoSpeech()
+                // Transient handoff faults (AudioRecord release races
+                // cancel()→listen() overlap): retry immediately without
+                // costing one of the 3 silent rounds.
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
                 SpeechRecognizer.ERROR_AUDIO,
-                -> listener?.onNoSpeech()
-                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS,
                 SpeechRecognizer.ERROR_CLIENT,
+                -> listener?.onRetry()
+                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS,
                 -> listener?.onFatal("Microphone unavailable — live session ended.")
                 else -> listener?.onFatal("Voice recognition failed — live session ended.")
             }
