@@ -66,6 +66,7 @@ import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -2236,6 +2237,16 @@ private fun ChatScreen(
     // semantics are, a session can never bleed into another tab's screen.
     var liveMode by remember(tab) { mutableStateOf(false) }
     var silentRounds by remember(tab) { mutableIntStateOf(0) }
+    // Rotation silently kills a live session (remember(tab) state is lost
+    // and the rotation guard deliberately doesn't restart it). This flag
+    // survives recreation so the user gets told instead of silence.
+    var liveLostOnRotate by rememberSaveable(tab) { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (liveLostOnRotate) {
+            liveLostOnRotate = false
+            snackbar.showSnackbar("Live session ended on rotation.")
+        }
+    }
     // Deferred listen: the recognizer result handler below runs before
     // startVoice is declared, so it nudges via nonce and the effect after
     // startVoice performs the actual listen.
@@ -2272,6 +2283,7 @@ private fun ChatScreen(
     fun endLive(reason: String? = null) {
         liveMode = false
         silentRounds = 0
+        liveLostOnRotate = false
         // Stop the detector now — don't rely on the liveMode=false effect
         // round-trip to get around to it.
         interrupt.stop()
@@ -2373,6 +2385,7 @@ private fun ChatScreen(
             tts.stop()
             if (state.streaming) onStop()
             liveMode = true
+            liveLostOnRotate = true
             silentRounds = 0
             if (!interrupt.hasPermission(context)) {
                 micPermission.launch(Manifest.permission.RECORD_AUDIO)
@@ -2524,6 +2537,7 @@ private fun ChatScreen(
                                     tts.stop()
                                     if (state.streaming) onStop()
                                     liveMode = true
+                                    liveLostOnRotate = true
                                     silentRounds = 0
                                     if (!interrupt.hasPermission(context)) {
                                         micPermission.launch(Manifest.permission.RECORD_AUDIO)

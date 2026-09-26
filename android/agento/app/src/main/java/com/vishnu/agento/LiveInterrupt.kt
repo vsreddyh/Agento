@@ -66,6 +66,15 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
             runCatching { recorder.release() }
             return false
         }
+        // Start synchronously: startRecording() throws IllegalStateException
+        // on a dead mic (not just SecurityException) — fail here so start()
+        // returns false and live degrades to tap-to-talk.
+        try {
+            recorder.startRecording()
+        } catch (e: Exception) {
+            runCatching { recorder.release() }
+            return false
+        }
         rec = recorder
         if (AcousticEchoCanceler.isAvailable()) {
             runCatching {
@@ -80,7 +89,6 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
             // release only ITS unit, never the new one's.
             val myAec = aecAtStart
             try {
-                recorder.startRecording()
                 val buf = ShortArray(minBuf / 2)
                 // Calibrate: ~400ms of readout+room as the floor.
                 var floorSum = 0.0
