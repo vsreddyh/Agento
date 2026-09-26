@@ -263,7 +263,11 @@ class MainActivity : ComponentActivity() {
                                 Destination.God -> ChatTab(
                                     app = application, tab = "god", title = "God", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
-                                    autoLiveGen = liveGen.intValue,
+                                    // Only the requested tab sees the gen:
+                                    // per-tab consumed counters would
+                                    // otherwise auto-start sessions on
+                                    // tabs the user merely switches to.
+                                    autoLiveGen = if (liveTab == "god") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -273,7 +277,7 @@ class MainActivity : ComponentActivity() {
                                 Destination.Story -> ChatTab(
                                     app = application, tab = "story", title = "Story", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
-                                    autoLiveGen = liveGen.intValue,
+                                    autoLiveGen = if (liveTab == "story") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -283,7 +287,7 @@ class MainActivity : ComponentActivity() {
                                 Destination.Portfolio -> ChatTab(
                                     app = application, tab = "resumes", title = "Resume and Portfolio", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
-                                    autoLiveGen = liveGen.intValue,
+                                    autoLiveGen = if (liveTab == "resumes") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -2232,13 +2236,17 @@ private fun ChatScreen(
     // semantics are, a session can never bleed into another tab's screen.
     var liveMode by remember(tab) { mutableStateOf(false) }
     var silentRounds by remember(tab) { mutableIntStateOf(0) }
+    // Deferred listen: the recognizer result handler below runs before
+    // startVoice is declared, so it nudges via nonce and the effect after
+    // startVoice performs the actual listen.
+    var listenNonce by remember(tab) { mutableIntStateOf(0) }
     // Hands-free interrupt (#85): background mic watches for speech while
     // the readout plays; on trigger just cut TTS — the speakingKey effect
     // below starts the recognizer. Needs RECORD_AUDIO; without it the loop
     // still runs tap-to-talk.
     val context = LocalContext.current
-    val interrupt = remember { LiveInterrupt({ scope.launch { tts.stop() } }) }
-    var micArmed by remember { mutableStateOf(interrupt.hasPermission(context)) }
+    val interrupt = remember(tab) { LiveInterrupt({ scope.launch { tts.stop() } }) }
+    var micArmed by remember(tab) { mutableStateOf(interrupt.hasPermission(context)) }
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -2288,7 +2296,7 @@ private fun ChatScreen(
                 // Silent round (no speech or cancelled): 3 strikes ends it.
                 silentRounds++
                 if (silentRounds >= 3) endLive("Live session ended (no speech).")
-                else startVoice()
+                else listenNonce++
             } else if (heard.trimEnd('.', '!', '?').equals("stop", ignoreCase = true)) {
                 endLive()
             } else {
@@ -2351,14 +2359,13 @@ private fun ChatScreen(
         }
         wasStreaming = state.streaming
     }
-    // Widget live request (#85): each generation starts the session once.
-    // Same steps as the toggle (kill turn, arm, listen).
+    // Widget live request (#85): effect placed after startVoice (it calls
+    // it); each generation starts the session once. Same steps as the
+    // toggle (kill turn, arm, listen; handoff rule for the first listen).
     var consumedLiveGen by remember(tab) { mutableIntStateOf(0) }
     LaunchedEffect(autoLiveGen) {
         if (autoLiveGen > consumedLiveGen) {
             consumedLiveGen = autoLiveGen
-            // Same handoff rule as the toggle: an effect drives the first
-            // listen when speaking/streaming ends.
             val handoff = speakingKey != null || state.streaming
             tts.stop()
             if (state.streaming) onStop()
@@ -2387,6 +2394,9 @@ private fun ChatScreen(
             startVoice()
         }
         wasSpeaking = speakingKey != null
+    }
+    LaunchedEffect(listenNonce) {
+        if (listenNonce > 0) startVoice()
     }
     // Surface send failures as a toast too (the inline card keeps details).
     LaunchedEffect(state.error) {

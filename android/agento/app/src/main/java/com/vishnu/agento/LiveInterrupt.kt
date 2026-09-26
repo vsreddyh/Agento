@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
@@ -71,7 +72,13 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
                 aec = AcousticEchoCanceler.create(recorder.audioSessionId)?.apply { enabled = true }
             }
         }
+        val aecAtStart = aec
         job = scope.launch(Dispatchers.IO) {
+            // Coroutine-local AEC ref, captured synchronously below at
+            // creation: a rapid restart's start() replaces the shared field
+            // before this coroutine's finally runs — the finally must
+            // release only ITS unit, never the new one's.
+            val myAec = aecAtStart
             try {
                 recorder.startRecording()
                 val buf = ShortArray(minBuf / 2)
@@ -128,8 +135,8 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
                 runCatching { recorder.stop() }
                 recorder.release()
                 if (rec === recorder) rec = null
-                aec?.let { runCatching { it.release() } }
-                aec = null
+                myAec?.let { runCatching { it.release() } }
+                if (aec === myAec) aec = null
             }
         }
         return true
