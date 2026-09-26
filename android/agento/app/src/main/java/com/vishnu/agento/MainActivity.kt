@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -141,6 +142,7 @@ private enum class SettingSection(val title: String) {
     Appearance("Appearance"),
     Notifications("Notifications"),
     Storage("Storage"),
+    Usage("Usage"),
     About("About"),
 }
 
@@ -3096,6 +3098,13 @@ private fun SettingsScreen(
             ) {
                 when (section) {
                     null -> {
+                        val usageStatus = remember(context, settingsRefresh) {
+                            val all = UsageStore.loadAll(context)
+                            val total = all.values.fold(0L) { acc, t -> acc + t.total }
+                            val turns = all.values.fold(0L) { acc, t -> acc + t.turns }
+                            if (turns == 0L) "Not tracked yet"
+                            else "${formatTokens(total)} tokens · $turns turns"
+                        }
                         SettingsHub(
                             serverStatus = if (state.serverUrl.isBlank()) {
                                 "Not set up"
@@ -3117,6 +3126,7 @@ private fun SettingsScreen(
                                 else -> "System"
                             },
                             notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
+                            usageStatus = usageStatus,
                             appVersion = remember(context) {
                                 UpdateManager.currentVersion(context).first
                             },
@@ -3378,6 +3388,8 @@ private fun SettingsScreen(
                             settingsRefresh++
                             scope.launch { snackbar.showSnackbar(Toasts.SAVED) }
                         })
+                    }
+                    SettingSection.Usage -> {
                         UsageSection()
                     }
                 }
@@ -3386,9 +3398,11 @@ private fun SettingsScreen(
     }
 }
 
-/** Local usage estimates: per-assistant traffic measured on-device.
- * The gateway exposes no aggregate endpoint, so tokens are approximated
- * from characters (≈4 chars/token) — good enough for a sense of scale. */
+/** Real usage: per-assistant token counts reported by the server.
+ * Each completed turn's stream carries a `usage` object (see
+ * [parseTokenUsage]); totals accumulate on-device from those reports, so
+ * turns from before this update — and failed turns, which report zeros —
+ * contribute nothing. */
 @Composable
 private fun UsageSection() {
     val context = LocalContext.current
@@ -3397,20 +3411,22 @@ private fun UsageSection() {
 
     LaunchedEffect(Unit) {
         val data = withContext(Dispatchers.IO) {
-            val prefs = context.getSharedPreferences(
-                AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            UsageStore.clearLegacy(context)
             listOf(
-                Triple("god", "God", "default"),
-                Triple("story", "Story", "story"),
-                Triple("resumes", "Resume and Portfolio", "resumes"),
-            ).map { (tab, label, _) ->
+                "god" to "God",
+                "story" to "Story",
+                "resumes" to "Resume and Portfolio",
+            ).map { (tab, label) ->
                 val threads = ChatThreads.load(context, tab)
+                val t = UsageStore.load(context, tab)
                 UsageRow(
                     label = label,
                     conversations = threads.size,
                     messages = threads.sumOf { it.messages.size },
-                    sentChars = prefs.getLong("usage_sent_$tab", 0L),
-                    recvChars = prefs.getLong("usage_recv_$tab", 0L),
+                    prompt = t.prompt,
+                    completion = t.completion,
+                    total = t.total,
+                    turns = t.turns,
                 )
             }
         }
@@ -3424,13 +3440,14 @@ private fun UsageSection() {
         }
         return
     }
-    val totalChars = rows.sumOf { it.sentChars + it.recvChars }
+    val totalTokens = rows.sumOf { it.total }
+    val countedTurns = rows.sumOf { it.turns }
     SectionCard(
         title = "Total",
-        subtitle = "Across all assistants, measured on this device.",
+        subtitle = "Server-reported tokens across all assistants, counted on this device.",
     ) {
         Text(
-            "≈ ${formatTokens(totalChars)} tokens · " +
+            "${formatTokens(totalTokens)} tokens · " +
                 "${rows.sumOf { it.messages }} messages · " +
                 "${rows.sumOf { it.conversations }} conversations",
             style = MaterialTheme.typography.bodyLarge,
@@ -3439,26 +3456,37 @@ private fun UsageSection() {
     rows.forEach { r ->
         SectionCard(title = r.label) {
             Text(
-                "≈ ${formatTokens(r.sentChars + r.recvChars)} tokens · " +
+                "${formatTokens(r.total)} tokens · " +
                     "${r.messages} messages · ${r.conversations} conversations",
                 style = MaterialTheme.typography.bodyMedium,
             )
-            HintLine("Sent ≈ ${formatTokens(r.sentChars)} · received ≈ ${formatTokens(r.recvChars)}")
+            HintLine(
+                if (r.turns > 0) {
+                    "Prompt ${formatTokens(r.prompt)} · completion ${formatTokens(r.completion)} · ${r.turns} counted turns"
+                } else {
+                    "No token counts reported yet — chat once to start tracking."
+                }
+            )
         }
     }
-    HintLine("Estimates only — the server reports no totals, so these are character-based approximations.")
+    if (countedTurns == 0L) {
+        HintLine("Nothing counted yet. Turns from before this update have no reports and can't be backfilled.")
+    } else {
+        HintLine("Only turns with server reports count — failed turns report zeros and are skipped.")
+    }
 }
 
 private data class UsageRow(
     val label: String,
     val conversations: Int,
     val messages: Int,
-    val sentChars: Long,
-    val recvChars: Long,
+    val prompt: Long,
+    val completion: Long,
+    val total: Long,
+    val turns: Long,
 )
 
-private fun formatTokens(chars: Long): String {
-    val tokens = chars / 4
+private fun formatTokens(tokens: Long): String {
     return when {
         tokens >= 1_000_000 -> "%.1fM".format(tokens / 1_000_000.0)
         tokens >= 1_000 -> "%.1fk".format(tokens / 1_000.0)
@@ -3474,16 +3502,18 @@ private fun SettingsHub(
     healthStatus: String,
     themeStatus: String,
     notificationsStatus: String,
+    usageStatus: String,
     appVersion: String,
     onPick: (SettingSection) -> Unit,
 ) {
-    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, appVersion) {
+    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, usageStatus, appVersion) {
         listOf(
             HubRow(SettingSection.Connection, serverStatus),
             HubRow(SettingSection.Health, healthStatus),
             HubRow(SettingSection.Appearance, themeStatus),
             HubRow(SettingSection.Notifications, notificationsStatus),
-            HubRow(SettingSection.Storage, "Backup and usage"),
+            HubRow(SettingSection.Storage, "Backup"),
+            HubRow(SettingSection.Usage, usageStatus),
             HubRow(SettingSection.About, appVersion),
         )
     }
@@ -3532,6 +3562,7 @@ private fun SettingSection.hubIcon() = when (this) {
     SettingSection.Appearance -> Icons.Filled.DarkMode
     SettingSection.Notifications -> Icons.Filled.Notifications
     SettingSection.Storage -> Icons.Filled.Folder
+    SettingSection.Usage -> Icons.Filled.DataUsage
     SettingSection.About -> Icons.Filled.Info
 }
 

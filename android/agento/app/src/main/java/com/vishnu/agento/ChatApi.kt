@@ -30,7 +30,9 @@ data class ChatMessage(
 
 sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
-    data class Done(val fullText: String) : ChatEvent
+    /** [usage] is the server-reported token count for the turn (null when
+     * the stream carried no usable `usage` object — e.g. a failed turn). */
+    data class Done(val fullText: String, val usage: TokenUsage? = null) : ChatEvent
     data class Error(val message: String) : ChatEvent
     /** Live tool-start signal from `hermes.tool.progress` SSE frames. */
     data class ToolProgress(
@@ -38,6 +40,42 @@ sealed interface ChatEvent {
         val label: String = "",
         val status: String = "",
     ) : ChatEvent
+}
+
+/** Real token counts for one turn, parsed from the SSE `usage` object. */
+data class TokenUsage(
+    val prompt: Long = 0L,
+    val completion: Long = 0L,
+    val total: Long = 0L,
+)
+
+/**
+ * Lenient parse of one SSE data-line object: the gateway attaches
+ * `usage: {prompt_tokens, completion_tokens, total_tokens}` to the final
+ * chunk (OpenAI shape, verified live). Alternate key names
+ * (`input_tokens`/`output_tokens`, bare `total`) are accepted; a missing
+ * total derives from prompt + completion. Null when no usable counts are
+ * present — failed turns report all zeros, which read as absent rather
+ * than as a real zero-token turn. Pure for testability.
+ */
+fun parseTokenUsage(o: JSONObject): TokenUsage? {
+    val src = o.optJSONObject("usage") ?: o
+    fun num(vararg keys: String): Long {
+        for (k in keys) {
+            if (src.isNull(k)) continue
+            val raw = src.opt(k)
+            if (raw is Number) {
+                val v = raw.toLong()
+                if (v > 0) return v
+            }
+        }
+        return 0L
+    }
+    val prompt = num("prompt_tokens", "input_tokens", "prompt_eval_count")
+    val completion = num("completion_tokens", "output_tokens", "eval_count")
+    val total = num("total_tokens", "total").takeIf { it > 0 } ?: (prompt + completion)
+    if (prompt == 0L && completion == 0L && total == 0L) return null
+    return TokenUsage(prompt = prompt, completion = completion, total = total)
 }
 
 /** Known provider slugs: offline fallback for the dynamic picker (the live
@@ -305,8 +343,10 @@ class ChatApi(context: Context) {
                 gatewayError = gatewayError, syncError = syncError,
             ))
     }
-    /** Streams reply deltas for [messages]; emits Done(fullText) at `[DONE]`.
-     * Tool-start visibility comes through as [ChatEvent.ToolProgress] parsed
+    /** Streams reply deltas for [messages]; emits Done(fullText, usage) at `[DONE]`.
+     * Token counts come from the stream's `usage` object (final chunk), parsed
+     * leniently via [parseTokenUsage] — null when the server reports nothing
+     * usable. Tool-start visibility comes through as [ChatEvent.ToolProgress] parsed
      * from the gateway's `hermes.tool.progress` SSE frames. [sessionId] is
      * sent as `X-Hermes-Session-Id` (blank = omitted) so the turn can be
      * correlated with `GET api/sessions/{id}/messages` afterwards; the agent
@@ -368,6 +408,9 @@ class ChatApi(context: Context) {
                         return@launch
                     }
                     val full = StringBuilder()
+                    // Last usable `usage` object wins: the gateway attaches
+                    // totals to the final chunk (earlier chunks carry none).
+                    var seenUsage: TokenUsage? = null
                     // OkHttp in this project has no sse module; parse SSE lines manually.
                     // `: keepalive` comments and `event:` lines carry no payload.
                     while (!source.exhausted()) {
@@ -377,6 +420,11 @@ class ChatApi(context: Context) {
                         val data = line.removePrefix("data:").trim()
                         if (data.isEmpty()) continue
                         if (data == "[DONE]") break
+                        // Server-reported token counts (final chunk). Parsed
+                        // off every JSON frame so placement never matters;
+                        // frames without counts leave the last-seen intact.
+                        runCatching { parseTokenUsage(JSONObject(data)) }
+                            .getOrNull()?.let { seenUsage = it }
                         // Tool-progress frames carry {"tool","label",...} and no
                         // choices array — surface them instead of dropping them.
                         val progress = runCatching {
@@ -425,7 +473,7 @@ class ChatApi(context: Context) {
                             trySend(ChatEvent.Delta(delta))
                         }
                     }
-                    trySend(ChatEvent.Done(full.toString()))
+                    trySend(ChatEvent.Done(full.toString(), seenUsage))
                 }
             } catch (e: Exception) {
                 trySend(ChatEvent.Error(e.message ?: e.javaClass.simpleName))

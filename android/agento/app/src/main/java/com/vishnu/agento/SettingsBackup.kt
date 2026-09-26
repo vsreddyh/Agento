@@ -16,8 +16,9 @@ import org.json.JSONObject
  */
 object SettingsBackup {
 
-    // NOTE: stays 1 — the prefs schema is unchanged and old readers ignore
-    // the additive "files" section, so no MAJOR bump is required.
+    // NOTE: stays 1 — the prefs schema gains only additive optional keys
+    // (usage totals, per-model effort memory) and old readers ignore the
+    // additive "files" section, so no MAJOR bump is required.
     const val VERSION = 1
 
     private val TABS = listOf("story", "resumes", "god")
@@ -51,6 +52,14 @@ object SettingsBackup {
 
     /** Boolean prefs the app reads. */
     val BOOLEAN_KEYS: List<String> = listOf("first_sync_done", "notify_reply_done")
+
+    /**
+     * Cumulative real token totals per assistant (see UsageStore). Longs are
+     * exported/imported like the string/boolean allowlists above — additive
+     * and optional, so old backups (without these keys) still restore and
+     * old readers ignore the extra numbers.
+     */
+    val LONG_KEYS: List<String> = UsageStore.LONG_KEYS
 
     /**
      * True for per-model effort memory keys (`effort_<tab>_<model>` with tab
@@ -87,6 +96,9 @@ object SettingsBackup {
         for (k in BOOLEAN_KEYS) {
             if (prefs.contains(k)) values.put(k, prefs.getBoolean(k, false))
         }
+        for (k in LONG_KEYS) {
+            if (prefs.contains(k)) values.put(k, prefs.getLong(k, 0L))
+        }
         val files = JSONObject()
         for (name in backupFiles()) {
             val f = java.io.File(context.filesDir, name)
@@ -118,6 +130,14 @@ object SettingsBackup {
             for (k in BOOLEAN_KEYS) {
                 if (values.has(k) && values.opt(k) is Boolean) {
                     edit.putBoolean(k, values.optBoolean(k))
+                    applied++
+                }
+            }
+            // Real token totals: JSON numbers only (optLong coerces, so the
+            // raw type is checked first like the other allowlists).
+            for (k in LONG_KEYS) {
+                if (values.has(k) && values.opt(k) is Number) {
+                    edit.putLong(k, values.optLong(k, 0L))
                     applied++
                 }
             }
