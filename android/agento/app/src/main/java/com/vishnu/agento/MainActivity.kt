@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
@@ -65,6 +66,7 @@ import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -164,9 +166,32 @@ class MainActivity : ComponentActivity() {
 
     private val healthModel: MainViewModel by viewModels()
 
+    /**
+     * Widget live-session requests (#85). Generation counter (not boolean)
+     * so retaps while the app is open retrigger: singleTop delivers them
+     * via onNewIntent, and the God tab consumes each generation once.
+     */
+    private val liveGen = mutableIntStateOf(0)
+    private val liveTab = mutableStateOf("god")
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == LiveWidget.ACTION_LIVE) {
+            liveTab.value = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
+            liveGen.intValue++
+        }
+    }
+
     /** Adaptive sidebar navigation (#18, #64); theme from prefs (#28). */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Widget live tap: same intent redelivered on rotation/recreation
+        // must not start a second session — only a fresh launch counts.
+        if (savedInstanceState == null && intent?.action == LiveWidget.ACTION_LIVE && liveGen.intValue == 0) {
+            liveTab.value = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
+            liveGen.intValue = 1
+        }
         setContent {
             val context = LocalContext.current
             var themeMode by remember { mutableStateOf(ThemeStore.load(context)) }
@@ -183,6 +208,18 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     var dest by remember { mutableStateOf(Destination.God) }
+                    // Widget live tap (#85): land on the requested tab; its
+                    // ChatTab consumes the liveGen generation and starts
+                    // the session. Retaps renavigate (singleTop) and refire.
+                    LaunchedEffect(liveGen.intValue) {
+                        if (liveGen.intValue > 0) {
+                            dest = when (liveTab.value) {
+                                "story" -> Destination.Story
+                                "resumes" -> Destination.Portfolio
+                                else -> Destination.God
+                            }
+                        }
+                    }
                     // Null section = the settings hub overview; a non-null
                     // section opens that subsection directly.
                     var section by remember { mutableStateOf<SettingSection?>(null) }
@@ -227,6 +264,11 @@ class MainActivity : ComponentActivity() {
                                 Destination.God -> ChatTab(
                                     app = application, tab = "god", title = "God", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
+                                    // Only the requested tab sees the gen:
+                                    // per-tab consumed counters would
+                                    // otherwise auto-start sessions on
+                                    // tabs the user merely switches to.
+                                    autoLiveGen = if (liveTab.value == "god") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -236,6 +278,7 @@ class MainActivity : ComponentActivity() {
                                 Destination.Story -> ChatTab(
                                     app = application, tab = "story", title = "Story", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
+                                    autoLiveGen = if (liveTab.value == "story") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -245,6 +288,7 @@ class MainActivity : ComponentActivity() {
                                 Destination.Portfolio -> ChatTab(
                                     app = application, tab = "resumes", title = "Resume and Portfolio", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
+                                    autoLiveGen = if (liveTab.value == "resumes") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit().putBoolean("tts_auto", it).apply()
@@ -490,6 +534,7 @@ private fun ChatTab(
     autoSpeak: Boolean,
     onAutoSpeak: (Boolean) -> Unit,
     onMenu: () -> Unit,
+    autoLiveGen: Int = 0,
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
     // Keyed per tab — otherwise all three tabs would share one ViewModel.
@@ -505,10 +550,10 @@ private fun ChatTab(
     // configured and a setup prompt otherwise.
     val setupNeeded = state.model.isBlank() || state.provider.isBlank()
     ChatScreen(
-        title = title, modelLabel = state.model.ifBlank { "" },
+        title = title, tab = tab, modelLabel = state.model.ifBlank { "" },
         setupNeeded = setupNeeded, state = state, wc = wc, snackbar = snackbar,
         tts = tts, autoSpeak = autoSpeak, onAutoSpeak = onAutoSpeak,
-        onMenu = onMenu,
+        onMenu = onMenu, autoLiveGen = autoLiveGen,
         onModel = { showModel = true },
         onHistory = { showThreads = true },
         onCheckConnection = vm::checkReachability,
@@ -2157,6 +2202,7 @@ private fun TabModelSheet(
 @Composable
 private fun ChatScreen(
     title: String,
+    tab: String,
     modelLabel: String,
     setupNeeded: Boolean,
     state: ChatUiState,
@@ -2174,6 +2220,7 @@ private fun ChatScreen(
     onStop: () -> Unit,
     onNew: () -> Unit,
     onRetry: () -> Unit,
+    autoLiveGen: Int = 0,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(state.messages.size, state.messages.lastOrNull()?.content?.length) {
@@ -2182,40 +2229,99 @@ private fun ChatScreen(
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val speakingKey by tts.speakingKey.collectAsState()
-    // Leaving the tab cuts speech (one shared engine for all three tabs).
-    DisposableEffect(Unit) { onDispose { tts.stop() } }
-    /** Every send-type action cuts speech first. */
-    fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
-    fun speakMessage(key: String, text: String) {
-        if (!tts.toggle(key, text)) {
-            scope.launch { snackbar.showSnackbar("Voice output unavailable.") }
+    // Live mode (#85): chain the existing one-shot voice input + TTS
+    // readout into a continuous talk-listen-talk loop. The system
+    // recognizer handles silence cutoff per turn; LiveInterrupt only
+    // detects talk-over during readout (no transcription).
+    // Live state is keyed by tab: whatever the when(dest) branch reuse
+    // semantics are, a session can never bleed into another tab's screen.
+    var liveMode by remember(tab) { mutableStateOf(false) }
+    var silentRounds by remember(tab) { mutableIntStateOf(0) }
+    // Rotation silently kills a live session (remember(tab) state is lost
+    // and the rotation guard deliberately doesn't restart it). This flag
+    // survives recreation so the user gets told instead of silence.
+    var liveLostOnRotate by rememberSaveable(tab) { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (liveLostOnRotate) {
+            liveLostOnRotate = false
+            snackbar.showSnackbar("Live session ended on rotation.")
         }
     }
-    // Auto-read: when a reply finishes cleanly while the toggle is on, speak it.
-    var wasStreaming by remember { mutableStateOf(false) }
-    LaunchedEffect(state.streaming) {
-        if (wasStreaming && !state.streaming && autoSpeak && state.error.isEmpty()) {
-            val last = state.messages.lastOrNull()
-            if (last != null && last.role == "assistant" && last.content.isNotBlank()) {
-                speakMessage(ttsKeyFor(last), last.content)
+    // Deferred listen: the recognizer result handler below runs before
+    // startVoice is declared, so it nudges via nonce and the effect after
+    // startVoice performs the actual listen.
+    var listenNonce by remember(tab) { mutableIntStateOf(0) }
+    // Hands-free interrupt (#85): background mic watches for speech while
+    // the readout plays; on trigger just cut TTS — the speakingKey effect
+    // below starts the recognizer. Needs RECORD_AUDIO; without it the loop
+    // still runs tap-to-talk.
+    val context = LocalContext.current
+    val interrupt = remember(tab) { LiveInterrupt({ scope.launch { tts.stop() } }) }
+    var micArmed by remember(tab) { mutableStateOf(interrupt.hasPermission(context)) }
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        micArmed = granted
+        if (!granted) {
+            scope.launch {
+                snackbar.showSnackbar("Live interrupt needs mic access — tap to interrupt instead.")
             }
         }
-        wasStreaming = state.streaming
     }
+    DisposableEffect(tab) {
+        onDispose { interrupt.stop(); tts.stop() }
+    }
+    /** Every send-type action cuts speech first. */
+    fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
+    fun speakMessage(key: String, text: String): Boolean {
+        if (!tts.toggle(key, text)) {
+            scope.launch { snackbar.showSnackbar("Voice output unavailable.") }
+            return false
+        }
+        return true
+    }
+    fun endLive(reason: String? = null) {
+        liveMode = false
+        silentRounds = 0
+        liveLostOnRotate = false
+        // Stop the detector now — don't rely on the liveMode=false effect
+        // round-trip to get around to it.
+        interrupt.stop()
+        tts.stop()
+        if (reason != null) scope.launch { snackbar.showSnackbar(reason) }
+    }
+    // Reply/TTS loop effects are defined after startVoice below (they call it).
     // Built-in Android speech-to-text (RecognizerIntent — no extra
     // permission or dependency). Shared by God/Story/Resume and Portfolio: all three
     // tabs render this one ChatScreen, so one mic covers all chats.
     val voiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val heard = result.data
+        val heard = if (result.resultCode == Activity.RESULT_OK) {
+            result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
                 ?.firstOrNull()?.trim().orEmpty()
-            if (heard.isNotEmpty()) {
-                val cur = state.pending
-                onPending(if (cur.isBlank()) heard else "${cur.trimEnd()} $heard")
+        } else {
+            ""
+        }
+        if (liveMode) {
+            // Checked at result time: toggling live off mid-listen just
+            // drops back to the plain pending-text path below.
+            if (heard.isEmpty()) {
+                // Silent round (no speech or cancelled): 3 strikes ends it.
+                silentRounds++
+                if (silentRounds >= 3) endLive("Live session ended (no speech).")
+                else listenNonce++
+            } else if (heard.trimEnd('.', '!', '?').equals("stop", ignoreCase = true)) {
+                endLive()
+            } else {
+                silentRounds = 0
+                onPending(heard)
+                onSend()
             }
+        } else if (heard.isNotEmpty()) {
+            val cur = state.pending
+            onPending(if (cur.isBlank()) heard else "${cur.trimEnd()} $heard")
         }
     }
     fun startVoice() {
@@ -2234,7 +2340,79 @@ private fun ChatScreen(
             voiceLauncher.launch(intent)
         } catch (e: ActivityNotFoundException) {
             scope.launch { snackbar.showSnackbar("No voice input app found.") }
+            // No recognizer = no loop: end loudly instead of sticking ON.
+            if (liveMode) endLive("Live session ended (no voice input app).")
         }
+    }
+    // Auto-read: when a reply finishes cleanly while the toggle is on, speak it.
+    // In live mode the reply is always spoken (independent of the toggle).
+    var wasStreaming by remember(tab) { mutableStateOf(false) }
+    LaunchedEffect(state.streaming) {
+        if (wasStreaming && !state.streaming) {
+            if (liveMode) {
+                if (state.error.isEmpty()) {
+                    silentRounds = 0
+                    val last = state.messages.lastOrNull()
+                    if (last != null && last.role == "assistant" && last.content.isNotBlank()) {
+                        if (!speakMessage(ttsKeyFor(last), last.content)) {
+                            // Engine dead: speakingKey never sets, so the
+                            // loop effect can't re-listen — end it loudly.
+                            endLive("Live session ended (voice output unavailable).")
+                        }
+                    } else {
+                        startVoice()
+                    }
+                } else {
+                    endLive("Live session ended (reply failed).")
+                }
+            } else if (autoSpeak && state.error.isEmpty()) {
+                val last = state.messages.lastOrNull()
+                if (last != null && last.role == "assistant" && last.content.isNotBlank()) {
+                    speakMessage(ttsKeyFor(last), last.content)
+                }
+            }
+        }
+        wasStreaming = state.streaming
+    }
+    // Widget live request (#85): effect placed after startVoice (it calls
+    // it); each generation starts the session once. Same steps as the
+    // toggle (kill turn, arm, listen; handoff rule for the first listen).
+    var consumedLiveGen by remember(tab) { mutableIntStateOf(0) }
+    LaunchedEffect(autoLiveGen) {
+        if (autoLiveGen > consumedLiveGen) {
+            consumedLiveGen = autoLiveGen
+            val handoff = speakingKey != null || state.streaming
+            tts.stop()
+            if (state.streaming) onStop()
+            liveMode = true
+            liveLostOnRotate = true
+            silentRounds = 0
+            if (!interrupt.hasPermission(context)) {
+                micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            } else {
+                micArmed = true
+            }
+            if (!handoff) startVoice()
+        }
+    }
+    // Live loop driver: when the spoken reply fully finishes, listen again.
+    // While it plays, the interrupt detector listens for talk-over.
+    var wasSpeaking by remember(tab) { mutableStateOf(false) }
+    LaunchedEffect(speakingKey, liveMode, micArmed) {
+        if (liveMode && speakingKey != null && micArmed) {
+            // start() false = no mic after all: degrade visibly to
+            // tap-to-talk instead of retrying silently every re-listen.
+            if (!interrupt.start(this)) micArmed = false
+        } else {
+            interrupt.stop()
+        }
+        if (wasSpeaking && speakingKey == null && liveMode) {
+            startVoice()
+        }
+        wasSpeaking = speakingKey != null
+    }
+    LaunchedEffect(listenNonce) {
+        if (listenNonce > 0) startVoice()
     }
     // Surface send failures as a toast too (the inline card keeps details).
     LaunchedEffect(state.error) {
@@ -2330,7 +2508,12 @@ private fun ChatScreen(
                         OutlinedTextField(
                             value = state.pending,
                             onValueChange = onPending,
-                            placeholder = { Text("Ask ${title.lowercase(Locale.ROOT)} anything…") },
+                            placeholder = {
+                                Text(
+                                    if (liveMode) "Live session — speak now…"
+                                    else "Ask ${title.lowercase(Locale.ROOT)} anything…",
+                                )
+                            },
                             modifier = Modifier.weight(1f),
                             maxLines = 4,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -2338,8 +2521,45 @@ private fun ChatScreen(
                             shape = RoundedCornerShape(24.dp),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
+                        // Live mode (#85): continuous talk-listen-talk using the
+                        // same recognizer + TTS. Enabling mid-turn stops it first.
+                        if (liveMode) {
+                            FilledTonalIconButton(onClick = { endLive() }) {
+                                Icon(Icons.Filled.Equalizer, contentDescription = "End live session")
+                            }
+                        } else {
+                            IconButton(
+                                onClick = {
+                                    // speaking-stop and stream-end effects
+                                    // drive the first listen when they fire —
+                                    // launching here too stacks dialogs.
+                                    val handoff = speakingKey != null || state.streaming
+                                    tts.stop()
+                                    if (state.streaming) onStop()
+                                    liveMode = true
+                                    liveLostOnRotate = true
+                                    silentRounds = 0
+                                    if (!interrupt.hasPermission(context)) {
+                                        micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                    } else {
+                                        micArmed = true
+                                    }
+                                    if (!handoff) startVoice()
+                                },
+                                enabled = state.ready,
+                            ) {
+                                Icon(Icons.Filled.Equalizer, contentDescription = "Start live session")
+                            }
+                        }
                         IconButton(
-                            onClick = ::startVoice,
+                            // In a live readout the loop effect starts the
+                            // listen after the cut — launching here too would
+                            // stack two recognizer dialogs.
+                            onClick = if (liveMode && speakingKey != null) {
+                                { tts.stop() }
+                            } else {
+                                stopThen(::startVoice)
+                            },
                             enabled = !state.streaming,
                         ) {
                             Icon(Icons.Filled.Mic, contentDescription = "Voice input")
