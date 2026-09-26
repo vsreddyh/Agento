@@ -5,6 +5,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -20,12 +22,22 @@ data class ChatMessage(
     val content: String,
     /** Epoch millis when the message was created; 0 = unknown (legacy). */
     val ts: Long = 0L,
+    /** Tool names the assistant used for this reply (persisted, [] = unknown). */
+    val tools: List<String> = emptyList(),
+    /** Skill names the assistant used for this reply (heuristic, see ServerApi). */
+    val skills: List<String> = emptyList(),
 )
 
 sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
     data class Done(val fullText: String) : ChatEvent
     data class Error(val message: String) : ChatEvent
+    /** Live tool-start signal from `hermes.tool.progress` SSE frames. */
+    data class ToolProgress(
+        val tool: String,
+        val label: String = "",
+        val status: String = "",
+    ) : ChatEvent
 }
 
 /** Known provider slugs: offline fallback for the dynamic picker (the live
@@ -257,12 +269,18 @@ class ChatApi(context: Context) {
                 gatewayError = gatewayError, syncError = syncError,
             ))
     }
-    /** Streams reply deltas for [messages]; emits Done(fullText) at `[DONE]`. */
+    /** Streams reply deltas for [messages]; emits Done(fullText) at `[DONE]`.
+     * Tool-start visibility comes through as [ChatEvent.ToolProgress] parsed
+     * from the gateway's `hermes.tool.progress` SSE frames. [sessionId] is
+     * sent as `X-Hermes-Session-Id` (blank = omitted) so the turn can be
+     * correlated with `GET api/sessions/{id}/messages` afterwards; the agent
+     * loop itself is unchanged (full history is still sent per request). */
     fun streamChat(
         path: String,
         provider: String,
         model: String,
         messages: List<ChatMessage>,
+        sessionId: String = "",
     ): Flow<ChatEvent> = callbackFlow {
         val base = baseUrl()
         if (base.isEmpty()) {
@@ -282,13 +300,13 @@ class ChatApi(context: Context) {
         payload.put("messages", arr)
         payload.put("stream", true)
         val body = payload.toString().toRequestBody(JSON)
-        val request = Request.Builder()
+        val reqBuilder = Request.Builder()
             .url("$base$path/v1/chat/completions")
             .header("Authorization", "Bearer ${password()}")
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
-            .post(body)
-            .build()
+        if (sessionId.isNotBlank()) reqBuilder.header("X-Hermes-Session-Id", sessionId.trim())
+        val request = reqBuilder.post(body).build()
         val call = http.newCall(request)
         val job = launch(Dispatchers.IO) {
             try {
@@ -305,12 +323,48 @@ class ChatApi(context: Context) {
                     }
                     val full = StringBuilder()
                     // OkHttp in this project has no sse module; parse SSE lines manually.
+                    // `: keepalive` comments and `event:` lines carry no payload.
                     while (!source.exhausted()) {
                         val line = source.readUtf8Line() ?: break
+                        if (line.startsWith(":") || line.startsWith("event:")) continue
                         if (!line.startsWith("data:")) continue
                         val data = line.removePrefix("data:").trim()
                         if (data.isEmpty()) continue
                         if (data == "[DONE]") break
+                        // Tool-progress frames carry {"tool","label",...} and no
+                        // choices array — surface them instead of dropping them.
+                        val progress = runCatching {
+                            val o = JSONObject(data)
+                            if (o.optJSONArray("choices") != null) return@runCatching null
+                            // A real tool name is required: label-only frames
+                            // can't be attributed, so they are skipped rather
+                            // than surfaced under a bogus name.
+                            val tool = o.optString("tool", "").trim()
+                            if (tool.isEmpty()) return@runCatching null
+                            ChatEvent.ToolProgress(
+                                tool = tool,
+                                label = o.optString("label", "").trim(),
+                                status = o.optString("status", "").trim(),
+                            )
+                        }.getOrNull()
+                        if (progress != null) {
+                            trySend(progress)
+                            continue
+                        }
+                        // Gateway error frames ({"error": "..."}) carry no
+                        // choices/tool payload — surface them instead of
+                        // dropping, so the user never sees a bogus
+                        // "empty reply" for a failed turn.
+                        val errMsg = runCatching {
+                            JSONObject(data).optString("error", "").trim()
+                        }.getOrDefault("")
+                        if (errMsg.isNotEmpty()) {
+                            // Terminal: no Done follows (same contract as the
+                            // HTTP-error path), so the consumer must not
+                            // expect further frames for this turn.
+                            trySend(ChatEvent.Error(errMsg))
+                            return@launch
+                        }
                         val delta = runCatching {
                             val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
                             val choice = choices.optJSONObject(0) ?: return@runCatching ""
@@ -337,7 +391,7 @@ class ChatApi(context: Context) {
             job.cancel()
             call.cancel()
         }
-    }
+    }.buffer(Channel.UNLIMITED)
 }
 
 /** Profile dir name backing an app tab (tab keys differ from profile names). */
@@ -350,5 +404,5 @@ fun defaultProfileFor(tab: String): String = when (tab) {
 fun tabTitle(tab: String): String = when (tab) {
     "god" -> "God"
     "story" -> "Story"
-    else -> "Portfolio"
+    else -> "Resume and Portfolio"
 }

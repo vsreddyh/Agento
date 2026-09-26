@@ -60,6 +60,7 @@ warning() { echo "[entrypoint] WARN: $*" >&2; }
 info() { echo "[entrypoint] $*"; }
 
 do_render() {
+    local home profile cwd
     # ── God (gateway home = Hermes' built-in "default" profile) ──
     export HERMES_CWD="${HERMES_CWD:-/workspace}"
     render_config "$HERMES_HOME"
@@ -67,7 +68,23 @@ do_render() {
     # ── Side profiles (story, resumes) ───────
     for home in "$HERMES_HOME"/profiles/*/; do
         [[ -d "$home" ]] || continue
-        HERMES_CWD="/workspace/$(basename "$home")" render_config "$home"
+        # Story works directly in its lore vault, not an empty per-profile
+        # dir (workspace/story is retired); every other profile keeps the
+        # /workspace/<name> convention. A local `cwd` is used so the
+        # exported HERMES_CWD (god's /workspace) is never mutated — the
+        # gateway process must not inherit the last profile's cwd.
+        # A missing vault clone is warned, not hidden: booting story in an
+        # empty dir risks hallucinated lore colliding with the real clone.
+        profile="$(basename "$home")"
+        case "$profile" in
+            story) cwd="/workspace/portals" ;;
+            *) cwd="/workspace/$profile" ;;
+        esac
+        mkdir -p "$cwd"
+        if [[ -z "$(ls -A "$cwd" 2>/dev/null)" ]]; then
+            warning "cwd $cwd is empty — check the host clone"
+        fi
+        HERMES_CWD="$cwd" render_config "$home"
         # Secret scope: hermes 0.21.4 resolves credentials per profile
         # from <profile>/.env ONLY (never os.environ under multiplexing) —
         # API_SERVER_KEY for chat auth AND the provider keys for model calls.
@@ -80,6 +97,7 @@ do_render() {
             printf 'OPENCODE_ZEN_API_KEY=%s\n' "${OPENCODE_ZEN_API_KEY:-${OPENCODE_API_KEY:-}}"
             printf 'OPENCODE_GO_API_KEY=%s\n' "${OPENCODE_GO_API_KEY:-${OPENCODE_API_KEY:-}}"
         } > "$home/.env"
+        chmod 600 "$home/.env" 2>/dev/null || true
     done
 
     export HERMES_HOME

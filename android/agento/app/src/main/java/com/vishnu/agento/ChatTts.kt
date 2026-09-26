@@ -13,7 +13,7 @@ import java.util.Locale
  * manifest entry is needed either).
  *
  * One instance is hoisted at the activity level and shared by
- * God/Story/Portfolio; each tab's [ChatScreen] stops it when the tab
+ * God/Story/Resume and Portfolio; each tab's [ChatScreen] stops it when the tab
  * is left or a new message is sent.
  */
 class ChatTts(context: Context) {

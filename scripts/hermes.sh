@@ -243,7 +243,17 @@ cmd_init() {
     chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" "$REPO/workspace" "$GATEWAY_HOME" 2>/dev/null || true
     local b
     for b in "${BOTS[@]}"; do
-        mkdir -p "$(profile_home "$b")" "$REPO/workspace/$b"
+        mkdir -p "$(profile_home "$b")"
+        # Story lives in the portals vault, not workspace/story (retired) —
+        # never recreate it; every other bot keeps workspace/<name>.
+        if [[ "$b" == "story" ]]; then
+            mkdir -p "$REPO/workspace/portals"
+            # Retired dir: rmdir only removes it when empty, so this can
+            # never delete real content — manual deletion also stays safe.
+            rmdir "$REPO/workspace/story" 2>/dev/null || true
+        else
+            mkdir -p "$REPO/workspace/$b"
+        fi
     done
     # Fix ownership before cloning: when run via sudo, dirs are root-owned and
     # clone as $SUDO_USER would get Permission denied. Do it now, not after.
@@ -255,7 +265,7 @@ cmd_init() {
     # auth needs a key on this host — set it up before init). The container
     # commits locally only; pull/push happen here on the host. Both repos stay
     # as separate git remotes; this repo does NOT vendor their files.
-    #  - vsreddyh/portals → workspace/portals (story bot lore vault; story cwd is workspace/story)
+    #  - vsreddyh/portals → workspace/portals (story bot lore vault AND story cwd)
     #  - vsreddyh/Resume  → workspace/resumes  (resumes bot cwd IS the repo)
     # The host key at ~/.ssh (or $SUDO_USER's ~/.ssh when run with sudo)
     # is reused — no key generation. Add the deploy key to ~/.ssh before
