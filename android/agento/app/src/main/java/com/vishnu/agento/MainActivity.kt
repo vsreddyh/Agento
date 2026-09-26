@@ -103,13 +103,13 @@ class ChatViewModelFactory(
 }
 
 /** Sidebar destinations; first three map 1:1 to gateway profiles.
- * Order is God, Story, Portfolio (#53); the resumes profile shows as
- * "Portfolio" (#54) but the tab key (prefs, files, profile path) is
+ * Order is God, Story, Resume and Portfolio (#53); the resumes profile shows as
+ * "Resume and Portfolio" (#54) but the tab key (prefs, files, profile path) is
  * unchanged so backend mapping never breaks. */
 private enum class Destination(val title: String) {
     God("God"),
     Story("Story"),
-    Portfolio("Portfolio"),
+    Portfolio("Resume and Portfolio"),
     Tasks("Tasks"),
     Storage("Storage"),
     Scheduler("Scheduler"),
@@ -193,7 +193,7 @@ class MainActivity : ComponentActivity() {
                     // on every navigation so model picks show up immediately.
                     val prefs = context.getSharedPreferences(
                         AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-                    // Built-in TTS: one engine shared by God/Story/Portfolio,
+                    // Built-in TTS: one engine shared by God/Story/Resume and Portfolio,
                     // shut down with the activity. Auto-read is a single
                     // global toggle (prefs `tts_auto`) in each chat's bar.
                     val tts = remember { ChatTts(context) }
@@ -243,7 +243,7 @@ class MainActivity : ComponentActivity() {
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
                                 Destination.Portfolio -> ChatTab(
-                                    app = application, tab = "resumes", title = "Portfolio", wc = wc,
+                                    app = application, tab = "resumes", title = "Resume and Portfolio", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
                                     onAutoSpeak = {
                                         autoSpeak = it
@@ -1673,7 +1673,7 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
 
     LaunchedEffect(profile) { load() }
 
-    val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Portfolio")
+    val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Resume and Portfolio")
     // UI hides explicitly-off toolsets only; unknown toggle state (null)
     // stays visible so flag-less server shapes never blank the section.
     val visibleToolsets = remember(toolsets) { toolsets.filter { it.enabled != false } }
@@ -2203,7 +2203,7 @@ private fun ChatScreen(
         wasStreaming = state.streaming
     }
     // Built-in Android speech-to-text (RecognizerIntent — no extra
-    // permission or dependency). Shared by God/Story/Portfolio: all three
+    // permission or dependency). Shared by God/Story/Resume and Portfolio: all three
     // tabs render this one ChatScreen, so one mic covers all chats.
     val voiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -2968,7 +2968,7 @@ private fun UsageSection() {
             listOf(
                 Triple("god", "God", "default"),
                 Triple("story", "Story", "story"),
-                Triple("resumes", "Portfolio", "resumes"),
+                Triple("resumes", "Resume and Portfolio", "resumes"),
             ).map { (tab, label, _) ->
                 val threads = ChatThreads.load(context, tab)
                 UsageRow(
