@@ -97,6 +97,17 @@ do_render() {
             printf 'OPENCODE_ZEN_API_KEY=%s\n' "${OPENCODE_ZEN_API_KEY:-${OPENCODE_API_KEY:-}}"
             printf 'OPENCODE_GO_API_KEY=%s\n' "${OPENCODE_GO_API_KEY:-${OPENCODE_API_KEY:-}}"
         } > "$home/.env"
+        # The gateway runs as the hermes user (UID 10000), not root: a
+        # fresh .env created above is root-owned and unreadable to it,
+        # which fails chat auth (no profile-scoped API_SERVER_KEY) and
+        # terminal policy. Existing files keep their owner on rewrite;
+        # chown covers the fresh-create case. Warn-but-continue when the
+        # hermes user is absent (non-container test runs).
+        if _hermes_uid="$(id -u hermes 2>/dev/null)"; then
+            chown "$_hermes_uid:${HERMES_GID:-10000}" "$home/.env"
+        else
+            warning "hermes user absent — $home/.env keeps current owner"
+        fi
         chmod 600 "$home/.env" 2>/dev/null || true
     done
 
