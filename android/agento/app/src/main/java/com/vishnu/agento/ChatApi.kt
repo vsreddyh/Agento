@@ -109,14 +109,30 @@ class ChatApi(context: Context) {
     fun modelFor(tab: String): String =
         (prefs.getString("model_$tab", "") ?: "").trim()
 
+    /**
+     * Reasoning effort for a tab+model pair; blank means unset (the gateway
+     * applies its own default). Per-model memory first
+     * (`effort_<tab>_<model>`), falling back to the tab's last pick
+     * (`effort_<tab>`) so a stored value survives a model catalog refresh.
+     */
+    fun effortFor(tab: String, model: String): String {
+        val m = model.trim()
+        if (m.isNotEmpty()) {
+            val perModel = (prefs.getString("effort_${tab}_$m", "") ?: "").trim()
+            if (perModel.isNotEmpty()) return perModel
+        }
+        return (prefs.getString("effort_$tab", "") ?: "").trim()
+    }
+
     fun setChatConfig(
         baseUrl: String,
         password: String,
         tab: String,
         provider: String,
         model: String,
+        effort: String = "",
     ) {
-        prefs.edit()
+        val edit = prefs.edit()
             .putString("server_base_url", baseUrl.trim().trimEnd('/'))
             .putString("app_password", password.trim())
             .remove("api_base_url") // legacy: unified key is written above
@@ -124,7 +140,12 @@ class ChatApi(context: Context) {
             .remove("path_$tab") // legacy: path field removed, defaults apply
             .putString("provider_$tab", provider.trim())
             .putString("model_$tab", model.trim())
-            .apply()
+        val e = effort.trim().lowercase()
+        if (e.isNotEmpty()) {
+            edit.putString("effort_$tab", e)
+            if (model.trim().isNotEmpty()) edit.putString("effort_${tab}_${model.trim()}", e)
+        }
+        edit.apply()
     }
 
     /** Fetches the Hermes provider-aware picker inventory that backs the
@@ -281,6 +302,7 @@ class ChatApi(context: Context) {
         model: String,
         messages: List<ChatMessage>,
         sessionId: String = "",
+        effort: String = "",
     ): Flow<ChatEvent> = callbackFlow {
         val base = baseUrl()
         if (base.isEmpty()) {
@@ -293,6 +315,15 @@ class ChatApi(context: Context) {
         // (legacy configs predate required selection).
         if (provider.isNotEmpty()) payload.put("provider", provider)
         if (model.isNotEmpty()) payload.put("model", model)
+        // Per-request reasoning override: the gateway translates
+        // model_options.reasoning_effort into the agent's reasoning config
+        // (unknown values are ignored server-side; blank = server default).
+        if (effort.trim().isNotEmpty()) {
+            payload.put(
+                "model_options",
+                JSONObject().put("reasoning_effort", effort.trim().lowercase()),
+            )
+        }
         val arr = JSONArray()
         for (m in messages) {
             arr.put(JSONObject().put("role", m.role).put("content", m.content))

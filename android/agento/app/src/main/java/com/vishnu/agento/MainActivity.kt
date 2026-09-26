@@ -240,10 +240,20 @@ class MainActivity : ComponentActivity() {
                         mutableStateOf(prefs.getBoolean("tts_auto", false))
                     }
                     val tabModels = remember(dest, section) {
+                        // Drawer subtitles: model plus its effort pick, so the
+                        // active reasoning level is visible without reopening
+                        // the picker. Blank effort = server default (medium).
+                        fun sub(tab: String): String {
+                            val m = (prefs.getString("model_$tab", "") ?: "").trim()
+                            if (m.isEmpty()) return ""
+                            val e = (prefs.getString("effort_${tab}_$m", "") ?: "").trim()
+                                .ifEmpty { (prefs.getString("effort_$tab", "") ?: "").trim() }
+                            return if (e.isEmpty()) m else "$m · $e"
+                        }
                         mapOf(
-                            "god" to (prefs.getString("model_god", "") ?: "").trim(),
-                            "story" to (prefs.getString("model_story", "") ?: "").trim(),
-                            "resumes" to (prefs.getString("model_resumes", "") ?: "").trim(),
+                            "god" to sub("god"),
+                            "story" to sub("story"),
+                            "resumes" to sub("resumes"),
                         )
                     }
                     fun drawerModel(d: Destination): String? = when (d) {
@@ -2109,6 +2119,7 @@ private fun TabModelSheet(
     val context = LocalContext.current
     var provider by remember { mutableStateOf("") }
     var model by remember { mutableStateOf("") }
+    var effort by remember { mutableStateOf("") }
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
@@ -2118,6 +2129,7 @@ private fun TabModelSheet(
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         provider = (prefs.getString("provider_$tab", "") ?: "").trim()
         model = (prefs.getString("model_$tab", "") ?: "").trim()
+        effort = ChatApi(context).effortFor(tab, model).ifEmpty { EffortCatalog.defaultFor(model) }
         val api = ChatApi(context)
         catalog = runCatching {
             api.fetchCatalog(catalogPath(api)).getOrThrow()
@@ -2127,9 +2139,9 @@ private fun TabModelSheet(
         }
         loading = false
     }
-    fun save(p: String, m: String) {
+    fun save(p: String, m: String, e: String) {
         val api = ChatApi(context)
-        api.setChatConfig(api.baseUrl(), api.password(), tab, p, m)
+        api.setChatConfig(api.baseUrl(), api.password(), tab, p, m, e)
         onChanged()
     }
     ModalBottomSheet(onDismissRequest = onClose) {
@@ -2153,7 +2165,7 @@ private fun TabModelSheet(
                     if (it != provider) model = ""
                     provider = it
                     error = ""
-                    save(provider, model)
+                    save(provider, model, effort)
                 },
             )
             Spacer(modifier = Modifier.height(8.dp))
@@ -2163,10 +2175,32 @@ private fun TabModelSheet(
                 options = modelOptionsFor(options, provider).map { m -> m to m },
                 onPick = {
                     model = it
+                    // Each model has its own effort vocabulary: restore this
+                    // model's saved pick, else its sensible default.
+                    effort = ChatApi(context).effortFor(tab, model)
+                        .ifEmpty { EffortCatalog.defaultFor(model) }
                     error = ""
-                    save(provider, model)
+                    save(provider, model, effort)
                 },
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            // Reasoning effort: options depend on the selected model
+            // (toggle families offer none/high, graded families offer levels).
+            val effortOptions = EffortCatalog.optionsFor(model)
+            OptionMenu(
+                label = "Effort",
+                shown = effort.ifEmpty { EffortCatalog.defaultFor(model) },
+                options = effortOptions.map { e -> e to EffortCatalog.labelFor(e) },
+                onPick = {
+                    effort = it
+                    error = ""
+                    save(provider, model, effort)
+                },
+            )
+            if (model.isBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                HintLine("Pick a model to see its effort levels.")
+            }
             Spacer(modifier = Modifier.height(8.dp))
             when {
                 loading -> {

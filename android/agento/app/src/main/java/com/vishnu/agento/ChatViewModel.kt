@@ -25,6 +25,7 @@ private const val UNTITLED = "New conversation"
 data class ChatUiState(
     val provider: String = "",
     val model: String = "",
+    val effort: String = "",
     val path: String = "",
     val messages: List<ChatMessage> = emptyList(),
     val streaming: Boolean = false,
@@ -59,6 +60,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         ChatUiState(
             provider = api.providerFor(tab),
             model = api.modelFor(tab),
+            effort = api.effortFor(tab, api.modelFor(tab)),
             path = api.pathFor(tab),
         )
     )
@@ -93,9 +95,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     fun refreshConfig() {
+        val model = api.modelFor(tab)
         _state.value = _state.value.copy(
             provider = api.providerFor(tab),
-            model = api.modelFor(tab),
+            model = model,
+            effort = api.effortFor(tab, model),
             path = api.pathFor(tab),
         )
     }
@@ -299,13 +303,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Re-read per-tab config at send time so Settings edits apply instantly.
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
+        val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
-        _state.value = _state.value.copy(provider = provider, model = model, path = path)
+        _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path)
         val history = _state.value.messages +
             ChatMessage("user", text, ChatThreads.now())
         _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
         addUsage(sent = text.length)
-        doSend(history, path, provider, model)
+        doSend(history, path, provider, model, effort)
     }
 
     private fun doSend(
@@ -313,6 +318,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         path: String = api.pathFor(tab),
         provider: String = api.providerFor(tab),
         model: String = api.modelFor(tab),
+        effort: String = api.effortFor(tab, model),
     ) {
         _state.value = _state.value.copy(
             streaming = true, error = "",
@@ -327,7 +333,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val liveTools = mutableListOf<String>()
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
-            api.streamChat(path, provider, model, history, runSessionId).collect { event ->
+            api.streamChat(path, provider, model, history, runSessionId, effort).collect { event ->
                 when (event) {
                     is ChatEvent.ToolProgress -> {
                         val name = event.tool.trim()
