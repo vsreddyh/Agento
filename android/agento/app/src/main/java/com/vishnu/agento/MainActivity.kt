@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
@@ -2182,8 +2183,13 @@ private fun ChatScreen(
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val speakingKey by tts.speakingKey.collectAsState()
+    // Live mode (#85): chain the existing one-shot voice input + TTS
+    // readout into a continuous talk-listen-talk loop. No new audio code —
+    // the system recognizer handles silence cutoff per turn.
+    var liveMode by remember { mutableStateOf(false) }
+    var silentRounds by remember { mutableIntStateOf(0) }
     // Leaving the tab cuts speech (one shared engine for all three tabs).
-    DisposableEffect(Unit) { onDispose { tts.stop() } }
+    DisposableEffect(Unit) { onDispose { liveMode = false; tts.stop() } }
     /** Every send-type action cuts speech first. */
     fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
     fun speakMessage(key: String, text: String) {
@@ -2191,31 +2197,44 @@ private fun ChatScreen(
             scope.launch { snackbar.showSnackbar("Voice output unavailable.") }
         }
     }
-    // Auto-read: when a reply finishes cleanly while the toggle is on, speak it.
-    var wasStreaming by remember { mutableStateOf(false) }
-    LaunchedEffect(state.streaming) {
-        if (wasStreaming && !state.streaming && autoSpeak && state.error.isEmpty()) {
-            val last = state.messages.lastOrNull()
-            if (last != null && last.role == "assistant" && last.content.isNotBlank()) {
-                speakMessage(ttsKeyFor(last), last.content)
-            }
-        }
-        wasStreaming = state.streaming
+    fun endLive(reason: String? = null) {
+        liveMode = false
+        silentRounds = 0
+        tts.stop()
+        if (reason != null) scope.launch { snackbar.showSnackbar(reason) }
     }
+    // Reply/TTS loop effects are defined after startVoice below (they call it).
     // Built-in Android speech-to-text (RecognizerIntent — no extra
     // permission or dependency). Shared by God/Story/Resume and Portfolio: all three
     // tabs render this one ChatScreen, so one mic covers all chats.
     val voiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val heard = result.data
+        val heard = if (result.resultCode == Activity.RESULT_OK) {
+            result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
                 ?.firstOrNull()?.trim().orEmpty()
-            if (heard.isNotEmpty()) {
-                val cur = state.pending
-                onPending(if (cur.isBlank()) heard else "${cur.trimEnd()} $heard")
+        } else {
+            ""
+        }
+        if (liveMode) {
+            // Checked at result time: toggling live off mid-listen just
+            // drops back to the plain pending-text path below.
+            if (heard.isEmpty()) {
+                // Silent round (no speech or cancelled): 3 strikes ends it.
+                silentRounds++
+                if (silentRounds >= 3) endLive("Live session ended (no speech).")
+                else startVoice()
+            } else if (heard.trimEnd('.', '!', '?').equals("stop", ignoreCase = true)) {
+                endLive()
+            } else {
+                silentRounds = 0
+                onPending(heard)
+                onSend()
             }
+        } else if (heard.isNotEmpty()) {
+            val cur = state.pending
+            onPending(if (cur.isBlank()) heard else "${cur.trimEnd()} $heard")
         }
     }
     fun startVoice() {
@@ -2235,6 +2254,40 @@ private fun ChatScreen(
         } catch (e: ActivityNotFoundException) {
             scope.launch { snackbar.showSnackbar("No voice input app found.") }
         }
+    }
+    // Auto-read: when a reply finishes cleanly while the toggle is on, speak it.
+    // In live mode the reply is always spoken (independent of the toggle).
+    var wasStreaming by remember { mutableStateOf(false) }
+    LaunchedEffect(state.streaming) {
+        if (wasStreaming && !state.streaming) {
+            if (liveMode) {
+                if (state.error.isEmpty()) {
+                    silentRounds = 0
+                    val last = state.messages.lastOrNull()
+                    if (last != null && last.role == "assistant" && last.content.isNotBlank()) {
+                        speakMessage(ttsKeyFor(last), last.content)
+                    } else {
+                        startVoice()
+                    }
+                } else {
+                    endLive("Live session ended (reply failed).")
+                }
+            } else if (autoSpeak && state.error.isEmpty()) {
+                val last = state.messages.lastOrNull()
+                if (last != null && last.role == "assistant" && last.content.isNotBlank()) {
+                    speakMessage(ttsKeyFor(last), last.content)
+                }
+            }
+        }
+        wasStreaming = state.streaming
+    }
+    // Live loop driver: when the spoken reply fully finishes, listen again.
+    var wasSpeaking by remember { mutableStateOf(false) }
+    LaunchedEffect(speakingKey) {
+        if (wasSpeaking && speakingKey == null && liveMode) {
+            startVoice()
+        }
+        wasSpeaking = speakingKey != null
     }
     // Surface send failures as a toast too (the inline card keeps details).
     LaunchedEffect(state.error) {
@@ -2330,7 +2383,12 @@ private fun ChatScreen(
                         OutlinedTextField(
                             value = state.pending,
                             onValueChange = onPending,
-                            placeholder = { Text("Ask ${title.lowercase(Locale.ROOT)} anything…") },
+                            placeholder = {
+                                Text(
+                                    if (liveMode) "Live session — speak now…"
+                                    else "Ask ${title.lowercase(Locale.ROOT)} anything…",
+                                )
+                            },
                             modifier = Modifier.weight(1f),
                             maxLines = 4,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -2338,8 +2396,28 @@ private fun ChatScreen(
                             shape = RoundedCornerShape(24.dp),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
+                        // Live mode (#85): continuous talk-listen-talk using the
+                        // same recognizer + TTS. Enabling mid-turn stops it first.
+                        if (liveMode) {
+                            FilledTonalIconButton(onClick = { endLive() }) {
+                                Icon(Icons.Filled.Equalizer, contentDescription = "End live session")
+                            }
+                        } else {
+                            IconButton(
+                                onClick = {
+                                    tts.stop()
+                                    if (state.streaming) onStop()
+                                    liveMode = true
+                                    silentRounds = 0
+                                    startVoice()
+                                },
+                                enabled = state.ready,
+                            ) {
+                                Icon(Icons.Filled.Equalizer, contentDescription = "Start live session")
+                            }
+                        }
                         IconButton(
-                            onClick = ::startVoice,
+                            onClick = stopThen(::startVoice),
                             enabled = !state.streaming,
                         ) {
                             Icon(Icons.Filled.Mic, contentDescription = "Voice input")
