@@ -42,3 +42,9 @@ file the fact touches, keep the canon consistent, and commit + push to GitHub.
 3. Commit with clear messages (`feat(lore):`, `docs(characters):`,
    `fix(timeline):`).
 4. Push to origin after each update.
+
+## Communication (i-have-adhd skill)
+
+The user has ADHD. Apply the `i-have-adhd` project skill to every reply:
+action-first, numbered steps, no preamble, no closers. Restate state each
+turn; give specific time estimates.

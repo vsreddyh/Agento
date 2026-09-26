@@ -39,3 +39,10 @@ what was edited.
 
 Free-form natural language. Read the JD, read the master, produce the tailored
 `.tex`, compile to `exports/`, and report the changelog.
+
+## Communication (i-have-adhd skill)
+
+The user has ADHD. Apply the `i-have-adhd` project skill to every reply:
+action-first, numbered steps, no preamble, no closers. Restate state each
+turn; give specific time estimates. (The changelog stays, but keep it capped:
+5 items max, must-vs-nice split if longer.)
