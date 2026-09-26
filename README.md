@@ -56,6 +56,7 @@ Retention ───────────────► one-shot container (c
 - **SSH Key Pair**: Configured in `~/.ssh` with read/write access to private GitHub repos for Git-backed bots:
   - `git@github.com:vsreddyh/portals.git` (Story bot lore vault)
   - `git@github.com:vsreddyh/Resume.git` (Resumes bot CV repository)
+  - Bootstrap order matters: the gateway bind-mounts `id_ed25519`(.pub) + `known_hosts` read-only and **fails to start without them** — provision keys before the first `./scripts/hermes.sh start` (set `VPS_SSH_DIR` in `.env` if the VPS user isn't root).
 
 ### Required External Services & API Keys
 - **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai). One key for the single `opencode-go` provider, selected per request in app Settings (model `mimo-v2.6-flash`).
