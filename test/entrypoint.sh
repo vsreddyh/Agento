@@ -90,13 +90,18 @@ do_render() {
         # API_SERVER_KEY for chat auth AND the provider keys for model calls.
         # Rendered from the shared env (fail-fast above guarantees PASSWORD;
         # provider keys come from compose); regenerated every start,
-        # git-ignored, nothing extra to rotate.
-        {
-            printf 'API_SERVER_KEY=%s\n' "$PASSWORD"
-            printf 'OPENCODE_API_KEY=%s\n' "${OPENCODE_API_KEY:-}"
-            printf 'OPENCODE_ZEN_API_KEY=%s\n' "${OPENCODE_ZEN_API_KEY:-${OPENCODE_API_KEY:-}}"
-            printf 'OPENCODE_GO_API_KEY=%s\n' "${OPENCODE_GO_API_KEY:-${OPENCODE_API_KEY:-}}"
-        } > "$home/.env"
+        # git-ignored, nothing extra to rotate. umask 077: `>` creates with
+        # the ambient umask (often 644) before chmod 600 tightens it —
+        # no world-readable window for secrets on fresh create.
+        (
+            umask 077
+            {
+                printf 'API_SERVER_KEY=%s\n' "$PASSWORD"
+                printf 'OPENCODE_API_KEY=%s\n' "${OPENCODE_API_KEY:-}"
+                printf 'OPENCODE_ZEN_API_KEY=%s\n' "${OPENCODE_ZEN_API_KEY:-${OPENCODE_API_KEY:-}}"
+                printf 'OPENCODE_GO_API_KEY=%s\n' "${OPENCODE_GO_API_KEY:-${OPENCODE_API_KEY:-}}"
+            } > "$home/.env"
+        )
         # The gateway runs as the hermes user (UID 10000), not root: a
         # fresh .env created above is root-owned and unreadable to it,
         # which fails chat auth (no profile-scoped API_SERVER_KEY) and
@@ -104,7 +109,8 @@ do_render() {
         # chown covers the fresh-create case. Warn-but-continue when the
         # hermes user is absent (non-container test runs).
         if _hermes_uid="$(id -u hermes 2>/dev/null)"; then
-            chown "$_hermes_uid:${HERMES_GID:-10000}" "$home/.env"
+            chown "$_hermes_uid:${HERMES_GID:-10000}" "$home/.env" \
+                || warning "chown failed for $home/.env (continuing)"
         else
             warning "hermes user absent — $home/.env keeps current owner"
         fi
