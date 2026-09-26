@@ -5,6 +5,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -349,6 +351,17 @@ class ChatApi(context: Context) {
                             trySend(progress)
                             continue
                         }
+                        // Gateway error frames ({"error": "..."}) carry no
+                        // choices/tool payload — surface them instead of
+                        // dropping, so the user never sees a bogus
+                        // "empty reply" for a failed turn.
+                        val errMsg = runCatching {
+                            JSONObject(data).optString("error", "").trim()
+                        }.getOrDefault("")
+                        if (errMsg.isNotEmpty()) {
+                            trySend(ChatEvent.Error(errMsg))
+                            continue
+                        }
                         val delta = runCatching {
                             val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
                             val choice = choices.optJSONObject(0) ?: return@runCatching ""
@@ -375,7 +388,7 @@ class ChatApi(context: Context) {
             job.cancel()
             call.cancel()
         }
-    }
+    }.buffer(Channel.UNLIMITED)
 }
 
 /** Profile dir name backing an app tab (tab keys differ from profile names). */

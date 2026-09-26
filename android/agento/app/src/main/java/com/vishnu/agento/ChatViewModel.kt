@@ -237,12 +237,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val who = if (m.role == "user") "You" else "Assistant"
             sb.append("**$who:** ${m.content.trim()}\n\n")
             if (m.role != "user" && (m.tools.isNotEmpty() || m.skills.isNotEmpty())) {
-                // Backticked so a tool/skill name can never break the export's Markdown.
+                // Backticked so a tool/skill name can never break the export's
+                // Markdown; inner backticks are quoted first so the fence holds.
                 val used = listOf(
                     m.tools.takeIf { it.isNotEmpty() }
-                        ?.let { "tools: " + it.joinToString(", ") { n -> "`$n`" } },
+                        ?.let { "tools: " + it.joinToString(", ") { n -> "`${n.replace("`", "'")}`" } },
                     m.skills.takeIf { it.isNotEmpty() }
-                        ?.let { "skills: " + it.joinToString(", ") { n -> "`$n`" } },
+                        ?.let { "skills: " + it.joinToString(", ") { n -> "`${n.replace("`", "'")}`" } },
                 ).filterNotNull().joinToString(" · ")
                 sb.append("_Used $used._\n\n")
             }
@@ -330,7 +331,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 when (event) {
                     is ChatEvent.ToolProgress -> {
                         val name = event.tool.trim()
-                        if (name.isNotEmpty() && name !in liveTools) liveTools.add(name)
+                        // Capped during collection: a flood of frames must
+                        // not grow this unbounded before Done caps at 20.
+                        if (name.isNotEmpty() && name !in liveTools && liveTools.size < 20) {
+                            liveTools.add(name)
+                        }
                         _state.value = _state.value.copy(
                             activeTools = liveTools.toList(),
                             // Keep the last non-empty label; frames
