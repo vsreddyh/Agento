@@ -169,6 +169,9 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 	default:
 		return nil, fail("state must be open|done|all, got '%s'", state)
 	}
+	if overdue && state != "open" {
+		return nil, fail("overdue only applies to state=open, got state='%s'", state)
+	}
 	if overdue {
 		filt["completedAt"] = nil
 		filt["due_date"] = bson.M{"$ne": "", "$lt": time.Now().Format("2006-01-02")}
@@ -312,18 +315,24 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, error)
 }
 
 // Reopen clears completion (completedAt + expiresAt), making it open again.
+// Errors on unknown ids and on tasks that are already open.
 func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
 		return nil, fail("bad id '%s'", id)
 	}
-	res, err := s.tasks.UpdateOne(ctx, bson.M{"_id": oid},
+	res, err := s.tasks.UpdateOne(ctx,
+		bson.M{"_id": oid, "completedAt": bson.M{"$ne": nil, "$exists": true}},
 		bson.M{"$unset": bson.M{"completedAt": "", "expiresAt": ""}})
 	if err != nil {
 		return nil, err
 	}
 	if res.MatchedCount == 0 {
-		return nil, fail("unknown task '%s'", id)
+		var doc bson.M
+		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); ferr != nil {
+			return nil, fail("unknown task '%s'", id)
+		}
+		return nil, fail("task '%s' is already open", id)
 	}
 	return s.Get(ctx, id)
 }

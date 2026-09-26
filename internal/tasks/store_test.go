@@ -106,6 +106,9 @@ func TestCompleteReopenDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
+	if _, err := s.Reopen(ctx, id); err == nil {
+		t.Fatal("reopen of an open task must fail")
+	}
 	if _, hasExpiry := open["expiresAt"]; hasExpiry {
 		t.Fatalf("reopen must clear expiresAt: %v", open)
 	}
@@ -172,6 +175,9 @@ func TestOverdueAndTTLIndex(t *testing.T) {
 	rows, err := s.List(ctx, "open", true, "")
 	if err != nil || len(rows) != 1 || rows[0]["name"] != "late" {
 		t.Fatalf("overdue filter: %v %v", rows, err)
+	}
+	if _, err := s.List(ctx, "done", true, ""); err == nil {
+		t.Fatal("overdue with state=done must fail")
 	}
 	cur, err := s.tasks.Indexes().List(ctx)
 	if err != nil {

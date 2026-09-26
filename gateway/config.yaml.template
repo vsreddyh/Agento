@@ -202,4 +202,4 @@ mcp_servers:
 # NOTE: no Playwright MCP — the native browser toolset covers automation
 # (the npx stdio server was redundant weight on every profile).
 
-_config_version: 34
+_config_version: 35
