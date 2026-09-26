@@ -3488,8 +3488,8 @@ private data class UsageRow(
 
 private fun formatTokens(tokens: Long): String {
     return when {
-        tokens >= 1_000_000 -> "%.1fM".format(tokens / 1_000_000.0)
-        tokens >= 1_000 -> "%.1fk".format(tokens / 1_000.0)
+        tokens >= 1_000_000 -> "%.1fM".format(Locale.US, tokens / 1_000_000.0)
+        tokens >= 1_000 -> "%.1fk".format(Locale.US, tokens / 1_000.0)
         else -> "$tokens"
     }
 }

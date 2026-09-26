@@ -135,9 +135,10 @@ object SettingsBackup {
             }
             // Real token totals: JSON numbers only (optLong coerces, so the
             // raw type is checked first like the other allowlists).
+            // Negatives (hand-edited files) clamp to 0 — totals never go below.
             for (k in LONG_KEYS) {
                 if (values.has(k) && values.opt(k) is Number) {
-                    edit.putLong(k, values.optLong(k, 0L))
+                    edit.putLong(k, maxOf(0L, values.optLong(k, 0L)))
                     applied++
                 }
             }

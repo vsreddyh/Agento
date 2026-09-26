@@ -9,14 +9,7 @@ data class UsageTotals(
     val total: Long = 0L,
     /** Turns whose stream reported usable counts (failed/zero turns excluded). */
     val turns: Long = 0L,
-) {
-    operator fun plus(other: UsageTotals) = UsageTotals(
-        prompt = prompt + other.prompt,
-        completion = completion + other.completion,
-        total = total + other.total,
-        turns = turns + other.turns,
-    )
-}
+)
 
 /**
  * Real token totals parsed from each turn's SSE `usage` object (see
@@ -56,7 +49,9 @@ object UsageStore {
     fun loadAll(context: Context): Map<String, UsageTotals> =
         TABS.associateWith { load(context, it) }
 
-    /** Adds one turn's counts; no-op when [usage] carries nothing usable. */
+    /** Adds one turn's counts; no-op when [usage] carries nothing usable.
+     * Read-modify-write on shared prefs: two tabs finishing a turn at the
+     * same instant can lose an increment — acceptable at this volume. */
     fun add(context: Context, tab: String, usage: TokenUsage) {
         if (usage.prompt <= 0 && usage.completion <= 0 && usage.total <= 0) return
         val p = prefs(context)

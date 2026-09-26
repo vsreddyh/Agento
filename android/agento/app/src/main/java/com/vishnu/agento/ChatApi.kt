@@ -63,10 +63,17 @@ fun parseTokenUsage(o: JSONObject): TokenUsage? {
     fun num(vararg keys: String): Long {
         for (k in keys) {
             if (src.isNull(k)) continue
-            val raw = src.opt(k)
-            if (raw is Number) {
-                val v = raw.toLong()
-                if (v > 0) return v
+            when (val raw = src.opt(k)) {
+                is Number -> {
+                    val v = raw.toLong()
+                    if (v > 0) return v
+                }
+                // Some proxies serialize counts as strings; accept clean
+                // integers rather than dropping the turn silently.
+                is String -> {
+                    val v = raw.trim().toLongOrNull()
+                    if (v != null && v > 0) return v
+                }
             }
         }
         return 0L
