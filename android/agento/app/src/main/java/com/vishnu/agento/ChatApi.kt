@@ -109,14 +109,38 @@ class ChatApi(context: Context) {
     fun modelFor(tab: String): String =
         (prefs.getString("model_$tab", "") ?: "").trim()
 
+    /**
+     * Reasoning effort for a tab+model pair; blank means unset (the gateway
+     * applies its own default). Per-model memory first
+     * (`effort_<tab>_<model>`), falling back to the tab's last pick
+     * (`effort_<tab>`). The stored value is clamped to the model's own
+     * vocabulary — a pick saved for a graded model (e.g. `max`) is invalid
+     * on a toggle model (`none`/`high`) and reads back as blank so callers
+     * fall through to the model's default instead of showing/sending a
+     * level the model can't speak.
+     */
+    fun effortFor(tab: String, model: String): String {
+        val m = model.trim()
+        var stored = ""
+        if (m.isNotEmpty()) {
+            stored = (prefs.getString("effort_${tab}_$m", "") ?: "").trim().lowercase()
+        }
+        if (stored.isEmpty()) {
+            stored = (prefs.getString("effort_$tab", "") ?: "").trim().lowercase()
+        }
+        if (stored.isEmpty() || m.isEmpty()) return stored
+        return stored.takeIf { it in EffortCatalog.optionsFor(m) } ?: ""
+    }
+
     fun setChatConfig(
         baseUrl: String,
         password: String,
         tab: String,
         provider: String,
         model: String,
+        effort: String = "",
     ) {
-        prefs.edit()
+        val edit = prefs.edit()
             .putString("server_base_url", baseUrl.trim().trimEnd('/'))
             .putString("app_password", password.trim())
             .remove("api_base_url") // legacy: unified key is written above
@@ -124,7 +148,19 @@ class ChatApi(context: Context) {
             .remove("path_$tab") // legacy: path field removed, defaults apply
             .putString("provider_$tab", provider.trim())
             .putString("model_$tab", model.trim())
-            .apply()
+        val e = effort.trim().lowercase()
+        if (e.isNotEmpty()) {
+            // Clamp to the model's vocabulary so a stale tab pick can never
+            // be persisted under a model that can't speak it (reads back via
+            // effortFor, which clamps the same way).
+            val valid = if (model.trim().isEmpty()) e
+                else e.takeIf { it in EffortCatalog.optionsFor(model.trim()) }
+            if (valid != null) {
+                edit.putString("effort_$tab", valid)
+                if (model.trim().isNotEmpty()) edit.putString("effort_${tab}_${model.trim()}", valid)
+            }
+        }
+        edit.apply()
     }
 
     /** Fetches the Hermes provider-aware picker inventory that backs the
@@ -281,6 +317,7 @@ class ChatApi(context: Context) {
         model: String,
         messages: List<ChatMessage>,
         sessionId: String = "",
+        effort: String = "",
     ): Flow<ChatEvent> = callbackFlow {
         val base = baseUrl()
         if (base.isEmpty()) {
@@ -293,6 +330,15 @@ class ChatApi(context: Context) {
         // (legacy configs predate required selection).
         if (provider.isNotEmpty()) payload.put("provider", provider)
         if (model.isNotEmpty()) payload.put("model", model)
+        // Per-request reasoning override: the gateway translates
+        // model_options.reasoning_effort into the agent's reasoning config
+        // (unknown values are ignored server-side; blank = server default).
+        if (effort.trim().isNotEmpty()) {
+            payload.put(
+                "model_options",
+                JSONObject().put("reasoning_effort", effort.trim().lowercase()),
+            )
+        }
         val arr = JSONArray()
         for (m in messages) {
             arr.put(JSONObject().put("role", m.role).put("content", m.content))

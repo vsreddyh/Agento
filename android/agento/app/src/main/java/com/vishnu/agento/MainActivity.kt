@@ -15,6 +15,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -238,11 +239,29 @@ class MainActivity : ComponentActivity() {
                     var autoSpeak by remember {
                         mutableStateOf(prefs.getBoolean("tts_auto", false))
                     }
-                    val tabModels = remember(dest, section) {
+                    // Bumped whenever a model/effort pick saves, so the
+                    // drawer subtitles below recompute without waiting for
+                    // a navigation (remember(dest, section) alone goes stale).
+                    var drawerTick by remember { mutableIntStateOf(0) }
+                    val tabModels = remember(dest, section, drawerTick) {
+                        // Drawer subtitles: model plus its effort pick, so the
+                        // active reasoning level is visible without reopening
+                        // the picker. Blank effort = server default (medium).
+                        fun sub(tab: String): String {
+                            val m = (prefs.getString("model_$tab", "") ?: "").trim()
+                            if (m.isEmpty()) return ""
+                            // Clamped like effortFor: a pick saved for another
+                            // model never leaks into this model's subtitle.
+                            val e = (prefs.getString("effort_${tab}_$m", "") ?: "").trim()
+                                .ifEmpty { (prefs.getString("effort_$tab", "") ?: "").trim() }
+                                .lowercase()
+                                .takeIf { it in EffortCatalog.optionsFor(m) }.orEmpty()
+                            return if (e.isEmpty()) m else "$m · $e"
+                        }
                         mapOf(
-                            "god" to (prefs.getString("model_god", "") ?: "").trim(),
-                            "story" to (prefs.getString("model_story", "") ?: "").trim(),
-                            "resumes" to (prefs.getString("model_resumes", "") ?: "").trim(),
+                            "god" to sub("god"),
+                            "story" to sub("story"),
+                            "resumes" to sub("resumes"),
                         )
                     }
                     fun drawerModel(d: Destination): String? = when (d) {
@@ -274,6 +293,7 @@ class MainActivity : ComponentActivity() {
                                         prefs.edit().putBoolean("tts_auto", it).apply()
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
+                                    onConfigChanged = { drawerTick++ },
                                 )
                                 Destination.Story -> ChatTab(
                                     app = application, tab = "story", title = "Story", wc = wc,
@@ -284,6 +304,7 @@ class MainActivity : ComponentActivity() {
                                         prefs.edit().putBoolean("tts_auto", it).apply()
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
+                                    onConfigChanged = { drawerTick++ },
                                 )
                                 Destination.Portfolio -> ChatTab(
                                     app = application, tab = "resumes", title = "Resume and Portfolio", wc = wc,
@@ -294,6 +315,7 @@ class MainActivity : ComponentActivity() {
                                         prefs.edit().putBoolean("tts_auto", it).apply()
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
+                                    onConfigChanged = { drawerTick++ },
                                 )
                                 Destination.Tasks -> TasksScreen(
                                     wc = wc,
@@ -535,6 +557,7 @@ private fun ChatTab(
     onAutoSpeak: (Boolean) -> Unit,
     onMenu: () -> Unit,
     autoLiveGen: Int = 0,
+    onConfigChanged: () -> Unit = {},
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
     // Keyed per tab — otherwise all three tabs would share one ViewModel.
@@ -591,7 +614,8 @@ private fun ChatTab(
     }
     if (showModel) {
         TabModelSheet(app = app, tab = tab, title = title,
-            onChanged = vm::refreshConfig, onClose = { showModel = false })
+            onChanged = { vm.refreshConfig(); onConfigChanged() },
+            onClose = { showModel = false })
     }
 }
 
@@ -2108,6 +2132,7 @@ private fun TabModelSheet(
     val context = LocalContext.current
     var provider by remember { mutableStateOf("") }
     var model by remember { mutableStateOf("") }
+    var effort by remember { mutableStateOf("") }
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
@@ -2117,6 +2142,7 @@ private fun TabModelSheet(
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         provider = (prefs.getString("provider_$tab", "") ?: "").trim()
         model = (prefs.getString("model_$tab", "") ?: "").trim()
+        effort = ChatApi(context).effortFor(tab, model).ifEmpty { EffortCatalog.defaultFor(model) }
         val api = ChatApi(context)
         catalog = runCatching {
             api.fetchCatalog(catalogPath(api)).getOrThrow()
@@ -2126,9 +2152,9 @@ private fun TabModelSheet(
         }
         loading = false
     }
-    fun save(p: String, m: String) {
+    fun save(p: String, m: String, e: String) {
         val api = ChatApi(context)
-        api.setChatConfig(api.baseUrl(), api.password(), tab, p, m)
+        api.setChatConfig(api.baseUrl(), api.password(), tab, p, m, e)
         onChanged()
     }
     ModalBottomSheet(onDismissRequest = onClose) {
@@ -2152,7 +2178,7 @@ private fun TabModelSheet(
                     if (it != provider) model = ""
                     provider = it
                     error = ""
-                    save(provider, model)
+                    save(provider, model, effort)
                 },
             )
             Spacer(modifier = Modifier.height(8.dp))
@@ -2162,10 +2188,36 @@ private fun TabModelSheet(
                 options = modelOptionsFor(options, provider).map { m -> m to m },
                 onPick = {
                     model = it
+                    // Each model has its own effort vocabulary: restore this
+                    // model's saved pick, else its sensible default.
+                    effort = ChatApi(context).effortFor(tab, model)
+                        .ifEmpty { EffortCatalog.defaultFor(model) }
                     error = ""
-                    save(provider, model)
+                    save(provider, model, effort)
                 },
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            // Reasoning effort: options depend on the selected model
+            // (toggle families offer none/high, graded families offer levels).
+            // The shown value is clamped: a pick restored for another model
+            // never displays as valid here.
+            val effortOptions = EffortCatalog.optionsFor(model)
+            val shownEffort = effort.takeIf { it in effortOptions }
+                ?: EffortCatalog.defaultFor(model)
+            OptionMenu(
+                label = "Effort",
+                shown = shownEffort,
+                options = effortOptions.map { e -> e to EffortCatalog.labelFor(e) },
+                onPick = {
+                    effort = it
+                    error = ""
+                    save(provider, model, effort)
+                },
+            )
+            if (model.isBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                HintLine("Pick a model to see its effort levels.")
+            }
             Spacer(modifier = Modifier.height(8.dp))
             when {
                 loading -> {
@@ -2237,6 +2289,9 @@ private fun ChatScreen(
     // semantics are, a session can never bleed into another tab's screen.
     var liveMode by remember(tab) { mutableStateOf(false) }
     var silentRounds by remember(tab) { mutableIntStateOf(0) }
+    // Transient recognizer faults (busy/audio/client overlap) retry without
+    // costing a silent round; capped so a wedged recognizer still ends loudly.
+    var transientRetries by remember(tab) { mutableIntStateOf(0) }
     // Rotation silently kills a live session (remember(tab) state is lost
     // and the rotation guard deliberately doesn't restart it). This flag
     // survives recreation so the user gets told instead of silence.
@@ -2247,10 +2302,6 @@ private fun ChatScreen(
             snackbar.showSnackbar("Live session ended on rotation.")
         }
     }
-    // Deferred listen: the recognizer result handler below runs before
-    // startVoice is declared, so it nudges via nonce and the effect after
-    // startVoice performs the actual listen.
-    var listenNonce by remember(tab) { mutableIntStateOf(0) }
     // Hands-free interrupt (#85): background mic watches for speech while
     // the readout plays; on trigger just cut TTS — the speakingKey effect
     // below starts the recognizer. Needs RECORD_AUDIO; without it the loop
@@ -2258,18 +2309,26 @@ private fun ChatScreen(
     val context = LocalContext.current
     val interrupt = remember(tab) { LiveInterrupt({ scope.launch { tts.stop() } }) }
     var micArmed by remember(tab) { mutableStateOf(interrupt.hasPermission(context)) }
+    // In-app recognizer for live mode (#85): headless, so our overlay
+    // (status + End button) stays visible — the system dialog would cover it.
+    val liveRec = remember(tab) { LiveRecognizer(context) }
+    var livePartial by remember(tab) { mutableStateOf("") }
+    var pendingLiveStart by remember(tab) { mutableStateOf(false) }
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         micArmed = granted
+        // Granted + pending start is consumed by an effect after startLive;
+        // denied clears the pending start with a hint.
         if (!granted) {
+            pendingLiveStart = false
             scope.launch {
-                snackbar.showSnackbar("Live interrupt needs mic access — tap to interrupt instead.")
+                snackbar.showSnackbar("Live mode needs microphone access.")
             }
         }
     }
     DisposableEffect(tab) {
-        onDispose { interrupt.stop(); tts.stop() }
+        onDispose { interrupt.stop(); liveRec.destroy(); tts.stop() }
     }
     /** Every send-type action cuts speech first. */
     fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
@@ -2283,10 +2342,14 @@ private fun ChatScreen(
     fun endLive(reason: String? = null) {
         liveMode = false
         silentRounds = 0
+        transientRetries = 0
         liveLostOnRotate = false
+        livePartial = ""
+        pendingLiveStart = false
         // Stop the detector now — don't rely on the liveMode=false effect
         // round-trip to get around to it.
         interrupt.stop()
+        liveRec.cancel()
         tts.stop()
         if (reason != null) scope.launch { snackbar.showSnackbar(reason) }
     }
@@ -2304,22 +2367,9 @@ private fun ChatScreen(
         } else {
             ""
         }
-        if (liveMode) {
-            // Checked at result time: toggling live off mid-listen just
-            // drops back to the plain pending-text path below.
-            if (heard.isEmpty()) {
-                // Silent round (no speech or cancelled): 3 strikes ends it.
-                silentRounds++
-                if (silentRounds >= 3) endLive("Live session ended (no speech).")
-                else listenNonce++
-            } else if (heard.trimEnd('.', '!', '?').equals("stop", ignoreCase = true)) {
-                endLive()
-            } else {
-                silentRounds = 0
-                onPending(heard)
-                onSend()
-            }
-        } else if (heard.isNotEmpty()) {
+        // One-shot mic only: live sessions listen headless via LiveRecognizer,
+        // so there is no live branch here (its retry path is onNoSpeech/onRetry).
+        if (heard.isNotEmpty()) {
             val cur = state.pending
             onPending(if (cur.isBlank()) heard else "${cur.trimEnd()} $heard")
         }
@@ -2340,8 +2390,76 @@ private fun ChatScreen(
             voiceLauncher.launch(intent)
         } catch (e: ActivityNotFoundException) {
             scope.launch { snackbar.showSnackbar("No voice input app found.") }
-            // No recognizer = no loop: end loudly instead of sticking ON.
-            if (liveMode) endLive("Live session ended (no voice input app).")
+        }
+    }
+    /** One in-app listen cycle for the live loop (overlay stays visible). */
+    fun liveListen() {
+        liveRec.listen()
+    }
+    /** Begins (or resumes) the live session: kill turn, arm, listen. */
+    fun startLive() {
+        if (!liveRec.available()) {
+            endLive("Voice recognition unavailable on this device.")
+            return
+        }
+        pendingLiveStart = false
+        liveRec.cancel()
+        tts.stop()
+        if (state.streaming) onStop()
+        liveMode = true
+        liveLostOnRotate = true
+        silentRounds = 0
+        transientRetries = 0
+        livePartial = ""
+        micArmed = true
+        val handoff = speakingKey != null || state.streaming
+        if (!handoff) liveListen()
+    }
+    // One-shot mic results flow through voiceLauncher below; only live
+    // cycles arrive here. Reassigned each composition so closures stay fresh.
+    fun bindLiveListener() {
+        liveRec.listener = object : LiveRecognizer.Listener {
+            override fun onBegin() {
+                transientRetries = 0
+            }
+            override fun onPartial(text: String) {
+                livePartial = text
+            }
+            override fun onResult(heard: String) {
+                livePartial = ""
+                transientRetries = 0
+                if (!liveMode) {
+                    onPending(heard)
+                    return
+                }
+                if (heard.trimEnd('.', '!', '?').equals("stop", ignoreCase = true)) {
+                    endLive()
+                } else {
+                    silentRounds = 0
+                    onPending(heard)
+                    onSend()
+                }
+            }
+            override fun onNoSpeech() {
+                if (!liveMode) return
+                livePartial = ""
+                transientRetries = 0
+                silentRounds++
+                if (silentRounds >= 3) endLive("Live session ended (no speech).")
+                else liveListen()
+            }
+            override fun onRetry() {
+                if (!liveMode) return
+                transientRetries++
+                if (transientRetries > 5) {
+                    endLive("Voice recognition unavailable — live session ended.")
+                } else {
+                    liveListen()
+                }
+            }
+            override fun onFatal(message: String) {
+                if (liveMode) endLive(message)
+            }
         }
     }
     // Auto-read: when a reply finishes cleanly while the toggle is on, speak it.
@@ -2360,7 +2478,7 @@ private fun ChatScreen(
                             endLive("Live session ended (voice output unavailable).")
                         }
                     } else {
-                        startVoice()
+                        liveListen()
                     }
                 } else {
                     endLive("Live session ended (reply failed).")
@@ -2381,20 +2499,20 @@ private fun ChatScreen(
     LaunchedEffect(autoLiveGen) {
         if (autoLiveGen > consumedLiveGen) {
             consumedLiveGen = autoLiveGen
-            val handoff = speakingKey != null || state.streaming
-            tts.stop()
-            if (state.streaming) onStop()
-            liveMode = true
-            liveLostOnRotate = true
-            silentRounds = 0
             if (!interrupt.hasPermission(context)) {
+                pendingLiveStart = true
                 micPermission.launch(Manifest.permission.RECORD_AUDIO)
             } else {
-                micArmed = true
+                startLive()
             }
-            if (!handoff) startVoice()
         }
     }
+    // Granted mic permission with a pending start fires the session.
+    LaunchedEffect(micArmed) {
+        if (micArmed && pendingLiveStart) startLive()
+    }
+    // Bind recognizer callbacks (after all local funs).
+    bindLiveListener()
     // Live loop driver: when the spoken reply fully finishes, listen again.
     // While it plays, the interrupt detector listens for talk-over.
     var wasSpeaking by remember(tab) { mutableStateOf(false) }
@@ -2407,12 +2525,9 @@ private fun ChatScreen(
             interrupt.stop()
         }
         if (wasSpeaking && speakingKey == null && liveMode) {
-            startVoice()
+            liveListen()
         }
         wasSpeaking = speakingKey != null
-    }
-    LaunchedEffect(listenNonce) {
-        if (listenNonce > 0) startVoice()
     }
     // Surface send failures as a toast too (the inline card keeps details).
     LaunchedEffect(state.error) {
@@ -2530,21 +2645,14 @@ private fun ChatScreen(
                         } else {
                             IconButton(
                                 onClick = {
-                                    // speaking-stop and stream-end effects
-                                    // drive the first listen when they fire —
-                                    // launching here too stacks dialogs.
-                                    val handoff = speakingKey != null || state.streaming
-                                    tts.stop()
-                                    if (state.streaming) onStop()
-                                    liveMode = true
-                                    liveLostOnRotate = true
-                                    silentRounds = 0
+                                    // Mic permission gates the session: the
+                                    // in-app recognizer cannot run without it.
                                     if (!interrupt.hasPermission(context)) {
+                                        pendingLiveStart = true
                                         micPermission.launch(Manifest.permission.RECORD_AUDIO)
                                     } else {
-                                        micArmed = true
+                                        startLive()
                                     }
-                                    if (!handoff) startVoice()
                                 },
                                 enabled = state.ready,
                             ) {
@@ -2552,11 +2660,14 @@ private fun ChatScreen(
                             }
                         }
                         IconButton(
-                            // In a live readout the loop effect starts the
-                            // listen after the cut — launching here too would
-                            // stack two recognizer dialogs.
-                            onClick = if (liveMode && speakingKey != null) {
-                                { tts.stop() }
+                            // Live: cut speech, drop the current listen, start
+                            // fresh (no system dialog exists to stack).
+                            onClick = if (liveMode) {
+                                {
+                                    tts.stop()
+                                    liveRec.cancel()
+                                    if (speakingKey == null) liveListen()
+                                }
                             } else {
                                 stopThen(::startVoice)
                             },
@@ -2759,6 +2870,75 @@ private fun ChatScreen(
                             }
                         }
                     }
+                }
+            }
+        }
+        // Live overlay (#85): status + transcript + an End button that stays
+        // reachable — the in-app recognizer has no system dialog to cover it.
+        if (liveMode) {
+            LiveOverlay(
+                speaking = speakingKey != null,
+                thinking = state.streaming,
+                partial = livePartial,
+                onEnd = { endLive() },
+            )
+        }
+    }
+}
+
+/** Live voice overlay (#85): status + live transcript + a big End button.
+ * Drawn in the Scaffold BoxScope over the chat, so it stays tappable —
+ * the in-app recognizer shows no system dialog to cover it. Taps outside
+ * the card fall through to the chat behind (typing mid-live is allowed). */
+@Composable
+private fun LiveOverlay(
+    speaking: Boolean,
+    thinking: Boolean,
+    partial: String,
+    onEnd: () -> Unit,
+) {
+    val status = when {
+        speaking -> "Speaking…"
+        thinking -> "Thinking…"
+        else -> "Listening…"
+    }
+    Box(
+        modifier = Modifier.fillMaxSize()
+            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(
+                    Icons.Filled.Equalizer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(40.dp),
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(status, style = MaterialTheme.typography.titleLarge)
+                if (partial.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "“$partial”",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(modifier = Modifier.height(20.dp))
+                Button(
+                    onClick = onEnd,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) {
+                    Text("End live session", style = MaterialTheme.typography.titleMedium)
                 }
             }
         }

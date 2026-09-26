@@ -39,6 +39,9 @@ object SettingsBackup {
         for (t in TABS) {
             add("provider_$t")
             add("model_$t")
+            // Current effort pick per tab; per-model memory
+            // (`effort_<tab>_<model>`) is dynamic — see effortKeys() below.
+            add("effort_$t")
         }
         add("server_url")
         add("auth_token")
@@ -49,12 +52,37 @@ object SettingsBackup {
     /** Boolean prefs the app reads. */
     val BOOLEAN_KEYS: List<String> = listOf("first_sync_done", "notify_reply_done")
 
+    /**
+     * True for per-model effort memory keys (`effort_<tab>_<model>` with tab
+     * in [TABS]). Shaped tight so a hand-edited backup can't pollute prefs
+     * with arbitrary `effort_*` keys.
+     */
+    fun isEffortMemoryKey(k: String): Boolean {
+        if (!k.startsWith("effort_")) return false
+        for (t in TABS) {
+            if (k.startsWith("effort_${t}_") && k.length > "effort_${t}_".length) return true
+        }
+        return false
+    }
+
+    /**
+     * Dynamic per-model effort memory keys: present in prefs but unknowable
+     * statically, so they are enumerated live. Only string values are exported.
+     */
+    private fun effortKeys(prefs: android.content.SharedPreferences): List<String> =
+        prefs.all.keys.filter { k ->
+            isEffortMemoryKey(k) && prefs.all[k] is String
+        }.sorted()
+
     /** Serializes all known prefs plus app files; absent keys are omitted (not nulled). */
     fun export(context: Context): JSONObject {
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
         val values = JSONObject()
         for (k in STRING_KEYS) {
             if (prefs.contains(k)) values.put(k, prefs.getString(k, "") ?: "")
+        }
+        for (k in effortKeys(prefs)) {
+            values.put(k, prefs.getString(k, "") ?: "")
         }
         for (k in BOOLEAN_KEYS) {
             if (prefs.contains(k)) values.put(k, prefs.getBoolean(k, false))
@@ -90,6 +118,16 @@ object SettingsBackup {
             for (k in BOOLEAN_KEYS) {
                 if (values.has(k) && values.opt(k) is Boolean) {
                     edit.putBoolean(k, values.optBoolean(k))
+                    applied++
+                }
+            }
+            // Per-model effort memory: same allowlist shape as export
+            // (isEffortMemoryKey, string values only). Unknown keys and
+            // mistyped values are still skipped.
+            val names = values.keys().asSequence().toList()
+            for (k in names) {
+                if (isEffortMemoryKey(k) && values.opt(k) is String) {
+                    edit.putString(k, values.optString(k, ""))
                     applied++
                 }
             }
