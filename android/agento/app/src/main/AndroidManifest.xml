@@ -12,6 +12,11 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Live voice mode (#85): background speech detector that hears the user
+         talking over the readout (hands-free interrupt). The one-shot system
+         recognizer used for transcription needs no permission; without this,
+         live mode still works but interrupt is tap-only. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- In-app updater (Settings → App updates): fires the platform package
          installer for a downloaded release APK (issue #6). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />

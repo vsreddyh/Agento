@@ -2184,12 +2184,31 @@ private fun ChatScreen(
     val scope = rememberCoroutineScope()
     val speakingKey by tts.speakingKey.collectAsState()
     // Live mode (#85): chain the existing one-shot voice input + TTS
-    // readout into a continuous talk-listen-talk loop. No new audio code —
-    // the system recognizer handles silence cutoff per turn.
+    // readout into a continuous talk-listen-talk loop. The system
+    // recognizer handles silence cutoff per turn; LiveInterrupt only
+    // detects talk-over during readout (no transcription).
     var liveMode by remember { mutableStateOf(false) }
     var silentRounds by remember { mutableIntStateOf(0) }
-    // Leaving the tab cuts speech (one shared engine for all three tabs).
-    DisposableEffect(Unit) { onDispose { liveMode = false; tts.stop() } }
+    // Hands-free interrupt (#85): background mic watches for speech while
+    // the readout plays; on trigger just cut TTS — the speakingKey effect
+    // below starts the recognizer. Needs RECORD_AUDIO; without it the loop
+    // still runs tap-to-talk.
+    val context = LocalContext.current
+    val interrupt = remember { LiveInterrupt({ scope.launch { tts.stop() } }) }
+    var micArmed by remember { mutableStateOf(interrupt.hasPermission(context)) }
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        micArmed = granted
+        if (!granted) {
+            scope.launch {
+                snackbar.showSnackbar("Live interrupt needs mic access — tap to interrupt instead.")
+            }
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { liveMode = false; interrupt.stop(); tts.stop() }
+    }
     /** Every send-type action cuts speech first. */
     fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
     fun speakMessage(key: String, text: String) {
@@ -2282,8 +2301,14 @@ private fun ChatScreen(
         wasStreaming = state.streaming
     }
     // Live loop driver: when the spoken reply fully finishes, listen again.
+    // While it plays, the interrupt detector listens for talk-over.
     var wasSpeaking by remember { mutableStateOf(false) }
-    LaunchedEffect(speakingKey) {
+    LaunchedEffect(speakingKey, liveMode, micArmed) {
+        if (liveMode && speakingKey != null && micArmed) {
+            interrupt.start(this)
+        } else {
+            interrupt.stop()
+        }
         if (wasSpeaking && speakingKey == null && liveMode) {
             startVoice()
         }
@@ -2409,6 +2434,11 @@ private fun ChatScreen(
                                     if (state.streaming) onStop()
                                     liveMode = true
                                     silentRounds = 0
+                                    if (!interrupt.hasPermission(context)) {
+                                        micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                    } else {
+                                        micArmed = true
+                                    }
                                     startVoice()
                                 },
                                 enabled = state.ready,
@@ -2417,7 +2447,14 @@ private fun ChatScreen(
                             }
                         }
                         IconButton(
-                            onClick = stopThen(::startVoice),
+                            // In a live readout the loop effect starts the
+                            // listen after the cut — launching here too would
+                            // stack two recognizer dialogs.
+                            onClick = if (liveMode && speakingKey != null) {
+                                { tts.stop() }
+                            } else {
+                                stopThen(::startVoice)
+                            },
                             enabled = !state.streaming,
                         ) {
                             Icon(Icons.Filled.Mic, contentDescription = "Voice input")
