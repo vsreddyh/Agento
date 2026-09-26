@@ -374,12 +374,25 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         }
                     }
                     is ChatEvent.Error -> {
-                        // Drop the empty placeholder on failure.
-                        val msgs = _state.value.messages.dropLast(1)
+                        // Terminal (see streamChat): nothing follows. Keep any
+                        // partial reply with live-seen tools attached; drop
+                        // the placeholder only when it is still empty.
+                        val msgs = _state.value.messages
+                        val last = msgs.lastOrNull()
+                        val kept = if (last?.role == "assistant" && last.content.isNotEmpty()) {
+                            msgs.dropLast(1) + last.copy(
+                                tools = (last.tools + liveTools).distinct().take(20),
+                            )
+                        } else if (last?.role == "assistant") {
+                            msgs.dropLast(1)
+                        } else {
+                            msgs
+                        }
                         _state.value = _state.value.copy(
-                            messages = msgs, streaming = false, error = event.message,
+                            messages = kept, streaming = false, error = event.message,
                             activeTools = emptyList(), activeToolLabel = "",
                         )
+                        if (kept.size == msgs.size) upsertActive(kept)
                         persist()
                         checkReachability()
                     }
@@ -423,6 +436,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (usage.tools.isEmpty() && usage.skills.isEmpty()) return@launch
             val expected = final.ifEmpty { "The assistant sent an empty reply. Try asking again." }
             withContext(Dispatchers.Main) {
+                // A resend issued mid-fetch means a new turn is streaming;
+                // skip so the in-flight placeholder is never persisted.
+                if (_state.value.streaming) return@withContext
                 val fresh = _state.value.messages.toMutableList()
                 var idx = if (doneIndex in fresh.indices) {
                     val m = fresh[doneIndex]

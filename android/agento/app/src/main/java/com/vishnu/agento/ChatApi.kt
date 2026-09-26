@@ -359,8 +359,11 @@ class ChatApi(context: Context) {
                             JSONObject(data).optString("error", "").trim()
                         }.getOrDefault("")
                         if (errMsg.isNotEmpty()) {
+                            // Terminal: no Done follows (same contract as the
+                            // HTTP-error path), so the consumer must not
+                            // expect further frames for this turn.
                             trySend(ChatEvent.Error(errMsg))
-                            continue
+                            return@launch
                         }
                         val delta = runCatching {
                             val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
