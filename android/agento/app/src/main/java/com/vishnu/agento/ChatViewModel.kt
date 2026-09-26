@@ -52,6 +52,7 @@ data class ChatUiState(
 class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     private val api = ChatApi(app)
+    private val serverApi = ServerApi(app)
     private val appCtx: Application = app
 
     private val _state = mutableStateOf(
@@ -236,9 +237,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val who = if (m.role == "user") "You" else "Assistant"
             sb.append("**$who:** ${m.content.trim()}\n\n")
             if (m.role != "user" && (m.tools.isNotEmpty() || m.skills.isNotEmpty())) {
+                // Backticked so a tool/skill name can never break the export's Markdown.
                 val used = listOf(
-                    m.tools.takeIf { it.isNotEmpty() }?.let { "tools: ${it.joinToString(", ")}" },
-                    m.skills.takeIf { it.isNotEmpty() }?.let { "skills: ${it.joinToString(", ")}" },
+                    m.tools.takeIf { it.isNotEmpty() }
+                        ?.let { "tools: " + it.joinToString(", ") { n -> "`$n`" } },
+                    m.skills.takeIf { it.isNotEmpty() }
+                        ?.let { "skills: " + it.joinToString(", ") { n -> "`$n`" } },
                 ).filterNotNull().joinToString(" · ")
                 sb.append("_Used $used._\n\n")
             }
@@ -329,7 +333,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         if (name.isNotEmpty() && name !in liveTools) liveTools.add(name)
                         _state.value = _state.value.copy(
                             activeTools = liveTools.toList(),
-                            activeToolLabel = event.label,
+                            // Keep the last non-empty label; frames
+                            // without one must not blank the indicator.
+                            activeToolLabel = event.label.ifEmpty { _state.value.activeToolLabel },
                         )
                     }
                     is ChatEvent.Delta -> {
@@ -353,7 +359,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         addUsage(recv = final.length)
                         upsertActive(finished)
                         persist()
-                        backfillUsage(path, runSessionId, finishedAt, final)
+                        backfillUsage(path, runSessionId, finishedAt, final, finished.size - 1)
                         // #58: ping the user when a reply lands while the app
                         // is backgrounded (gateway has no cronjobs to report).
                         if (!ForegroundTracker.isForeground) {
@@ -394,20 +400,33 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Post-turn usage fetch: merges server-recorded tools + skills into the
      * finished message so they persist and render as chips. Silent on
-     * failure — the live tools attached at Done stay. The patch applies to
-     * the fresh state (matched by timestamp) so a send made mid-fetch is
-     * never clobbered; a thread switch simply finds no match. */
-    private fun backfillUsage(path: String, sessionId: String, finishedAt: Long, final: String) {
+     * failure — the live tools attached at Done stay. The patch targets the
+     * index captured at Done time (verified by timestamp, with a timestamp
+     * search fallback) so a send made mid-fetch is never clobbered; a thread
+     * switch simply finds no match. */
+    private fun backfillUsage(
+        path: String,
+        sessionId: String,
+        finishedAt: Long,
+        final: String,
+        doneIndex: Int,
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
             val usage = runCatching {
-                ServerApi(appCtx).fetchSessionUsage(path, sessionId).getOrThrow()
+                serverApi.fetchSessionUsage(path, sessionId).getOrThrow()
             }.getOrNull() ?: return@launch
             if (usage.tools.isEmpty() && usage.skills.isEmpty()) return@launch
             val expected = final.ifEmpty { "The assistant sent an empty reply. Try asking again." }
             withContext(Dispatchers.Main) {
                 val fresh = _state.value.messages.toMutableList()
-                val idx = fresh.indexOfLast {
-                    it.role == "assistant" && it.ts == finishedAt && it.content == expected
+                var idx = if (doneIndex in fresh.indices) {
+                    val m = fresh[doneIndex]
+                    if (m.role == "assistant" && m.ts == finishedAt) doneIndex else -1
+                } else -1
+                if (idx < 0) {
+                    idx = fresh.indexOfLast {
+                        it.role == "assistant" && it.ts == finishedAt && it.content == expected
+                    }
                 }
                 if (idx < 0) return@withContext
                 val prev = fresh[idx]
