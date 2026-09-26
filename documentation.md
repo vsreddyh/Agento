@@ -107,7 +107,7 @@ Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered con
 
 ## Remote MongoDB & Storage Model
 
-Domain data for `money`, `health-check`, and `cookbook` is managed in MongoDB (default database: `hermes`, configurable via `MONGODB_DB`):
+Domain data for `money`, `health-check`, `cookbook`, and `task-manager` is managed in MongoDB (default database: `hermes`, configurable via `MONGODB_DB`):
 
 | Collection | Associated Bot | Schema / Keys |
 |---|---|---|
@@ -118,6 +118,7 @@ Domain data for `money`, `health-check`, and `cookbook` is managed in MongoDB (d
 | `cookbook_ingredients` | Cookbook | `name` (unique), `note`, `createdAt` — **permanent** |
 | `cookbook_recipes` | Cookbook | `name` (unique), `servings`, per-serving `kcal/protein_g/carbs_g/fat_g/fiber_g`, `quantities[{ingredient_id, name, qty}]` — **permanent** |
 | `cookbook_cook_log` | Cookbook | `recipe_id`, `date`, `cooking_note`, `aftertaste_note` — **permanent** |
+| `tasks` | Task-manager | `name`, `description`, `due_date`, `due_time`, `estimated_minutes`, `repeat_rule` (verbatim) — no status field; `completedAt` null = open, done tasks TTL 3d via `expiresAt` |
 
 ### Database Helper CLI
 Bots and scripts interact with MongoDB using the `mongo` Go CLI (`cmd/mongo/main.go`, baked into the bot image at `/usr/local/bin/mongo`):
