@@ -9,6 +9,7 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import java.util.Locale
 
 /** One skill from `GET {profile}/v1/skills` (read-only mirror of the dashboard). */
 data class SkillInfo(
@@ -116,7 +117,7 @@ class ServerApi(context: Context) {
                         enabled = optBool(o),
                     ))
                 }
-                out.distinctBy { it.name.lowercase() }.sortedBy { it.name.lowercase() }
+                out.distinctBy { it.name.lowercase(Locale.ROOT) }.sortedBy { it.name.lowercase(Locale.ROOT) }
             }
         }
 
@@ -162,7 +163,7 @@ class ServerApi(context: Context) {
                         tools = tools,
                     ))
                 }
-                out.distinctBy { it.name.lowercase() }.sortedBy { it.name.lowercase() }
+                out.distinctBy { it.name.lowercase(Locale.ROOT) }.sortedBy { it.name.lowercase(Locale.ROOT) }
             }
         }
 
@@ -216,16 +217,19 @@ fun mcpServersFrom(toolsets: List<ToolsetInfo>): List<McpServer> {
     }
     return byServer.map { (name, tools) ->
         McpServer(name, tools.distinct().sorted())
-    }.sortedBy { it.name.lowercase() }
+    }.sortedBy { it.name.lowercase(Locale.ROOT) }
 }
 
 /**
  * Origin split for the Skills screen's two sections.
  *
- * Skills: in-the-box Hermes skills always carry a `category`
+ * Assumption: in-the-box Hermes skills always carry a `category`
  * (e.g. "creative", "web"); project skills (podman-management,
  * git-remote-preflight, …) report null/empty. So non-blank category =
- * default, blank = custom.
+ * default, blank = custom. Bare-string server shapes have no category and
+ * always land in Custom; if the gateway ever omits categories entirely,
+ * the screen falls back to treating every skill as default (see
+ * SkillsScreen's anyCategorized guard) rather than emptying Default.
  */
 fun SkillInfo.isDefault(): Boolean = category.isNotBlank()
 
@@ -243,7 +247,7 @@ private val CUSTOM_MCP_TOOLSET_NAMES = setOf(
  * Derived [McpServer] rows are always custom.
  */
 fun ToolsetInfo.isCustomMcp(): Boolean {
-    val n = name.trim().lowercase()
+    val n = name.trim().lowercase(Locale.ROOT)
     if (n == "mcp" || n.startsWith("mcp-") || n.startsWith("mcp_")) return true
     if (n in CUSTOM_MCP_TOOLSET_NAMES) return true
     if (tools.any { it.startsWith("mcp__") }) return true
@@ -252,25 +256,25 @@ fun ToolsetInfo.isCustomMcp(): Boolean {
 
 /** Case-insensitive search across name + description (+ category/tools). */
 fun SkillInfo.matches(query: String): Boolean {
-    val q = query.trim().lowercase()
+    val q = query.trim().lowercase(Locale.ROOT)
     if (q.isEmpty()) return true
-    return name.lowercase().contains(q)
-        || description.lowercase().contains(q)
-        || category.lowercase().contains(q)
+    return name.lowercase(Locale.ROOT).contains(q)
+        || description.lowercase(Locale.ROOT).contains(q)
+        || category.lowercase(Locale.ROOT).contains(q)
 }
 
 fun ToolsetInfo.matches(query: String): Boolean {
-    val q = query.trim().lowercase()
+    val q = query.trim().lowercase(Locale.ROOT)
     if (q.isEmpty()) return true
-    return name.lowercase().contains(q)
-        || label.lowercase().contains(q)
-        || description.lowercase().contains(q)
-        || tools.any { it.lowercase().contains(q) }
+    return name.lowercase(Locale.ROOT).contains(q)
+        || label.lowercase(Locale.ROOT).contains(q)
+        || description.lowercase(Locale.ROOT).contains(q)
+        || tools.any { it.lowercase(Locale.ROOT).contains(q) }
 }
 
 fun McpServer.matches(query: String): Boolean {
-    val q = query.trim().lowercase()
+    val q = query.trim().lowercase(Locale.ROOT)
     if (q.isEmpty()) return true
-    return name.lowercase().contains(q)
-        || tools.any { it.lowercase().contains(q) }
+    return name.lowercase(Locale.ROOT).contains(q)
+        || tools.any { it.lowercase(Locale.ROOT).contains(q) }
 }

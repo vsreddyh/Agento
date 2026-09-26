@@ -89,6 +89,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 /** Builds per-tab chat ViewModels so story/resumes/god keep isolated history. */
 class ChatViewModelFactory(
@@ -706,7 +707,7 @@ private fun taskRank(status: String): Int =
     TASK_STATUSES.indexOf(status).let { if (it < 0) 2 else it }
 
 /** Maps legacy free-text statuses onto the fixed set (#55). */
-private fun normalizeStatus(raw: String): String = when (raw.trim().lowercase()) {
+private fun normalizeStatus(raw: String): String = when (raw.trim().lowercase(Locale.ROOT)) {
     "doing", "ongoing", "in progress", "in_progress" -> "Ongoing"
     "paused", "pause", "pasued" -> "Paused"
     "done", "complete", "completed" -> "Done"
@@ -768,7 +769,7 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         .filter { filter == "All" || normalizeStatus(it.status) == filter }
         .let { list ->
             when (sort) {
-                TaskSort.Name -> list.sortedBy { it.name.lowercase() }
+                TaskSort.Name -> list.sortedBy { it.name.lowercase(Locale.ROOT) }
                 TaskSort.Newest -> list.sortedByDescending { it.updatedAt }
                 TaskSort.Oldest -> list.sortedBy { it.updatedAt }
                 TaskSort.Default -> list.sortedWith(
@@ -1602,7 +1603,8 @@ private fun McpCard(server: McpServer) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
             Text(server.name, style = MaterialTheme.typography.bodyLarge)
             Text(
-                "${server.tools.size} tool(s): ${server.tools.take(8).joinToString(", ")}" +
+                if (server.tools.isEmpty()) "No tools listed"
+                else "${server.tools.size} tool(s): ${server.tools.take(8).joinToString(", ")}" +
                     if (server.tools.size > 8) "…" else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1687,16 +1689,20 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var toolsSortOpen by remember { mutableStateOf(false) }
 
     fun sortSkills(list: List<SkillInfo>): List<SkillInfo> = when (skillsSort) {
-        SkillsSort.NameZa -> list.sortedByDescending { it.name.lowercase() }
+        SkillsSort.NameZa -> list.sortedByDescending { it.name.lowercase(Locale.ROOT) }
         SkillsSort.Category -> list.sortedWith(
-            compareBy({ it.category.ifEmpty { "\uFFFF" }.lowercase() }, { it.name.lowercase() })
+            // Empty category sorts last so custom skills trail defaults.
+            compareBy({ it.category.ifEmpty { "\uFFFF" }.lowercase(Locale.ROOT) }, { it.name.lowercase(Locale.ROOT) })
         )
-        SkillsSort.NameAz -> list.sortedBy { it.name.lowercase() }
+        SkillsSort.NameAz -> list.sortedBy { it.name.lowercase(Locale.ROOT) }
     }
     // Origin rule (see ServerApi): bundled Hermes skills carry a category,
-    // project skills don't — so non-blank category means default.
-    val defaultSkills = remember(skills, query, skillsSort) {
-        sortSkills(skills.filter { it.isDefault() && it.matches(query) })
+    // project skills don't — so non-blank category means default. If the
+    // server omits categories entirely, everything counts as default
+    // rather than silently emptying the Default section.
+    val anyCategorized = remember(skills) { skills.any { it.category.isNotBlank() } }
+    val defaultSkills = remember(skills, query, skillsSort, anyCategorized) {
+        sortSkills(skills.filter { (it.isDefault() || !anyCategorized) && it.matches(query) })
     }
     val customSkills = remember(skills, query, skillsSort) {
         sortSkills(skills.filter { !it.isDefault() && it.matches(query) })
@@ -1705,12 +1711,12 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val shownCustomSkills = if (skillsOrigin == SkillsOrigin.Default) emptyList() else customSkills
 
     fun sortToolsets(list: List<ToolsetInfo>): List<ToolsetInfo> = when (toolsSort) {
-        ToolsSort.NameZa -> list.sortedByDescending { it.label.ifEmpty { it.name }.lowercase() }
+        ToolsSort.NameZa -> list.sortedByDescending { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
         ToolsSort.MostTools -> list.sortedWith(
             compareByDescending<ToolsetInfo> { it.tools.size }
-                .thenBy { it.label.ifEmpty { it.name }.lowercase() }
+                .thenBy { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
         )
-        ToolsSort.NameAz -> list.sortedBy { it.label.ifEmpty { it.name }.lowercase() }
+        ToolsSort.NameAz -> list.sortedBy { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
     }
     val defaultTools = remember(visibleToolsets, query, toolsSort) {
         sortToolsets(visibleToolsets.filter { !it.isCustomMcp() && it.matches(query) })
@@ -1721,11 +1727,11 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val customMcpServers = remember(mcp, query, toolsSort) {
         val filtered = mcp.filter { it.matches(query) }
         if (toolsSort == ToolsSort.NameZa) {
-            filtered.sortedByDescending { it.name.lowercase() }
+            filtered.sortedByDescending { it.name.lowercase(Locale.ROOT) }
         } else {
             filtered.sortedWith(
                 compareBy({ if (toolsSort == ToolsSort.MostTools) -it.tools.size else 0 },
-                    { it.name.lowercase() })
+                    { it.name.lowercase(Locale.ROOT) })
             )
         }
     }
@@ -1970,7 +1976,8 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         }
                         item {
                             Text(
-                                "Read-only — servers are configured on the gateway.",
+                                "Read-only — servers are configured on the gateway; " +
+                                    "derived rows may repeat their toolset.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -2304,7 +2311,7 @@ private fun ChatScreen(
                         OutlinedTextField(
                             value = state.pending,
                             onValueChange = onPending,
-                            placeholder = { Text("Ask ${title.lowercase()} anything…") },
+                            placeholder = { Text("Ask ${title.lowercase(Locale.ROOT)} anything…") },
                             modifier = Modifier.weight(1f),
                             maxLines = 4,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
