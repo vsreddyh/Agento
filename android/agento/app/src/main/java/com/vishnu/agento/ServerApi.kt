@@ -273,7 +273,7 @@ private val SKILL_ARG_NAME = Regex(""""(?:skill|skill_name|skill_id)"\s*:\s*"([A
 fun skillNamesFromToolCall(tool: String, args: String): List<String> {
     val out = mutableListOf<String>()
     SKILL_MD_PATH.findAll(args).forEach { out.add(it.groupValues[1]) }
-    if (tool.startsWith("skill", ignoreCase = true)) {
+    if (tool.equals("skill", ignoreCase = true) || tool.startsWith("skill_", ignoreCase = true)) {
         SKILL_ARG_NAME.findAll(args).forEach { out.add(it.groupValues[1]) }
     }
     return out.distinct()
@@ -286,12 +286,14 @@ fun usageFromToolCalls(calls: List<SessionToolCall>): SessionUsage {
     return SessionUsage(tools = tools.take(20), skills = skills.take(20))
 }
 
-/** Groups `mcp__<server>__<tool>` tools into per-server rows. */
 /** URL-encodes one path segment (session ids are UUIDs today, encoded
- * defensively so a malformed id can never break the request path). */
+ * defensively so a malformed id can never break the request path; the `+`
+ * fix-up is needed because form-encoding emits `+` for space, which is only
+ * valid in query strings, not path segments). */
 private fun urlEncode(segment: String): String =
-    java.net.URLEncoder.encode(segment, Charsets.UTF_8.name())
+    java.net.URLEncoder.encode(segment, Charsets.UTF_8.name()).replace("+", "%20")
 
+/** Groups `mcp__<server>__<tool>` tools into per-server rows. */
 fun mcpServersFrom(toolsets: List<ToolsetInfo>): List<McpServer> {
     val byServer = linkedMapOf<String, MutableList<String>>()
     for (ts in toolsets) {

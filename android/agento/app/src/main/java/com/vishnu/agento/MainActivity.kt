@@ -2308,8 +2308,13 @@ private fun ChatScreen(
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
                     if (state.streaming && state.activeTools.isNotEmpty()) {
+                        val shown = state.activeTools.take(3).joinToString(", ") +
+                            if (state.activeTools.size > 3) {
+                                " +${state.activeTools.size - 3} more"
+                            } else ""
+                        val label = state.activeToolLabel.trim()
                         Text(
-                            "Using ${state.activeTools.joinToString(", ")}…",
+                            "Using $shown…" + if (label.isNotEmpty()) " · $label" else "",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
