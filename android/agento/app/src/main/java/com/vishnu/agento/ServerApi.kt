@@ -218,3 +218,59 @@ fun mcpServersFrom(toolsets: List<ToolsetInfo>): List<McpServer> {
         McpServer(name, tools.distinct().sorted())
     }.sortedBy { it.name.lowercase() }
 }
+
+/**
+ * Origin split for the Skills screen's two sections.
+ *
+ * Skills: in-the-box Hermes skills always carry a `category`
+ * (e.g. "creative", "web"); project skills (podman-management,
+ * git-remote-preflight, …) report null/empty. So non-blank category =
+ * default, blank = custom.
+ */
+fun SkillInfo.isDefault(): Boolean = category.isNotBlank()
+
+/** Toolset names that are project MCP servers rather than built-ins. */
+private val CUSTOM_MCP_TOOLSET_NAMES = setOf(
+    "miser-money", "miser_money",
+    "mcp-miser-money", "mcp-cookbook", "mcp-health-check",
+    "cookbook", "health-check", "health_check", "money",
+)
+
+/**
+ * Tools: built-in Hermes toolsets (web, browser, terminal, …) are the
+ * default group; project MCP servers (money/cookbook/health-check, any
+ * `mcp-*` toolset, or toolsets carrying `mcp__` tools) are custom MCP.
+ * Derived [McpServer] rows are always custom.
+ */
+fun ToolsetInfo.isCustomMcp(): Boolean {
+    val n = name.trim().lowercase()
+    if (n == "mcp" || n.startsWith("mcp-") || n.startsWith("mcp_")) return true
+    if (n in CUSTOM_MCP_TOOLSET_NAMES) return true
+    if (tools.any { it.startsWith("mcp__") }) return true
+    return false
+}
+
+/** Case-insensitive search across name + description (+ category/tools). */
+fun SkillInfo.matches(query: String): Boolean {
+    val q = query.trim().lowercase()
+    if (q.isEmpty()) return true
+    return name.lowercase().contains(q)
+        || description.lowercase().contains(q)
+        || category.lowercase().contains(q)
+}
+
+fun ToolsetInfo.matches(query: String): Boolean {
+    val q = query.trim().lowercase()
+    if (q.isEmpty()) return true
+    return name.lowercase().contains(q)
+        || label.lowercase().contains(q)
+        || description.lowercase().contains(q)
+        || tools.any { it.lowercase().contains(q) }
+}
+
+fun McpServer.matches(query: String): Boolean {
+    val q = query.trim().lowercase()
+    if (q.isEmpty()) return true
+    return name.lowercase().contains(q)
+        || tools.any { it.lowercase().contains(q) }
+}
