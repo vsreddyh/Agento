@@ -634,7 +634,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // is still empty.
                         val msgs = _state.value.messages
                         val last = msgs.lastOrNull()
-                        val kept = if (last?.role == "assistant" && last.content.isNotEmpty()) {
+                        val kept = if (last?.role == "assistant" &&
+                            (last.content.isNotBlank() || last.reasoning.isNotBlank())
+                        ) {
                             msgs.dropLast(1) + last.copy(
                                 tools = (last.tools + liveTools).distinct().take(20),
                                 unreported = true,
@@ -671,7 +673,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Finished assistant message with the live-seen tools and the turn's
      * server-reported token counts attached (null usage = the stream carried
      * nothing usable, so the reply is marked unreported rather than zero),
-     * plus the reasoning trace and the model that served it. */
+     * plus the reasoning trace and the model that served it. [final] is
+     * persisted as-is (possibly empty): the UI renders its own fallback, so
+     * no synthetic text ever enters history or the next turn's prompt. */
     private fun msgsDropLastPlusAssistant(
         final: String,
         finishedAt: Long,
@@ -683,7 +687,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val msgs = _state.value.messages
         return msgs.dropLast(1) + ChatMessage(
             "assistant",
-            final.ifEmpty { "The assistant sent an empty reply. Try asking again." },
+            final,
             finishedAt,
             tools = tools.distinct().take(20),
             prompt = usage?.prompt ?: 0L,
@@ -702,9 +706,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private fun flushQueued(doneGen: Int) {
         if (doneGen != sendGen) return
         val q = _state.value.queued.trim()
-        if (q.isEmpty() || _state.value.streaming || !_state.value.ready) {
-            // Streaming here means a newer turn started mid-flush; keep the
-            // queue for its Done rather than firing into the live request.
+        // A newer turn started mid-flush: keep the queue for its Done
+        // rather than firing into the live request.
+        if (q.isEmpty() || _state.value.streaming) return
+        // Not ready (connectivity flap): no future Done is coming to fire
+        // this, so hand it back to the composer instead of stranding it.
+        if (!_state.value.ready) {
+            _state.value = _state.value.copy(queued = "", pending = q)
             return
         }
         _state.value = _state.value.copy(queued = "")
@@ -769,7 +777,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 serverApi.fetchSessionUsage(path, sessionId).getOrThrow()
             }.getOrNull() ?: return@launch
             if (usage.tools.isEmpty() && usage.skills.isEmpty()) return@launch
-            val expected = final.ifEmpty { "The assistant sent an empty reply. Try asking again." }
+            val expected = final
             withContext(Dispatchers.Main) {
                 // A resend issued mid-fetch means a new turn is streaming;
                 // skip so the in-flight placeholder is never persisted.
@@ -781,7 +789,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 } else -1
                 if (idx < 0) {
                     idx = fresh.indexOfLast {
-                        it.role == "assistant" && it.ts == finishedAt && it.content == expected
+                        it.role == "assistant" && it.ts == finishedAt &&
+                            (expected.isEmpty() || it.content == expected)
                     }
                 }
                 if (idx < 0) return@withContext
