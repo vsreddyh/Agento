@@ -61,9 +61,50 @@ info() { echo "[entrypoint] $*"; }
 
 do_render() {
     local home profile cwd
+    # Secret scope: hermes 0.21.4 resolves credentials per profile
+    # from <profile>/.env ONLY (never os.environ under multiplexing) —
+    # API_SERVER_KEY for chat auth AND the provider keys for model calls.
+    # Rendered from the shared env (fail-fast above guarantees PASSWORD;
+    # provider keys come from compose); regenerated every start,
+    # git-ignored, nothing extra to rotate. umask 077: `>` creates with
+    # the ambient umask (often 644) before chmod 600 tightens it —
+    # no world-readable window for secrets on fresh create.
+    # NOTE: god ("default" profile) IS the gateway home dir itself —
+    # Hermes maps the name "default" to $HERMES_HOME and skips any
+    # nested profiles/default/ dir, so god needs $HERMES_HOME/.env
+    # (a profiles/default/.env is ignored). Missing it = every god
+    # chat fails with "No usable credentials found for provider
+    # 'opencode-go'" and the app shows "assistant sent an empty reply".
+    write_profile_env() {
+        local _home="$1" _hermes_uid
+        (
+            umask 077
+            {
+                printf 'API_SERVER_KEY=%s\n' "$PASSWORD"
+                printf 'OPENCODE_API_KEY=%s\n' "${OPENCODE_API_KEY:-}"
+                printf 'OPENCODE_ZEN_API_KEY=%s\n' "${OPENCODE_ZEN_API_KEY:-${OPENCODE_API_KEY:-}}"
+                printf 'OPENCODE_GO_API_KEY=%s\n' "${OPENCODE_GO_API_KEY:-${OPENCODE_API_KEY:-}}"
+            } > "$_home/.env"
+        )
+        # The gateway runs as the hermes user (UID 10000), not root: a
+        # fresh .env created above is root-owned and unreadable to it,
+        # which fails chat auth (no profile-scoped API_SERVER_KEY) and
+        # terminal policy. Existing files keep their owner on rewrite;
+        # chown covers the fresh-create case. Warn-but-continue when the
+        # hermes user is absent (non-container test runs).
+        if _hermes_uid="$(id -u hermes 2>/dev/null)"; then
+            chown "$_hermes_uid:${HERMES_GID:-10000}" "$_home/.env" \
+                || warning "chown failed for $_home/.env (continuing)"
+        else
+            warning "hermes user absent — $_home/.env keeps current owner"
+        fi
+        chmod 600 "$_home/.env" 2>/dev/null || true
+    }
+
     # ── God (gateway home = Hermes' built-in "default" profile) ──
     export HERMES_CWD="${HERMES_CWD:-/workspace}"
     render_config "$HERMES_HOME"
+    write_profile_env "$HERMES_HOME"
 
     # ── Side profiles (story, resumes) ───────
     for home in "$HERMES_HOME"/profiles/*/; do
@@ -85,36 +126,11 @@ do_render() {
             warning "cwd $cwd is empty — check the host clone"
         fi
         HERMES_CWD="$cwd" render_config "$home"
-        # Secret scope: hermes 0.21.4 resolves credentials per profile
-        # from <profile>/.env ONLY (never os.environ under multiplexing) —
-        # API_SERVER_KEY for chat auth AND the provider keys for model calls.
-        # Rendered from the shared env (fail-fast above guarantees PASSWORD;
-        # provider keys come from compose); regenerated every start,
-        # git-ignored, nothing extra to rotate. umask 077: `>` creates with
-        # the ambient umask (often 644) before chmod 600 tightens it —
-        # no world-readable window for secrets on fresh create.
-        (
-            umask 077
-            {
-                printf 'API_SERVER_KEY=%s\n' "$PASSWORD"
-                printf 'OPENCODE_API_KEY=%s\n' "${OPENCODE_API_KEY:-}"
-                printf 'OPENCODE_ZEN_API_KEY=%s\n' "${OPENCODE_ZEN_API_KEY:-${OPENCODE_API_KEY:-}}"
-                printf 'OPENCODE_GO_API_KEY=%s\n' "${OPENCODE_GO_API_KEY:-${OPENCODE_API_KEY:-}}"
-            } > "$home/.env"
-        )
-        # The gateway runs as the hermes user (UID 10000), not root: a
-        # fresh .env created above is root-owned and unreadable to it,
-        # which fails chat auth (no profile-scoped API_SERVER_KEY) and
-        # terminal policy. Existing files keep their owner on rewrite;
-        # chown covers the fresh-create case. Warn-but-continue when the
-        # hermes user is absent (non-container test runs).
-        if _hermes_uid="$(id -u hermes 2>/dev/null)"; then
-            chown "$_hermes_uid:${HERMES_GID:-10000}" "$home/.env" \
-                || warning "chown failed for $home/.env (continuing)"
-        else
-            warning "hermes user absent — $home/.env keeps current owner"
-        fi
-        chmod 600 "$home/.env" 2>/dev/null || true
+        # Skip Hermes' built-in "default" name: it maps to the gateway
+        # home itself, so profiles/default/.env would be ignored
+        # (god's keys already went to $HERMES_HOME/.env above).
+        [[ "$profile" == "default" ]] && continue
+        write_profile_env "$home"
     done
 
     export HERMES_HOME
