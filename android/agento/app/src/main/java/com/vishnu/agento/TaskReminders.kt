@@ -227,12 +227,12 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 },
             )
         }
-        val open = Intent(appCtx, MainActivity::class.java)
+        val launch = Intent(appCtx, MainActivity::class.java)
             .setAction(TaskWidget.ACTION_TASKS)
             .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
             .setData(Uri.parse("agento://reminder/$taskId"))
         val tap = PendingIntent.getActivity(
-            appCtx, taskId.hashCode(), open,
+            appCtx, taskId.hashCode(), launch,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         mgr.notify(
