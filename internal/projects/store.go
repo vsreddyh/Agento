@@ -132,7 +132,7 @@ func (s *Store) Create(ctx context.Context, name, status, note string) (map[stri
 	}
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{
-		"name": name, "status": status, "note": note,
+		"name": name, "status": status, "note": strings.TrimSpace(note),
 		"createdAt": now, "updatedAt": now,
 	}
 	res, err := s.projects.InsertOne(ctx, doc)
@@ -243,7 +243,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		if !ok {
 			return nil, fail("note must be a string")
 		}
-		set["note"] = note
+		set["note"] = strings.TrimSpace(note)
 	}
 	if len(set) == 0 {
 		return toDoc(cur), nil

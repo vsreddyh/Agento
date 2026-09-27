@@ -101,6 +101,14 @@ func main() {
 			if in.Note != nil {
 				fields["note"] = *in.Note
 			}
+			if len(fields) == 0 {
+				// Explicit no-op marker so the agent knows nothing changed.
+				doc, err := store.Get(ctx, in.ID)
+				if err != nil {
+					return fail(err)
+				}
+				return result(map[string]any{"ok": true, "project": doc, "noop": true})
+			}
 			doc, err := store.Update(ctx, in.ID, fields)
 			if err != nil {
 				return fail(err)

@@ -12,7 +12,7 @@ same validation — see `cmd/health-api/main.go`).
 | `create_project` | Create a project (name required; status defaults to Todo) |
 | `list_projects` | List by status Todo/Ongoing/Paused/Done/all, or search name/note (limit caps rows, default 200) |
 | `get_project` | Fetch one project by id |
-| `update_project` | Edit name/status/note (only sent keys change) |
+| `update_project` | Edit name/status/note (only sent keys change; empty update returns `noop: true`) |
 | `delete_project` | Permanently delete |
 
 ## Schema (MongoDB `hermes` DB)

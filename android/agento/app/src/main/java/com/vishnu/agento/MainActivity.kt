@@ -1414,7 +1414,9 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 prefs.edit().putBoolean("projects_migrated", true).apply()
             } else {
                 val norm = { s: String -> s.trim().lowercase(Locale.ROOT) }
-                val have = api.list("all").getOrNull().orEmpty()
+                // Limit 500 (server max): the default 200 would see an
+                // incomplete board past 200 rows and duplicate/stall.
+                val have = api.list("all", limit = 500).getOrNull().orEmpty()
                     .map { norm(it.name) }.toMutableSet()
                 for ((name, status, note) in legacy) {
                     if (norm(name) in have) continue
@@ -1422,7 +1424,7 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     if (created == null) break
                     have.add(norm(created.name))
                 }
-                val landed = api.list("all").getOrNull().orEmpty()
+                val landed = api.list("all", limit = 500).getOrNull().orEmpty()
                     .map { norm(it.name) }.toSet()
                 if (legacy.all { norm(it.first) in landed }) {
                     withContext(Dispatchers.IO) {
@@ -1631,6 +1633,7 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     busy = false
                 }
             },
+            saving = busy,
         )
     }
 }
@@ -1702,6 +1705,7 @@ private fun TaskDialog(
     isNew: Boolean,
     onDismiss: () -> Unit,
     onSave: (ServerProject) -> Unit,
+    saving: Boolean = false,
 ) {
     var name by remember(initial.id) { mutableStateOf(initial.name) }
     var status by remember(initial.id) { mutableStateOf(normalizeStatus(initial.status)) }
@@ -1761,7 +1765,8 @@ private fun TaskDialog(
                         note = note.trim(),
                     ))
                 },
-                enabled = name.isNotBlank(),
+                // Gated on !saving: double-tap would create/update twice.
+                enabled = name.isNotBlank() && !saving,
             ) { Text("Save") }
         },
         dismissButton = {

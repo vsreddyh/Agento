@@ -702,6 +702,8 @@ func listProjects(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	limit := 0
+	// Non-numeric ?limit= falls back to the store default (200) on
+	// purpose: a stray query param should never nuke the board list.
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil {
 			limit = n

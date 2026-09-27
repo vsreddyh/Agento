@@ -91,8 +91,9 @@ class ProjectsApi(context: Context) {
     }
 
     /** Lists projects by status (`Todo|Ongoing|Paused|Done|all`, default
-     * all); unknown statuses fail fast. `search` matches name/note. */
-    suspend fun list(status: String = "all", search: String = ""): Result<List<ServerProject>> =
+     * all); unknown statuses fail fast. `search` matches name/note. `limit`
+     * caps rows (server default 200, max 500). */
+    suspend fun list(status: String = "all", search: String = "", limit: Int = 200): Result<List<ServerProject>> =
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
@@ -100,7 +101,8 @@ class ProjectsApi(context: Context) {
             }
             val s = status.trim().ifEmpty { "all" }
             val q = "?status=" + URLEncoder.encode(s, Charsets.UTF_8.name()).replace("+", "%20") +
-                (if (search.isNotBlank()) "&search=" + URLEncoder.encode(search.trim(), Charsets.UTF_8.name()).replace("+", "%20") else "")
+                (if (search.isNotBlank()) "&search=" + URLEncoder.encode(search.trim(), Charsets.UTF_8.name()).replace("+", "%20") else "") +
+                "&limit=$limit"
             call("GET", "/api/projects$q").map { body ->
                 val out = mutableListOf<ServerProject>()
                 val root = JSONObject(body)
