@@ -222,7 +222,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         streamJob?.cancel()
         streamJob = null
         serverTotalsJob?.cancel()
-        val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())        threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
+        val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
+        threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
         threadId = fresh.id
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
@@ -235,7 +236,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (threads.any { it.messages.isNotEmpty() }) persist()
     }
 
-    /** Renames a conversation (auto-titles stop once renamed). */    fun renameThread(id: String, title: String) {
+    /** Renames a conversation (auto-titles stop once renamed). */
+    fun renameThread(id: String, title: String) {
         val clean = title.trim().ifEmpty { return }
         threads = threads.map { if (it.id == id) it.copy(title = clean) else it }
         _state.value = _state.value.copy(threads = summaries())

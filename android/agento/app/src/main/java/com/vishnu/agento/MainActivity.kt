@@ -4199,7 +4199,12 @@ private fun ChatScreen(
                                             val usedLine = listOf(
                                                 if (msg.total > 0) {
                                                     "~${formatTokens(msg.total)} tok"
-                                                } else if (msg.unreported) {
+                                                } else if (msg.content.isNotEmpty()) {
+                                                    // Explicit gap (#121): a reply with no
+                                                    // usable report — failed/interrupted
+                                                    // turns and pre-tracking history
+                                                    // alike, matching the header's
+                                                    // "without reports" count.
                                                     "no usage reported"
                                                 } else {
                                                     null
