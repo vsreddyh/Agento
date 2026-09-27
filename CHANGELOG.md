@@ -10,6 +10,12 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.15.0]
+
+- Task widget is dynamic: 3x2 minimum, resizable both ways, with the
+  row count adapting to placement height (2 rows at 3x2, up to 6),
+  a "+N more" overflow line, and due labels on wide placements.
+
 ## [3.14.1]
 
 - Tools screen no longer lists each MCP server twice: derived server
