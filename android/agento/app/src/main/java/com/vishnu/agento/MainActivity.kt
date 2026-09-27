@@ -4432,9 +4432,11 @@ private fun AppUpdateSection() {
         val rel = latest
         if (rel != null && rel.notes.isNotBlank()) {
             // Rendered as Markdown (not raw text) so changelog headings and
-            // lists never show their `#`/`-` markers in the app.
+            // lists never show their `#`/`-` markers in the app. Full notes:
+            // truncating raw Markdown mid-token can leave unclosed syntax
+            // and render broken output.
             Markdown(
-                content = rel.notes.take(400),
+                content = rel.notes,
                 modifier = Modifier.fillMaxWidth(),
             )
         }

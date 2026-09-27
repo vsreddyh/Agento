@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - "android/**"
+      - "CHANGELOG.md"
       - ".github/workflows/android-apk.yml"
   pull_request:
     paths:
       - "android/**"
+      - "CHANGELOG.md"
       - ".github/workflows/android-apk.yml"
   workflow_dispatch:
 

@@ -15,11 +15,6 @@ see GitHub Releases for older notes.
 - Update notes render as Markdown (no raw `#` markers) and come from a
   human-written changelog — no more auto-generated commit hashes.
 
-## [3.7.1]
-
-- Update notes render as Markdown (no raw `#` markers) and come from a
-  human-written changelog — no more auto-generated commit hashes.
-
 ## [3.7.0]
 
 - Conversations show which tools and skills were used: a live `Using …`
