@@ -40,7 +40,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
@@ -825,6 +830,36 @@ private enum class ServerTaskFilter(val state: String, val title: String) {
     All("all", "All"),
 }
 
+/** Client-side sort for the task list (server returns one state at a time,
+ * unsorted). Due puts undated tasks last; Created is newest first. */
+private enum class ServerTaskSort(val title: String) {
+    Due("Due date"),
+    Name("Name"),
+    Created("Newest"),
+    Estimate("Estimate"),
+}
+
+private fun ServerTask.dueKey(): String {
+    if (dueDate.isEmpty()) return "~~~~"
+    return dueDate + "T" + dueTime
+}
+
+/** True when an open task's due date is before today (ISO YYYY-MM-DD
+ * compares lexicographically). Blank date never counts as overdue. */
+private fun ServerTask.isOverdue(today: String): Boolean =
+    isOpen() && dueDate.isNotEmpty() && dueDate < today
+
+private fun List<ServerTask>.sortedByMode(mode: ServerTaskSort): List<ServerTask> =
+    when (mode) {
+        ServerTaskSort.Due -> sortedWith(compareBy({ it.dueKey() }, { it.name.lowercase(Locale.ROOT) }))
+        ServerTaskSort.Name -> sortedBy { it.name.lowercase(Locale.ROOT) }
+        ServerTaskSort.Created -> sortedByDescending { it.createdAt }
+        ServerTaskSort.Estimate -> sortedWith(
+            compareByDescending<ServerTask> { it.estimatedMinutes > 0 }
+                .thenByDescending { it.estimatedMinutes },
+        )
+    }
+
 /** Task Manager: the user's own tasks from the shared `tasks` collection
  * (the same rows the assistant manages over MCP). Full CRUD here; the
  * assistant stays a second writer through chat, same as before. */
@@ -838,6 +873,10 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val api = remember(context) { TasksApi(context) }
     var tasks by remember { mutableStateOf<List<ServerTask>>(emptyList()) }
     var filter by remember { mutableStateOf(ServerTaskFilter.Open) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var sort by remember { mutableStateOf(ServerTaskSort.Due) }
+    var sortMenu by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<ServerTask?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     // Bumped after every load/mutation so the loader below reruns.
@@ -959,21 +998,74 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("Search tasks") },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Clear search")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    ServerTaskFilter.entries.forEach { f ->
-                        FilterChip(
-                            selected = filter == f,
-                            onClick = { filter = f },
-                            label = { Text(f.title) },
-                        )
+                    Row(
+                        modifier = Modifier.weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        ServerTaskFilter.entries.forEach { f ->
+                            FilterChip(
+                                selected = filter == f,
+                                onClick = { filter = f },
+                                label = { Text(f.title) },
+                            )
+                        }
+                    }
+                    Box {
+                        OutlinedButton(onClick = { sortMenu = true }) {
+                            Icon(Icons.Filled.Sort, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(sort.title)
+                        }
+                        DropdownMenu(
+                            expanded = sortMenu,
+                            onDismissRequest = { sortMenu = false },
+                        ) {
+                            ServerTaskSort.entries.forEach { s ->
+                                DropdownMenuItem(
+                                    text = { Text(s.title) },
+                                    onClick = { sort = s; sortMenu = false },
+                                )
+                            }
+                        }
                     }
                 }
                 if (busy) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                // Derived once per composition: search narrows, sort orders.
+                val today = remember {
+                    java.time.LocalDate.now().toString()
+                }
+                val visible = remember(tasks, query, sort) {
+                    val q = query.trim().lowercase(Locale.ROOT)
+                    tasks
+                        .filter { t ->
+                            q.isEmpty() ||
+                                t.name.lowercase(Locale.ROOT).contains(q) ||
+                                t.description.lowercase(Locale.ROOT).contains(q)
+                        }
+                        .sortedByMode(sort)
                 }
                 if (loading) {
                     Box(
@@ -1002,14 +1094,30 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         actionLabel = "New task",
                         onAction = { editing = ServerTaskDraft() },
                     )
+                } else if (visible.isEmpty()) {
+                    EmptyState(
+                        icon = Icons.Filled.Search,
+                        title = "No matches",
+                        subtitle = "Try a different search.",
+                        actionLabel = "Clear search",
+                        onAction = { query = "" },
+                    )
                 } else {
-                    tasks.forEach { t ->
+                    Text(
+                        "${visible.size} of ${tasks.size}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    visible.forEach { t ->
                         ServerTaskRow(
                             task = t,
+                            overdue = t.isOverdue(today),
                             actionsEnabled = !busy,
-                            onEdit = { editing = t.toDraft() },
-                            onComplete = { doComplete(t) },
-                            onReopen = { doReopen(t) },
+                            onOpen = { selected = t },
+                            onToggle = {
+                                if (t.isOpen()) doComplete(t) else doReopen(t)
+                                selected = null
+                            },
                         )
                     }
                 }
@@ -1121,6 +1229,29 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             },
         )
     }
+
+    val open = selected?.let { s -> tasks.firstOrNull { it.id == s.id } ?: s }
+    if (open != null) {
+        val sheetToday = java.time.LocalDate.now().toString()
+        ServerTaskDetailSheet(
+            task = open,
+            overdue = open.isOverdue(sheetToday),
+            actionsEnabled = !busy,
+            onDismiss = { selected = null },
+            onEdit = {
+                selected = null
+                editing = open.toDraft()
+            },
+            onToggle = {
+                selected = null
+                if (open.isOpen()) doComplete(open) else doReopen(open)
+            },
+            onDelete = {
+                selected = null
+                deleting = open
+            },
+        )
+    }
 }
 
 /** Editor draft for a server task (id empty = new). Text fields stay strings
@@ -1145,88 +1276,254 @@ private fun ServerTask.toDraft() = ServerTaskDraft(
     repeatRule = repeatRule,
 )
 
-/** One server task row: tap to edit, quick complete/reopen at the edge
- * (gated while an operation is in flight so double-taps can't race). */
+/** Compact server task row: checkbox toggles complete/reopen, tap opens
+ * the detail sheet. Only name + one due line show here; description,
+ * estimate, repeat, and timestamps live on the detail page. Overdue
+ * open tasks render the due line in error color. */
 @Composable
 private fun ServerTaskRow(
     task: ServerTask,
+    overdue: Boolean,
     actionsEnabled: Boolean,
-    onEdit: () -> Unit,
-    onComplete: () -> Unit,
-    onReopen: () -> Unit,
+    onOpen: () -> Unit,
+    onToggle: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = onEdit,
+        onClick = onOpen,
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            IconButton(onClick = onToggle, enabled = actionsEnabled) {
+                if (task.isOpen()) {
+                    Icon(
+                        Icons.Filled.RadioButtonUnchecked,
+                        contentDescription = "Complete task",
+                    )
+                } else {
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = "Reopen task",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (!task.isOpen()) {
-                        Icon(
-                            Icons.Filled.CheckCircle,
-                            contentDescription = "Completed",
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text(
-                        task.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                if (task.description.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        task.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 4,
-                    )
-                }
-                val meta = buildList {
+                Text(
+                    task.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (task.isOpen()) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                val dueBits = buildList {
                     if (task.dueDate.isNotEmpty()) {
                         add(
-                            "Due ${task.dueDate}" +
+                            task.dueDate +
                                 (if (task.dueTime.isNotEmpty()) " ${task.dueTime}" else "")
                         )
                     }
                     if (task.estimatedMinutes > 0) add("~${task.estimatedMinutes} min")
-                    if (!task.isOpen() && task.completedAt.isNotEmpty()) {
-                        add("Done ${task.completedAt.take(10)}")
-                    }
+                    if (task.repeatRule.isNotEmpty()) add(task.repeatRule)
                 }
-                if (meta.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
+                if (dueBits.isNotEmpty()) {
                     Text(
-                        meta.joinToString(" · "),
+                        dueBits.joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = if (overdue) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
-                }
-                if (task.repeatRule.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
+                } else if (task.description.isNotEmpty()) {
                     Text(
-                        "Repeats: ${task.repeatRule}",
+                        task.description,
                         style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            if (task.isOpen()) {
-                IconButton(onClick = onComplete, enabled = actionsEnabled) {
-                    Icon(Icons.Filled.CheckCircle, contentDescription = "Complete task")
-                }
-            } else {
-                IconButton(onClick = onReopen, enabled = actionsEnabled) {
-                    Icon(Icons.Filled.Undo, contentDescription = "Reopen task")
-                }
+            if (task.description.isNotEmpty()) {
+                Icon(
+                    Icons.Filled.Description,
+                    contentDescription = "Has details",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
             }
         }
+    }
+}
+
+/** Full detail sheet for one task: every field plus Complete/Reopen,
+ * Edit, and Delete actions. Opened by tapping a compact row. */
+@Composable
+private fun ServerTaskDetailSheet(
+    task: ServerTask,
+    overdue: Boolean,
+    actionsEnabled: Boolean,
+    onDismiss: () -> Unit,
+    onEdit: () -> Unit,
+    onToggle: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier.fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    task.name,
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (task.isOpen()) {
+                    AssistChip(
+                        onClick = {},
+                        label = { Text(if (overdue) "Overdue" else "Open") },
+                        colors = AssistChipDefaults.assistChipColors(
+                            labelColor = if (overdue) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                        ),
+                    )
+                } else {
+                    AssistChip(onClick = {}, label = { Text("Done") })
+                }
+            }
+            if (task.description.isNotEmpty()) {
+                SelectionContainer {
+                    Text(
+                        task.description,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+            }
+            HorizontalDivider()
+            DetailLine(
+                icon = Icons.Filled.Schedule,
+                label = "Due",
+                value = when {
+                    task.dueDate.isEmpty() -> "No due date"
+                    else -> task.dueDate +
+                        (if (task.dueTime.isNotEmpty()) " at ${task.dueTime}" else "")
+                },
+                highlight = overdue,
+            )
+            DetailLine(
+                icon = Icons.Filled.Tune,
+                label = "Estimate",
+                value = if (task.estimatedMinutes > 0) {
+                    "~${task.estimatedMinutes} min"
+                } else {
+                    "No estimate"
+                },
+            )
+            DetailLine(
+                icon = Icons.Filled.Repeat,
+                label = "Repeats",
+                value = task.repeatRule.ifEmpty { "Does not repeat" },
+            )
+            if (task.createdAt.isNotEmpty() || task.completedAt.isNotEmpty()) {
+                DetailLine(
+                    icon = Icons.Filled.History,
+                    label = "History",
+                    value = listOf(
+                        task.createdAt.take(10).takeIf { it.isNotEmpty() }
+                            ?.let { "Created $it" },
+                        task.completedAt.take(10).takeIf { it.isNotEmpty() }
+                            ?.let { "Done $it" },
+                    ).filterNotNull().joinToString(" · ").ifEmpty { "—" },
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Button(
+                    onClick = onToggle,
+                    enabled = actionsEnabled,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (task.isOpen()) "Complete" else "Reopen")
+                }
+                OutlinedButton(
+                    onClick = onEdit,
+                    enabled = actionsEnabled,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Filled.Edit, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Edit")
+                }
+            }
+            OutlinedButton(
+                onClick = onDelete,
+                enabled = actionsEnabled,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Filled.Delete, contentDescription = null)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Delete")
+            }
+        }
+    }
+}
+
+/** One icon + label + value line in the detail sheet. */
+@Composable
+private fun DetailLine(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String,
+    highlight: Boolean = false,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (highlight) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(72.dp),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (highlight) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
     }
 }
 
