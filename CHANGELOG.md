@@ -10,6 +10,19 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.19.0]
+
+- Chat feel and control: auto-scroll pins to the latest message (a manual
+  scroll-up unpins and reveals Jump-to-latest), Regenerate resends without
+  the last reply, stopped replies are marked with Continue + Regenerate,
+  and the composer stays live mid-stream with Queue send.
+- Message substance: assistant text is selectable, reasoning traces render
+  in a collapsible Thinking section, every reply carries its serving model
+  in the meta line, and user messages support edit-and-resubmit (Replace
+  with drop-turns confirmation, Fork to a new thread).
+- Deferred: code-block copy buttons (needs a version-pinned mikepenz
+  components override) and the TalkBack/keyboard/reduced-motion pass.
+
 ## [3.18.0]
 
 - Usage display: every assistant reply carries its token report

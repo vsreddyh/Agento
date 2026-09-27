@@ -21,6 +21,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,6 +29,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -40,6 +42,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
@@ -102,6 +105,7 @@ import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -651,6 +655,8 @@ private fun ChatTab(
         onCheckConnection = vm::checkReachability,
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop,
         onNew = vm::newConversation, onRetry = vm::retry,
+        onRegenerate = vm::regenerate, onContinue = vm::continueTurn,
+        onReplace = vm::replaceAndResend, onFork = vm::forkAndResend,
     )
     if (showThreads) {
         ThreadSheet(
@@ -3593,11 +3599,53 @@ private fun ChatScreen(
     onStop: () -> Unit,
     onNew: () -> Unit,
     onRetry: () -> Unit,
+    onRegenerate: () -> Unit = {},
+    onContinue: () -> Unit = {},
+    onReplace: (Int, String) -> Unit = { _, _ -> },
+    onFork: (Int, String) -> Unit = { _, _ -> },
     autoLiveGen: Int = 0,
 ) {
     val listState = rememberLazyListState()
-    LaunchedEffect(state.messages.size, state.messages.lastOrNull()?.content?.length) {
-        if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size - 1)
+    // Stick-to-bottom follows the user (#122): auto-scroll only while the
+    // viewport is pinned to the latest message. A manual scroll-up unpins
+    // (Jump-to-latest appears); reaching the bottom re-pins.
+    var stick by remember(tab) { mutableStateOf(true) }
+    // Unpin on user drags only (#122): programmatic smooth-scrolls also
+    // raise isScrollInProgress, so gating on it would let every auto-scroll
+    // unpin itself mid-stream. DragInteraction.Start fires for touch drags.
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect {
+            if (it is DragInteraction.Start) stick = false
+        }
+    }
+    // Message-list head offset: the usage header item (when shown) shifts
+    // message indices by one — every scroll target accounts for it.
+    val headCount = if (state.messages.any { it.role != "user" && it.content.isNotBlank() }) 1 else 0
+    // New turns / streamed tokens follow only while pinned. The key covers
+    // content and reasoning length alike so thinking-only streams follow.
+    val lastMsg = state.messages.lastOrNull()
+    val lastLen = (lastMsg?.content?.length ?: 0) + (lastMsg?.reasoning?.length ?: 0)
+    LaunchedEffect(state.messages.size, lastLen) {
+        if (stick && state.messages.isNotEmpty()) {
+            listState.animateScrollToItem(headCount + state.messages.size - 1)
+        }
+    }
+    // Re-pin when the user scrolls back to the latest message.
+    LaunchedEffect(listState.isScrollInProgress, state.messages.size, lastLen) {
+        if (!listState.isScrollInProgress && state.messages.isNotEmpty()) {
+            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+            if (last != null && last.index >= headCount + state.messages.size - 1) stick = true
+        }
+    }
+    // Inline user-message editor (#122): message index under edit, its
+    // draft, and a pending replace awaiting drop-turns confirmation.
+    var editingIndex by remember(tab) { mutableStateOf<Int?>(null) }
+    var editDraft by remember(tab) { mutableStateOf("") }
+    var confirmReplace by remember(tab) { mutableStateOf<Pair<Int, String>?>(null) }
+    // Edit state belongs to one thread: a switch or a fresh thread closes it.
+    LaunchedEffect(state.threadId) {
+        editingIndex = null
+        confirmReplace = null
     }
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -3869,6 +3917,29 @@ private fun ChatScreen(
     }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
+        // Jump-to-latest (#122): the stock FAB slot, shown once a manual
+        // scroll-up unpins the viewport; tapping re-pins and drops to the
+        // newest message. No extra nesting around the message list.
+        floatingActionButton = {
+            if (!stick && state.messages.isNotEmpty()) {
+                SmallFloatingActionButton(
+                    onClick = {
+                        stick = true
+                        scope.launch {
+                            listState.animateScrollToItem(
+                                headCount + state.messages.size - 1
+                            )
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ) {
+                    Icon(
+                        Icons.Filled.ArrowDownward,
+                        contentDescription = "Jump to latest",
+                    )
+                }
+            }
+        },
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -3944,6 +4015,26 @@ private fun ChatScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 2.dp),
+                        )
+                    }
+                    // Queue-or-send (#122): the composer stays live while
+                    // streaming. Parking a send here auto-fires it on Done;
+                    // a queued send returns to the composer on failure/stop.
+                    if (state.streaming && state.queued.isBlank() && state.pending.isNotBlank()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            TextButton(onClick = onSend) { Text("Queue send") }
+                        }
+                    }
+                    if (state.streaming && state.queued.isNotBlank()) {
+                        Text(
+                            "Queued — sends when the reply finishes.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 2.dp),
                         )
@@ -4111,8 +4202,12 @@ private fun ChatScreen(
                                 )
                             }
                         }
-                        items(state.messages) { msg ->
+                        itemsIndexed(state.messages) { index, msg ->
                             val isUser = msg.role == "user"
+                            val isLast = index == state.messages.lastIndex
+                            // Replace resend drops turns when anything
+                            // non-blank follows the edited message.
+                            val dropsTurns = state.messages.drop(index + 1).any { it.content.isNotBlank() }
                             // #52: proper conversational bubbles — user right, assistant left.
                             Box(
                                 modifier = Modifier.fillMaxWidth(),
@@ -4147,6 +4242,19 @@ private fun ChatScreen(
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 )
                                             }
+                                            // Edit & resubmit (#122): pencil opens an
+                                            // inline editor (Replace / Fork).
+                                            if (isUser && !state.streaming) {
+                                                IconButton(
+                                                    onClick = {
+                                                        editingIndex = index
+                                                        editDraft = msg.content
+                                                    },
+                                                    modifier = Modifier.size(28.dp),
+                                                ) {
+                                                    Icon(Icons.Filled.Edit, contentDescription = "Edit and resend")
+                                                }
+                                            }
                                             if (!isUser && msg.content.isNotEmpty()) {
                                                 val key = ttsKeyFor(msg)
                                                 val speaking = speakingKey == key
@@ -4172,23 +4280,118 @@ private fun ChatScreen(
                                                 ) {
                                                     Icon(Icons.Filled.ContentCopy, contentDescription = "Copy")
                                                 }
+                                                // Regenerate (#122, v1 replace): resends
+                                                // history minus this reply. Offered on
+                                                // the latest assistant message only.
+                                                if (isLast && !state.streaming) {
+                                                    IconButton(
+                                                        onClick = stopThen(onRegenerate),
+                                                        modifier = Modifier.size(28.dp),
+                                                    ) {
+                                                        Icon(Icons.Filled.Refresh, contentDescription = "Regenerate reply")
+                                                    }
+                                                }
                                             }
                                         }
                                         Spacer(modifier = Modifier.height(2.dp))
                                         if (isUser) {
-                                            SelectionContainer {
-                                                Text(
-                                                    msg.content.ifEmpty { "…" },
-                                                    style = MaterialTheme.typography.bodyMedium,
+                                            if (editingIndex == index) {
+                                                // Inline editor (#122): Replace drops
+                                                // later turns (confirmed first),
+                                                // Fork copies them to a new thread.
+                                                OutlinedTextField(
+                                                    value = editDraft,
+                                                    onValueChange = { editDraft = it },
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    maxLines = 6,
                                                 )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Button(
+                                                        onClick = {
+                                                            if (dropsTurns) {
+                                                                confirmReplace = index to editDraft
+                                                            } else {
+                                                                onReplace(index, editDraft)
+                                                                editingIndex = null
+                                                            }
+                                                        },
+                                                        enabled = editDraft.isNotBlank(),
+                                                    ) { Text("Replace") }
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            onFork(index, editDraft)
+                                                            editingIndex = null
+                                                        },
+                                                        enabled = editDraft.isNotBlank(),
+                                                    ) { Text("Fork") }
+                                                    TextButton(onClick = { editingIndex = null }) {
+                                                        Text("Cancel")
+                                                    }
+                                                }
+                                            } else {
+                                                SelectionContainer {
+                                                    Text(
+                                                        msg.content.ifEmpty { "…" },
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                    )
+                                                }
                                             }
                                         } else {
-                                            // Assistant messages render Markdown
-                                            // (code blocks, lists); copy keeps the source.
-                                            Markdown(
-                                                content = msg.content.ifEmpty { "…" },
-                                                modifier = Modifier.fillMaxWidth(),
-                                            )
+                                            // Reasoning trace (#122): collapsible
+                                            // Thinking section above the reply.
+                                            if (msg.reasoning.isNotEmpty()) {
+                                                // Keyed on position + timestamp:
+                                                // two rapid turns can share a ms.
+                                                var thinkingOpen by remember(index, msg.ts) { mutableStateOf(false) }
+                                                TextButton(
+                                                    onClick = { thinkingOpen = !thinkingOpen },
+                                                    contentPadding = PaddingValues(0.dp),
+                                                ) {
+                                                    Text(
+                                                        if (thinkingOpen) "Hide thinking" else "Thinking",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                    )
+                                                    Icon(
+                                                        if (thinkingOpen) Icons.Filled.ExpandLess
+                                                        else Icons.Filled.ExpandMore,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(16.dp),
+                                                    )
+                                                }
+                                                if (thinkingOpen) {
+                                                    SelectionContainer {
+                                                        Text(
+                                                            msg.reasoning,
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        )
+                                                    }
+                                                    Spacer(modifier = Modifier.height(4.dp))
+                                                }
+                                            }
+                                            // Assistant text is selectable (#122);
+                                            // code-block copy buttons are deferred
+                                            // (mikepenz components override needs
+                                            // a version-pinned API check) — the
+                                            // header copy keeps the full source.
+                                            SelectionContainer {
+                                                Markdown(
+                                                    content = msg.content.ifEmpty { "…" },
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                )
+                                            }
+                                            if (msg.interrupted) {
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    "Stopped — reply incomplete.",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.error,
+                                                )
+                                            }
                                             // Persisted tool/skill usage for this
                                             // reply (live frames + post-turn fetch),
                                             // plus the turn's token report (#121).
@@ -4197,6 +4400,11 @@ private fun ChatScreen(
                                             // so nothing is rendered until
                                             // pricing is real.
                                             val usedLine = listOf(
+                                                // Per-message model attribution (#122)
+                                                // leads the meta line, then tokens
+                                                // (#121), then tools/skills.
+                                                (msg.model.ifEmpty { modelLabel })
+                                                    .takeIf { it.isNotBlank() },
                                                 if (msg.total > 0) {
                                                     "~${formatTokens(msg.total)} tok"
                                                 } else if (msg.content.isNotEmpty()) {
@@ -4224,6 +4432,24 @@ private fun ChatScreen(
                                                     overflow = TextOverflow.Ellipsis,
                                                 )
                                             }
+                                            // Stopped-state actions (#122): the latest
+                                            // interrupted reply offers an honest
+                                            // Continue (fresh "Continue" turn) plus
+                                            // Regenerate (replace semantics).
+                                            if (msg.interrupted && isLast && !state.streaming) {
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    OutlinedButton(onClick = stopThen(onContinue)) {
+                                                        Text("Continue")
+                                                    }
+                                                    TextButton(onClick = stopThen(onRegenerate)) {
+                                                        Text("Regenerate")
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -4232,6 +4458,36 @@ private fun ChatScreen(
                     }
                 }
             }
+        }
+        // Replace confirmation (#122): resending from an edited message
+        // drops every later turn — confirmed here, Fork needs none.
+        val confirm = confirmReplace
+        if (confirm != null) {
+            val (idx, text) = confirm
+            val dropped = state.messages.drop(idx + 1).count { it.content.isNotBlank() }
+            AlertDialog(
+                onDismissRequest = { confirmReplace = null },
+                title = { Text("Resend from edited message?") },
+                text = {
+                    Text(
+                        if (dropped == 1) {
+                            "This drops 1 later message and resends."
+                        } else {
+                            "This drops $dropped later messages and resends."
+                        }
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        onReplace(idx, text)
+                        confirmReplace = null
+                        editingIndex = null
+                    }) { Text("Replace") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmReplace = null }) { Text("Cancel") }
+                },
+            )
         }
         // Live overlay (#85): status + transcript + an End button that stays
         // reachable — the in-app recognizer has no system dialog to cover it.

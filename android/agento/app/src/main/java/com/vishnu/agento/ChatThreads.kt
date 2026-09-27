@@ -21,6 +21,9 @@ data class StoredMessage(
     val total: Long = 0L,
     val cached: Long = 0L,
     val unreported: Boolean = false,
+    val model: String = "",
+    val reasoning: String = "",
+    val interrupted: Boolean = false,
 )
 
 /** One conversation thread inside a tab. */
@@ -88,6 +91,7 @@ object ChatThreads {
             ChatMessage(
                 it.role, it.content, it.ts, it.tools, it.skills,
                 it.prompt, it.completion, it.total, it.cached, it.unreported,
+                it.model, it.reasoning, it.interrupted,
             )
         }
 
@@ -96,6 +100,7 @@ object ChatThreads {
             StoredMessage(
                 it.role, it.content, it.ts, it.tools, it.skills,
                 it.prompt, it.completion, it.total, it.cached, it.unreported,
+                it.model, it.reasoning, it.interrupted,
             )
         }
 }

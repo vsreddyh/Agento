@@ -44,6 +44,9 @@ data class ChatUiState(
     /** Server-side totals for the active thread's gateway session (#121);
      * null = unknown (fetch failed, or the thread predates stable sessions). */
     val serverTokens: SessionTotals? = null,
+    /** Text queued while streaming (#122): auto-sends when the reply
+     * finishes cleanly, restored to the composer on failure/stop. */
+    val queued: String = "",
 )
 
 /** Device-observed usage for one conversation thread, summed from
@@ -119,6 +122,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     val state: State<ChatUiState> = _state
 
     private var streamJob: Job? = null
+    /** Send generation: incremented on every doSend/stop so a late
+     * buffered Done/Error/Delta (callbackFlow is UNLIMITED) from a
+     * cancelled turn can never overwrite a newer turn's state. */
+    private var sendGen = 0
     private var threadId: String = ""
     private var threads: List<ChatThread> = emptyList()
 
@@ -211,6 +218,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeTools = emptyList(),
             activeToolLabel = "",
             serverTokens = null,
+            queued = "",
         )
         refreshServerTotals()
     }
@@ -230,6 +238,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             threads = summaries(), threadId = threadId,
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
+            queued = "",
         )
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
@@ -262,7 +271,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
-                serverTokens = null,
+                serverTokens = null, queued = "",
             )
         }
         _state.value = _state.value.copy(threads = summaries())
@@ -336,11 +345,47 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     fun stop() {
+        val wasStreaming = _state.value.streaming
+        // Bump the generation first: a Done/Error already buffered from
+        // this turn goes stale and can no longer overwrite the patch below.
+        sendGen++
         streamJob?.cancel()
         streamJob = null
+        // Mark the in-flight reply as stopped (#122): the partial text
+        // stays with an explicit interrupted flag (Continue/Regenerate
+        // offered in the UI). A queued send is restored to the composer
+        // rather than dropped or fired blindly.
+        val msgs = _state.value.messages
+        val last = msgs.lastOrNull()
+        val patched = if (wasStreaming && last?.role == "assistant") {
+            if (last.content.isNotBlank() || last.reasoning.isNotBlank()) {
+                msgs.dropLast(1) + last.copy(interrupted = true)
+            } else {
+                // Stopped before anything arrived: drop the empty
+                // placeholder so it never enters history or counts.
+                msgs.dropLast(1)
+            }
+        } else {
+            msgs
+        }
+        val queued = _state.value.queued
         _state.value = _state.value.copy(
-            streaming = false, activeTools = emptyList(), activeToolLabel = ""
+            messages = patched, streaming = false,
+            activeTools = emptyList(), activeToolLabel = "",
+            queued = "",
+            pending = if (queued.isNotBlank() && _state.value.pending.isBlank()) queued
+                else _state.value.pending,
         )
+        // Persist the stopped partial so the interrupted flag (and the
+        // text/trace so far) survives a thread switch or restart.
+        if (patched !== msgs && patched.any {
+                it.role == "assistant" &&
+                    (it.content.isNotBlank() || it.reasoning.isNotBlank())
+            }
+        ) {
+            upsertActive(patched)
+            persist()
+        }
     }
 
     /** Resends the current history (used after a failed request). */
@@ -353,17 +398,116 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     fun send() {
         val text = _state.value.pending.trim()
-        if (text.isEmpty() || _state.value.streaming || !_state.value.ready) return
+        if (text.isEmpty() || !_state.value.ready) return
+        // Queue-or-send (#122): the composer stays live while streaming —
+        // a send mid-stream parks the text and auto-fires on Done, instead
+        // of being swallowed by the streaming guard. First queued text wins;
+        // later sends wait for the composer (no silent overwrite).
+        if (_state.value.streaming) {
+            if (_state.value.queued.isBlank()) {
+                _state.value = _state.value.copy(pending = "", queued = text)
+            }
+            return
+        }
         // Re-read per-tab config at send time so Settings edits apply instantly.
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
-        _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path)
+        _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path, queued = "")
         val history = _state.value.messages +
             ChatMessage("user", text, ChatThreads.now())
         _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
         doSend(history, path, provider, model, effort)
+    }
+
+    /** Regenerates the last reply (#122, v1 replace semantics): drops the
+     * trailing assistant message and resends the remaining history. */
+    fun regenerate() {
+        if (_state.value.streaming || !_state.value.ready) return
+        val msgs = _state.value.messages.filter { it.content.isNotBlank() }
+        if (msgs.none { it.role == "user" }) return
+        val trimmed = if (msgs.lastOrNull()?.role == "assistant") msgs.dropLast(1) else msgs
+        if (trimmed.none { it.role == "user" }) return
+        val provider = api.providerFor(tab)
+        val model = api.modelFor(tab)
+        val effort = api.effortFor(tab, model)
+        val path = api.pathFor(tab)
+        _state.value = _state.value.copy(
+            provider = provider, model = model, effort = effort, path = path, queued = "",
+        )
+        doSend(trimmed, path, provider, model, effort)
+    }
+
+    /** Continues a stopped reply (#122): appends an honest "Continue" turn
+     * and sends (the stateless loop resends full history, so continuation
+     * is a fresh turn — never presented as server-side resumption). */
+    fun continueTurn() {
+        if (_state.value.streaming || !_state.value.ready) return
+        val msgs = _state.value.messages
+        val last = msgs.lastOrNull()
+        if (last?.role != "assistant" || !last.interrupted) return
+        val provider = api.providerFor(tab)
+        val model = api.modelFor(tab)
+        val effort = api.effortFor(tab, model)
+        val path = api.pathFor(tab)
+        _state.value = _state.value.copy(
+            provider = provider, model = model, effort = effort, path = path, queued = "",
+        )
+        val history = msgs + ChatMessage("user", "Continue", ChatThreads.now())
+        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+        doSend(history, path, provider, model, effort)
+    }
+
+    /** Edits a user message and resends from there (#122 Replace): history
+     * after [index] is dropped. Callers confirm first when turns are lost. */
+    fun replaceAndResend(index: Int, text: String) {
+        if (_state.value.streaming || !_state.value.ready) return
+        val clean = text.trim()
+        if (clean.isEmpty()) return
+        val msgs = _state.value.messages
+        if (index !in msgs.indices || msgs[index].role != "user") return
+        val provider = api.providerFor(tab)
+        val model = api.modelFor(tab)
+        val effort = api.effortFor(tab, model)
+        val path = api.pathFor(tab)
+        _state.value = _state.value.copy(
+            provider = provider, model = model, effort = effort, path = path, queued = "",
+        )
+        val history = msgs.take(index) + ChatMessage("user", clean, ChatThreads.now())
+        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+        doSend(history, path, provider, model, effort)
+    }
+
+    /** Forks a thread at an edited user message (#122): the copy (up to and
+     * including the replacement) becomes a new conversation and sends. */
+    fun forkAndResend(index: Int, text: String) {
+        if (_state.value.streaming || !_state.value.ready) return
+        val clean = text.trim()
+        if (clean.isEmpty()) return
+        val msgs = _state.value.messages
+        if (index !in msgs.indices || msgs[index].role != "user") return
+        val provider = api.providerFor(tab)
+        val model = api.modelFor(tab)
+        val effort = api.effortFor(tab, model)
+        val path = api.pathFor(tab)
+        val forked = msgs.take(index) + ChatMessage("user", clean, ChatThreads.now())
+        val fresh = ChatThread(
+            id = ChatThreads.newId(),
+            updatedAt = ChatThreads.now(),
+            messages = ChatThreads.toStored(forked),
+        )
+        threads = listOf(fresh) + threads
+        threadId = fresh.id
+        _state.value = _state.value.copy(
+            provider = provider, model = model, effort = effort, path = path,
+            messages = forked, threads = summaries(), threadId = threadId,
+            error = "", pending = "", streaming = true, queued = "",
+            activeTools = emptyList(), activeToolLabel = "",
+            serverTokens = null,
+        )
+        persist()
+        doSend(forked, path, provider, model, effort)
     }
 
     private fun doSend(
@@ -377,9 +521,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             streaming = true, error = "",
             activeTools = emptyList(), activeToolLabel = "",
         )
-        // Placeholder assistant message that deltas append to.
-        _state.value = _state.value.copy(messages = history + ChatMessage("assistant", "", ChatThreads.now()))
+        // Placeholder assistant message that deltas append to. Its timestamp
+        // and model are fixed up front: rebuilding it per token must not
+        // mint a fresh ts (remembers keyed on it would reset mid-stream)
+        // nor drop the serving model (the meta line would flicker).
+        val placeholderTs = ChatThreads.now()
+        _state.value = _state.value.copy(
+            messages = history + ChatMessage(
+                "assistant", "", placeholderTs, model = model,
+            )
+        )
         val acc = StringBuilder()
+        // Reasoning trace accumulator (bounded by the sender; mirrored here
+        // so the placeholder update below can't grow it past the cap).
+        val racc = StringBuilder()
         // One stable gateway session per app thread (#120): the thread id
         // ships as X-Hermes-Session-Id so turns append to the same server
         // session (titles/costs read per conversation). Captured up front:
@@ -387,8 +542,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val stableSessionId = threadId
         val liveTools = mutableListOf<String>()
         streamJob?.cancel()
+        // Fresh generation: events from any older turn still buffered go
+        // stale (see stop()). Captured below; every handler checks it.
+        sendGen++
+        val gen = sendGen
         streamJob = viewModelScope.launch {
             api.streamChat(path, provider, model, history, stableSessionId, effort).collect { event ->
+                // Stale turn (cancelled after this event buffered): never
+                // let it touch state — it could resurrect a dropped
+                // placeholder or clear a newer turn's interrupted flag.
+                if (gen != sendGen) return@collect
                 when (event) {
                     is ChatEvent.ToolProgress -> {
                         val name = event.tool.trim()
@@ -407,15 +570,36 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     is ChatEvent.Delta -> {
                         acc.append(event.text)
                         val msgs = _state.value.messages
+                        val prior = msgs.lastOrNull()
+                        // Preserve the reasoning trace accumulated so far:
+                        // rebuilding the placeholder from content alone
+                        // would wipe it on every token.
+                        val kept = if (prior?.role == "assistant") prior.reasoning else ""
                         _state.value = _state.value.copy(
-                            messages = msgs.dropLast(1) + ChatMessage("assistant", acc.toString(), ChatThreads.now()),
+                            messages = msgs.dropLast(1) + ChatMessage(
+                                "assistant", acc.toString(), placeholderTs,
+                                reasoning = kept, model = model,
+                            ),
                         )
+                    }
+                    is ChatEvent.Reasoning -> {
+                        if (racc.length < REASONING_CAP) {
+                            racc.append(event.text.take(REASONING_CAP - racc.length))
+                        }
+                        val msgs = _state.value.messages
+                        val last = msgs.lastOrNull()
+                        if (last?.role == "assistant") {
+                            _state.value = _state.value.copy(
+                                messages = msgs.dropLast(1) + last.copy(reasoning = racc.toString()),
+                            )
+                        }
                     }
                     is ChatEvent.Done -> {
                         val final = event.fullText.ifEmpty { acc.toString() }
                         val finishedAt = ChatThreads.now()
                         val finished = msgsDropLastPlusAssistant(
                             final, finishedAt, liveTools.toList(), event.usage,
+                            racc.toString(), model,
                         )
                         _state.value = _state.value.copy(
                             messages = finished,
@@ -436,6 +620,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                                 .replace(Regex("\\s+"), " ").take(160)
                             ChatNotifications.notifyDone(appCtx, tabTitle(tab), snippet)
                         }
+                        // This turn is over: release the job before flushing
+                        // so the queued send's doSend never "cancels" the
+                        // just-finished collection it runs inside of.
+                        streamJob = null
+                        flushQueued(gen)
                     }
                     is ChatEvent.Error -> {
                         // Terminal (see streamChat): nothing follows. Keep any
@@ -445,7 +634,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // is still empty.
                         val msgs = _state.value.messages
                         val last = msgs.lastOrNull()
-                        val kept = if (last?.role == "assistant" && last.content.isNotEmpty()) {
+                        val kept = if (last?.role == "assistant" &&
+                            (last.content.isNotBlank() || last.reasoning.isNotBlank())
+                        ) {
                             msgs.dropLast(1) + last.copy(
                                 tools = (last.tools + liveTools).distinct().take(20),
                                 unreported = true,
@@ -458,6 +649,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         _state.value = _state.value.copy(
                             messages = kept, streaming = false, error = event.message,
                             activeTools = emptyList(), activeToolLabel = "",
+                            // A queued send never auto-fires after a failure
+                            // (no failure cascades): hand it back to the
+                            // composer instead.
+                            pending = if (_state.value.queued.isNotBlank() &&
+                                _state.value.pending.isBlank()
+                            ) {
+                                _state.value.queued
+                            } else {
+                                _state.value.pending
+                            },
+                            queued = "",
                         )
                         if (kept.size == msgs.size) upsertActive(kept)
                         persist()
@@ -470,17 +672,22 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Finished assistant message with the live-seen tools and the turn's
      * server-reported token counts attached (null usage = the stream carried
-     * nothing usable, so the reply is marked unreported rather than zero). */
+     * nothing usable, so the reply is marked unreported rather than zero),
+     * plus the reasoning trace and the model that served it. [final] is
+     * persisted as-is (possibly empty): the UI renders its own fallback, so
+     * no synthetic text ever enters history or the next turn's prompt. */
     private fun msgsDropLastPlusAssistant(
         final: String,
         finishedAt: Long,
         tools: List<String>,
         usage: TokenUsage?,
+        reasoning: String,
+        model: String,
     ): List<ChatMessage> {
         val msgs = _state.value.messages
         return msgs.dropLast(1) + ChatMessage(
             "assistant",
-            final.ifEmpty { "The assistant sent an empty reply. Try asking again." },
+            final,
             finishedAt,
             tools = tools.distinct().take(20),
             prompt = usage?.prompt ?: 0L,
@@ -488,7 +695,36 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             total = usage?.total ?: 0L,
             cached = usage?.cached ?: 0L,
             unreported = usage == null,
+            model = model.trim(),
+            reasoning = reasoning,
         )
+    }
+
+    /** Sends a send queued mid-stream once the reply finishes cleanly.
+     * [doneGen] must still be current (a stop() in between keeps the queue
+     * parked instead of firing into the new turn). */
+    private fun flushQueued(doneGen: Int) {
+        if (doneGen != sendGen) return
+        val q = _state.value.queued.trim()
+        // A newer turn started mid-flush: keep the queue for its Done
+        // rather than firing into the live request.
+        if (q.isEmpty() || _state.value.streaming) return
+        // Not ready (connectivity flap): no future Done is coming to fire
+        // this, so hand it back to the composer instead of stranding it.
+        if (!_state.value.ready) {
+            _state.value = _state.value.copy(queued = "", pending = q)
+            return
+        }
+        _state.value = _state.value.copy(queued = "")
+        val provider = api.providerFor(tab)
+        val model = api.modelFor(tab)
+        val effort = api.effortFor(tab, model)
+        val path = api.pathFor(tab)
+        _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path)
+        val history = _state.value.messages +
+            ChatMessage("user", q, ChatThreads.now())
+        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+        doSend(history, path, provider, model, effort)
     }
 
     /** Refreshes the server-side session totals for the active thread (#121
@@ -541,7 +777,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 serverApi.fetchSessionUsage(path, sessionId).getOrThrow()
             }.getOrNull() ?: return@launch
             if (usage.tools.isEmpty() && usage.skills.isEmpty()) return@launch
-            val expected = final.ifEmpty { "The assistant sent an empty reply. Try asking again." }
+            val expected = final
             withContext(Dispatchers.Main) {
                 // A resend issued mid-fetch means a new turn is streaming;
                 // skip so the in-flight placeholder is never persisted.
@@ -553,7 +789,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 } else -1
                 if (idx < 0) {
                     idx = fresh.indexOfLast {
-                        it.role == "assistant" && it.ts == finishedAt && it.content == expected
+                        it.role == "assistant" && it.ts == finishedAt &&
+                            (expected.isEmpty() || it.content == expected)
                     }
                 }
                 if (idx < 0) return@withContext

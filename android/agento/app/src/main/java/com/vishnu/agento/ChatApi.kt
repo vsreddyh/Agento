@@ -35,10 +35,18 @@ data class ChatMessage(
     /** True when the turn ran but the stream carried no usable `usage`
      * object (failed/interrupted turn) — an explicit gap, not a zero. */
     val unreported: Boolean = false,
+    /** Model that produced this reply, stored at send time ("" = legacy). */
+    val model: String = "",
+    /** Collapsible reasoning trace for this reply ("" = none reported). */
+    val reasoning: String = "",
+    /** True when streaming stopped mid-reply (explicit stopped state). */
+    val interrupted: Boolean = false,
 )
 
 sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
+    /** A slice of the model's reasoning trace (`delta.reasoning_content`). */
+    data class Reasoning(val text: String) : ChatEvent
     /** [usage] is the server-reported token count for the turn (null when
      * the stream carried no usable `usage` object — e.g. a failed turn). */
     data class Done(val fullText: String, val usage: TokenUsage? = null) : ChatEvent
@@ -131,6 +139,10 @@ private fun hasTokenKey(o: JSONObject): Boolean {
     }
     return false
 }
+
+/** Reasoning trace cap per turn (backing the collapsible Thinking
+ * section); shared by the stream parser and the collector. */
+const val REASONING_CAP = 20_000
 
 /** Known provider slugs: offline fallback for the dynamic picker (the live
  * list comes from GET /api/model/options on the gateway). */
@@ -463,6 +475,9 @@ class ChatApi(context: Context) {
                         return@launch
                     }
                     val full = StringBuilder()
+                    // Reasoning trace accumulator, bounded: traces can run
+                    // long and only back a collapsible section.
+                    val reasoned = StringBuilder()
                     // Last usable `usage` object wins: the gateway attaches
                     // totals to the final chunk (earlier chunks carry none).
                     var seenUsage: TokenUsage? = null
@@ -518,14 +533,37 @@ class ChatApi(context: Context) {
                             val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
                             val choice = choices.optJSONObject(0) ?: return@runCatching ""
                             // chat completions: choices[0].delta.content;
-                            // responses API: choices[0].message.content (fallback)
+                            // responses API: choices[0].message.content
+                            // (fallback). optString never returns null, so
+                            // emptiness (not nullness) selects the fallback.
                             choice.optJSONObject("delta")?.optString("content")
+                                .takeUnless { it.isNullOrEmpty() }
                                 ?: choice.optJSONObject("message")?.optString("content")
+                                    .takeUnless { it.isNullOrEmpty() }
                                 ?: ""
                         }.getOrDefault("")
                         if (delta.isNotEmpty()) {
                             full.append(delta)
                             trySend(ChatEvent.Delta(delta))
+                        }
+                        // Reasoning trace (Hermes emits delta.reasoning_content;
+                        // flash reports it on thinking turns). Same shape
+                        // probing as content above; empty for most turns.
+                        val reasoning = runCatching {
+                            val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
+                            val choice = choices.optJSONObject(0) ?: return@runCatching ""
+                            choice.optJSONObject("delta")?.optString("reasoning_content")
+                                .takeUnless { it.isNullOrEmpty() }
+                                ?: choice.optJSONObject("message")?.optString("reasoning_content")
+                                    .takeUnless { it.isNullOrEmpty() }
+                                ?: ""
+                        }.getOrDefault("")
+                        if (reasoning.isNotEmpty() && reasoned.length < REASONING_CAP) {
+                            // The event carries the truncated slice, so every
+                            // consumer stays under the shared cap.
+                            val slice = reasoning.take(REASONING_CAP - reasoned.length)
+                            reasoned.append(slice)
+                            trySend(ChatEvent.Reasoning(slice))
                         }
                     }
                     trySend(ChatEvent.Done(full.toString(), seenUsage))
