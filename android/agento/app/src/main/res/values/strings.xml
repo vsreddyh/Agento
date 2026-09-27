@@ -2,6 +2,12 @@
 <resources>
     <string name="app_name">Agento</string>
     <string name="live_widget_desc">Start a live voice session with God</string>
+    <string name="task_widget_desc">Open tasks at a glance</string>
+    <string name="task_widget_title">Task Manager</string>
+    <string name="task_widget_loading">Loading…</string>
+    <string name="task_widget_error">Couldn\'t load tasks</string>
+    <string name="task_widget_empty">All done!</string>
+    <string name="task_widget_refresh">Refresh tasks</string>
     <string name="channel_name">Health Sync</string>
     <string name="channel_desc">Hourly health data sync to your bot</string>
     <string name="sync_notif_title">Syncing health data…</string>

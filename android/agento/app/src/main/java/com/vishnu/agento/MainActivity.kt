@@ -183,12 +183,22 @@ class MainActivity : ComponentActivity() {
     private val liveGen = mutableIntStateOf(0)
     private val liveTab = mutableStateOf("god")
 
+    /**
+     * Task widget tap (#101). Generation counter like liveGen so retaps
+     * while the app is open renavigate: singleTop delivers them via
+     * onNewIntent and the Task Manager tab consumes each generation once.
+     */
+    private val tasksGen = mutableIntStateOf(0)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == LiveWidget.ACTION_LIVE) {
             liveTab.value = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
             liveGen.intValue++
+        }
+        if (intent.action == TaskWidget.ACTION_TASKS) {
+            tasksGen.intValue++
         }
     }
 
@@ -200,6 +210,10 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null && intent?.action == LiveWidget.ACTION_LIVE && liveGen.intValue == 0) {
             liveTab.value = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
             liveGen.intValue = 1
+        }
+        // Task widget tap: same redelivery guard — only a fresh launch counts.
+        if (savedInstanceState == null && intent?.action == TaskWidget.ACTION_TASKS && tasksGen.intValue == 0) {
+            tasksGen.intValue = 1
         }
         setContent {
             val context = LocalContext.current
@@ -227,6 +241,12 @@ class MainActivity : ComponentActivity() {
                                 "resumes" -> Destination.Portfolio
                                 else -> Destination.God
                             }
+                        }
+                    }
+                    // Widget task tap (#101): land on the Task Manager screen.
+                    LaunchedEffect(tasksGen.intValue) {
+                        if (tasksGen.intValue > 0) {
+                            dest = Destination.TaskManager
                         }
                     }
                     // Null section = the settings hub overview; a non-null
@@ -831,6 +851,11 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         }
     }
 
+    // Push fresh counts to the home-screen widget (#101) after mutations.
+    fun pokeWidget() {
+        TaskWidget.refresh(context)
+    }
+
     fun doComplete(t: ServerTask) {
         busy = true
         scope.launch {
@@ -847,6 +872,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         repeatRule = t.repeatRule,
                     )
                     refreshTick++
+                    pokeWidget()
                 },
                 onFailure = ::fail,
             )
@@ -858,7 +884,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         busy = true
         scope.launch {
             api.reopen(t.id).fold(
-                onSuccess = { refreshTick++ },
+                onSuccess = { refreshTick++; pokeWidget() },
                 onFailure = ::fail,
             )
             busy = false
@@ -873,6 +899,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     deleting = null
                     editing = null
                     refreshTick++
+                    pokeWidget()
                     snackbar.showSnackbar("Task deleted.")
                 },
                 onFailure = ::fail,
@@ -1010,7 +1037,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             estimatedMinutes = mins,
                             repeatRule = next.repeatRule,
                         ).fold(
-                            onSuccess = { editing = null; refreshTick++ },
+                            onSuccess = { editing = null; refreshTick++; pokeWidget() },
                             onFailure = ::fail,
                         )
                     } else {
@@ -1023,7 +1050,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             estimatedMinutes = mins,
                             repeatRule = next.repeatRule,
                         ).fold(
-                            onSuccess = { editing = null; refreshTick++ },
+                            onSuccess = { editing = null; refreshTick++; pokeWidget() },
                             onFailure = ::fail,
                         )
                     }
@@ -1068,7 +1095,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                 .takeIf { it.isNotEmpty() }?.toIntOrNull(),
                             repeatRule = again.repeatRule,
                         ).fold(
-                            onSuccess = { refreshTick++ },
+                            onSuccess = { refreshTick++; pokeWidget() },
                             onFailure = ::fail,
                         )
                         busy = false
