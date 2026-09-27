@@ -191,7 +191,7 @@ class ServerApi(context: Context) {
                     val o = arr.optJSONObject(i) ?: continue
                     val role = o.optString("role", "")
                     roles.add(role)
-                    when (role) {
+                    when (role.trim().lowercase(java.util.Locale.ROOT)) {
                         "assistant" -> {
                             val tarr = o.optJSONArray("tool_calls") ?: continue
                             for (j in 0 until tarr.length()) {
@@ -271,13 +271,19 @@ private data class IndexedCall(
 
 /**
  * Transcript offset where the latest turn starts: just after the last
- * `user`/`human` row. Returns 0 when no user row exists (per-turn legacy
- * sessions, or gateways that don't echo user messages) so the whole
- * transcript counts. Pure for testability.
+ * `user`/`human` row (case-insensitive — gateway shapes drift). Returns
+ * `roles.size` when no user row exists so nothing is attributed to this
+ * turn: with stable per-thread sessions a whole-transcript fallback would
+ * bleed every prior turn's tools into the current reply's chips, while
+ * empty is safe (the live tool frames attached at Done stay). Pure for
+ * testability.
  */
 fun lastTurnStartIndex(roles: List<String>): Int {
-    val lastUser = roles.indexOfLast { it == "user" || it == "human" }
-    return if (lastUser < 0) 0 else lastUser + 1
+    val lastUser = roles.indexOfLast {
+        val r = it.trim().lowercase(java.util.Locale.ROOT)
+        r == "user" || r == "human"
+    }
+    return if (lastUser < 0) roles.size else lastUser + 1
 }
 
 /** Tools + skills used during one server-side turn. */
