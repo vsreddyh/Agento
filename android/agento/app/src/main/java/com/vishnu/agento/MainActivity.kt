@@ -863,9 +863,9 @@ private fun ServerTask.dueKey(): String {
 }
 
 /** True when an open task's due date is before today (ISO YYYY-MM-DD
- * compares lexicographically). Blank date never counts as overdue. */
+ * compares lexicographically). Blank or malformed dates never count. */
 private fun ServerTask.isOverdue(today: String): Boolean =
-    isOpen() && dueDate.isNotEmpty() && dueDate < today
+    isOpen() && dueDate.isIsoDate() && dueDate < today
 
 /** Day buckets for the grouped task list, in display order. Done tasks
  * in the All view collect in Completed at the bottom. */
@@ -881,7 +881,7 @@ private enum class DueBucket(val title: String) {
 
 private fun ServerTask.dueBucket(today: java.time.LocalDate): DueBucket {
     if (!isOpen()) return DueBucket.Completed
-    if (dueDate.isEmpty()) return DueBucket.NoDate
+    if (!dueDate.isIsoDate()) return DueBucket.NoDate
     val s = dueDate
     val t = today.toString()
     return when {
@@ -983,8 +983,18 @@ private fun TaskManagerScreen(
         loading = false
     }
 
-    // Open the deep-linked row as soon as it is in the list (retries
-    // across filter switches until it appears).
+    // Open the deep-linked row as soon as it is in the list. A later
+    // filter switch is an explicit context change, so a still-missing id
+    // is dropped there instead of lingering (e.g. a deleted task). The
+    // first run is skipped so a fresh deep-link survives initial load.
+    var seenFilter by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(filterName) {
+        if (seenFilter == null) seenFilter = filterName
+        else if (seenFilter != filterName) {
+            seenFilter = filterName
+            pendingDeepLink = null
+        }
+    }
     LaunchedEffect(tasks, pendingDeepLink) {
         pendingDeepLink?.let { id ->
             tasks.firstOrNull { it.id == id }?.let {

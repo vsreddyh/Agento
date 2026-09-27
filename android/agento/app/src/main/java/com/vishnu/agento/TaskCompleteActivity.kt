@@ -5,7 +5,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.launch
 
 /**
  * Invisible trampoline for task-widget row taps (Theme.Agento.Trampoline,

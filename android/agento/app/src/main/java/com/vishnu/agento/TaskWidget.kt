@@ -11,6 +11,9 @@ import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /** Which server state one widget placement shows. Stored per widget id
@@ -79,6 +82,18 @@ class TaskWidget : AppWidgetProvider() {
                 }
             }
         }
+    }
+
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        // Drop per-placement prefs (view/density/due) so removed widgets
+        // don't leak keys forever.
+        val edit = prefs(context).edit()
+        for (id in appWidgetIds) {
+            edit.remove("task_widget_view_$id")
+                .remove("task_widget_density_$id")
+                .remove("task_widget_due_$id")
+        }
+        edit.apply()
     }
 
     /** Fetches open tasks off-thread; goAsync keeps the broadcast alive. */
@@ -177,16 +192,19 @@ class TaskWidget : AppWidgetProvider() {
         }
 
         /** Single fetch-and-push path shared by pull() and refresh().
-         * All three states are fetched so every placement's view has
-         * data regardless of which views are installed. */
+         * All three states are fetched (in parallel) so every placement's
+         * view has data regardless of which views are installed. */
         private suspend fun fetchAndPush(appCtx: Context, ids: IntArray) {
             if (ids.isEmpty()) return
             val api = TasksApi(appCtx)
             val views = mutableMapOf<String, List<ServerTask>>()
             var failed = false
-            for (v in TaskWidgetView.entries) {
-                val list = api.list(v.state).getOrNull()
-                if (list == null) failed = true else views[v.state] = list
+            coroutineScope {
+                TaskWidgetView.entries.map { v ->
+                    async { v.state to api.list(v.state).getOrNull() }
+                }.awaitAll().forEach { (state, list) ->
+                    if (list == null) failed = true else views[state] = list
+                }
             }
             if (views.isNotEmpty()) cachedViews = views
             lastError = failed && views.isEmpty()
@@ -239,10 +257,11 @@ class TaskWidget : AppWidgetProvider() {
             )
             // Trampoline template: per-row fill-ins carry either
             // EXTRA_TASK_ID (open detail) or EXTRA_COMPLETE_ID (complete
-            // inline). Per-widget data URI keeps factories distinct.
+            // inline). Per-widget code, like the view/config intents, so
+            // placements never share a cached PendingIntent.
             val trampoline = Intent(context, TaskCompleteActivity::class.java)
             val rowPending = PendingIntent.getActivity(
-                context, ROW_CODE, trampoline,
+                context, ROW_CODE + appWidgetId, trampoline,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             // Per-widget data URI so the launcher keeps a distinct factory
