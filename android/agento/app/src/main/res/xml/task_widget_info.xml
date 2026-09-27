@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 3x2 minimum (180dp x 110dp), resizable both ways; the provider picks
-     how many task rows fit from the per-widget size options, so any
-     placement at or above 3x2 renders without clipping. -->
+<!-- 3x2 minimum (180dp x 110dp), resizable both ways; the content is a
+     scrollable list that fills whatever height the placement offers. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="180dp"
     android:minHeight="110dp"

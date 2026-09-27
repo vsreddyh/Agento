@@ -10,6 +10,12 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.16.0]
+
+- Task widget redo: rounded card with dark-mode surface, header divider,
+  and a scrollable task list that fills any placement at/above the 3x2
+  minimum — no row cap, no "+N more", every task reachable by scroll.
+
 ## [3.15.0]
 
 - Task widget is dynamic: 3x2 minimum, resizable both ways, with the

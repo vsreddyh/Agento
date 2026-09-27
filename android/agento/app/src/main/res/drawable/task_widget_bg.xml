@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rounded card background for the task widget; solid comes from
+     @color/task_widget_bg so light/dark resolve via values-night. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="28dp" />
+    <solid android:color="@color/task_widget_bg" />
+</shape>

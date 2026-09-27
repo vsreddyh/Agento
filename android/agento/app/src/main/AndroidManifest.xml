@@ -136,6 +136,12 @@
                 android:resource="@xml/task_widget_info" />
         </receiver>
 
+        <!-- Collection adapter backing the task widget's scrollable list. -->
+        <service
+            android:name=".TaskWidgetService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+
         <receiver
             android:name=".BootReceiver"
             android:exported="true">

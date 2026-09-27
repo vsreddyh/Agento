@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#1B5E20</color>
+    <!-- Task widget card surface (light). Night variant in values-night. -->
+    <color name="task_widget_bg">#FFFFFF</color>
+    <color name="task_widget_divider">#1F000000</color>
 </resources>

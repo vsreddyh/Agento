@@ -1,18 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Task manager widget (#101): RemoteViews can't use Compose, so this is a
-     plain LinearLayout — header (title + count + refresh) plus up to
-     MAX_ROWS single-line task rows and a "+N more" overflow line. The
-     provider re-renders per widget id on update/resize (TaskWidget.kt reads
-     the size options bundle), so a 3x2 widget shows 2 rows and taller /
-     wider placements grow the list instead of clipping. System background +
-     primary/secondary text colors so it stays readable on any wallpaper. -->
+<!-- Task manager widget (#101): card with header (title + count + refresh),
+     divider, then a scrollable ListView fed by TaskWidgetService. The list
+     takes all remaining height (weight 1), so any placement at/above the
+     3x2 minimum fills instead of leaving a blank slab; all 30 tasks are
+     reachable by scroll, no "+N more" truncation. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="12dp"
-    android:background="?android:attr/colorBackground">
+    android:padding="16dp"
+    android:background="@drawable/task_widget_bg">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -30,7 +28,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/task_widget_title"
-                android:textSize="14sp"
+                android:textSize="16sp"
                 android:textStyle="bold"
                 android:textColor="?android:attr/textColorPrimary" />
 
@@ -40,89 +38,43 @@
                 android:layout_height="wrap_content"
                 android:textSize="13sp"
                 android:text="@string/task_widget_loading"
-                android:textColor="?android:attr/textColorPrimary" />
+                android:textColor="?android:attr/textColorSecondary" />
 
         </LinearLayout>
 
         <ImageButton
             android:id="@+id/task_widget_refresh"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
             android:src="@android:drawable/ic_menu_rotate"
             android:background="?android:attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/task_widget_refresh" />
 
     </LinearLayout>
 
-    <LinearLayout
-        android:id="@+id/task_widget_list"
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="4dp"
+        android:background="@color/task_widget_divider" />
+
+    <ListView
+        android:id="@+id/task_widget_list_view"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:divider="@color/task_widget_divider"
+        android:dividerHeight="1dp"
+        android:clipToPadding="false" />
+
+    <TextView
+        android:id="@+id/task_widget_empty"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:paddingTop="2dp">
-
-        <TextView
-            android:id="@+id/task_widget_item1"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="13sp"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="?android:attr/textColorSecondary" />
-
-        <TextView
-            android:id="@+id/task_widget_item2"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="13sp"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="?android:attr/textColorSecondary" />
-
-        <TextView
-            android:id="@+id/task_widget_item3"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="13sp"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="?android:attr/textColorSecondary" />
-
-        <TextView
-            android:id="@+id/task_widget_item4"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="13sp"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="?android:attr/textColorSecondary" />
-
-        <TextView
-            android:id="@+id/task_widget_item5"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="13sp"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="?android:attr/textColorSecondary" />
-
-        <TextView
-            android:id="@+id/task_widget_item6"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="13sp"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="?android:attr/textColorSecondary" />
-
-        <TextView
-            android:id="@+id/task_widget_overflow"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textSize="12sp"
-            android:textStyle="italic"
-            android:textColor="?android:attr/textColorSecondary" />
-
-    </LinearLayout>
+        android:paddingTop="8dp"
+        android:textSize="13sp"
+        android:text="@string/task_widget_loading"
+        android:textColor="?android:attr/textColorSecondary" />
 
 </LinearLayout>
