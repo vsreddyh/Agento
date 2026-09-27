@@ -1,21 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One scrollable row in the task widget list: name takes the width,
-     due label hugs the right and ellipsizes independently. -->
+<!-- Compact widget row: tighter padding, smaller text, name only (the due
+     line is controlled separately by the per-widget display setting). -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_row"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:paddingTop="8dp"
-    android:paddingBottom="8dp"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp"
     android:paddingStart="4dp"
     android:paddingEnd="4dp">
 
     <ImageButton
         android:id="@+id/task_widget_row_check"
-        android:layout_width="32dp"
-        android:layout_height="32dp"
+        android:layout_width="28dp"
+        android:layout_height="28dp"
         android:padding="6dp"
         android:src="@drawable/task_check"
         android:background="?android:attr/selectableItemBackgroundBorderless"
@@ -26,7 +26,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:textSize="14sp"
+        android:textSize="12sp"
         android:maxLines="1"
         android:ellipsize="end"
         android:textColor="?android:attr/textColorPrimary" />
@@ -36,7 +36,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:paddingStart="8dp"
-        android:textSize="12sp"
+        android:textSize="11sp"
         android:maxLines="1"
         android:textColor="?android:attr/textColorSecondary" />
 

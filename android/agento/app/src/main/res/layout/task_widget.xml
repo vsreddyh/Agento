@@ -25,6 +25,7 @@
             android:orientation="vertical">
 
             <TextView
+                android:id="@+id/task_widget_title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/task_widget_title"
@@ -41,6 +42,18 @@
                 android:textColor="?android:attr/textColorSecondary" />
 
         </LinearLayout>
+
+        <Button
+            android:id="@+id/task_widget_view"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:paddingLeft="8dp"
+            android:paddingRight="8dp"
+            android:textSize="12sp"
+            android:textAllCaps="false"
+            android:contentDescription="@string/task_widget_view" />
 
         <ImageButton
             android:id="@+id/task_widget_refresh"
