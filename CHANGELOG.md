@@ -10,6 +10,12 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.14.1]
+
+- Tools screen no longer lists each MCP server twice: derived server
+  rows now show only when the gateway doesn't already list the server
+  as its own toolset (4 servers showed as 8; 5 with project-manager).
+
 ## [3.14.0]
 
 - Tools move out of Skills into their own sidebar section, with the
