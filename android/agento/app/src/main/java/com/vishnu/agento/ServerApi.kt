@@ -327,8 +327,37 @@ fun SkillInfo.isDefault(): Boolean = category.isNotBlank()
 private val CUSTOM_MCP_TOOLSET_NAMES = setOf(
     "miser-money", "miser_money",
     "mcp-miser-money", "mcp-cookbook", "mcp-health-check",
+    "mcp-task-manager", "mcp_task_manager",
     "cookbook", "health-check", "health_check", "money",
+    "task-manager", "task_manager",
 )
+
+/** Normalizes a toolset or derived-server name to one MCP server key:
+ * lowercase, `mcp-`/`mcp_` prefix stripped, `_` treated as `-`. Pure. */
+fun normalizeMcpServerKey(name: String): String {
+    var n = name.trim().lowercase(Locale.ROOT).replace('_', '-')
+    if (n.startsWith("mcp-")) n = n.removePrefix("mcp-")
+    return n
+}
+
+/**
+ * Drops derived [McpServer] rows already covered by an explicit custom
+ * toolset row (e.g. `mcp-miser-money` toolset + derived `miser-money`
+ * parsed from its `mcp__miser-money__*` tools would otherwise render the
+ * same server twice). Derived rows remain as fallback for servers with no
+ * explicit row (older gateways, MCP tools bundled in a default toolset).
+ * Pure for testability.
+ */
+fun dedupMcpServers(
+    toolsets: List<ToolsetInfo>,
+    servers: List<McpServer>,
+): List<McpServer> {
+    val covered = toolsets
+        .filter { it.isCustomMcp() }
+        .map { normalizeMcpServerKey(it.name) }
+        .toSet()
+    return servers.filter { normalizeMcpServerKey(it.name) !in covered }
+}
 
 /**
  * Tools: built-in Hermes toolsets (web, browser, terminal, …) are the
