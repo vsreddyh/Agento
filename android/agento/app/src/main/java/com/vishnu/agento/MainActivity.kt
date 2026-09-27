@@ -475,65 +475,70 @@ private fun DrawerList(
     onToggleSettings: () -> Unit,
     modelFor: (Destination) -> String? = { null },
 ) {
-    Text(
-        "Agento",
-        style = MaterialTheme.typography.titleLarge,
-        modifier = Modifier.padding(16.dp),
-    )
-    Destination.entries.forEach { d ->
-        if (d == Destination.Settings) {
-            NavigationDrawerItem(
-                label = { Text(d.title) },
-                icon = { Icon(d.icon(), contentDescription = null) },
-                badge = {
-                    Icon(
-                        if (settingsOpen) Icons.Filled.ExpandLess
-                        else Icons.Filled.ExpandMore,
-                        contentDescription = null,
-                    )
-                },
-                selected = dest == d,
-                onClick = onToggleSettings,
-                modifier = Modifier.padding(horizontal = 8.dp),
-            )
-            // #60: settings subsections live in the
-            // sidebar; each opens its own screen.
-            if (settingsOpen) {
-                SettingSection.entries.forEach { s ->
-                    NavigationDrawerItem(
-                        label = { Text(s.title) },
-                        selected = dest == Destination.Settings && section == s,
-                        onClick = { onSection(s) },
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                            .padding(start = 24.dp),
-                    )
-                }
-            }
-        } else {
-            val sub = modelFor(d)
-            NavigationDrawerItem(
-                label = {
-                    Column {
-                        Text(d.title, maxLines = 1)
-                        if (sub != null) {
-                            Text(
-                                sub.ifEmpty { "Not set up" },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (sub.isEmpty()) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                                maxLines = 1,
-                            )
-                        }
+    // Scrollable (#105): 9 destinations plus the settings subsections
+    // overflow short screens — without this the bottom items are cut off
+    // with no way to reach them.
+    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        Text(
+            "Agento",
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(16.dp),
+        )
+        Destination.entries.forEach { d ->
+            if (d == Destination.Settings) {
+                NavigationDrawerItem(
+                    label = { Text(d.title) },
+                    icon = { Icon(d.icon(), contentDescription = null) },
+                    badge = {
+                        Icon(
+                            if (settingsOpen) Icons.Filled.ExpandLess
+                            else Icons.Filled.ExpandMore,
+                            contentDescription = null,
+                        )
+                    },
+                    selected = dest == d,
+                    onClick = onToggleSettings,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+                // #60: settings subsections live in the
+                // sidebar; each opens its own screen.
+                if (settingsOpen) {
+                    SettingSection.entries.forEach { s ->
+                        NavigationDrawerItem(
+                            label = { Text(s.title) },
+                            selected = dest == Destination.Settings && section == s,
+                            onClick = { onSection(s) },
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                                .padding(start = 24.dp),
+                        )
                     }
-                },
-                icon = { Icon(d.icon(), contentDescription = null) },
-                selected = dest == d,
-                onClick = { onDest(d) },
-                modifier = Modifier.padding(horizontal = 8.dp),
-            )
+                }
+            } else {
+                val sub = modelFor(d)
+                NavigationDrawerItem(
+                    label = {
+                        Column {
+                            Text(d.title, maxLines = 1)
+                            if (sub != null) {
+                                Text(
+                                    sub.ifEmpty { "Not set up" },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (sub.isEmpty()) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    },
+                    icon = { Icon(d.icon(), contentDescription = null) },
+                    selected = dest == d,
+                    onClick = { onDest(d) },
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+            }
         }
     }
 }
@@ -548,31 +553,35 @@ private fun RailContent(
     onSection: (SettingSection) -> Unit,
     onToggleSettings: () -> Unit,
 ) {
-    Destination.entries.forEach { d ->
-        if (d == Destination.Settings) {
-            NavigationRailItem(
-                selected = dest == d,
-                onClick = onToggleSettings,
-                icon = { Icon(d.icon(), contentDescription = d.title) },
-                label = { Text(d.title) },
-            )
-            if (settingsOpen) {
-                SettingSection.entries.forEach { s ->
-                    NavigationRailItem(
-                        selected = dest == Destination.Settings && section == s,
-                        onClick = { onSection(s) },
-                        icon = { },
-                        label = { Text(s.title) },
-                    )
+    // Scrollable like the drawer (#105): the rail overflows the same way
+    // on short landscape screens.
+    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        Destination.entries.forEach { d ->
+            if (d == Destination.Settings) {
+                NavigationRailItem(
+                    selected = dest == d,
+                    onClick = onToggleSettings,
+                    icon = { Icon(d.icon(), contentDescription = d.title) },
+                    label = { Text(d.title) },
+                )
+                if (settingsOpen) {
+                    SettingSection.entries.forEach { s ->
+                        NavigationRailItem(
+                            selected = dest == Destination.Settings && section == s,
+                            onClick = { onSection(s) },
+                            icon = { },
+                            label = { Text(s.title) },
+                        )
+                    }
                 }
+            } else {
+                NavigationRailItem(
+                    selected = dest == d,
+                    onClick = { onDest(d) },
+                    icon = { Icon(d.icon(), contentDescription = d.title) },
+                    label = { Text(d.title) },
+                )
             }
-        } else {
-            NavigationRailItem(
-                selected = dest == d,
-                onClick = { onDest(d) },
-                icon = { Icon(d.icon(), contentDescription = d.title) },
-                label = { Text(d.title) },
-            )
         }
     }
 }
