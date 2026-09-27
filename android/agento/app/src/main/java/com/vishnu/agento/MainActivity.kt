@@ -3508,6 +3508,67 @@ private fun TabModelSheet(
     }
 }
 
+/** Per-thread usage header (#121): thread total + last-turn context size
+ * (the prompt of the latest reported turn — the full history is resent, so
+ * prompt size IS the context pressure gauge) + counted/unreported turns.
+ * The server line reconciles against the gateway session total (covers
+ * turns served to other devices); the baseline line explains large
+ * first-turn prompts (SOUL.md + skills + tools load before turn 1). */
+@Composable
+private fun ThreadUsageHeader(usage: ThreadUsage, server: SessionTotals?) {
+    if (usage.counted == 0 && usage.unreported == 0) return
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        ),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(
+                listOfNotNull(
+                    if (usage.total > 0) {
+                        "Thread ~${formatTokens(usage.total)} tok"
+                    } else {
+                        null
+                    },
+                    if (usage.lastPrompt > 0) {
+                        "context ~${formatTokens(usage.lastPrompt)}"
+                    } else {
+                        null
+                    },
+                    if (usage.counted > 0) {
+                        if (usage.counted == 1) "1 counted turn" else "${usage.counted} counted turns"
+                    } else {
+                        null
+                    },
+                    if (usage.unreported > 0) {
+                        if (usage.unreported == 1) "1 without report" else "${usage.unreported} without reports"
+                    } else {
+                        null
+                    },
+                ).joinToString(" · ").ifEmpty { "No usage reported yet." },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            val serverTotal = server?.total ?: 0L
+            if (serverTotal > 0 && serverTotal != usage.total) {
+                Text(
+                    "Server total ~${formatTokens(serverTotal)} tok (all devices)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (usage.firstPrompt > 0) {
+                Text(
+                    "First-turn context ~${formatTokens(usage.firstPrompt)} (baseline + first message)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 /** Streaming chat surface (#52: conversational bubbles); auto-scrolls on
  * new tokens, delegates I/O to callbacks. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -4030,6 +4091,17 @@ private fun ChatScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         contentPadding = PaddingValues(vertical = 8.dp),
                     ) {
+                        // Per-thread usage header (#121): device-observed sums
+                        // from per-message reports, reconciled against the
+                        // server session total (the multi-device truth).
+                        if (state.messages.any { it.role != "user" && it.content.isNotBlank() }) {
+                            item {
+                                ThreadUsageHeader(
+                                    usage = threadUsageOf(state.messages),
+                                    server = state.serverTokens,
+                                )
+                            }
+                        }
                         if (state.messages.isEmpty() && !setupNeeded) {
                             item {
                                 EmptyState(
@@ -4118,8 +4190,25 @@ private fun ChatScreen(
                                                 modifier = Modifier.fillMaxWidth(),
                                             )
                                             // Persisted tool/skill usage for this
-                                            // reply (live frames + post-turn fetch).
+                                            // reply (live frames + post-turn fetch),
+                                            // plus the turn's token report (#121).
+                                            // No cost line: the gateway reports
+                                            // estimated_cost_usd 0.0 / unknown,
+                                            // so nothing is rendered until
+                                            // pricing is real.
                                             val usedLine = listOf(
+                                                if (msg.total > 0) {
+                                                    "~${formatTokens(msg.total)} tok"
+                                                } else if (msg.content.isNotEmpty()) {
+                                                    // Explicit gap (#121): a reply with no
+                                                    // usable report — failed/interrupted
+                                                    // turns and pre-tracking history
+                                                    // alike, matching the header's
+                                                    // "without reports" count.
+                                                    "no usage reported"
+                                                } else {
+                                                    null
+                                                },
                                                 msg.tools.takeIf { it.isNotEmpty() }
                                                     ?.let { "Tools: ${it.joinToString(", ")}" },
                                                 msg.skills.takeIf { it.isNotEmpty() }
@@ -4671,7 +4760,9 @@ private fun SettingsScreen(
  * Each completed turn's stream carries a `usage` object (see
  * [parseTokenUsage]); totals accumulate on-device from those reports, so
  * turns from before this update — and failed turns, which report zeros —
- * contribute nothing. */
+ * contribute nothing. Cached is the of-prompt cached subset. Cost is
+ * deliberately absent: the gateway reports estimated_cost_usd 0.0 /
+ * unknown, so nothing renders until pricing is real. */
 @Composable
 private fun UsageSection() {
     val context = LocalContext.current
@@ -4688,6 +4779,13 @@ private fun UsageSection() {
             ).map { (tab, label) ->
                 val threads = ChatThreads.load(context, tab)
                 val t = UsageStore.load(context, tab)
+                // Replies with no usable report (failed/interrupted turns,
+                // or history from before per-message tracking) surface as
+                // explicit gaps instead of silent skips.
+                val unreported = threads.flatMap { it.messages }.count {
+                    it.role != "user" && it.content.isNotBlank() &&
+                        it.total <= 0 && it.prompt <= 0 && it.completion <= 0
+                }
                 UsageRow(
                     label = label,
                     conversations = threads.size,
@@ -4695,7 +4793,9 @@ private fun UsageSection() {
                     prompt = t.prompt,
                     completion = t.completion,
                     total = t.total,
+                    cached = t.cached,
                     turns = t.turns,
+                    unreported = unreported,
                 )
             }
         }
@@ -4731,7 +4831,13 @@ private fun UsageSection() {
             )
             HintLine(
                 if (r.turns > 0) {
-                    "Prompt ${formatTokens(r.prompt)} · completion ${formatTokens(r.completion)} · ${r.turns} counted turns"
+                    listOfNotNull(
+                        "Prompt ${formatTokens(r.prompt)}",
+                        "completion ${formatTokens(r.completion)}",
+                        if (r.cached > 0) "cached ${formatTokens(r.cached)}" else null,
+                        "${r.turns} counted turns",
+                        if (r.unreported > 0) "${r.unreported} without reports" else null,
+                    ).joinToString(" · ")
                 } else {
                     "No token counts reported yet — chat once to start tracking."
                 }
@@ -4752,7 +4858,9 @@ private data class UsageRow(
     val prompt: Long,
     val completion: Long,
     val total: Long,
+    val cached: Long,
     val turns: Long,
+    val unreported: Int,
 )
 
 private fun formatTokens(tokens: Long): String {

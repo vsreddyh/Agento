@@ -26,6 +26,15 @@ data class ChatMessage(
     val tools: List<String> = emptyList(),
     /** Skill names the assistant used for this reply (heuristic, see ServerApi). */
     val skills: List<String> = emptyList(),
+    /** Server-reported token counts for this reply (0 = unknown/legacy). */
+    val prompt: Long = 0L,
+    val completion: Long = 0L,
+    val total: Long = 0L,
+    /** Of-prompt cached tokens (subset, 0 = unknown/unreported). */
+    val cached: Long = 0L,
+    /** True when the turn ran but the stream carried no usable `usage`
+     * object (failed/interrupted turn) — an explicit gap, not a zero. */
+    val unreported: Boolean = false,
 )
 
 sealed interface ChatEvent {
@@ -42,24 +51,41 @@ sealed interface ChatEvent {
     ) : ChatEvent
 }
 
-/** Real token counts for one turn, parsed from the SSE `usage` object. */
+/** Real token counts for one turn, parsed from the SSE `usage` object.
+ * `cached` is the of-prompt cached subset (`cache_read_tokens` et al, 0
+ * when the server doesn't emit it — chat-completions carries
+ * prompt/completion/total only; the split arrives via the sessions API). */
 data class TokenUsage(
     val prompt: Long = 0L,
     val completion: Long = 0L,
     val total: Long = 0L,
+    val cached: Long = 0L,
 )
 
 /**
  * Lenient parse of one SSE data-line object: the gateway attaches
  * `usage: {prompt_tokens, completion_tokens, total_tokens}` to the final
- * chunk (OpenAI shape, verified live). Alternate key names
- * (`input_tokens`/`output_tokens`, bare `total`) are accepted; a missing
- * total derives from prompt + completion. Null when no usable counts are
+ * chunk (OpenAI shape, verified live). The nested `usage` object wins when
+ * present; a bare object only counts when it carries a known token key, so
+ * unrelated frames (tool progress, errors) can never parse as usage.
+ * Alternate key names (`input_tokens`/`output_tokens`, bare `total`) are
+ * accepted; a missing total derives from prompt + completion. Cached keys
+ * (`cache_read_tokens` et al) are accepted when present and read as a
+ * subset of prompt (0 when absent — never derived, so absence can't be
+ * mistaken for a real zero-cached turn). Null when no usable counts are
  * present — failed turns report all zeros, which read as absent rather
  * than as a real zero-token turn. Pure for testability.
  */
 fun parseTokenUsage(o: JSONObject): TokenUsage? {
-    val src = o.optJSONObject("usage") ?: o
+    // Scoped shape: the nested `usage` object when present (a non-object
+    // `usage` reads as absent, not as the whole frame); otherwise the frame
+    // itself only when it carries at least one known token key, so an
+    // unrelated frame that happens to contain `total` can't parse as usage.
+    val src = if (o.has("usage")) {
+        o.optJSONObject("usage") ?: return null
+    } else {
+        o.takeIf { hasTokenKey(it) } ?: return null
+    }
     fun num(vararg keys: String): Long {
         for (k in keys) {
             if (src.isNull(k)) continue
@@ -82,7 +108,28 @@ fun parseTokenUsage(o: JSONObject): TokenUsage? {
     val completion = num("completion_tokens", "output_tokens", "eval_count")
     val total = num("total_tokens", "total").takeIf { it > 0 } ?: (prompt + completion)
     if (prompt == 0L && completion == 0L && total == 0L) return null
-    return TokenUsage(prompt = prompt, completion = completion, total = total)
+    // Cached is informational-only: zero-or-absent reads as unknown, so a
+    // plain read of the known keys (numbers or clean integer strings) is
+    // correct — never derived, so absence can't become a false zero.
+    val cached = num(
+        "cache_read_tokens", "cached_tokens", "cache_read_input_tokens",
+        "prompt_cache_hit_tokens",
+    )
+    return TokenUsage(prompt = prompt, completion = completion, total = total, cached = cached)
+}
+
+/** True when the object carries at least one known token-count key. */
+private fun hasTokenKey(o: JSONObject): Boolean {
+    for (k in listOf(
+        "prompt_tokens", "input_tokens", "prompt_eval_count",
+        "completion_tokens", "output_tokens", "eval_count",
+        "total_tokens", "total",
+        "cache_read_tokens", "cached_tokens",
+        "cache_read_input_tokens", "prompt_cache_hit_tokens",
+    )) {
+        if (!o.isNull(k)) return true
+    }
+    return false
 }
 
 /** Known provider slugs: offline fallback for the dynamic picker (the live

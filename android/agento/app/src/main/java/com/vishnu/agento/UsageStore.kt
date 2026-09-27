@@ -7,6 +7,8 @@ data class UsageTotals(
     val prompt: Long = 0L,
     val completion: Long = 0L,
     val total: Long = 0L,
+    /** Of-prompt cached subset (0 = none reported yet). */
+    val cached: Long = 0L,
     /** Turns whose stream reported usable counts (failed/zero turns excluded). */
     val turns: Long = 0L,
 )
@@ -26,11 +28,12 @@ object UsageStore {
     private fun promptKey(tab: String) = "usage_prompt_$tab"
     private fun completionKey(tab: String) = "usage_completion_$tab"
     private fun totalKey(tab: String) = "usage_total_$tab"
+    private fun cachedKey(tab: String) = "usage_cached_$tab"
     private fun turnsKey(tab: String) = "usage_turns_$tab"
 
     /** Every long pref this store reads; allowlisted for backup export/import. */
     val LONG_KEYS: List<String> = TABS.flatMap {
-        listOf(promptKey(it), completionKey(it), totalKey(it), turnsKey(it))
+        listOf(promptKey(it), completionKey(it), totalKey(it), cachedKey(it), turnsKey(it))
     }
 
     private fun prefs(context: Context) =
@@ -42,6 +45,7 @@ object UsageStore {
             prompt = p.getLong(promptKey(tab), 0L),
             completion = p.getLong(completionKey(tab), 0L),
             total = p.getLong(totalKey(tab), 0L),
+            cached = p.getLong(cachedKey(tab), 0L),
             turns = p.getLong(turnsKey(tab), 0L),
         )
     }
@@ -55,12 +59,16 @@ object UsageStore {
     fun add(context: Context, tab: String, usage: TokenUsage) {
         if (usage.prompt <= 0 && usage.completion <= 0 && usage.total <= 0) return
         val p = prefs(context)
-        p.edit()
+        val edit = p.edit()
             .putLong(promptKey(tab), p.getLong(promptKey(tab), 0L) + usage.prompt)
             .putLong(completionKey(tab), p.getLong(completionKey(tab), 0L) + usage.completion)
             .putLong(totalKey(tab), p.getLong(totalKey(tab), 0L) + usage.total)
             .putLong(turnsKey(tab), p.getLong(turnsKey(tab), 0L) + 1)
-            .apply()
+        // Cached is a subset row: accumulate only when reported (0 = absent).
+        if (usage.cached > 0) {
+            edit.putLong(cachedKey(tab), p.getLong(cachedKey(tab), 0L) + usage.cached)
+        }
+        edit.apply()
     }
 
     /** Drops the retired character-estimate keys so only real counts remain. */
