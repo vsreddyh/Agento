@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Due-time task reminders: exact alarms when the OS grants them
+         (inexact fallback otherwise). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Fired when a Hermes reply finishes while the app is backgrounded
          (Settings → Hermes notifications, issue #58). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -140,6 +143,33 @@
         <service
             android:name=".TaskWidgetService"
             android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+
+        <!-- Invisible trampoline for task-widget row taps: completes the
+             task or forwards to MainActivity, then finishes. Exported so
+             the widget host can send its PendingIntent. -->
+        <activity
+            android:name=".TaskCompleteActivity"
+            android:theme="@style/Theme.Agento.Trampoline"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="true" />
+
+        <!-- Per-widget display settings (density, due line): launched by
+             the system at add time via android:configure and later by
+             tapping the widget's title. -->
+        <activity
+            android:name=".TaskWidgetConfigActivity"
+            android:theme="@style/Theme.Agento"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
+        <!-- Due-time task reminder alarms (explicit intents only). -->
+        <receiver
+            android:name=".TaskAlarmReceiver"
             android:exported="false" />
 
         <receiver

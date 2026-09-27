@@ -10,6 +10,16 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.17.0]
+
+- Widget completes tasks inline: a ring button on every row finishes the
+  task without opening the app, row taps deep-link into the detail sheet,
+  and the header cycles Open/Done/All per placement. Display settings
+  (comfortable/compact density, due line) live behind a tap on the title.
+- Task Manager groups rows by day (Overdue/Today/Tomorrow/This week/
+  Later/No due date) behind a Day groups chip, and a bell toggles
+  due-time reminders that fire a notification deep-linking to the task.
+
 ## [3.16.1]
 
 - Task widget no longer risks a load error on slow/cold starts: the

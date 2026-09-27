@@ -4,11 +4,14 @@ package com.vishnu.agento
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlarmManager
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -196,6 +199,13 @@ class MainActivity : ComponentActivity() {
      */
     private val tasksGen = mutableIntStateOf(0)
 
+    /**
+     * Deep-link into one task's detail sheet (widget row tap, reminder
+     * tap). Carried alongside tasksGen; TaskManagerScreen consumes and
+     * clears it once the list loads.
+     */
+    private val tasksTargetId = mutableStateOf<String?>(null)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -205,6 +215,9 @@ class MainActivity : ComponentActivity() {
         }
         if (intent.action == TaskWidget.ACTION_TASKS) {
             tasksGen.intValue++
+            intent.getStringExtra(TaskWidget.EXTRA_TASK_ID)?.let {
+                tasksTargetId.value = it
+            }
         }
     }
 
@@ -220,6 +233,9 @@ class MainActivity : ComponentActivity() {
         // Task widget tap: same redelivery guard — only a fresh launch counts.
         if (savedInstanceState == null && intent?.action == TaskWidget.ACTION_TASKS && tasksGen.intValue == 0) {
             tasksGen.intValue = 1
+            intent.getStringExtra(TaskWidget.EXTRA_TASK_ID)?.let {
+                tasksTargetId.value = it
+            }
         }
         setContent {
             val context = LocalContext.current
@@ -358,6 +374,8 @@ class MainActivity : ComponentActivity() {
                                 Destination.TaskManager -> TaskManagerScreen(
                                     wc = wc,
                                     onMenu = { scope.launch { drawerState.open() } },
+                                    deepLinkId = tasksTargetId.value,
+                                    onDeepLinkConsumed = { tasksTargetId.value = null },
                                 )
                                 Destination.Storage -> StorageScreen(
                                     onMenu = { scope.launch { drawerState.open() } },
@@ -849,6 +867,32 @@ private fun ServerTask.dueKey(): String {
 private fun ServerTask.isOverdue(today: String): Boolean =
     isOpen() && dueDate.isNotEmpty() && dueDate < today
 
+/** Day buckets for the grouped task list, in display order. Done tasks
+ * in the All view collect in Completed at the bottom. */
+private enum class DueBucket(val title: String) {
+    Overdue("Overdue"),
+    Today("Today"),
+    Tomorrow("Tomorrow"),
+    ThisWeek("This week"),
+    Later("Later"),
+    NoDate("No due date"),
+    Completed("Completed"),
+}
+
+private fun ServerTask.dueBucket(today: java.time.LocalDate): DueBucket {
+    if (!isOpen()) return DueBucket.Completed
+    if (dueDate.isEmpty()) return DueBucket.NoDate
+    val s = dueDate
+    val t = today.toString()
+    return when {
+        s < t -> DueBucket.Overdue
+        s == t -> DueBucket.Today
+        s == today.plusDays(1).toString() -> DueBucket.Tomorrow
+        s <= today.plusDays(7).toString() -> DueBucket.ThisWeek
+        else -> DueBucket.Later
+    }
+}
+
 private fun List<ServerTask>.sortedByMode(mode: ServerTaskSort): List<ServerTask> =
     when (mode) {
         ServerTaskSort.Due -> sortedWith(compareBy({ it.dueKey() }, { it.name.lowercase(Locale.ROOT) }))
@@ -865,7 +909,12 @@ private fun List<ServerTask>.sortedByMode(mode: ServerTaskSort): List<ServerTask
  * assistant stays a second writer through chat, same as before. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
+private fun TaskManagerScreen(
+    wc: WindowClass,
+    onMenu: () -> Unit = {},
+    deepLinkId: String? = null,
+    onDeepLinkConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -893,15 +942,56 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var deleting by remember { mutableStateOf<ServerTask?>(null) }
     var recreate by remember { mutableStateOf<ServerTaskDraft?>(null) }
     var busy by remember { mutableStateOf(false) }
+    // Day-grouped sections (Overdue/Today/…); flat list when off or on
+    // the Done filter, where buckets carry no meaning.
+    var groupByDay by rememberSaveable { mutableStateOf(true) }
+    // Widget/alarm deep-link into one task's detail sheet: staged here,
+    // opened once the list carries the row, then cleared upstream.
+    var pendingDeepLink by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(deepLinkId) {
+        if (deepLinkId != null) {
+            pendingDeepLink = deepLinkId
+            onDeepLinkConsumed()
+        }
+    }
+    // Reminder bell state + notification permission gate (Android 13+).
+    var remindersOn by remember { mutableStateOf(TaskReminders.isEnabled(context)) }
+    val notifPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) armRemindersAfterChecks()
+        else scope.launch { snackbar.showSnackbar("Notifications denied — reminders stay off.") }
+    }
+
+    // First successful load also (re)arms due-time alarms, covering
+    // agent-side changes made while the app was closed.
+    var scheduledOnce by remember { mutableStateOf(false) }
 
     LaunchedEffect(filter, refreshTick) {
         loading = true
         error = ""
         api.list(filter.state).fold(
-            onSuccess = { tasks = it },
+            onSuccess = {
+                tasks = it
+                if (!scheduledOnce) {
+                    scheduledOnce = true
+                    TaskReminders.refresh(context)
+                }
+            },
             onFailure = { e -> error = serverDetail(e.message ?: e.javaClass.simpleName) },
         )
         loading = false
+    }
+
+    // Open the deep-linked row as soon as it is in the list (retries
+    // across filter switches until it appears).
+    LaunchedEffect(tasks, pendingDeepLink) {
+        pendingDeepLink?.let { id ->
+            tasks.firstOrNull { it.id == id }?.let {
+                selected = it
+                pendingDeepLink = null
+            }
+        }
     }
 
     fun fail(e: Throwable) {
@@ -910,9 +1000,44 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         }
     }
 
-    // Push fresh counts to the home-screen widget (#101) after mutations.
+    // Push fresh counts to the home-screen widget (#101) after mutations,
+    // and re-arm due-time alarms (completions/deletions/edits change them).
     fun pokeWidget() {
         TaskWidget.refresh(context)
+        TaskReminders.refresh(context)
+    }
+
+    // Enable path for the reminder bell: exact-alarm grant is best
+    // effort (the scheduler falls back to inexact), notifications are
+    // required, so those gate through the permission request above.
+    fun armRemindersAfterChecks() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val mgr = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            if (!mgr.canScheduleExactAlarms()) {
+                runCatching {
+                    context.startActivity(
+                        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM),
+                    )
+                }
+            }
+        }
+        TaskReminders.setEnabled(context, true)
+        remindersOn = true
+    }
+
+    fun onBell() {
+        if (remindersOn) {
+            TaskReminders.setEnabled(context, false)
+            remindersOn = false
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            armRemindersAfterChecks()
+        }
     }
 
     fun doComplete(t: ServerTask) {
@@ -979,6 +1104,20 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 title = { Text("Task Manager") },
                 actions = {
                     IconButton(
+                        onClick = ::onBell,
+                        enabled = !busy,
+                    ) {
+                        Icon(
+                            Icons.Filled.Notifications,
+                            contentDescription = "Due-time reminders",
+                            tint = if (remindersOn) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                    IconButton(
                         onClick = { editing = ServerTaskDraft() },
                         enabled = !busy,
                     ) {
@@ -1036,6 +1175,11 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                 label = { Text(f.title) },
                             )
                         }
+                        FilterChip(
+                            selected = groupByDay,
+                            onClick = { groupByDay = !groupByDay },
+                            label = { Text("Day groups") },
+                        )
                     }
                     Box {
                         OutlinedButton(onClick = { sortMenu = true }) {
@@ -1114,17 +1258,45 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    visible.forEach { t ->
-                        ServerTaskRow(
-                            task = t,
-                            overdue = t.isOverdue(today),
-                            actionsEnabled = !busy,
-                            onOpen = { selected = t },
-                            onToggle = {
-                                if (t.isOpen()) doComplete(t) else doReopen(t)
-                                selected = null
-                            },
-                        )
+                    // Day sections (skipped on the Done filter, where due
+                    // buckets carry no meaning); within a section the
+                    // current sort still applies.
+                    val day = java.time.LocalDate.now()
+                    val sections = remember(visible, groupByDay, filter) {
+                        if (!groupByDay || filter == ServerTaskFilter.Done) {
+                            listOf(null to visible)
+                        } else {
+                            DueBucket.entries.mapNotNull { b ->
+                                val rows = visible.filter { it.dueBucket(day) == b }
+                                if (rows.isEmpty()) null else b to rows
+                            }
+                        }
+                    }
+                    sections.forEach { (bucket, rows) ->
+                        if (bucket != null) {
+                            Text(
+                                bucket.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = if (bucket == DueBucket.Overdue) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.primary
+                                },
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                        }
+                        rows.forEach { t ->
+                            ServerTaskRow(
+                                task = t,
+                                overdue = t.isOverdue(today),
+                                actionsEnabled = !busy,
+                                onOpen = { selected = t },
+                                onToggle = {
+                                    if (t.isOpen()) doComplete(t) else doReopen(t)
+                                    selected = null
+                                },
+                            )
+                        }
                     }
                 }
                 HintLine("Your tasks, shared with your assistant — changes here and in chat land in the same list.")

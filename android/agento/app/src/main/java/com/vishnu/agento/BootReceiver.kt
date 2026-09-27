@@ -15,6 +15,8 @@ class BootReceiver : BroadcastReceiver() {
                 // Re-pull widget data: the collection factory's in-memory
                 // cache is empty after process death (review on #116).
                 TaskWidget.refresh(context)
+                // Alarms don't survive reboot: recompute from open tasks.
+                TaskReminders.refresh(context)
             }
         }
     }

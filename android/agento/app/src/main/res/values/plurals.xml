@@ -4,4 +4,12 @@
         <item quantity="one">%d open task</item>
         <item quantity="other">%d open tasks</item>
     </plurals>
+    <plurals name="task_widget_done">
+        <item quantity="one">%d done task</item>
+        <item quantity="other">%d done tasks</item>
+    </plurals>
+    <plurals name="task_widget_all">
+        <item quantity="one">%d task</item>
+        <item quantity="other">%d tasks</item>
+    </plurals>
 </resources>

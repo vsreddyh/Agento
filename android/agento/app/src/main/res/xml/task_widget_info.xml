@@ -11,6 +11,7 @@
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="0"
+    android:configure="com.vishnu.agento.TaskWidgetConfigActivity"
     android:initialLayout="@layout/task_widget"
     android:previewLayout="@layout/task_widget"
     android:description="@string/task_widget_desc"
