@@ -2848,7 +2848,16 @@ private fun ChatScreen(
         }
     }
     DisposableEffect(tab) {
-        onDispose { interrupt.stop(); liveRec.destroy(); tts.stop() }
+        onDispose {
+            interrupt.stop(); liveRec.destroy(); tts.stop()
+            // #107: leaving the tab ends the session silently. A rotation
+            // recreates the activity (isChangingConfigurations) and keeps
+            // the "ended on rotation" notice; a plain tab switch clears it
+            // so re-entering never replays the end prompt.
+            if ((context as? Activity)?.isChangingConfigurations != true) {
+                liveLostOnRotate = false
+            }
+        }
     }
     /** Every send-type action cuts speech first. */
     fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
@@ -3015,7 +3024,9 @@ private fun ChatScreen(
     // Widget live request (#85): effect placed after startVoice (it calls
     // it); each generation starts the session once. Same steps as the
     // toggle (kill turn, arm, listen; handoff rule for the first listen).
-    var consumedLiveGen by remember(tab) { mutableIntStateOf(0) }
+    // Saveable (#107): exiting the tab and re-entering must not re-fire
+    // the same generation and pop the End prompt again and again.
+    var consumedLiveGen by rememberSaveable(tab) { mutableIntStateOf(0) }
     LaunchedEffect(autoLiveGen) {
         if (autoLiveGen > consumedLiveGen) {
             consumedLiveGen = autoLiveGen
