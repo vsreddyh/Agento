@@ -10,6 +10,14 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.17.0]
+
+- Task Manager redo: compact rows (checkbox + name + one due line,
+  overdue in red) with a detail bottom sheet holding the full
+  description, due, estimate, repeat, and history plus
+  Complete/Reopen, Edit, and Delete. Search across name/details,
+  sort by due date / name / newest / estimate, and a result count.
+
 ## [3.15.0]
 
 - Task widget is dynamic: 3x2 minimum, resizable both ways, with the
