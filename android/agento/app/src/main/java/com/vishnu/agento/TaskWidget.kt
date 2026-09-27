@@ -6,8 +6,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.os.Bundle
-import android.view.View
+import android.net.Uri
 import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,18 +14,18 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * Home-screen task manager widget (#101): open server-task count plus as
- * many single-line task rows as the placement fits, with tap-to-open (Task
- * Manager screen) and a refresh button. Reads the same shared `tasks`
- * collection as TaskManagerScreen via TasksApi; the app pushes fresh data
- * after every task mutation via [refresh]. No configuration, no periodic
- * updates (updatePeriodMillis=0) — data pulls on add/refresh-tap/
- * resize/mutation only, so a sleeping server costs nothing in background.
+ * Home-screen task manager widget (#101): header (title + open count +
+ * refresh) above a scrollable task list, with tap-to-open (Task Manager
+ * screen). Reads the same shared `tasks` collection as TaskManagerScreen
+ * via TasksApi; the app pushes fresh data after every task mutation via
+ * [refresh]. No configuration, no periodic updates (updatePeriodMillis=0)
+ * — data pulls on add/refresh-tap/mutation only, so a sleeping server
+ * costs nothing in the background.
  *
- * Dynamic sizing: min footprint 3x2, resizable both ways. [render] reads
- * the per-widget size options ([AppWidgetManager.getAppWidgetOptions])
- * and shows 2 rows at 3x2, growing to [MAX_ROWS] on taller placements;
- * wide placements append each task's due label inline.
+ * Dynamic sizing: min footprint 3x2, resizable both ways. The list is a
+ * RemoteViews collection ([TaskWidgetService]) with weight 1, so it takes
+ * whatever height the placement offers — 2-ish rows at 3x2, the full list
+ * scrollable on tall placements. No row cap, no "+N more" truncation.
  */
 class TaskWidget : AppWidgetProvider() {
 
@@ -37,23 +36,9 @@ class TaskWidget : AppWidgetProvider() {
     ) {
         // Loading shell first so the widget never sits blank, then fill in.
         for (id in appWidgetIds) {
-            appWidgetManager.updateAppWidget(
-                id, render(context, appWidgetManager, id, null, false))
+            appWidgetManager.updateAppWidget(id, render(context, id, null, false))
         }
         pull(context, appWidgetIds)
-    }
-
-    override fun onAppWidgetOptionsChanged(
-        context: Context,
-        appWidgetManager: AppWidgetManager,
-        appWidgetId: Int,
-        newOptions: Bundle,
-    ) {
-        // Resize: re-render the shell at the new size immediately, then
-        // re-pull so the row count reflects real data at the new height.
-        appWidgetManager.updateAppWidget(
-            appWidgetId, render(context, appWidgetManager, appWidgetId, lastTasks, lastError))
-        pull(context, intArrayOf(appWidgetId))
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -93,21 +78,10 @@ class TaskWidget : AppWidgetProvider() {
         private const val OPEN_CODE = 1001
         private const val REFRESH_CODE = 1002
 
-        /** Hard cap on task rows; taller widgets just get airier text. */
-        private const val MAX_ROWS = 6
-
-        private val ITEM_IDS = intArrayOf(
-            R.id.task_widget_item1,
-            R.id.task_widget_item2,
-            R.id.task_widget_item3,
-            R.id.task_widget_item4,
-            R.id.task_widget_item5,
-            R.id.task_widget_item6,
-        )
-
-        // Last fetched data, reused for instant resize re-renders between
-        // pulls (volatile: written on IO, read on the broadcast thread).
-        @Volatile private var lastTasks: List<ServerTask>? = null
+        // Snapshot read by TaskWidgetService's factory (same process).
+        // Volatile: written on IO, read on the RemoteViews service thread.
+        @Volatile var cachedTasks: List<ServerTask>? = null
+            private set
         @Volatile private var lastError: Boolean = false
 
         /** Re-pull server tasks and push to every installed widget. Call
@@ -127,32 +101,23 @@ class TaskWidget : AppWidgetProvider() {
         private suspend fun fetchAndPush(appCtx: Context, ids: IntArray) {
             if (ids.isEmpty()) return
             val tasks = TasksApi(appCtx).list("open").getOrNull()
-            lastTasks = tasks
+            cachedTasks = tasks
             lastError = tasks == null
             val mgr = AppWidgetManager.getInstance(appCtx)
             for (id in ids) {
-                mgr.updateAppWidget(id, render(appCtx, mgr, id, tasks, tasks == null))
+                mgr.updateAppWidget(id, render(appCtx, id, tasks, tasks == null))
             }
+            // Notify after the update loop: render() re-sets the remote
+            // adapter, which would invalidate an earlier notify.
+            mgr.notifyAppWidgetViewDataChanged(ids, R.id.task_widget_list_view)
         }
 
-        /** Rows that fit the widget's guaranteed height: 2 at the 3x2
-         * minimum (110dp), one more per ~50dp, capped at [MAX_ROWS]. */
-        internal fun rowsForHeight(minHeightDp: Int): Int = when {
-            minHeightDp >= 320 -> 6
-            minHeightDp >= 260 -> 5
-            minHeightDp >= 200 -> 4
-            minHeightDp >= 150 -> 3
-            minHeightDp >= 110 -> 2
-            else -> 1
-        }.coerceIn(1, MAX_ROWS)
-
-        /** Full widget view: tap targets always bound, text reflects the
-         * latest fetch (null = not loaded yet, error flag = fetch failed).
-         * Row count and due labels adapt to the per-widget size options so
-         * any placement at/above 3x2 renders without clipping. */
+        /** Full widget view: header reflects the latest fetch (null = not
+         * loaded yet, error flag = fetch failed); the list binds to
+         * [TaskWidgetService] and fills whatever height the placement
+         * offers, so any size at/above 3x2 renders without clipping. */
         private fun render(
             context: Context,
-            mgr: AppWidgetManager,
             appWidgetId: Int,
             tasks: List<ServerTask>?,
             error: Boolean,
@@ -167,14 +132,21 @@ class TaskWidget : AppWidgetProvider() {
                 context, REFRESH_CODE, refresh,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            val opts = runCatching { mgr.getAppWidgetOptions(appWidgetId) }.getOrNull()
-            val minH = opts?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 110) ?: 110
-            val minW = opts?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 180) ?: 180
-            val rows = rowsForHeight(minH)
-            val wide = minW >= 250
+            // Per-widget data URI so the launcher keeps a distinct factory
+            // per id; a plain opaque URI is guaranteed unique.
+            val svc = Intent(context, TaskWidgetService::class.java).apply {
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                data = Uri.parse("agento://widget/$appWidgetId")
+            }
             return RemoteViews(context.packageName, R.layout.task_widget).apply {
                 setOnClickPendingIntent(R.id.task_widget_body, openPending)
                 setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
+                setPendingIntentTemplate(R.id.task_widget_list_view, openPending)
+                setRemoteAdapter(R.id.task_widget_list_view, svc)
+                setEmptyView(
+                    R.id.task_widget_list_view,
+                    R.id.task_widget_empty,
+                )
                 val count = when {
                     tasks == null && !error -> context.getString(R.string.task_widget_loading)
                     tasks == null -> context.getString(R.string.task_widget_error)
@@ -183,37 +155,14 @@ class TaskWidget : AppWidgetProvider() {
                         R.plurals.task_widget_open, tasks.size, tasks.size)
                 }
                 setTextViewText(R.id.task_widget_count, count)
-                val open_tasks = if (tasks.isNullOrEmpty()) emptyList() else tasks
-                val shown = open_tasks.take(rows)
-                for (i in ITEM_IDS.indices) {
-                    val viewId = ITEM_IDS[i]
-                    if (i < shown.size) {
-                        setTextViewText(viewId, "\u2022 " + label(shown[i], wide))
-                        setViewVisibility(viewId, View.VISIBLE)
-                    } else {
-                        setViewVisibility(viewId, View.GONE)
-                    }
+                val emptyText = when {
+                    tasks == null && !error -> context.getString(R.string.task_widget_loading)
+                    tasks == null -> context.getString(R.string.task_widget_error)
+                    tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
+                    else -> ""
                 }
-                val extra = open_tasks.size - shown.size
-                if (extra > 0) {
-                    setTextViewText(R.id.task_widget_overflow, "+$extra more")
-                    setViewVisibility(R.id.task_widget_overflow, View.VISIBLE)
-                } else {
-                    setViewVisibility(R.id.task_widget_overflow, View.GONE)
-                }
-                setViewVisibility(
-                    R.id.task_widget_list,
-                    if (open_tasks.isEmpty()) View.GONE else View.VISIBLE,
-                )
+                setTextViewText(R.id.task_widget_empty, emptyText)
             }
-        }
-
-        /** Row label: name only on narrow placements; name + due label
-         * when wide enough for the extra text to survive ellipsizing. */
-        private fun label(task: ServerTask, wide: Boolean): String {
-            val due = listOf(task.dueDate.trim(), task.dueTime.trim())
-                .filter { it.isNotEmpty() }.joinToString(" ")
-            return if (wide && due.isNotEmpty()) "${task.name} \u00b7 $due" else task.name
         }
     }
 }
