@@ -122,6 +122,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     val state: State<ChatUiState> = _state
 
     private var streamJob: Job? = null
+    /** Send generation: incremented on every doSend/stop so a late
+     * buffered Done/Error/Delta (callbackFlow is UNLIMITED) from a
+     * cancelled turn can never overwrite a newer turn's state. */
+    private var sendGen = 0
     private var threadId: String = ""
     private var threads: List<ChatThread> = emptyList()
 
@@ -342,6 +346,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     fun stop() {
         val wasStreaming = _state.value.streaming
+        // Bump the generation first: a Done/Error already buffered from
+        // this turn goes stale and can no longer overwrite the patch below.
+        sendGen++
         streamJob?.cancel()
         streamJob = null
         // Mark the in-flight reply as stopped (#122): the partial text
@@ -351,10 +358,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val msgs = _state.value.messages
         val last = msgs.lastOrNull()
         val patched = if (wasStreaming && last?.role == "assistant") {
-            if (last.content.isNotBlank()) {
+            if (last.content.isNotBlank() || last.reasoning.isNotBlank()) {
                 msgs.dropLast(1) + last.copy(interrupted = true)
             } else {
-                // Stopped before any text arrived: drop the empty
+                // Stopped before anything arrived: drop the empty
                 // placeholder so it never enters history or counts.
                 msgs.dropLast(1)
             }
@@ -370,8 +377,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 else _state.value.pending,
         )
         // Persist the stopped partial so the interrupted flag (and the
-        // text so far) survives a thread switch or restart.
-        if (patched !== msgs && patched.any { it.role == "assistant" && it.content.isNotBlank() }) {
+        // text/trace so far) survives a thread switch or restart.
+        if (patched !== msgs && patched.any {
+                it.role == "assistant" &&
+                    (it.content.isNotBlank() || it.reasoning.isNotBlank())
+            }
+        ) {
             upsertActive(patched)
             persist()
         }
@@ -390,9 +401,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (text.isEmpty() || !_state.value.ready) return
         // Queue-or-send (#122): the composer stays live while streaming —
         // a send mid-stream parks the text and auto-fires on Done, instead
-        // of being swallowed by the streaming guard.
+        // of being swallowed by the streaming guard. First queued text wins;
+        // later sends wait for the composer (no silent overwrite).
         if (_state.value.streaming) {
-            _state.value = _state.value.copy(pending = "", queued = text)
+            if (_state.value.queued.isBlank()) {
+                _state.value = _state.value.copy(pending = "", queued = text)
+            }
             return
         }
         // Re-read per-tab config at send time so Settings edits apply instantly.
@@ -528,8 +542,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val stableSessionId = threadId
         val liveTools = mutableListOf<String>()
         streamJob?.cancel()
+        // Fresh generation: events from any older turn still buffered go
+        // stale (see stop()). Captured below; every handler checks it.
+        sendGen++
+        val gen = sendGen
         streamJob = viewModelScope.launch {
             api.streamChat(path, provider, model, history, stableSessionId, effort).collect { event ->
+                // Stale turn (cancelled after this event buffered): never
+                // let it touch state — it could resurrect a dropped
+                // placeholder or clear a newer turn's interrupted flag.
+                if (gen != sendGen) return@collect
                 when (event) {
                     is ChatEvent.ToolProgress -> {
                         val name = event.tool.trim()
@@ -598,7 +620,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                                 .replace(Regex("\\s+"), " ").take(160)
                             ChatNotifications.notifyDone(appCtx, tabTitle(tab), snippet)
                         }
-                        flushQueued()
+                        // This turn is over: release the job before flushing
+                        // so the queued send's doSend never "cancels" the
+                        // just-finished collection it runs inside of.
+                        streamJob = null
+                        flushQueued(gen)
                     }
                     is ChatEvent.Error -> {
                         // Terminal (see streamChat): nothing follows. Keep any
@@ -670,8 +696,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
     }
 
-    /** Sends a send queued mid-stream once the reply finishes cleanly. */
-    private fun flushQueued() {
+    /** Sends a send queued mid-stream once the reply finishes cleanly.
+     * [doneGen] must still be current (a stop() in between keeps the queue
+     * parked instead of firing into the new turn). */
+    private fun flushQueued(doneGen: Int) {
+        if (doneGen != sendGen) return
         val q = _state.value.queued.trim()
         if (q.isEmpty() || _state.value.streaming || !_state.value.ready) {
             // Streaming here means a newer turn started mid-flush; keep the

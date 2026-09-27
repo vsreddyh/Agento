@@ -3621,8 +3621,10 @@ private fun ChatScreen(
     // Message-list head offset: the usage header item (when shown) shifts
     // message indices by one — every scroll target accounts for it.
     val headCount = if (state.messages.any { it.role != "user" && it.content.isNotBlank() }) 1 else 0
-    // New turns / streamed tokens follow only while pinned.
-    val lastLen = state.messages.lastOrNull()?.content?.length ?: 0
+    // New turns / streamed tokens follow only while pinned. The key covers
+    // content and reasoning length alike so thinking-only streams follow.
+    val lastMsg = state.messages.lastOrNull()
+    val lastLen = (lastMsg?.content?.length ?: 0) + (lastMsg?.reasoning?.length ?: 0)
     LaunchedEffect(state.messages.size, lastLen) {
         if (stick && state.messages.isNotEmpty()) {
             listState.animateScrollToItem(headCount + state.messages.size - 1)
@@ -3915,6 +3917,29 @@ private fun ChatScreen(
     }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
+        // Jump-to-latest (#122): the stock FAB slot, shown once a manual
+        // scroll-up unpins the viewport; tapping re-pins and drops to the
+        // newest message. No extra nesting around the message list.
+        floatingActionButton = {
+            if (!stick && state.messages.isNotEmpty()) {
+                SmallFloatingActionButton(
+                    onClick = {
+                        stick = true
+                        scope.launch {
+                            listState.animateScrollToItem(
+                                headCount + state.messages.size - 1
+                            )
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ) {
+                    Icon(
+                        Icons.Filled.ArrowDownward,
+                        contentDescription = "Jump to latest",
+                    )
+                }
+            }
+        },
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -4151,13 +4176,12 @@ private fun ChatScreen(
                         CircularProgressIndicator()
                     }
                 } else {
-                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            contentPadding = PaddingValues(vertical = 8.dp),
-                        ) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                    ) {
                         // Per-thread usage header (#121): device-observed sums
                         // from per-message reports, reconciled against the
                         // server session total (the multi-device truth).
@@ -4429,29 +4453,6 @@ private fun ChatScreen(
                                         }
                                     }
                                 }
-                            }
-                        }
-                        // Jump-to-latest (#122): appears once a manual
-                        // scroll-up unpins the viewport; tapping re-pins
-                        // and drops to the newest message.
-                        if (!stick && state.messages.isNotEmpty()) {
-                            SmallFloatingActionButton(
-                                onClick = {
-                                    stick = true
-                                    scope.launch {
-                                        listState.animateScrollToItem(
-                                            headCount + state.messages.size - 1
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.align(Alignment.BottomCenter)
-                                    .padding(bottom = 8.dp),
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                            ) {
-                                Icon(
-                                    Icons.Filled.ArrowDownward,
-                                    contentDescription = "Jump to latest",
-                                )
                             }
                         }
                     }
