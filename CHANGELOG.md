@@ -10,6 +10,13 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.16.1]
+
+- Task widget no longer risks a load error on slow/cold starts: the
+  collection factory's fallback fetch is capped at 10s and never throws
+  (it runs on the AppWidget binder thread, where the shared 30s
+  timeout could stall the host bind).
+
 ## [3.16.0]
 
 - Task widget redo: rounded card with dark-mode surface, header divider,

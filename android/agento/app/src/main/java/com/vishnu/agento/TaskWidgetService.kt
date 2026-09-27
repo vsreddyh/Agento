@@ -6,6 +6,7 @@ import android.view.View
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Collection adapter for the task widget's scrollable list. Reads the
@@ -32,9 +33,18 @@ private class TaskFactory(private val appCtx: Context) : RemoteViewsService.Remo
         // In-memory snapshot first; after process death/reboot the cache
         // is empty, so fall back to a synchronous fetch (blocking is
         // explicitly allowed here) instead of showing Loading… forever.
+        // Bounded and throw-proof: this runs on the AppWidget binder
+        // thread, and the shared client's 30s read timeout (or any
+        // unexpected throw) would stall/kill the host bind and surface
+        // as a widget load error. Slow path just shows empty/stale.
         items = TaskWidget.cachedTasks
-            ?: runBlocking { TasksApi(appCtx).list("open").getOrNull() }
-            ?: emptyList()
+            ?: runCatching {
+                runBlocking {
+                    withTimeoutOrNull(10_000) {
+                        TasksApi(appCtx).list("open").getOrNull()
+                    }.orEmpty()
+                }
+            }.getOrDefault(emptyList())
     }
 
     override fun getCount(): Int = items.size
