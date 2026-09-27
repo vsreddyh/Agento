@@ -10,6 +10,7 @@ import android.view.View
 import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
@@ -47,14 +48,9 @@ class TaskWidget : AppWidgetProvider() {
     /** Fetches open tasks off-thread; goAsync keeps the broadcast alive. */
     private fun pull(context: Context, ids: IntArray) {
         val pending = goAsync()
-        CoroutineScope(Dispatchers.IO).launch {
+        widgetScope.launch {
             try {
-                val appCtx = context.applicationContext
-                val tasks = TasksApi(appCtx).list("open").getOrNull()
-                val mgr = AppWidgetManager.getInstance(appCtx)
-                for (id in ids) {
-                    mgr.updateAppWidget(id, render(appCtx, tasks, tasks == null))
-                }
+                fetchAndPush(context.applicationContext, ids)
             } finally {
                 pending.finish()
             }
@@ -68,16 +64,35 @@ class TaskWidget : AppWidgetProvider() {
         /** Widget refresh-button broadcast (handled in onReceive). */
         const val ACTION_REFRESH = "com.vishnu.agento.action.TASKS_REFRESH"
 
+        // One app-scoped worker: per-call CoroutineScope(Dispatchers.IO)
+        // leaks a scope per update (review #109).
+        private val widgetScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        // Distinct PendingIntent codes (review #109): actions already keep
+        // the open/refresh intents apart, but codes make that explicit.
+        private const val OPEN_CODE = 1001
+        private const val REFRESH_CODE = 1002
+
         /** Re-pull server tasks and push to every installed widget. Call
          * after task mutations so the home screen never goes stale. */
         fun refresh(context: Context) {
-            CoroutineScope(Dispatchers.IO).launch {
+            widgetScope.launch {
                 val appCtx = context.applicationContext
-                val tasks = TasksApi(appCtx).list("open").getOrNull()
                 val mgr = AppWidgetManager.getInstance(appCtx)
-                for (id in mgr.getAppWidgetIds(ComponentName(appCtx, TaskWidget::class.java))) {
-                    mgr.updateAppWidget(id, render(appCtx, tasks, tasks == null))
-                }
+                fetchAndPush(
+                    appCtx,
+                    mgr.getAppWidgetIds(ComponentName(appCtx, TaskWidget::class.java)),
+                )
+            }
+        }
+
+        /** Single fetch-and-push path shared by pull() and refresh(). */
+        private suspend fun fetchAndPush(appCtx: Context, ids: IntArray) {
+            if (ids.isEmpty()) return
+            val tasks = TasksApi(appCtx).list("open").getOrNull()
+            val mgr = AppWidgetManager.getInstance(appCtx)
+            for (id in ids) {
+                mgr.updateAppWidget(id, render(appCtx, tasks, tasks == null))
             }
         }
 
@@ -86,12 +101,12 @@ class TaskWidget : AppWidgetProvider() {
         private fun render(context: Context, tasks: List<ServerTask>?, error: Boolean): RemoteViews {
             val open = Intent(context, MainActivity::class.java).setAction(ACTION_TASKS)
             val openPending = PendingIntent.getActivity(
-                context, 0, open,
+                context, OPEN_CODE, open,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val refresh = Intent(context, TaskWidget::class.java).setAction(ACTION_REFRESH)
             val refreshPending = PendingIntent.getBroadcast(
-                context, 0, refresh,
+                context, REFRESH_CODE, refresh,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             return RemoteViews(context.packageName, R.layout.task_widget).apply {

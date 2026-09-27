@@ -1,31 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Task manager widget (#101): RemoteViews can't use Compose, so this is a
-     plain LinearLayout — count + first open task, tap opens Task Manager. -->
+     plain LinearLayout — count + first open task, tap opens Task Manager.
+     System background + primary text colors (review #109) so it stays
+     readable on any wallpaper, light or dark. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:padding="12dp"
+    android:background="?android:attr/colorBackground">
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Task Manager"
-        android:textStyle="bold" />
+        android:text="@string/task_widget_title"
+        android:textStyle="bold"
+        android:textColor="?android:attr/textColorPrimary" />
 
     <TextView
         android:id="@+id/task_widget_count"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="@string/task_widget_loading" />
+        android:text="@string/task_widget_loading"
+        android:textColor="?android:attr/textColorPrimary" />
 
     <TextView
         android:id="@+id/task_widget_top"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:maxLines="2"
-        android:ellipsize="end" />
+        android:ellipsize="end"
+        android:textColor="?android:attr/textColorSecondary" />
 
     <ImageButton
         android:id="@+id/task_widget_refresh"
