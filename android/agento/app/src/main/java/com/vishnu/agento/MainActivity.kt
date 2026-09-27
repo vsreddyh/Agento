@@ -38,6 +38,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.Close
@@ -92,10 +93,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
@@ -123,6 +122,7 @@ private enum class Destination(val title: String) {
     Storage("Storage"),
     Scheduler("Scheduler"),
     Skills("Skills"),
+    Tools("Tools"),
     Settings("Settings"),
 }
 
@@ -135,6 +135,7 @@ private fun Destination.icon() = when (this) {
     Destination.Storage -> Icons.Filled.Folder
     Destination.Scheduler -> Icons.Filled.Schedule
     Destination.Skills -> Icons.Filled.Extension
+    Destination.Tools -> Icons.Filled.Build
     Destination.Settings -> Icons.Filled.Settings
 }
 
@@ -360,6 +361,10 @@ class MainActivity : ComponentActivity() {
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
                                 Destination.Skills -> SkillsScreen(
+                                    wc = wc,
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                )
+                                Destination.Tools -> ToolsScreen(
                                     wc = wc,
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
@@ -2341,11 +2346,10 @@ private fun McpCard(server: McpServer) {
     }
 }
 
-/** Read-only skills + tools inventory per assistant, in two sections —
- * Skills (Default vs Custom) and Tools (Default vs Custom MCP) — each with
+/** Read-only skills inventory per assistant — Default vs Custom — with
  * Tasks-style search filtering, origin FilterChips and a sort dropdown.
- * Origin rule: in-the-box Hermes skills/toolsets are default, everything
- * else (project skills, money/cookbook/health-check MCP, `mcp-*`) is custom.
+ * Origin rule: in-the-box Hermes skills carry a category, project skills
+ * don't — so non-blank category means default.
  */
 @Composable
 private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
@@ -2353,9 +2357,7 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val scope = rememberCoroutineScope()
     var profile by remember { mutableStateOf("god") }
     var skills by remember { mutableStateOf<List<SkillInfo>>(emptyList()) }
-    var toolsets by remember { mutableStateOf<List<ToolsetInfo>>(emptyList()) }
     var skillsError by remember { mutableStateOf("") }
-    var toolsError by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
     // Cancelled + replaced on every load() so rapid profile taps can't
@@ -2366,31 +2368,20 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         loadJob?.cancel()
         busy = true
         skillsError = ""
-        toolsError = ""
         loaded = false
         val path = ChatApi(context).pathFor(profile)
         var job: Job? = null
         job = scope.launch {
             try {
-                supervisorScope {
-                    val s = async { ServerApi(context).listSkills(path) }
-                    val t = async { ServerApi(context).listToolsets(path) }
-                    // Await into locals first: a cancel landing between the
-                    // two awaits must not leave half-stale state behind.
-                    val sr = s.await()
-                    val tr = t.await()
-                    ensureActive()
-                    if (loadJob == job) {
-                        skills = sr.getOrDefault(emptyList())
-                        toolsets = tr.getOrDefault(emptyList())
-                        skillsError = sr.exceptionOrNull()?.let {
-                            it.message ?: it.javaClass.simpleName
-                        } ?: ""
-                        toolsError = tr.exceptionOrNull()?.let {
-                            it.message ?: it.javaClass.simpleName
-                        } ?: ""
-                        loaded = true
-                    }
+                val sr = ServerApi(context).listSkills(path)
+                // A cancel landing mid-await must not leave stale state.
+                ensureActive()
+                if (loadJob == job) {
+                    skills = sr.getOrDefault(emptyList())
+                    skillsError = sr.exceptionOrNull()?.let {
+                        it.message ?: it.javaClass.simpleName
+                    } ?: ""
+                    loaded = true
                 }
             } finally {
                 if (loadJob == job) busy = false
@@ -2402,19 +2393,12 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     LaunchedEffect(profile) { load() }
 
     val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Resume and Portfolio")
-    // UI hides explicitly-off toolsets only; unknown toggle state (null)
-    // stays visible so flag-less server shapes never blank the section.
-    val visibleToolsets = remember(toolsets) { toolsets.filter { it.enabled != false } }
-    val mcp = remember(visibleToolsets) { mcpServersFrom(visibleToolsets) }
 
-    // Per-section search + origin filter + sort (Tasks-style).
+    // Search + origin filter + sort (Tasks-style).
     var query by remember { mutableStateOf("") }
     var skillsOrigin by remember { mutableStateOf(SkillsOrigin.All) }
     var skillsSort by remember { mutableStateOf(SkillsSort.NameAz) }
     var skillsSortOpen by remember { mutableStateOf(false) }
-    var toolsOrigin by remember { mutableStateOf(ToolsOrigin.All) }
-    var toolsSort by remember { mutableStateOf(ToolsSort.NameAz) }
-    var toolsSortOpen by remember { mutableStateOf(false) }
 
     fun sortSkills(list: List<SkillInfo>): List<SkillInfo> = when (skillsSort) {
         SkillsSort.NameZa -> list.sortedByDescending { it.name.lowercase(Locale.ROOT) }
@@ -2441,41 +2425,10 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val shownDefaultSkills = if (skillsOrigin == SkillsOrigin.Custom) emptyList() else defaultSkills
     val shownCustomSkills = if (skillsOrigin == SkillsOrigin.Default) emptyList() else customSkills
 
-    fun sortToolsets(list: List<ToolsetInfo>): List<ToolsetInfo> = when (toolsSort) {
-        ToolsSort.NameZa -> list.sortedByDescending { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
-        ToolsSort.MostTools -> list.sortedWith(
-            compareByDescending<ToolsetInfo> { it.tools.size }
-                .thenBy { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
-        )
-        ToolsSort.NameAz -> list.sortedBy { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
-    }
-    val defaultTools = remember(visibleToolsets, query, toolsSort) {
-        sortToolsets(visibleToolsets.filter { !it.isCustomMcp() && it.matches(query) })
-    }
-    val customMcpToolsets = remember(visibleToolsets, query, toolsSort) {
-        sortToolsets(visibleToolsets.filter { it.isCustomMcp() && it.matches(query) })
-    }
-    val customMcpServers = remember(mcp, query, toolsSort) {
-        val filtered = mcp.filter { it.matches(query) }
-        if (toolsSort == ToolsSort.NameZa) {
-            filtered.sortedByDescending { it.name.lowercase(Locale.ROOT) }
-        } else {
-            filtered.sortedWith(
-                compareBy({ if (toolsSort == ToolsSort.MostTools) -it.tools.size else 0 },
-                    { it.name.lowercase(Locale.ROOT) })
-            )
-        }
-    }
-    val shownDefaultTools = if (toolsOrigin == ToolsOrigin.CustomMcp) emptyList() else defaultTools
-    val shownCustomMcpToolsets =
-        if (toolsOrigin == ToolsOrigin.Default) emptyList() else customMcpToolsets
-    val shownCustomMcpServers =
-        if (toolsOrigin == ToolsOrigin.Default) emptyList() else customMcpServers
-
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Skills & tools") },
+                title = { Text("Skills") },
                 navigationIcon = {
                     IconButton(onClick = onMenu) {
                         Icon(Icons.Filled.Menu, contentDescription = "Menu")
@@ -2510,7 +2463,7 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = { Text("Search skills & tools…") },
+                    placeholder = { Text("Search skills…") },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     trailingIcon = if (query.isEmpty()) null else ({
                         IconButton(onClick = { query = "" }) {
@@ -2525,46 +2478,28 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         CircularProgressIndicator()
                     }
                 }
-                // Hoisted above the list so memoization isn't position-keyed.
-                val skillsHint = remember(skillsError) {
-                    "Skills unavailable (${friendlyError(skillsError).title}) — " +
-                        "tools below still work."
-                }
-                val toolsHint = remember(toolsError) {
-                    "Tools unavailable (${friendlyError(toolsError).title}) — " +
-                        "skills above still work."
-                }
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp),
                 ) {
-                    // Fully-empty screen: one error card with retry, joining both
-                    // raws when both sources failed so Details keeps everything.
-                    val bothEmptyError = listOf(toolsError, skillsError)
-                        .filter { it.isNotEmpty() }
-                        .joinToString("\n\n")
-                    if (skills.isEmpty() && visibleToolsets.isEmpty()
-                        && bothEmptyError.isNotEmpty() && loaded
-                    ) {
+                    if (skills.isEmpty() && skillsError.isNotEmpty() && loaded) {
                         item {
-                            ErrorCard(raw = bothEmptyError, onRetry = { load() })
+                            ErrorCard(raw = skillsError, onRetry = { load() })
                         }
                     }
-                    if (loaded && skills.isEmpty() && visibleToolsets.isEmpty()
-                        && skillsError.isEmpty() && toolsError.isEmpty()
-                    ) {
+                    if (loaded && skills.isEmpty() && skillsError.isEmpty()) {
                         item {
                             EmptyState(
                                 icon = Icons.Filled.Extension,
                                 title = "Nothing listed",
-                                subtitle = "This assistant reports no skills or toolsets.",
+                                subtitle = "This assistant reports no skills.",
                                 actionLabel = "Refresh",
                                 onAction = { load() },
                             )
                         }
                     }
-                    // ── SECTION 1: Skills (Default vs Custom) ──
+                    // ── Skills (Default vs Custom) ──
                     item {
                         Text(
                             "Skills",
@@ -2628,15 +2563,6 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             SkillCard(s)
                         }
                     }
-                    // Partial failure with the other side intact: slim hint only
-                    // (the full-empty card above already covers both-empty).
-                    if (skills.isEmpty() && skillsError.isNotEmpty()
-                        && visibleToolsets.isNotEmpty() && loaded
-                    ) {
-                        item {
-                            HintLine(skillsHint)
-                        }
-                    }
                     if (loaded && skills.isNotEmpty()
                         && shownDefaultSkills.isEmpty() && shownCustomSkills.isEmpty()
                         && skillsError.isEmpty()
@@ -2645,7 +2571,177 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             HintLine("No skills match this search or filter.")
                         }
                     }
-                    // ── SECTION 2: Tools (Default vs Custom MCP) ──
+                }
+            }
+        }
+    }
+}
+
+/** Read-only tools inventory per assistant — Default vs Custom MCP — with
+ * Tasks-style search filtering, origin FilterChips and a sort dropdown.
+ * Origin rule: in-the-box Hermes toolsets are default, everything else
+ * (in-repo MCP servers, `mcp-*`) is custom. Split out of SkillsScreen
+ * into its own sidebar section (#106).
+ */
+@Composable
+private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var profile by remember { mutableStateOf("god") }
+    var toolsets by remember { mutableStateOf<List<ToolsetInfo>>(emptyList()) }
+    var toolsError by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var loaded by remember { mutableStateOf(false) }
+    // Cancelled + replaced on every load() so rapid profile taps can't
+    // let a stale response win; only the latest job may clear busy.
+    var loadJob by remember { mutableStateOf<Job?>(null) }
+
+    fun load() {
+        loadJob?.cancel()
+        busy = true
+        toolsError = ""
+        loaded = false
+        val path = ChatApi(context).pathFor(profile)
+        var job: Job? = null
+        job = scope.launch {
+            try {
+                val tr = ServerApi(context).listToolsets(path)
+                // A cancel landing mid-await must not leave stale state.
+                ensureActive()
+                if (loadJob == job) {
+                    toolsets = tr.getOrDefault(emptyList())
+                    toolsError = tr.exceptionOrNull()?.let {
+                        it.message ?: it.javaClass.simpleName
+                    } ?: ""
+                    loaded = true
+                }
+            } finally {
+                if (loadJob == job) busy = false
+            }
+        }
+        loadJob = job
+    }
+
+    LaunchedEffect(profile) { load() }
+
+    val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Resume and Portfolio")
+    // UI hides explicitly-off toolsets only; unknown toggle state (null)
+    // stays visible so flag-less server shapes never blank the section.
+    val visibleToolsets = remember(toolsets) { toolsets.filter { it.enabled != false } }
+    val mcp = remember(visibleToolsets) { mcpServersFrom(visibleToolsets) }
+
+    // Search + origin filter + sort (Tasks-style).
+    var query by remember { mutableStateOf("") }
+    var toolsOrigin by remember { mutableStateOf(ToolsOrigin.All) }
+    var toolsSort by remember { mutableStateOf(ToolsSort.NameAz) }
+    var toolsSortOpen by remember { mutableStateOf(false) }
+
+    fun sortToolsets(list: List<ToolsetInfo>): List<ToolsetInfo> = when (toolsSort) {
+        ToolsSort.NameZa -> list.sortedByDescending { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
+        ToolsSort.MostTools -> list.sortedWith(
+            compareByDescending<ToolsetInfo> { it.tools.size }
+                .thenBy { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
+        )
+        ToolsSort.NameAz -> list.sortedBy { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
+    }
+    val defaultTools = remember(visibleToolsets, query, toolsSort) {
+        sortToolsets(visibleToolsets.filter { !it.isCustomMcp() && it.matches(query) })
+    }
+    val customMcpToolsets = remember(visibleToolsets, query, toolsSort) {
+        sortToolsets(visibleToolsets.filter { it.isCustomMcp() && it.matches(query) })
+    }
+    val customMcpServers = remember(mcp, query, toolsSort) {
+        val filtered = mcp.filter { it.matches(query) }
+        if (toolsSort == ToolsSort.NameZa) {
+            filtered.sortedByDescending { it.name.lowercase(Locale.ROOT) }
+        } else {
+            filtered.sortedWith(
+                compareBy({ if (toolsSort == ToolsSort.MostTools) -it.tools.size else 0 },
+                    { it.name.lowercase(Locale.ROOT) })
+            )
+        }
+    }
+    val shownDefaultTools = if (toolsOrigin == ToolsOrigin.CustomMcp) emptyList() else defaultTools
+    val shownCustomMcpToolsets =
+        if (toolsOrigin == ToolsOrigin.Default) emptyList() else customMcpToolsets
+    val shownCustomMcpServers =
+        if (toolsOrigin == ToolsOrigin.Default) emptyList() else customMcpServers
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Tools") },
+                navigationIcon = {
+                    IconButton(onClick = onMenu) {
+                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { load() }, enabled = !busy) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Column(modifier = Modifier.contentWidth(wc)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    tabs.forEach { (key, label) ->
+                        FilterChip(
+                            selected = profile == key,
+                            onClick = { profile = key },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search tools…") },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    trailingIcon = if (query.isEmpty()) null else ({
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Clear search")
+                        }
+                    }),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                )
+                if (busy && !loaded) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                ) {
+                    if (visibleToolsets.isEmpty() && toolsError.isNotEmpty() && loaded) {
+                        item {
+                            ErrorCard(raw = toolsError, onRetry = { load() })
+                        }
+                    }
+                    if (loaded && visibleToolsets.isEmpty() && toolsError.isEmpty()) {
+                        item {
+                            EmptyState(
+                                icon = Icons.Filled.Build,
+                                title = "Nothing listed",
+                                subtitle = "This assistant reports no toolsets.",
+                                actionLabel = "Refresh",
+                                onAction = { load() },
+                            )
+                        }
+                    }
+                    // ── Tools (Default vs Custom MCP) ──
                     item {
                         Text(
                             "Tools",
@@ -2718,13 +2814,6 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         }
                         items(shownCustomMcpServers, key = { "ms:" + it.name }) { server ->
                             McpCard(server)
-                        }
-                    }
-                    if (visibleToolsets.isEmpty() && toolsError.isNotEmpty()
-                        && skills.isNotEmpty() && loaded
-                    ) {
-                        item {
-                            HintLine(toolsHint)
                         }
                     }
                     if (loaded && visibleToolsets.isNotEmpty()

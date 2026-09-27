@@ -10,6 +10,11 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.14.0]
+
+- Tools move out of Skills into their own sidebar section, with the
+  same per-assistant picker, search, filters, and sorts.
+
 ## [3.13.1]
 
 - Sidebar scrolls: the drawer and rail no longer cut off entries on
