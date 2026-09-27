@@ -22,6 +22,12 @@ import java.time.ZoneId
 private val IsoDate = Regex("\\d{4}-\\d{2}-\\d{2}")
 private val ClockTime = Regex("(\\d{1,2}):(\\d{2})(?::(\\d{2}))?")
 
+/** Shared worker for alarm receivers (one scope, never per-broadcast). */
+private val alarmScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+/** Fixed notification id; identity comes from the per-task tag. */
+private const val ALARM_NOTIF_ID = 1
+
 /** True for strict ISO dates only; anything else is treated as undated
  * so one malformed row can never poison comparisons or alarms. */
 fun String.isIsoDate(): Boolean =
@@ -34,9 +40,13 @@ fun dueMillisOrNull(dueDate: String, dueTime: String): Long? {
     if (!dueDate.isIsoDate()) return null
     val parts = ClockTime.matchEntire(dueTime.trim()) ?: return null
     val (h, m, s) = parts.destructured
-    if (h.toInt() > 23 || m.toInt() > 59 || s.toInt() > 59) return null
+    // The :ss group is optional — absent means zero, never "".toInt().
+    val hh = h.toIntOrNull() ?: return null
+    val mm = m.toIntOrNull() ?: return null
+    val ss = s.toIntOrNull() ?: 0
+    if (hh > 23 || mm > 59 || ss > 59) return null
     val at = runCatching {
-        LocalDate.parse(dueDate).atTime(h.toInt(), m.toInt(), s.toInt())
+        LocalDate.parse(dueDate).atTime(hh, mm, ss)
     }.getOrNull() ?: return null
     return at.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 }
@@ -148,17 +158,16 @@ object TaskReminders {
 
 /** Fires a due task's notification; tap deep-links to its detail sheet.
  * Name lookup runs off-thread via goAsync so a slow network can never
- * ANR the broadcast — the alert posts with a fallback title first only
- * if the lookup path itself is slow, otherwise with the real name. */
+ * ANR the broadcast — the alert still posts on fallback title if lookup
+ * fails. The scope is file-shared (like [TaskReminders]'s), not per
+ * broadcast, so fired receivers leave nothing behind. */
 class TaskAlarmReceiver : BroadcastReceiver() {
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onReceive(context: Context, intent: Intent) {
         val taskId = intent.getStringExtra(TaskWidget.EXTRA_TASK_ID).orEmpty()
         if (taskId.isEmpty()) return
         val pending = goAsync()
-        scope.launch {
+        alarmScope.launch {
             try {
                 post(context.applicationContext, taskId)
             } finally {
@@ -194,7 +203,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         mgr.notify(
-            taskId.hashCode(),
+            // Tag-based identity: unique per task even if two ids ever
+            // share a hashCode (the PendingIntent request code, by
+            // contrast, is disambiguated by its data URI).
+            taskId, ALARM_NOTIF_ID,
             NotificationCompat.Builder(appCtx, TaskReminders.CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_menu_agenda)
                 .setContentTitle(name)
