@@ -1331,7 +1331,8 @@ private fun normalizeStatus(raw: String): String = when (raw.trim().lowercase(Lo
 }
 
 /** One-time read of the retired local tasks.json (#104): name/status/note
- * triples for server import. Lenient — a corrupt file imports as empty. */
+ * triples for server import. Lenient — a corrupt file imports as empty.
+ * Capped at 500 to match the server MaxLimit used by the migration calls. */
 private fun loadLegacyTasks(context: android.content.Context): List<Triple<String, String, String>> {
     val f = java.io.File(context.filesDir, "tasks.json")
     if (!f.exists()) return emptyList()
@@ -1342,7 +1343,7 @@ private fun loadLegacyTasks(context: android.content.Context): List<Triple<Strin
             Triple(o.optString("name"), o.optString("status"), o.optString("note"))
         }.mapNotNull { it }
             .filter { it.first.isNotBlank() }
-            .take(200)
+            .take(500)
     }.getOrDefault(emptyList())
 }
 
