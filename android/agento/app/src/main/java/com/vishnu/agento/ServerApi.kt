@@ -220,6 +220,28 @@ class ServerApi(context: Context) {
             }
         }
 
+    /** Server-side totals for one gateway session (#121 reconciliation).
+     * Lenient: the wrapped `{"session":{...}}` shape is verified live, with
+     * bare-object fallback; alternate token key names accepted; unknown or
+     * missing sessions are success-with-null (pre-#120 thread ids, deleted
+     * sessions) so the UI falls back to device sums. Only transport/parse
+     * failures are errors. */
+    suspend fun fetchSessionTotals(path: String, sessionId: String): Result<SessionTotals?> =
+        withContext(Dispatchers.IO) {
+            if (sessionId.isBlank()) {
+                return@withContext Result.failure(IllegalStateException("Session id not set"))
+            }
+            get(path, "api/sessions/${urlEncode(sessionId)}").map { body ->
+                val root = runCatching { JSONObject(body) }.getOrNull()
+                    ?: throw RuntimeException("Unexpected response shape")
+                // 404-style unknown sessions surface as failures upstream;
+                // an explicit error object reads as absent, not fatal.
+                if (root.optString("error", "").trim().isNotEmpty()) return@map null
+                val s = root.optJSONObject("session") ?: root
+                parseSessionTotals(s)
+            }
+        }
+
     /**
      * Strict toggle parse: only real booleans count — strings, numbers and
      * nulls read as unknown (null) instead of Off.
@@ -286,6 +308,20 @@ fun lastTurnStartIndex(roles: List<String>): Int {
     return if (lastUser < 0) roles.size else lastUser + 1
 }
 
+/** Server-side token totals for one gateway session (`GET api/sessions/{id}`,
+ * verified live: `{"object":"hermes.session","session":{input_tokens,
+ * output_tokens, cache_read_tokens, ...}}`). The multi-device truth for
+ * #121 reconcilation — device sums only cover turns this device served. */
+data class SessionTotals(
+    val prompt: Long = 0L,
+    val completion: Long = 0L,
+    val cached: Long = 0L,
+    val reasoning: Long = 0L,
+    val total: Long = 0L,
+    val messages: Long = 0L,
+    val model: String = "",
+)
+
 /** Tools + skills used during one server-side turn. */
 data class SessionUsage(
     val tools: List<String> = emptyList(),
@@ -320,6 +356,37 @@ fun usageFromToolCalls(calls: List<SessionToolCall>): SessionUsage {
     val tools = calls.mapNotNull { it.name.trim().ifEmpty { null } }.distinct()
     val skills = calls.flatMap { skillNamesFromToolCall(it.name, it.arguments) }.distinct()
     return SessionUsage(tools = tools.take(20), skills = skills.take(20))
+}
+
+/**
+ * Lenient parse of one gateway session object into totals: accepts
+ * `input_tokens`/`prompt_tokens`, `output_tokens`/`completion_tokens`,
+ * `cache_read_tokens`/`cached_tokens`, `reasoning_tokens`, plus
+ * `message_count`/`tool_call_count` and `model`. Missing totals derive
+ * from prompt + completion; absent rows read as zero. Pure for testability.
+ */
+fun parseSessionTotals(s: JSONObject): SessionTotals {
+    fun num(vararg keys: String): Long {
+        for (k in keys) {
+            val v = s.optLong(k, 0L)
+            if (v > 0) return v
+        }
+        return 0L
+    }
+    val prompt = num("input_tokens", "prompt_tokens")
+    val completion = num("output_tokens", "completion_tokens")
+    val cached = num("cache_read_tokens", "cached_tokens", "cache_read_input_tokens")
+    val reasoning = num("reasoning_tokens")
+    val total = num("total_tokens", "total").takeIf { it > 0 } ?: (prompt + completion)
+    return SessionTotals(
+        prompt = prompt,
+        completion = completion,
+        cached = cached,
+        reasoning = reasoning,
+        total = total,
+        messages = num("message_count", "messages"),
+        model = s.optString("model", "").trim(),
+    )
 }
 
 /** URL-encodes one path segment (session ids are UUIDs today, encoded

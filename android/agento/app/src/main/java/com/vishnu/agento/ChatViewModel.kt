@@ -41,7 +41,57 @@ data class ChatUiState(
     val activeTools: List<String> = emptyList(),
     /** Label of the latest live tool frame, e.g. what the tool is doing. */
     val activeToolLabel: String = "",
+    /** Server-side totals for the active thread's gateway session (#121);
+     * null = unknown (fetch failed, or the thread predates stable sessions). */
+    val serverTokens: SessionTotals? = null,
 )
+
+/** Device-observed usage for one conversation thread, summed from
+ * per-message reports (#121). Pure for testability. */
+data class ThreadUsage(
+    /** Sum of reported turn totals (device-observed). */
+    val total: Long = 0L,
+    /** Of-prompt cached subset sum. */
+    val cached: Long = 0L,
+    /** Last reported prompt size = current context size (full history resent). */
+    val lastPrompt: Long = 0L,
+    /** First reported prompt size = baseline overhead hint (SOUL + skills +
+     * tools, plus the first user message). */
+    val firstPrompt: Long = 0L,
+    /** Turns with usable server reports. */
+    val counted: Int = 0,
+    /** Assistant replies with no usable report (failed/interrupted/legacy). */
+    val unreported: Int = 0,
+)
+
+/** Sums per-message usage across one thread's messages. */
+fun threadUsageOf(messages: List<ChatMessage>): ThreadUsage {
+    var total = 0L
+    var cached = 0L
+    var lastPrompt = 0L
+    var firstPrompt = 0L
+    var counted = 0
+    var unreported = 0
+    for (m in messages) {
+        if (m.role == "user") continue
+        // Blank assistant rows are transient (the in-flight streaming
+        // placeholder), not turns — never count them either way.
+        if (m.content.isBlank()) continue
+        if (m.total > 0 || m.prompt > 0 || m.completion > 0) {
+            total += m.total
+            cached += m.cached
+            if (firstPrompt == 0L && m.prompt > 0) firstPrompt = m.prompt
+            if (m.prompt > 0) lastPrompt = m.prompt
+            counted++
+        } else {
+            unreported++
+        }
+    }
+    return ThreadUsage(
+        total = total, cached = cached, lastPrompt = lastPrompt,
+        firstPrompt = firstPrompt, counted = counted, unreported = unreported,
+    )
+}
 
 /**
  * One instance per chat tab (story / resumes / god). Conversations per tab
@@ -89,6 +139,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 threadId = threadId,
                 ready = true,
             )
+            refreshServerTotals()
         }
         checkReachability()
     }
@@ -156,7 +207,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             pending = "",
             activeTools = emptyList(),
             activeToolLabel = "",
+            serverTokens = null,
         )
+        refreshServerTotals()
     }
 
     /** + starts a new conversation; threads with chats are kept, empty
@@ -172,6 +225,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
             activeTools = emptyList(), activeToolLabel = "",
+            serverTokens = null,
         )
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
@@ -204,10 +258,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
+                serverTokens = null,
             )
         }
         _state.value = _state.value.copy(threads = summaries())
         persist()
+        refreshServerTotals()
     }
 
     /** Threads matching [query] in title or message text (switcher search). */
@@ -354,7 +410,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     is ChatEvent.Done -> {
                         val final = event.fullText.ifEmpty { acc.toString() }
                         val finishedAt = ChatThreads.now()
-                        val finished = msgsDropLastPlusAssistant(final, finishedAt, liveTools.toList())
+                        val finished = msgsDropLastPlusAssistant(
+                            final, finishedAt, liveTools.toList(), event.usage,
+                        )
                         _state.value = _state.value.copy(
                             messages = finished,
                             streaming = false,
@@ -366,6 +424,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         upsertActive(finished)
                         persist()
                         backfillUsage(path, stableSessionId, finishedAt, final, finished.size - 1)
+                        refreshServerTotals(path, stableSessionId)
                         // #58: ping the user when a reply lands while the app
                         // is backgrounded (gateway has no cronjobs to report).
                         if (!ForegroundTracker.isForeground) {
@@ -376,13 +435,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     }
                     is ChatEvent.Error -> {
                         // Terminal (see streamChat): nothing follows. Keep any
-                        // partial reply with live-seen tools attached; drop
-                        // the placeholder only when it is still empty.
+                        // partial reply with live-seen tools attached and
+                        // marked unreported (the turn ran but carried no
+                        // usable `usage`); drop the placeholder only when it
+                        // is still empty.
                         val msgs = _state.value.messages
                         val last = msgs.lastOrNull()
                         val kept = if (last?.role == "assistant" && last.content.isNotEmpty()) {
                             msgs.dropLast(1) + last.copy(
                                 tools = (last.tools + liveTools).distinct().take(20),
+                                unreported = true,
                             )
                         } else if (last?.role == "assistant") {
                             msgs.dropLast(1)
@@ -402,11 +464,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
-    /** Finished assistant message with the live-seen tools attached. */
+    /** Finished assistant message with the live-seen tools and the turn's
+     * server-reported token counts attached (null usage = the stream carried
+     * nothing usable, so the reply is marked unreported rather than zero). */
     private fun msgsDropLastPlusAssistant(
         final: String,
         finishedAt: Long,
         tools: List<String>,
+        usage: TokenUsage?,
     ): List<ChatMessage> {
         val msgs = _state.value.messages
         return msgs.dropLast(1) + ChatMessage(
@@ -414,7 +479,32 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             final.ifEmpty { "The assistant sent an empty reply. Try asking again." },
             finishedAt,
             tools = tools.distinct().take(20),
+            prompt = usage?.prompt ?: 0L,
+            completion = usage?.completion ?: 0L,
+            total = usage?.total ?: 0L,
+            cached = usage?.cached ?: 0L,
+            unreported = usage == null,
         )
+    }
+
+    /** Refreshes the server-side session totals for the active thread (#121
+     * reconciliation: the multi-device truth vs device-observed sums).
+     * Silent on failure — the thread header falls back to device sums. */
+    private fun refreshServerTotals(
+        path: String = api.pathFor(tab),
+        sessionId: String = threadId,
+    ) {
+        if (sessionId.isBlank() || !_state.value.ready) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val totals = runCatching {
+                serverApi.fetchSessionTotals(path, sessionId).getOrThrow()
+            }.getOrNull() ?: return@launch
+            withContext(Dispatchers.Main) {
+                if (sessionId == threadId && !_state.value.streaming) {
+                    _state.value = _state.value.copy(serverTokens = totals)
+                }
+            }
+        }
     }
 
     /** Post-turn usage fetch: merges server-recorded tools + skills into the

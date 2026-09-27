@@ -26,6 +26,15 @@ data class ChatMessage(
     val tools: List<String> = emptyList(),
     /** Skill names the assistant used for this reply (heuristic, see ServerApi). */
     val skills: List<String> = emptyList(),
+    /** Server-reported token counts for this reply (0 = unknown/legacy). */
+    val prompt: Long = 0L,
+    val completion: Long = 0L,
+    val total: Long = 0L,
+    /** Of-prompt cached tokens (subset, 0 = unknown/unreported). */
+    val cached: Long = 0L,
+    /** True when the turn ran but the stream carried no usable `usage`
+     * object (failed/interrupted turn) — an explicit gap, not a zero. */
+    val unreported: Boolean = false,
 )
 
 sealed interface ChatEvent {
@@ -42,11 +51,15 @@ sealed interface ChatEvent {
     ) : ChatEvent
 }
 
-/** Real token counts for one turn, parsed from the SSE `usage` object. */
+/** Real token counts for one turn, parsed from the SSE `usage` object.
+ * `cached` is the of-prompt cached subset (`cache_read_tokens` et al, 0
+ * when the server doesn't emit it — chat-completions carries
+ * prompt/completion/total only; the split arrives via the sessions API). */
 data class TokenUsage(
     val prompt: Long = 0L,
     val completion: Long = 0L,
     val total: Long = 0L,
+    val cached: Long = 0L,
 )
 
 /**
@@ -54,7 +67,10 @@ data class TokenUsage(
  * `usage: {prompt_tokens, completion_tokens, total_tokens}` to the final
  * chunk (OpenAI shape, verified live). Alternate key names
  * (`input_tokens`/`output_tokens`, bare `total`) are accepted; a missing
- * total derives from prompt + completion. Null when no usable counts are
+ * total derives from prompt + completion. Cached keys
+ * (`cache_read_tokens` et al) are accepted when present and read as a
+ * subset of prompt (0 when absent — never derived, so absence can't be
+ * mistaken for a real zero-cached turn). Null when no usable counts are
  * present — failed turns report all zeros, which read as absent rather
  * than as a real zero-token turn. Pure for testability.
  */
@@ -82,7 +98,15 @@ fun parseTokenUsage(o: JSONObject): TokenUsage? {
     val completion = num("completion_tokens", "output_tokens", "eval_count")
     val total = num("total_tokens", "total").takeIf { it > 0 } ?: (prompt + completion)
     if (prompt == 0L && completion == 0L && total == 0L) return null
-    return TokenUsage(prompt = prompt, completion = completion, total = total)
+    // Cached is informational-only: zero-or-absent reads as unknown, so a
+    // plain non-negative read (not the positive-only `num`) is correct.
+    val cached = runCatching {
+        src.optLong("cache_read_tokens").takeIf { it > 0 }
+            ?: src.optLong("cached_tokens").takeIf { it > 0 }
+            ?: src.optLong("cache_read_input_tokens").takeIf { it > 0 }
+            ?: 0L
+    }.getOrDefault(0L)
+    return TokenUsage(prompt = prompt, completion = completion, total = total, cached = cached)
 }
 
 /** Known provider slugs: offline fallback for the dynamic picker (the live

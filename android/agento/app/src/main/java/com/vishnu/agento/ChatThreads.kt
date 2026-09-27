@@ -7,7 +7,8 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 /** One persisted message (ChatMessage + timestamp; ts=0 reads as unknown).
- * tools/skills default empty so pre-visibility history reads as unknown. */
+ * tools/skills default empty so pre-visibility history reads as unknown;
+ * token fields default zero so pre-usage history reads as unreported. */
 @Serializable
 data class StoredMessage(
     val role: String = "",
@@ -15,6 +16,11 @@ data class StoredMessage(
     val ts: Long = 0L,
     val tools: List<String> = emptyList(),
     val skills: List<String> = emptyList(),
+    val prompt: Long = 0L,
+    val completion: Long = 0L,
+    val total: Long = 0L,
+    val cached: Long = 0L,
+    val unreported: Boolean = false,
 )
 
 /** One conversation thread inside a tab. */
@@ -78,8 +84,18 @@ object ChatThreads {
     }
 
     fun toUi(messages: List<StoredMessage>): List<ChatMessage> =
-        messages.map { ChatMessage(it.role, it.content, it.ts, it.tools, it.skills) }
+        messages.map {
+            ChatMessage(
+                it.role, it.content, it.ts, it.tools, it.skills,
+                it.prompt, it.completion, it.total, it.cached, it.unreported,
+            )
+        }
 
     fun toStored(messages: List<ChatMessage>): List<StoredMessage> =
-        messages.map { StoredMessage(it.role, it.content, it.ts, it.tools, it.skills) }
+        messages.map {
+            StoredMessage(
+                it.role, it.content, it.ts, it.tools, it.skills,
+                it.prompt, it.completion, it.total, it.cached, it.unreported,
+            )
+        }
 }

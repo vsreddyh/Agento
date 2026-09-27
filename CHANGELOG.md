@@ -10,6 +10,16 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.18.0]
+
+- Usage display: every assistant reply carries its token report
+  (`~1.2k tok`, persisted per message), and each thread shows a header
+  with the thread total, current context size, counted turns, and
+  replies without reports. The header reconciles against the gateway
+  session total (the multi-device truth) and notes the first-turn
+  baseline (SOUL + skills + tools). Settings totals gain a cached-tokens
+  row. No cost UI — the gateway reports no real pricing yet.
+
 ## [3.17.1]
 
 - Chat reuses one stable gateway session per conversation thread instead
