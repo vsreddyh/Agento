@@ -209,7 +209,7 @@ class TaskWidget : AppWidgetProvider() {
                     if (list == null) failed = true else views[state] = list
                 }
             }
-            if (views.isNotEmpty()) cachedViews = views
+            if (views.isNotEmpty()) cachedViews = cachedViews + views
             lastError = failed && views.isEmpty()
             val mgr = AppWidgetManager.getInstance(appCtx)
             for (id in ids) {

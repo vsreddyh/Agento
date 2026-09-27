@@ -146,6 +146,17 @@ object TaskReminders {
         }
     }
 
+    /** Drop one armed alarm (fired for a task that's gone). */
+    fun cancelOne(context: Context, taskId: String) {
+        val appCtx = context.applicationContext
+        val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        mgr.cancel(operation(appCtx, taskId))
+        val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
+        if (taskId in armed) {
+            prefs(appCtx).edit().putStringSet(PREF_ARMED, armed - taskId).apply()
+        }
+    }
+
     /** Drop every armed alarm (reminders disabled). */
     fun cancelAll(context: Context) {
         val appCtx = context.applicationContext
@@ -190,10 +201,19 @@ class TaskAlarmReceiver : BroadcastReceiver() {
     }
 
     private suspend fun post(appCtx: Context, taskId: String) {
-        val name = withTimeoutOrNull(10_000) {
+        val open = withTimeoutOrNull(10_000) {
             TasksApi(appCtx).list("open").getOrNull()
-        }?.firstOrNull { it.id == taskId }?.name
-            .orEmpty().ifEmpty { "Task due" }
+        }
+        // Absent from a successful fetch means done/deleted after arming
+        // (e.g. agent-side while the app was closed): drop the alarm and
+        // stay silent instead of pinging for a finished task. A failed
+        // fetch (null) is unknowable — the alert still goes out generic.
+        val task = open?.firstOrNull { it.id == taskId }
+        if (open != null && task == null) {
+            TaskReminders.cancelOne(appCtx, taskId)
+            return
+        }
+        val name = task?.name.orEmpty().ifEmpty { "Task due" }
         val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE)
             as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

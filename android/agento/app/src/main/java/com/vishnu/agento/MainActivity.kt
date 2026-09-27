@@ -1288,9 +1288,10 @@ private fun TaskManagerScreen(
                     )
                     // Day sections (skipped on the Done filter, where due
                     // buckets carry no meaning); within a section the
-                    // current sort still applies.
+                    // current sort still applies. The date string is a
+                    // remember key so buckets recompute past midnight.
                     val day = java.time.LocalDate.now()
-                    val sections = remember(visible, groupByDay, filter) {
+                    val sections = remember(visible, groupByDay, filter, day.toString()) {
                         if (!groupByDay || filter == ServerTaskFilter.Done) {
                             listOf(null to visible)
                         } else {
