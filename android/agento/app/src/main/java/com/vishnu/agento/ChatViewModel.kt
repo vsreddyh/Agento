@@ -320,13 +320,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Placeholder assistant message that deltas append to.
         _state.value = _state.value.copy(messages = history + ChatMessage("assistant", "", ChatThreads.now()))
         val acc = StringBuilder()
-        // Fresh id per send: pins this turn to one server session for the
-        // post-turn usage fetch, without changing the stateless agent loop.
-        val runSessionId = ChatThreads.newId()
+        // One stable gateway session per app thread (#120): the thread id
+        // ships as X-Hermes-Session-Id so turns append to the same server
+        // session (titles/costs read per conversation). Captured up front:
+        // a thread switch mid-turn must not retarget the in-flight request.
+        val stableSessionId = threadId
         val liveTools = mutableListOf<String>()
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
-            api.streamChat(path, provider, model, history, runSessionId, effort).collect { event ->
+            api.streamChat(path, provider, model, history, stableSessionId, effort).collect { event ->
                 when (event) {
                     is ChatEvent.ToolProgress -> {
                         val name = event.tool.trim()
@@ -363,7 +365,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         addTokens(event.usage)
                         upsertActive(finished)
                         persist()
-                        backfillUsage(path, runSessionId, finishedAt, final, finished.size - 1)
+                        backfillUsage(path, stableSessionId, finishedAt, final, finished.size - 1)
                         // #58: ping the user when a reply lands while the app
                         // is backgrounded (gateway has no cronjobs to report).
                         if (!ForegroundTracker.isForeground) {
@@ -417,7 +419,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Post-turn usage fetch: merges server-recorded tools + skills into the
      * finished message so they persist and render as chips. Silent on
-     * failure — the live tools attached at Done stay. The patch targets the
+     * failure — the live tools attached at Done stay. [sessionId] is the
+     * stable per-thread gateway session (#120); the fetch slices to the
+     * last turn server-side, so earlier turns never bleed into this
+     * reply's chips. The patch targets the
      * index captured at Done time (verified by timestamp, with a timestamp
      * search fallback) so a send made mid-fetch is never clobbered; a thread
      * switch simply finds no match. */
