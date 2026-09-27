@@ -12,6 +12,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -88,11 +89,13 @@ object TaskReminders {
         context.applicationContext.getSharedPreferences(
             AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
 
-    /** Recompute alarms off-thread. Safe to call often; diffs only. */
-    fun refresh(context: Context) {
+    /** Recompute alarms off-thread. Safe to call often; diffs only.
+     * Returns the worker Job so callers that must outlive a broadcast
+     * (BootReceiver) can join it. */
+    fun refresh(context: Context): Job {
         val appCtx = context.applicationContext
-        if (!isEnabled(appCtx)) return
-        scope.launch {
+        if (!isEnabled(appCtx)) return Job().also { it.complete() }
+        return scope.launch {
             val tasks = TasksApi(appCtx).list("open").getOrNull() ?: return@launch
             val now = LocalDateTime.now()
             val horizon = LocalDate.now().plusDays(HORIZON_DAYS).toString()
@@ -121,10 +124,20 @@ object TaskReminders {
                 mgr.canScheduleExactAlarms()
             for ((id, at) in wanted) {
                 val op = operation(appCtx, id)
-                if (exact) {
-                    mgr.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
-                } else {
-                    mgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
+                // A revoked grant between the check and the call throws
+                // SecurityException; fall back to inexact per alarm so one
+                // revocation can't abort the loop or skip the armed-write.
+                val armedOk = runCatching {
+                    if (exact) {
+                        mgr.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
+                    } else {
+                        mgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
+                    }
+                }.isSuccess
+                if (!armedOk && exact) {
+                    runCatching {
+                        mgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
+                    }
                 }
             }
             prefs(appCtx).edit()

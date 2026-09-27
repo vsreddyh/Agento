@@ -948,6 +948,9 @@ private fun TaskManagerScreen(
     // Widget/alarm deep-link into one task's detail sheet: staged here,
     // opened once the list carries the row, then cleared upstream.
     var pendingDeepLink by rememberSaveable { mutableStateOf<String?>(null) }
+    // Set when the screen itself switched filters to chase a deep-link;
+    // the filter-change clearer below must not eat the id it just set.
+    var deepLinkAutoSwitched by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(deepLinkId) {
         if (deepLinkId != null) {
             pendingDeepLink = deepLinkId
@@ -956,6 +959,25 @@ private fun TaskManagerScreen(
     }
     // Reminder bell state + notification permission gate (Android 13+).
     var remindersOn by remember { mutableStateOf(TaskReminders.isEnabled(context)) }
+    // Enable path for the reminder bell: exact-alarm grant is best
+    // effort (the scheduler falls back to inexact), notifications are
+    // required, so those gate through the permission request below.
+    // Declared before the launcher: the callback calls it, and locals
+    // are only visible after their declaration point.
+    fun armRemindersAfterChecks() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val mgr = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            if (!mgr.canScheduleExactAlarms()) {
+                runCatching {
+                    context.startActivity(
+                        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM),
+                    )
+                }
+            }
+        }
+        TaskReminders.setEnabled(context, true)
+        remindersOn = true
+    }
     val notifPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -985,22 +1007,36 @@ private fun TaskManagerScreen(
 
     // Open the deep-linked row as soon as it is in the list. A later
     // filter switch is an explicit context change, so a still-missing id
-    // is dropped there instead of lingering (e.g. a deleted task). The
-    // first run is skipped so a fresh deep-link survives initial load.
+    // is dropped there instead of lingering (e.g. a deleted task) —
+    // unless the switch was our own auto-chase below. The first run is
+    // skipped so a fresh deep-link survives initial load.
     var seenFilter by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(filterName) {
         if (seenFilter == null) seenFilter = filterName
         else if (seenFilter != filterName) {
             seenFilter = filterName
-            pendingDeepLink = null
+            if (deepLinkAutoSwitched) deepLinkAutoSwitched = false
+            else pendingDeepLink = null
         }
     }
-    LaunchedEffect(tasks, pendingDeepLink) {
-        pendingDeepLink?.let { id ->
-            tasks.firstOrNull { it.id == id }?.let {
-                selected = it
-                pendingDeepLink = null
-            }
+    // If a loaded, non-empty list doesn't carry the id and we haven't
+    // tried All yet, switch there automatically (a Done-view row tapped
+    // while the Manager sits on Open); otherwise the id is truly gone.
+    LaunchedEffect(tasks, loading, pendingDeepLink) {
+        val id = pendingDeepLink ?: return@LaunchedEffect
+        tasks.firstOrNull { it.id == id }?.let {
+            selected = it
+            pendingDeepLink = null
+            deepLinkAutoSwitched = false
+            return@LaunchedEffect
+        }
+        if (loading) return@LaunchedEffect
+        if (tasks.isEmpty() || filter == ServerTaskFilter.All || deepLinkAutoSwitched) {
+            pendingDeepLink = null
+            deepLinkAutoSwitched = false
+        } else {
+            deepLinkAutoSwitched = true
+            filterName = ServerTaskFilter.All.name
         }
     }
 
@@ -1015,24 +1051,6 @@ private fun TaskManagerScreen(
     fun pokeWidget() {
         TaskWidget.refresh(context)
         TaskReminders.refresh(context)
-    }
-
-    // Enable path for the reminder bell: exact-alarm grant is best
-    // effort (the scheduler falls back to inexact), notifications are
-    // required, so those gate through the permission request above.
-    fun armRemindersAfterChecks() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val mgr = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            if (!mgr.canScheduleExactAlarms()) {
-                runCatching {
-                    context.startActivity(
-                        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM),
-                    )
-                }
-            }
-        }
-        TaskReminders.setEnabled(context, true)
-        remindersOn = true
     }
 
     fun onBell() {

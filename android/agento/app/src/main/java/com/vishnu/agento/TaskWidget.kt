@@ -10,6 +10,7 @@ import android.net.Uri
 import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -179,10 +180,12 @@ class TaskWidget : AppWidgetProvider() {
         }
 
         /** Re-pull server tasks and push to every installed widget. Call
-         * after task mutations so the home screen never goes stale. */
-        fun refresh(context: Context) {
-            widgetScope.launch {
-                val appCtx = context.applicationContext
+         * after task mutations so the home screen never goes stale.
+         * Returns the worker Job so callers that must outlive a broadcast
+         * (BootReceiver) can join it. */
+        fun refresh(context: Context): Job {
+            val appCtx = context.applicationContext
+            return widgetScope.launch {
                 val mgr = AppWidgetManager.getInstance(appCtx)
                 fetchAndPush(
                     appCtx,
@@ -257,12 +260,14 @@ class TaskWidget : AppWidgetProvider() {
             )
             // Trampoline template: per-row fill-ins carry either
             // EXTRA_TASK_ID (open detail) or EXTRA_COMPLETE_ID (complete
-            // inline). Per-widget code, like the view/config intents, so
-            // placements never share a cached PendingIntent.
+            // inline). MUTABLE is required: fill-in extras are silently
+            // dropped from an immutable template on API 31+. Per-widget
+            // code, like the view/config intents, so placements never
+            // share a cached PendingIntent.
             val trampoline = Intent(context, TaskCompleteActivity::class.java)
             val rowPending = PendingIntent.getActivity(
                 context, ROW_CODE + appWidgetId, trampoline,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
             )
             // Per-widget data URI so the launcher keeps a distinct factory
             // per id; a plain opaque URI is guaranteed unique.
