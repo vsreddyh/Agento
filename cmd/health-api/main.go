@@ -20,6 +20,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	syncpkg "sync"
 	"time"
@@ -683,7 +684,8 @@ func tasksRoot(w http.ResponseWriter, r *http.Request) {
 // listProjects serves the app's Projects screen: the user's projects from
 // the shared `projects` collection (the same rows the agent manages over
 // the project-manager MCP). `?status=Todo|Ongoing|Paused|Done|all`
-// (default all), `?search=` matches name/note.
+// (default all), `?search=` matches name/note, `?limit=` caps rows
+// (default 200, max 500).
 func listProjects(w http.ResponseWriter, r *http.Request) {
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
@@ -699,9 +701,16 @@ func listProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	limit := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			limit = n
+		}
+	}
 	rows, err := store.List(ctx,
 		r.URL.Query().Get("status"),
 		r.URL.Query().Get("search"),
+		limit,
 	)
 	if err != nil {
 		writeProjectErr(w, err)
@@ -867,6 +876,14 @@ func updateProject(w http.ResponseWriter, r *http.Request, id string) {
 	if err := checkProjectFields(fields); err != nil {
 		writeProjectErr(w, err)
 		return
+	}
+	// JSON null counts as absent (checkProjectFields lets it through), but
+	// the store type-asserts strings — strip nils so explicit nulls read
+	// as "untouched" instead of 422ing after passing the guard.
+	for k, v := range fields {
+		if v == nil {
+			delete(fields, k)
+		}
 	}
 	store, ok := projectStore(w)
 	if !ok {

@@ -56,12 +56,13 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_projects",
-		Description: "List projects. status Todo | Ongoing | Paused | Done | all (default all); search matches name/note."},
+		Description: "List projects. status Todo | Ongoing | Paused | Done | all (default all); search matches name/note; limit caps rows (default 200, max 500)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			Status string `json:"status"`
 			Search string `json:"search"`
+			Limit  int    `json:"limit"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.List(ctx, in.Status, in.Search)
+			rows, err := store.List(ctx, in.Status, in.Search, in.Limit)
 			if err != nil {
 				return fail(err)
 			}

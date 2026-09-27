@@ -26,6 +26,14 @@ import (
 
 const coll = "projects"
 
+// DefaultLimit caps List rows when the caller passes limit <= 0;
+// MaxLimit clamps explicit requests (one unbounded Find would grow with
+// the board forever).
+const (
+	DefaultLimit = 200
+	MaxLimit     = 500
+)
+
 // Statuses is the fixed project lifecycle (same set as the app board).
 var Statuses = []string{"Todo", "Ongoing", "Paused", "Done"}
 
@@ -79,21 +87,6 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		{Keys: bson.D{{Key: "updatedAt", Value: -1}}, Options: options.Index().SetName("updatedAt_-1")},
 	})
 	return err
-}
-
-// NormalizeStatus maps legacy free-text values onto the fixed set
-// (unknown values fall back to Todo — same rule as the app board).
-func NormalizeStatus(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "ongoing", "doing", "in progress", "in_progress":
-		return "Ongoing"
-	case "paused", "pause", "pasued":
-		return "Paused"
-	case "done", "complete", "completed":
-		return "Done"
-	default:
-		return "Todo"
-	}
 }
 
 // CheckStatus rejects values outside the fixed set (empty = default Todo).
@@ -151,9 +144,10 @@ func (s *Store) Create(ctx context.Context, name, status, note string) (map[stri
 }
 
 // List returns projects filtered by status ("" or "all" = everything) with
-// optional case-insensitive name/note search. Sort: status order, newest
-// activity first within a status.
-func (s *Store) List(ctx context.Context, status, search string) ([]map[string]any, error) {
+// optional case-insensitive name/note search, most recently updated first
+// (the app applies its status-rank ordering client-side). limit caps rows:
+// <=0 defaults to DefaultLimit, above MaxLimit clamps down.
+func (s *Store) List(ctx context.Context, status, search string, limit int) ([]map[string]any, error) {
 	filt := bson.M{}
 	if status = strings.TrimSpace(status); status != "" && !strings.EqualFold(status, "all") {
 		st, err := CheckStatus(status)
@@ -167,7 +161,8 @@ func (s *Store) List(ctx context.Context, status, search string) ([]map[string]a
 		rx := bson.M{"$regex": regexp.QuoteMeta(search), "$options": "i"}
 		filt["$or"] = []bson.M{{"name": rx}, {"note": rx}}
 	}
-	cur, err := s.projects.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}))
+	cur, err := s.projects.Find(ctx, filt,
+		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}).SetLimit(clampLimit(limit)))
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +176,17 @@ func (s *Store) List(ctx context.Context, status, search string) ([]map[string]a
 		out = append(out, toDoc(doc))
 	}
 	return out, cur.Err()
+}
+
+// clampLimit applies the List cap policy (default + ceiling).
+func clampLimit(limit int) int64 {
+	if limit <= 0 {
+		return DefaultLimit
+	}
+	if limit > MaxLimit {
+		return MaxLimit
+	}
+	return int64(limit)
 }
 
 // Get fetches one project by hex id.

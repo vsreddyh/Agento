@@ -1376,33 +1376,61 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var sortOpen by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
 
+    fun fail(e: Throwable) {
+        scope.launch {
+            snackbar.showSnackbar(serverDetail(e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    fun toast(msg: String) {
+        scope.launch { snackbar.showSnackbar(msg) }
+    }
+
+    fun cycleStatus(t: ServerProject): String {
+        val next = when (normalizeStatus(t.status)) {
+            "Todo" -> "Ongoing"
+            "Ongoing" -> "Paused"
+            "Paused" -> "Done"
+            else -> "Todo"
+        }
+        return next
+    }
+
     // One-time import of the retired local tasks.json (#104): uploads rows
-    // missing on the server (matched by name), then deletes the file. A
-    // failed run leaves everything in place and retries next launch.
+    // missing on the server (name match is trimmed + case-insensitive, and
+    // successes join the set as they land so a retry never duplicates).
+    // The file is deleted only after every legacy row is confirmed on the
+    // server — a failed run leaves everything in place and retries next
+    // launch.
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences(
             AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         if (!prefs.getBoolean("projects_migrated", false)) {
             val legacy = withContext(Dispatchers.IO) { loadLegacyTasks(context) }
-            val existing = if (legacy.isEmpty()) {
-                emptySet()
-            } else {
-                api.list("all").getOrNull().orEmpty().map { it.name }.toSet()
-            }
-            var ok = true
-            for ((name, status, note) in legacy) {
-                if (name in existing) continue
-                if (api.create(name, normalizeStatus(status), note).isFailure) {
-                    ok = false
-                    break
-                }
-            }
-            if (ok) {
+            if (legacy.isEmpty()) {
                 withContext(Dispatchers.IO) {
                     java.io.File(context.filesDir, "tasks.json").delete()
                 }
                 prefs.edit().putBoolean("projects_migrated", true).apply()
-                if (legacy.isNotEmpty()) refreshTick++
+            } else {
+                val norm = { s: String -> s.trim().lowercase(Locale.ROOT) }
+                val have = api.list("all").getOrNull().orEmpty()
+                    .map { norm(it.name) }.toMutableSet()
+                for ((name, status, note) in legacy) {
+                    if (norm(name) in have) continue
+                    val created = api.create(name, normalizeStatus(status), note).getOrNull()
+                    if (created == null) break
+                    have.add(norm(created.name))
+                }
+                val landed = api.list("all").getOrNull().orEmpty()
+                    .map { norm(it.name) }.toSet()
+                if (legacy.all { norm(it.first) in landed }) {
+                    withContext(Dispatchers.IO) {
+                        java.io.File(context.filesDir, "tasks.json").delete()
+                    }
+                    prefs.edit().putBoolean("projects_migrated", true).apply()
+                    refreshTick++
+                }
             }
         }
     }
@@ -1412,19 +1440,14 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         error = ""
         api.list(if (filter == "All") "all" else filter).fold(
             onSuccess = { projects = it },
-            onFailure = { e -> error = serverDetail(e.message ?: e.javaClass.simpleName) },
+            onFailure = { e ->
+                val msg = serverDetail(e.message ?: e.javaClass.simpleName)
+                // A failed refresh over cached rows still surfaces: stale
+                // data with no error affordance hides outages.
+                if (projects.isEmpty()) error = msg else toast(msg)
+            },
         )
         loading = false
-    }
-
-    fun fail(e: Throwable) {
-        scope.launch {
-            snackbar.showSnackbar(serverDetail(e.message ?: e.javaClass.simpleName))
-        }
-    }
-
-    fun toast(msg: String) {
-        scope.launch { snackbar.showSnackbar(msg) }
     }
 
     fun doCycle(t: ServerProject) {
@@ -1447,16 +1470,6 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             )
             busy = false
         }
-    }
-
-    fun cycleStatus(t: ServerProject): String {
-        val next = when (normalizeStatus(t.status)) {
-            "Todo" -> "Ongoing"
-            "Ongoing" -> "Paused"
-            "Paused" -> "Done"
-            else -> "Todo"
-        }
-        return next
     }
 
     val visible = projects
@@ -1567,9 +1580,11 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         items(visible, key = { it.id }) { t ->
                             TaskCard(
                                 task = t,
-                                onCycle = { doCycle(t) },
-                                onEdit = { editing = t.copy(status = normalizeStatus(t.status)) },
-                                onDelete = { doDelete(t) },
+                                // Cards stay tappable but ignore taps mid-mutation:
+                                // concurrent edits race the refreshTick reload.
+                                onCycle = { if (!busy) doCycle(t) },
+                                onEdit = { if (!busy) editing = t.copy(status = normalizeStatus(t.status)) },
+                                onDelete = { if (!busy) doDelete(t) },
                             )
                         }
                     }
@@ -1582,9 +1597,9 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         items(visible, key = { it.id }) { t ->
                             TaskCard(
                                 task = t,
-                                onCycle = { doCycle(t) },
-                                onEdit = { editing = t.copy(status = normalizeStatus(t.status)) },
-                                onDelete = { doDelete(t) },
+                                onCycle = { if (!busy) doCycle(t) },
+                                onEdit = { if (!busy) editing = t.copy(status = normalizeStatus(t.status)) },
+                                onDelete = { if (!busy) doDelete(t) },
                             )
                         }
                     }

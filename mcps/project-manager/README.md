@@ -10,7 +10,7 @@ same validation — see `cmd/health-api/main.go`).
 | Tool | Purpose |
 |---|---|
 | `create_project` | Create a project (name required; status defaults to Todo) |
-| `list_projects` | List by status Todo/Ongoing/Paused/Done/all, or search name/note |
+| `list_projects` | List by status Todo/Ongoing/Paused/Done/all, or search name/note (limit caps rows, default 200) |
 | `get_project` | Fetch one project by id |
 | `update_project` | Edit name/status/note (only sent keys change) |
 | `delete_project` | Permanently delete |
