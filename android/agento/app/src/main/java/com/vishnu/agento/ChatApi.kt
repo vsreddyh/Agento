@@ -125,6 +125,7 @@ private fun hasTokenKey(o: JSONObject): Boolean {
         "completion_tokens", "output_tokens", "eval_count",
         "total_tokens", "total",
         "cache_read_tokens", "cached_tokens",
+        "cache_read_input_tokens", "prompt_cache_hit_tokens",
     )) {
         if (!o.isNull(k)) return true
     }
