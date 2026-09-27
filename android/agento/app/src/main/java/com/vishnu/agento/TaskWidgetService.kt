@@ -5,6 +5,7 @@ import android.content.Intent
 import android.view.View
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
+import kotlinx.coroutines.runBlocking
 
 /**
  * Collection adapter for the task widget's scrollable list. Reads the
@@ -28,7 +29,12 @@ private class TaskFactory(private val appCtx: Context) : RemoteViewsService.Remo
     override fun hasStableIds(): Boolean = true
 
     override fun onDataSetChanged() {
-        items = TaskWidget.cachedTasks ?: emptyList()
+        // In-memory snapshot first; after process death/reboot the cache
+        // is empty, so fall back to a synchronous fetch (blocking is
+        // explicitly allowed here) instead of showing Loading… forever.
+        items = TaskWidget.cachedTasks
+            ?: runBlocking { TasksApi(appCtx).list("open").getOrNull() }
+            ?: emptyList()
     }
 
     override fun getCount(): Int = items.size
@@ -49,7 +55,7 @@ private class TaskFactory(private val appCtx: Context) : RemoteViewsService.Remo
                 if (due.isEmpty()) View.GONE else View.VISIBLE,
             )
             setOnClickFillInIntent(
-                R.id.task_widget_row_name,
+                R.id.task_widget_row,
                 Intent().setAction(TaskWidget.ACTION_TASKS),
             )
         }

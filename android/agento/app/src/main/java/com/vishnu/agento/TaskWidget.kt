@@ -104,10 +104,12 @@ class TaskWidget : AppWidgetProvider() {
             cachedTasks = tasks
             lastError = tasks == null
             val mgr = AppWidgetManager.getInstance(appCtx)
-            mgr.notifyAppWidgetViewDataChanged(ids, R.id.task_widget_list_view)
             for (id in ids) {
                 mgr.updateAppWidget(id, render(appCtx, id, tasks, tasks == null))
             }
+            // Notify after the update loop: render() re-sets the remote
+            // adapter, which would invalidate an earlier notify.
+            mgr.notifyAppWidgetViewDataChanged(ids, R.id.task_widget_list_view)
         }
 
         /** Full widget view: header reflects the latest fetch (null = not
@@ -130,11 +132,11 @@ class TaskWidget : AppWidgetProvider() {
                 context, REFRESH_CODE, refresh,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            // Per-widget data URI: without it the launcher reuses one
-            // factory across ids and resizes show stale rows.
+            // Per-widget data URI so the launcher keeps a distinct factory
+            // per id; a plain opaque URI is guaranteed unique.
             val svc = Intent(context, TaskWidgetService::class.java).apply {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-                data = Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
+                data = Uri.parse("agento://widget/$appWidgetId")
             }
             return RemoteViews(context.packageName, R.layout.task_widget).apply {
                 setOnClickPendingIntent(R.id.task_widget_body, openPending)

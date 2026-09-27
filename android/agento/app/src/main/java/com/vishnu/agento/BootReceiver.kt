@@ -12,6 +12,9 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
                 AgentoApp.scheduleSync(context)
+                // Re-pull widget data: the collection factory's in-memory
+                // cache is empty after process death (review on #116).
+                TaskWidget.refresh(context)
             }
         }
     }

@@ -872,9 +872,15 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // One client for the screen (its OkHttpClient is shared process-wide).
     val api = remember(context) { TasksApi(context) }
     var tasks by remember { mutableStateOf<List<ServerTask>>(emptyList()) }
-    var filter by remember { mutableStateOf(ServerTaskFilter.Open) }
+    // Persisted by enum name (enums have no default Saveable saver);
+    // rotation used to reset these while the search query survived.
+    var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
+    val filter = runCatching { ServerTaskFilter.valueOf(filterName) }
+        .getOrDefault(ServerTaskFilter.Open)
+    var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Due.name) }
+    val sort = runCatching { ServerTaskSort.valueOf(sortName) }
+        .getOrDefault(ServerTaskSort.Due)
     var query by rememberSaveable { mutableStateOf("") }
-    var sort by remember { mutableStateOf(ServerTaskSort.Due) }
     var sortMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<ServerTask?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -1026,7 +1032,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         ServerTaskFilter.entries.forEach { f ->
                             FilterChip(
                                 selected = filter == f,
-                                onClick = { filter = f },
+                                onClick = { filterName = f.name },
                                 label = { Text(f.title) },
                             )
                         }
@@ -1044,7 +1050,7 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             ServerTaskSort.entries.forEach { s ->
                                 DropdownMenuItem(
                                     text = { Text(s.title) },
-                                    onClick = { sort = s; sortMenu = false },
+                                    onClick = { sortName = s.name; sortMenu = false },
                                 )
                             }
                         }
@@ -1054,9 +1060,9 @@ private fun TaskManagerScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 // Derived once per composition: search narrows, sort orders.
-                val today = remember {
-                    java.time.LocalDate.now().toString()
-                }
+                // Computed directly (not remembered) so it can't go stale
+                // if the app stays open past midnight — LocalDate is cheap.
+                val today = java.time.LocalDate.now().toString()
                 val visible = remember(tasks, query, sort) {
                     val q = query.trim().lowercase(Locale.ROOT)
                     tasks
@@ -1393,19 +1399,23 @@ private fun ServerTaskDetailSheet(
                     modifier = Modifier.weight(1f),
                 )
                 if (task.isOpen()) {
-                    AssistChip(
-                        onClick = {},
-                        label = { Text(if (overdue) "Overdue" else "Open") },
-                        colors = AssistChipDefaults.assistChipColors(
-                            labelColor = if (overdue) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            },
-                        ),
+                    // Static badge, not a chip: the status isn't actionable
+                    // and a clickable chip would be a dead target.
+                    Text(
+                        if (overdue) "Overdue" else "Open",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (overdue) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
                     )
                 } else {
-                    AssistChip(onClick = {}, label = { Text("Done") })
+                    Text(
+                        "Done",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             if (task.description.isNotEmpty()) {
