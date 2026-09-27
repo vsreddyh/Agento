@@ -355,9 +355,10 @@ class ChatApi(context: Context) {
      * leniently via [parseTokenUsage] — null when the server reports nothing
      * usable. Tool-start visibility comes through as [ChatEvent.ToolProgress] parsed
      * from the gateway's `hermes.tool.progress` SSE frames. [sessionId] is
-     * sent as `X-Hermes-Session-Id` (blank = omitted) so the turn can be
-     * correlated with `GET api/sessions/{id}/messages` afterwards; the agent
-     * loop itself is unchanged (full history is still sent per request). */
+     * sent as `X-Hermes-Session-Id` (blank = omitted). The app passes its
+     * stable per-thread id (#120) so turns append to one server session;
+     * the agent loop itself is unchanged (full history is still sent per
+     * request). */
     fun streamChat(
         path: String,
         provider: String,

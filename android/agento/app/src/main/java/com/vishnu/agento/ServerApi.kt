@@ -167,24 +167,31 @@ class ServerApi(context: Context) {
             }
         }
 
-    /** Tools + skills used during one server-side turn, read back from the
-     * gateway session the app pinned via `X-Hermes-Session-Id`. Assistant
-     * messages carry `tool_calls` (name + arguments JSON); tool-result rows
-     * carry `tool_name`. Skill names come from [skillNamesFromToolCall].
-     * Unknown/empty sessions are success-with-empty (the live tool frames
-     * already attached at Done stay); only transport/parse failures error. */
+    /** Tools + skills used during the latest server-side turn, read back from
+     * the gateway session the app pinned via `X-Hermes-Session-Id` (#120: one
+     * stable session per app thread, so this slices to the last turn).
+     * Assistant messages carry `tool_calls` (name + arguments JSON);
+     * tool-result rows carry `tool_name`. Skill names come from
+     * [skillNamesFromToolCall]. Only messages after the last `user`/`human`
+     * row count — earlier turns in the same session must not bleed into the
+     * current reply's chips. Unknown/empty sessions are success-with-empty
+     * (the live tool frames already attached at Done stay); only
+     * transport/parse failures error. */
     suspend fun fetchSessionUsage(path: String, sessionId: String): Result<SessionUsage> =
         withContext(Dispatchers.IO) {
             if (sessionId.isBlank()) {
                 return@withContext Result.failure(IllegalStateException("Session id not set"))
             }
             get(path, "api/sessions/${urlEncode(sessionId)}/messages").map { body ->
-                val calls = mutableListOf<SessionToolCall>()
+                val roles = mutableListOf<String>()
+                val indexed = mutableListOf<IndexedCall>()
                 val arr = rootArray(body, "messages", "data", "items")
                     ?: throw RuntimeException("Unexpected response shape")
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
-                    when (o.optString("role", "")) {
+                    val role = o.optString("role", "")
+                    roles.add(role)
+                    when (role) {
                         "assistant" -> {
                             val tarr = o.optJSONArray("tool_calls") ?: continue
                             for (j in 0 until tarr.length()) {
@@ -192,7 +199,8 @@ class ServerApi(context: Context) {
                                 val fn = tc.optJSONObject("function") ?: continue
                                 val name = fn.optString("name", "").trim()
                                 if (name.isEmpty()) continue
-                                calls.add(SessionToolCall(
+                                indexed.add(IndexedCall(
+                                    index = i,
                                     name = name,
                                     arguments = fn.optString("arguments", ""),
                                 ))
@@ -200,10 +208,14 @@ class ServerApi(context: Context) {
                         }
                         "tool" -> {
                             val name = o.optString("tool_name", "").trim()
-                            if (name.isNotEmpty()) calls.add(SessionToolCall(name = name))
+                            if (name.isNotEmpty()) indexed.add(IndexedCall(index = i, name = name))
                         }
                     }
                 }
+                val start = lastTurnStartIndex(roles)
+                val calls = indexed
+                    .filter { it.index >= start }
+                    .map { SessionToolCall(name = it.name, arguments = it.arguments) }
                 usageFromToolCalls(calls)
             }
         }
@@ -249,6 +261,24 @@ data class SessionToolCall(
     val name: String,
     val arguments: String = "",
 )
+
+/** Tool call with its position in the session transcript (for last-turn slicing). */
+private data class IndexedCall(
+    val index: Int,
+    val name: String,
+    val arguments: String = "",
+)
+
+/**
+ * Transcript offset where the latest turn starts: just after the last
+ * `user`/`human` row. Returns 0 when no user row exists (per-turn legacy
+ * sessions, or gateways that don't echo user messages) so the whole
+ * transcript counts. Pure for testability.
+ */
+fun lastTurnStartIndex(roles: List<String>): Int {
+    val lastUser = roles.indexOfLast { it == "user" || it == "human" }
+    return if (lastUser < 0) 0 else lastUser + 1
+}
 
 /** Tools + skills used during one server-side turn. */
 data class SessionUsage(

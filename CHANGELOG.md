@@ -10,6 +10,14 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.17.1]
+
+- Chat reuses one stable gateway session per conversation thread instead
+  of minting a session per turn, so server-side titles, token/cost
+  accounting, and compression read per conversation. Tool/skill chips
+  still backfill correctly: the post-turn fetch slices to the last turn
+  only.
+
 ## [3.17.0]
 
 - Widget completes tasks inline: a ring button on every row finishes the
