@@ -158,3 +158,69 @@ func TestTaskFieldValidation(t *testing.T) {
 		t.Fatalf("patch fractional: got %d (%s)", w.Code, w.Body.String())
 	}
 }
+
+func TestProjectItemGuard(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	// No token → 401 without touching MongoDB.
+	for _, target := range []string{"/api/projects/abc", "/api/projects"} {
+		req := httptest.NewRequest(http.MethodPost, target, nil)
+		w := httptest.NewRecorder()
+		if strings.Contains(target, "/abc") {
+			projectItem(w, req)
+		} else {
+			projectsRoot(w, req)
+		}
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s missing token: got %d", target, w.Code)
+		}
+	}
+	// Unknown sub-path → 404 without touching MongoDB.
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/abc/frobnicate", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	projectItem(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown sub-path: got %d", w.Code)
+	}
+	// Wrong method on the id → 405 without touching MongoDB.
+	req = httptest.NewRequest(http.MethodPost, "/api/projects/abc", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	projectItem(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("post on id: got %d", w.Code)
+	}
+	// Invalid JSON body → 422 without touching MongoDB.
+	req = httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader("{oops"))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	projectsRoot(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad json: got %d", w.Code)
+	}
+}
+
+func TestProjectFieldValidation(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	post := func(target, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-secret-12345678")
+		w := httptest.NewRecorder()
+		if strings.HasPrefix(target, "/api/projects/") {
+			projectItem(w, req)
+		} else {
+			projectsRoot(w, req)
+		}
+		return w
+	}
+	// Mistyped values fail before any MongoDB touch.
+	for _, body := range []string{
+		`{"name":"x","status":42}`,
+		`{"name":"x","note":42}`,
+		`{"name":42}`,
+	} {
+		if w := post("/api/projects", body); w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: got %d (%s)", body, w.Code, w.Body.String())
+		}
+	}
+}

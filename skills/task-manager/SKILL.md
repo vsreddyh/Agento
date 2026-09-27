@@ -6,8 +6,9 @@ description: "Personal task manager: create, list, complete, and roll recurring 
 # Task Manager
 
 Agent-side task tracking backed by the `task-manager` MCP server (MongoDB).
-This is NOT the app's Projects tab (formerly Tasks) — that is an app-local
-project list the agent cannot see. Everything here goes through MCP tools.
+This is NOT the app's Projects tab — that is a separate project board the
+agent manages through the `project-manager` MCP server (see
+`skills/project-manager/SKILL.md`). Everything here goes through MCP tools.
 
 ## Columns
 

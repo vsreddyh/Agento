@@ -10,6 +10,14 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.13.0]
+
+- Projects are now a shared server board: the app's Projects tab reads
+  and writes the `projects` collection over `/api/projects`, and the
+  assistant manages the same rows over the new `project-manager` MCP
+  (Todo/Ongoing/Paused/Done, permanent). Local `tasks.json` imports once
+  on first launch, then is retired.
+
 ## [3.12.1]
 
 - Update notes render as Markdown (no raw `#` markers) and come from a
