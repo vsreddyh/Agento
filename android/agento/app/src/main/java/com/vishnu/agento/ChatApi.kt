@@ -35,10 +35,18 @@ data class ChatMessage(
     /** True when the turn ran but the stream carried no usable `usage`
      * object (failed/interrupted turn) — an explicit gap, not a zero. */
     val unreported: Boolean = false,
+    /** Model that produced this reply, stored at send time ("" = legacy). */
+    val model: String = "",
+    /** Collapsible reasoning trace for this reply ("" = none reported). */
+    val reasoning: String = "",
+    /** True when streaming stopped mid-reply (explicit stopped state). */
+    val interrupted: Boolean = false,
 )
 
 sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
+    /** A slice of the model's reasoning trace (`delta.reasoning_content`). */
+    data class Reasoning(val text: String) : ChatEvent
     /** [usage] is the server-reported token count for the turn (null when
      * the stream carried no usable `usage` object — e.g. a failed turn). */
     data class Done(val fullText: String, val usage: TokenUsage? = null) : ChatEvent
@@ -163,6 +171,8 @@ class ChatApi(context: Context) {
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
+        /** Reasoning trace cap per turn (backing a collapsible section). */
+        private const val REASONING_CAP = 20_000
     }
 
     /** Single server URL (proxy: chat + sync on one port). One chain
@@ -463,6 +473,9 @@ class ChatApi(context: Context) {
                         return@launch
                     }
                     val full = StringBuilder()
+                    // Reasoning trace accumulator, bounded: traces can run
+                    // long and only back a collapsible section.
+                    val reasoned = StringBuilder()
                     // Last usable `usage` object wins: the gateway attaches
                     // totals to the final chunk (earlier chunks carry none).
                     var seenUsage: TokenUsage? = null
@@ -526,6 +539,20 @@ class ChatApi(context: Context) {
                         if (delta.isNotEmpty()) {
                             full.append(delta)
                             trySend(ChatEvent.Delta(delta))
+                        }
+                        // Reasoning trace (Hermes emits delta.reasoning_content;
+                        // flash reports it on thinking turns). Same shape
+                        // probing as content above; empty for most turns.
+                        val reasoning = runCatching {
+                            val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
+                            val choice = choices.optJSONObject(0) ?: return@runCatching ""
+                            choice.optJSONObject("delta")?.optString("reasoning_content")
+                                ?: choice.optJSONObject("message")?.optString("reasoning_content")
+                                ?: ""
+                        }.getOrDefault("")
+                        if (reasoning.isNotEmpty() && reasoned.length < REASONING_CAP) {
+                            reasoned.append(reasoning.take(REASONING_CAP - reasoned.length))
+                            trySend(ChatEvent.Reasoning(reasoning))
                         }
                     }
                     trySend(ChatEvent.Done(full.toString(), seenUsage))
