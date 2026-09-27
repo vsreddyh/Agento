@@ -2628,7 +2628,12 @@ private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // UI hides explicitly-off toolsets only; unknown toggle state (null)
     // stays visible so flag-less server shapes never blank the section.
     val visibleToolsets = remember(toolsets) { toolsets.filter { it.enabled != false } }
-    val mcp = remember(visibleToolsets) { mcpServersFrom(visibleToolsets) }
+    // Dedupe: explicit mcp-* toolset rows already render the server, so
+    // derived rows parsed from their mcp__<server>__* tools are fallback
+    // only (otherwise each server shows twice: 4 servers -> 8 rows).
+    val mcp = remember(visibleToolsets) {
+        dedupMcpServers(visibleToolsets, mcpServersFrom(visibleToolsets))
+    }
 
     // Search + origin filter + sort (Tasks-style).
     var query by remember { mutableStateOf("") }
@@ -2803,8 +2808,7 @@ private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         }
                         item {
                             Text(
-                                "Read-only — servers are configured on the gateway; " +
-                                    "derived rows may repeat their toolset.",
+                                "Read-only — servers are configured on the gateway.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
