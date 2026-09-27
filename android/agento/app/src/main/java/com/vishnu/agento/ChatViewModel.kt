@@ -78,7 +78,10 @@ fun threadUsageOf(messages: List<ChatMessage>): ThreadUsage {
         // placeholder), not turns — never count them either way.
         if (m.content.isBlank()) continue
         if (m.total > 0 || m.prompt > 0 || m.completion > 0) {
-            total += m.total
+            // A turn without a reported total still contributes its
+            // prompt + completion (completion-only/prompt-only reports,
+            // or future shapes without `total`) instead of adding 0.
+            total += if (m.total > 0) m.total else m.prompt + m.completion
             cached += m.cached
             if (firstPrompt == 0L && m.prompt > 0) firstPrompt = m.prompt
             if (m.prompt > 0) lastPrompt = m.prompt
@@ -218,8 +221,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (!_state.value.ready) return
         streamJob?.cancel()
         streamJob = null
-        val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
-        threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
+        serverTotalsJob?.cancel()
+        val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())        threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
         threadId = fresh.id
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
@@ -232,8 +235,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (threads.any { it.messages.isNotEmpty() }) persist()
     }
 
-    /** Renames a conversation (auto-titles stop once renamed). */
-    fun renameThread(id: String, title: String) {
+    /** Renames a conversation (auto-titles stop once renamed). */    fun renameThread(id: String, title: String) {
         val clean = title.trim().ifEmpty { return }
         threads = threads.map { if (it.id == id) it.copy(title = clean) else it }
         _state.value = _state.value.copy(threads = summaries())
@@ -489,16 +491,25 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Refreshes the server-side session totals for the active thread (#121
      * reconciliation: the multi-device truth vs device-observed sums).
-     * Silent on failure — the thread header falls back to device sums. */
+     * Transport failures keep the last value; an unknown session (null)
+     * clears it so the header falls back to device sums instead of showing
+     * a stale total. Only one fetch runs at a time. */
+    private var serverTotalsJob: Job? = null
+
     private fun refreshServerTotals(
         path: String = api.pathFor(tab),
         sessionId: String = threadId,
     ) {
         if (sessionId.isBlank() || !_state.value.ready) return
-        viewModelScope.launch(Dispatchers.IO) {
-            val totals = runCatching {
+        serverTotalsJob?.cancel()
+        serverTotalsJob = viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
                 serverApi.fetchSessionTotals(path, sessionId).getOrThrow()
-            }.getOrNull() ?: return@launch
+            }
+            // Failure = transport/parse: keep the last value. Success(null)
+            // = unknown session: clear through so no stale total lingers.
+            if (result.isFailure) return@launch
+            val totals = result.getOrNull()
             withContext(Dispatchers.Main) {
                 if (sessionId == threadId && !_state.value.streaming) {
                     _state.value = _state.value.copy(serverTokens = totals)

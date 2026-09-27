@@ -366,16 +366,30 @@ fun usageFromToolCalls(calls: List<SessionToolCall>): SessionUsage {
  * from prompt + completion; absent rows read as zero. Pure for testability.
  */
 fun parseSessionTotals(s: JSONObject): SessionTotals {
+    // Same lenient number read as parseTokenUsage: real numbers plus
+    // clean integer strings; positive-only so absence reads as unknown.
     fun num(vararg keys: String): Long {
         for (k in keys) {
-            val v = s.optLong(k, 0L)
-            if (v > 0) return v
+            if (s.isNull(k)) continue
+            when (val raw = s.opt(k)) {
+                is Number -> {
+                    val v = raw.toLong()
+                    if (v > 0) return v
+                }
+                is String -> {
+                    val v = raw.trim().toLongOrNull()
+                    if (v != null && v > 0) return v
+                }
+            }
         }
         return 0L
     }
     val prompt = num("input_tokens", "prompt_tokens")
     val completion = num("output_tokens", "completion_tokens")
-    val cached = num("cache_read_tokens", "cached_tokens", "cache_read_input_tokens")
+    val cached = num(
+        "cache_read_tokens", "cached_tokens", "cache_read_input_tokens",
+        "prompt_cache_hit_tokens",
+    )
     val reasoning = num("reasoning_tokens")
     val total = num("total_tokens", "total").takeIf { it > 0 } ?: (prompt + completion)
     return SessionTotals(

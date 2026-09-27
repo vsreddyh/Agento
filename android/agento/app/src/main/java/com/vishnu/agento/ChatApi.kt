@@ -65,9 +65,11 @@ data class TokenUsage(
 /**
  * Lenient parse of one SSE data-line object: the gateway attaches
  * `usage: {prompt_tokens, completion_tokens, total_tokens}` to the final
- * chunk (OpenAI shape, verified live). Alternate key names
- * (`input_tokens`/`output_tokens`, bare `total`) are accepted; a missing
- * total derives from prompt + completion. Cached keys
+ * chunk (OpenAI shape, verified live). The nested `usage` object wins when
+ * present; a bare object only counts when it carries a known token key, so
+ * unrelated frames (tool progress, errors) can never parse as usage.
+ * Alternate key names (`input_tokens`/`output_tokens`, bare `total`) are
+ * accepted; a missing total derives from prompt + completion. Cached keys
  * (`cache_read_tokens` et al) are accepted when present and read as a
  * subset of prompt (0 when absent — never derived, so absence can't be
  * mistaken for a real zero-cached turn). Null when no usable counts are
@@ -75,7 +77,15 @@ data class TokenUsage(
  * than as a real zero-token turn. Pure for testability.
  */
 fun parseTokenUsage(o: JSONObject): TokenUsage? {
-    val src = o.optJSONObject("usage") ?: o
+    // Scoped shape: the nested `usage` object when present (a non-object
+    // `usage` reads as absent, not as the whole frame); otherwise the frame
+    // itself only when it carries at least one known token key, so an
+    // unrelated frame that happens to contain `total` can't parse as usage.
+    val src = if (o.has("usage")) {
+        o.optJSONObject("usage") ?: return null
+    } else {
+        o.takeIf { hasTokenKey(it) } ?: return null
+    }
     fun num(vararg keys: String): Long {
         for (k in keys) {
             if (src.isNull(k)) continue
@@ -99,14 +109,26 @@ fun parseTokenUsage(o: JSONObject): TokenUsage? {
     val total = num("total_tokens", "total").takeIf { it > 0 } ?: (prompt + completion)
     if (prompt == 0L && completion == 0L && total == 0L) return null
     // Cached is informational-only: zero-or-absent reads as unknown, so a
-    // plain non-negative read (not the positive-only `num`) is correct.
-    val cached = runCatching {
-        src.optLong("cache_read_tokens").takeIf { it > 0 }
-            ?: src.optLong("cached_tokens").takeIf { it > 0 }
-            ?: src.optLong("cache_read_input_tokens").takeIf { it > 0 }
-            ?: 0L
-    }.getOrDefault(0L)
+    // plain read of the known keys (numbers or clean integer strings) is
+    // correct — never derived, so absence can't become a false zero.
+    val cached = num(
+        "cache_read_tokens", "cached_tokens", "cache_read_input_tokens",
+        "prompt_cache_hit_tokens",
+    )
     return TokenUsage(prompt = prompt, completion = completion, total = total, cached = cached)
+}
+
+/** True when the object carries at least one known token-count key. */
+private fun hasTokenKey(o: JSONObject): Boolean {
+    for (k in listOf(
+        "prompt_tokens", "input_tokens", "prompt_eval_count",
+        "completion_tokens", "output_tokens", "eval_count",
+        "total_tokens", "total",
+        "cache_read_tokens", "cached_tokens",
+    )) {
+        if (!o.isNull(k)) return true
+    }
+    return false
 }
 
 /** Known provider slugs: offline fallback for the dynamic picker (the live
