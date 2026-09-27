@@ -44,6 +44,29 @@ jobs:
           echo "version_name=$NAME" >> "$GITHUB_OUTPUT"
           echo "tag=agento-v${NAME}" >> "$GITHUB_OUTPUT"
 
+      # Release notes are human-written in the root CHANGELOG.md (no
+      # auto-generated commit hashes): extract the `## [x.y.z]` section for
+      # this version. Fails the job when the section is missing, so a
+      # release can never ship without a proper changelog entry.
+      - name: Extract changelog
+        id: changelog
+        run: |
+          VERSION_NAME="${{ steps.version.outputs.version_name }}"
+          NOTES=$(awk -v ver="$VERSION_NAME" '
+            $0 == "## [" ver "]" { in_section = 1; next }
+            in_section && /^## / { exit }
+            in_section { print }
+          ' ../../CHANGELOG.md)
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            echo "::error::CHANGELOG.md has no ## [$VERSION_NAME] section"
+            exit 1
+          fi
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$NOTES"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # Stable signature is REQUIRED for the in-app updater: Android refuses
       # an update signed with a different key. Add these repo secrets once
       # (Settings → Secrets → Actions) with your upload keystore:
@@ -118,24 +141,25 @@ jobs:
           name: agento-${{ steps.version.outputs.version_name }}-release
           path: android/agento/app/build/outputs/apk/release/*.apk
 
-      # Publishes the release APK under the repo's Releases page with patch
-      # notes (custom body below + auto-generated changelog). Only
-      # main-branch pushes cut a release so /releases/latest always points
-      # at the newest main build; PR/branch builds stop at artifacts above.
+      # Publishes the release APK under the repo's Releases page with the
+      # CHANGELOG.md section for this version as the notes (human-written —
+      # no commit hashes). Only main-branch pushes cut a release so
+      # /releases/latest always points at the newest main build; PR/branch
+      # builds stop at artifacts above.
       - name: Publish GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Agento ${{ steps.version.outputs.version_name }}
-          generate_release_notes: true
+          generate_release_notes: false
           body: |
             ## Agento `${{ steps.version.outputs.version_name }}`
 
             Install `agento-${{ steps.version.outputs.version_name }}-release.apk` on your phone — or tap **Check for updates** in Agento → Settings to pull it in-app.
 
-            Upgrading from ≤0.2.x? Set Server URL to the proxy (`http://<host>:8080`) and Password to `PASSWORD` — the old API key no longer authenticates chat.
-
             ### Changes
+
+            ${{ steps.changelog.outputs.notes }}
           files: |
             android/agento/app/build/outputs/apk/release/*.apk
