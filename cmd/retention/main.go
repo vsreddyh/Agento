@@ -74,7 +74,7 @@ func run() int {
 		fmt.Printf("%shealth-check: would remove %d from %s older than %s\n", prefix, n, c, foodCutoff)
 	}
 
-	fmt.Println("[retention] story/resumes/cookbook: no retention policy (git repos / permanent).")
+	fmt.Println("[retention] story/resumes/cookbook/projects: no retention policy (git repos / permanent).")
 	return 0
 }
 

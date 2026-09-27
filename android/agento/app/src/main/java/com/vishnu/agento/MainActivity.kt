@@ -1330,6 +1330,22 @@ private fun normalizeStatus(raw: String): String = when (raw.trim().lowercase(Lo
     else -> "Todo"
 }
 
+/** One-time read of the retired local tasks.json (#104): name/status/note
+ * triples for server import. Lenient — a corrupt file imports as empty. */
+private fun loadLegacyTasks(context: android.content.Context): List<Triple<String, String, String>> {
+    val f = java.io.File(context.filesDir, "tasks.json")
+    if (!f.exists()) return emptyList()
+    return runCatching {
+        val arr = org.json.JSONArray(f.readText())
+        List(arr.length()) { i ->
+            val o = arr.optJSONObject(i) ?: return@List null
+            Triple(o.optString("name"), o.optString("status"), o.optString("note"))
+        }.mapNotNull { it }
+            .filter { it.first.isNotBlank() }
+            .take(200)
+    }.getOrDefault(emptyList())
+}
+
 private enum class TaskSort(val title: String) {
     Default("Status"),
     Name("Name"),
@@ -1337,41 +1353,103 @@ private enum class TaskSort(val title: String) {
     Oldest("Oldest"),
 }
 
-/** Task board: fixed statuses, filters + sorts, persisted locally (#34, #55). */
+/** Project board: fixed statuses, filters + sorts, backed by the shared
+ * `projects` collection over /api/projects (#104 — retired local
+ * tasks.json). The agent manages the same rows over the project-manager
+ * MCP. First launch imports any local rows missing on the server. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    var tasks by remember { mutableStateOf<List<TaskItem>>(emptyList()) }
-    var editing by remember { mutableStateOf<TaskItem?>(null) }
-    var loaded by remember { mutableStateOf(false) }
+    // One client for the screen (its OkHttpClient is shared process-wide).
+    val api = remember(context) { ProjectsApi(context) }
+    var projects by remember { mutableStateOf<List<ServerProject>>(emptyList()) }
+    var editing by remember { mutableStateOf<ServerProject?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf("") }
+    // Bumped after every load/mutation so the loader below reruns.
+    var refreshTick by remember { mutableIntStateOf(0) }
     var filter by remember { mutableStateOf("All") }
     var sort by remember { mutableStateOf(TaskSort.Default) }
     var sortOpen by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
 
+    // One-time import of the retired local tasks.json (#104): uploads rows
+    // missing on the server (matched by name), then deletes the file. A
+    // failed run leaves everything in place and retries next launch.
     LaunchedEffect(Unit) {
-        val stored = withContext(Dispatchers.IO) { TaskStore.load(context) }
-        // One-time migration of legacy free-text statuses.
-        val migrated = stored.map {
-            val fixed = normalizeStatus(it.status)
-            if (fixed != it.status) it.copy(status = fixed) else it
+        val prefs = context.getSharedPreferences(
+            AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("projects_migrated", false)) {
+            val legacy = withContext(Dispatchers.IO) { loadLegacyTasks(context) }
+            val existing = if (legacy.isEmpty()) {
+                emptySet()
+            } else {
+                api.list("all").getOrNull().orEmpty().map { it.name }.toSet()
+            }
+            var ok = true
+            for ((name, status, note) in legacy) {
+                if (name in existing) continue
+                if (api.create(name, normalizeStatus(status), note).isFailure) {
+                    ok = false
+                    break
+                }
+            }
+            if (ok) {
+                withContext(Dispatchers.IO) {
+                    java.io.File(context.filesDir, "tasks.json").delete()
+                }
+                prefs.edit().putBoolean("projects_migrated", true).apply()
+                if (legacy.isNotEmpty()) refreshTick++
+            }
         }
-        if (migrated != stored) {
-            withContext(Dispatchers.IO) { TaskStore.save(context, migrated) }
-        }
-        tasks = migrated
-        loaded = true
     }
 
-    fun persist(next: List<TaskItem>, toast: String? = null) {
-        tasks = next
-        scope.launch(Dispatchers.IO) { TaskStore.save(context, next) }
-        if (toast != null) scope.launch { snackbar.showSnackbar(toast) }
+    LaunchedEffect(filter, refreshTick) {
+        loading = true
+        error = ""
+        api.list(if (filter == "All") "all" else filter).fold(
+            onSuccess = { projects = it },
+            onFailure = { e -> error = serverDetail(e.message ?: e.javaClass.simpleName) },
+        )
+        loading = false
     }
 
-    fun cycleStatus(t: TaskItem): String {
+    fun fail(e: Throwable) {
+        scope.launch {
+            snackbar.showSnackbar(serverDetail(e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    fun toast(msg: String) {
+        scope.launch { snackbar.showSnackbar(msg) }
+    }
+
+    fun doCycle(t: ServerProject) {
+        busy = true
+        scope.launch {
+            api.update(t.id, status = cycleStatus(t)).fold(
+                onSuccess = { refreshTick++; toast(Toasts.TASK_SAVED) },
+                onFailure = ::fail,
+            )
+            busy = false
+        }
+    }
+
+    fun doDelete(t: ServerProject) {
+        busy = true
+        scope.launch {
+            api.delete(t.id).fold(
+                onSuccess = { refreshTick++; toast(Toasts.TASK_DELETED) },
+                onFailure = ::fail,
+            )
+            busy = false
+        }
+    }
+
+    fun cycleStatus(t: ServerProject): String {
         val next = when (normalizeStatus(t.status)) {
             "Todo" -> "Ongoing"
             "Ongoing" -> "Paused"
@@ -1381,15 +1459,14 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         return next
     }
 
-    val visible = tasks
-        .filter { filter == "All" || normalizeStatus(it.status) == filter }
+    val visible = projects
         .let { list ->
             when (sort) {
                 TaskSort.Name -> list.sortedBy { it.name.lowercase(Locale.ROOT) }
-                TaskSort.Newest -> list.sortedByDescending { it.updatedAt }
-                TaskSort.Oldest -> list.sortedBy { it.updatedAt }
+                TaskSort.Newest -> list.sortedByDescending { projectTimeMs(it.updatedAt) }
+                TaskSort.Oldest -> list.sortedBy { projectTimeMs(it.updatedAt) }
                 TaskSort.Default -> list.sortedWith(
-                    compareBy({ taskRank(normalizeStatus(it.status)) }, { -it.updatedAt })
+                    compareBy({ taskRank(normalizeStatus(it.status)) }, { -projectTimeMs(it.updatedAt) })
                 )
             }
         }
@@ -1405,11 +1482,18 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 },
                 title = { Text("Projects") },
                 actions = {
-                    // #62: + starts a new task.
-                    IconButton(onClick = {
-                        editing = TaskItem(id = TaskStore.newId(), status = "Todo")
-                    }) {
+                    // #62: + starts a new project.
+                    IconButton(
+                        onClick = { editing = ServerProject(status = "Todo") },
+                        enabled = !busy,
+                    ) {
                         Icon(Icons.Filled.Add, contentDescription = "New task")
+                    }
+                    IconButton(
+                        onClick = { refreshTick++ },
+                        enabled = !busy,
+                    ) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }
                 },
             )
@@ -1445,22 +1529,31 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         }
                     }
                 }
-                if (!loaded) {
+                if (busy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                if (loading && projects.isEmpty()) {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
-                } else if (visible.isEmpty()) {
+                } else if (error.isNotEmpty() && projects.isEmpty()) {
+                    ErrorCard(
+                        raw = error,
+                        onRetry = { refreshTick++ },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
+                } else if (!loading && error.isEmpty() && visible.isEmpty()) {
                     EmptyState(
                         icon = Icons.Filled.List,
-                        title = if (tasks.isEmpty()) "No tasks yet" else "Nothing matches this filter",
-                        subtitle = if (tasks.isEmpty()) {
-                            "Capture your first to-do — it stays on this device."
+                        title = if (projects.isEmpty()) "No projects yet" else "Nothing matches this filter",
+                        subtitle = if (projects.isEmpty()) {
+                            "Capture your first project — it syncs to your server."
                         } else {
                             "Try a different status filter."
                         },
-                        actionLabel = if (tasks.isEmpty()) "New task" else null,
-                        onAction = if (tasks.isEmpty()) {
-                            { editing = TaskItem(id = TaskStore.newId(), status = "Todo") }
+                        actionLabel = if (projects.isEmpty()) "New task" else null,
+                        onAction = if (projects.isEmpty()) {
+                            { editing = ServerProject(status = "Todo") }
                         } else null,
                     )
                 } else if (wc == WindowClass.Expanded) {
@@ -1474,18 +1567,9 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         items(visible, key = { it.id }) { t ->
                             TaskCard(
                                 task = t,
-                                onCycle = {
-                                    persist(tasks.map {
-                                        if (it.id == t.id) it.copy(
-                                            status = cycleStatus(it),
-                                            updatedAt = ChatThreads.now(),
-                                        ) else it
-                                    }, Toasts.TASK_SAVED)
-                                },
+                                onCycle = { doCycle(t) },
                                 onEdit = { editing = t.copy(status = normalizeStatus(t.status)) },
-                                onDelete = {
-                                    persist(tasks.filterNot { it.id == t.id }, Toasts.TASK_DELETED)
-                                },
+                                onDelete = { doDelete(t) },
                             )
                         }
                     }
@@ -1498,18 +1582,9 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         items(visible, key = { it.id }) { t ->
                             TaskCard(
                                 task = t,
-                                onCycle = {
-                                    persist(tasks.map {
-                                        if (it.id == t.id) it.copy(
-                                            status = cycleStatus(it),
-                                            updatedAt = ChatThreads.now(),
-                                        ) else it
-                                    }, Toasts.TASK_SAVED)
-                                },
+                                onCycle = { doCycle(t) },
                                 onEdit = { editing = t.copy(status = normalizeStatus(t.status)) },
-                                onDelete = {
-                                    persist(tasks.filterNot { it.id == t.id }, Toasts.TASK_DELETED)
-                                },
+                                onDelete = { doDelete(t) },
                             )
                         }
                     }
@@ -1522,25 +1597,33 @@ private fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     if (draft != null) {
         TaskDialog(
             initial = draft,
-            isNew = tasks.none { it.id == draft.id },
+            isNew = draft.id.isEmpty(),
             onDismiss = { editing = null },
             onSave = { saved ->
-                val next = if (tasks.any { it.id == saved.id }) {
-                    tasks.map { if (it.id == saved.id) saved else it }
-                } else {
-                    listOf(saved) + tasks
+                busy = true
+                scope.launch {
+                    if (saved.id.isEmpty()) {
+                        api.create(saved.name, saved.status, saved.note).fold(
+                            onSuccess = { editing = null; refreshTick++; toast(Toasts.TASK_SAVED) },
+                            onFailure = ::fail,
+                        )
+                    } else {
+                        api.update(saved.id, saved.name, saved.status, saved.note).fold(
+                            onSuccess = { editing = null; refreshTick++; toast(Toasts.TASK_SAVED) },
+                            onFailure = ::fail,
+                        )
+                    }
+                    busy = false
                 }
-                persist(next, Toasts.TASK_SAVED)
-                editing = null
             },
         )
     }
 }
 
-/** One task card: title + note + colored status chip + timestamp + menu. */
+/** One project card: title + note + colored status chip + timestamp + menu. */
 @Composable
 private fun TaskCard(
-    task: TaskItem,
+    task: ServerProject,
     onCycle: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -1566,7 +1649,7 @@ private fun TaskCard(
                         maxLines = 3,
                     )
                 }
-                val ts = shortTime(task.updatedAt)
+                val ts = shortTime(projectTimeMs(task.updatedAt))
                 if (ts.isNotEmpty()) {
                     Text(
                         "Updated $ts",
@@ -1596,14 +1679,14 @@ private fun TaskCard(
     }
 }
 
-/** Add/edit dialog for one task row (status is a fixed picker, #55). */
+/** Add/edit dialog for one project row (status is a fixed picker, #55). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TaskDialog(
-    initial: TaskItem,
+    initial: ServerProject,
     isNew: Boolean,
     onDismiss: () -> Unit,
-    onSave: (TaskItem) -> Unit,
+    onSave: (ServerProject) -> Unit,
 ) {
     var name by remember(initial.id) { mutableStateOf(initial.name) }
     var status by remember(initial.id) { mutableStateOf(normalizeStatus(initial.status)) }
@@ -1661,7 +1744,6 @@ private fun TaskDialog(
                         name = name.trim(),
                         status = status,
                         note = note.trim(),
-                        updatedAt = ChatThreads.now(),
                     ))
                 },
                 enabled = name.isNotBlank(),
