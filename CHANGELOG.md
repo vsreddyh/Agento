@@ -10,6 +10,11 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.13.1]
+
+- Sidebar scrolls: the drawer and rail no longer cut off entries on
+  short screens.
+
 ## [3.13.0]
 
 - Projects are now a shared server board: the app's Projects tab reads
