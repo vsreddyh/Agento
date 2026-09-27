@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 
 /**
@@ -27,8 +28,13 @@ class TaskCompleteActivity : ComponentActivity() {
         if (!completeId.isNullOrEmpty()) {
             lifecycleScope.launch {
                 runCatching { TasksApi(this@TaskCompleteActivity).complete(completeId) }
-                TaskReminders.refresh(this@TaskCompleteActivity)
-                TaskWidget.refresh(this@TaskCompleteActivity)
+                // Join before finishing: the scopes are static and would
+                // survive, but a process death right after the tap must
+                // not lose the widget/alarm write.
+                joinAll(
+                    TaskReminders.refresh(this@TaskCompleteActivity),
+                    TaskWidget.refresh(this@TaskCompleteActivity),
+                )
                 finish()
             }
         } else {

@@ -18,7 +18,7 @@ class BootReceiver : BroadcastReceiver() {
      * boot handling forever. */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** Handles boot/update broadcasts; ignores all other intents. */
+    /** Handles boot/update/timezone broadcasts; ignores all others. */
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED,
@@ -37,6 +37,10 @@ class BootReceiver : BroadcastReceiver() {
                         pending.finish()
                     }
                 }
+            }
+            // Wall-clock alarms were armed in the old zone: recompute.
+            Intent.ACTION_TIMEZONE_CHANGED -> {
+                TaskReminders.refresh(context)
             }
         }
     }

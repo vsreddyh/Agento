@@ -39,7 +39,6 @@ private class TaskFactory(
     override fun onDestroy() = Unit
     override fun getLoadingView(): RemoteViews? = null
     override fun getViewTypeCount(): Int = 1
-    override fun hasStableIds(): Boolean = true
 
     private fun view(): TaskWidgetView =
         if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
@@ -77,8 +76,12 @@ private class TaskFactory(
 
     override fun getCount(): Int = items.size
 
-    override fun getItemId(position: Int): Long =
-        items.getOrNull(position)?.id?.hashCode()?.toLong() ?: position.toLong()
+    // Stable ids off: position ids would confuse recycling when the
+    // dataset shifts, and id hashes can theoretically collide. Plain
+    // positional binding is correct at this list size.
+    override fun hasStableIds(): Boolean = false
+
+    override fun getItemId(position: Int): Long = position.toLong()
 
     override fun getViewAt(position: Int): RemoteViews {
         val layout = if (compact()) {

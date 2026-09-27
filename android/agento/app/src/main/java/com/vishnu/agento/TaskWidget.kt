@@ -145,7 +145,6 @@ class TaskWidget : AppWidgetProvider() {
         // (one Open, one Done) each have data.
         @Volatile var cachedViews: Map<String, List<ServerTask>> = emptyMap()
             private set
-        @Volatile private var lastError: Boolean = false
 
         private fun prefs(context: Context) =
             context.applicationContext.getSharedPreferences(
@@ -201,22 +200,23 @@ class TaskWidget : AppWidgetProvider() {
             if (ids.isEmpty()) return
             val api = TasksApi(appCtx)
             val views = mutableMapOf<String, List<ServerTask>>()
-            var failed = false
             coroutineScope {
                 TaskWidgetView.entries.map { v ->
                     async { v.state to api.list(v.state).getOrNull() }
                 }.awaitAll().forEach { (state, list) ->
-                    if (list == null) failed = true else views[state] = list
+                    if (list != null) views[state] = list
                 }
             }
             if (views.isNotEmpty()) cachedViews = cachedViews + views
-            lastError = failed && views.isEmpty()
             val mgr = AppWidgetManager.getInstance(appCtx)
             for (id in ids) {
                 val view = viewFor(appCtx, id)
                 val tasks = views[view.state] ?: cachedViews[view.state]
+                // Error is per-view: no data for THIS view means the fetch
+                // failed (a global flag would stick others on loading when
+                // only one state errored).
                 mgr.updateAppWidget(
-                    id, render(appCtx, id, view, tasks, tasks == null && lastError))
+                    id, render(appCtx, id, view, tasks, tasks == null))
             }
             // Notify after the update loop: render() re-sets the remote
             // adapter, which would invalidate an earlier notify.
