@@ -507,8 +507,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             streaming = true, error = "",
             activeTools = emptyList(), activeToolLabel = "",
         )
-        // Placeholder assistant message that deltas append to.
-        _state.value = _state.value.copy(messages = history + ChatMessage("assistant", "", ChatThreads.now()))
+        // Placeholder assistant message that deltas append to. Its timestamp
+        // and model are fixed up front: rebuilding it per token must not
+        // mint a fresh ts (remembers keyed on it would reset mid-stream)
+        // nor drop the serving model (the meta line would flicker).
+        val placeholderTs = ChatThreads.now()
+        _state.value = _state.value.copy(
+            messages = history + ChatMessage(
+                "assistant", "", placeholderTs, model = model,
+            )
+        )
         val acc = StringBuilder()
         // Reasoning trace accumulator (bounded by the sender; mirrored here
         // so the placeholder update below can't grow it past the cap).
@@ -547,14 +555,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         val kept = if (prior?.role == "assistant") prior.reasoning else ""
                         _state.value = _state.value.copy(
                             messages = msgs.dropLast(1) + ChatMessage(
-                                "assistant", acc.toString(), ChatThreads.now(),
-                                reasoning = kept,
+                                "assistant", acc.toString(), placeholderTs,
+                                reasoning = kept, model = model,
                             ),
                         )
                     }
                     is ChatEvent.Reasoning -> {
-                        if (racc.length < 20_000) {
-                            racc.append(event.text.take(20_000 - racc.length))
+                        if (racc.length < REASONING_CAP) {
+                            racc.append(event.text.take(REASONING_CAP - racc.length))
                         }
                         val msgs = _state.value.messages
                         val last = msgs.lastOrNull()

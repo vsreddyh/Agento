@@ -140,6 +140,10 @@ private fun hasTokenKey(o: JSONObject): Boolean {
     return false
 }
 
+/** Reasoning trace cap per turn (backing the collapsible Thinking
+ * section); shared by the stream parser and the collector. */
+const val REASONING_CAP = 20_000
+
 /** Known provider slugs: offline fallback for the dynamic picker (the live
  * list comes from GET /api/model/options on the gateway). */
 enum class LlmProvider(val id: String) {
@@ -171,8 +175,6 @@ class ChatApi(context: Context) {
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
-        /** Reasoning trace cap per turn (backing a collapsible section). */
-        private const val REASONING_CAP = 20_000
     }
 
     /** Single server URL (proxy: chat + sync on one port). One chain
@@ -531,9 +533,13 @@ class ChatApi(context: Context) {
                             val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
                             val choice = choices.optJSONObject(0) ?: return@runCatching ""
                             // chat completions: choices[0].delta.content;
-                            // responses API: choices[0].message.content (fallback)
+                            // responses API: choices[0].message.content
+                            // (fallback). optString never returns null, so
+                            // emptiness (not nullness) selects the fallback.
                             choice.optJSONObject("delta")?.optString("content")
+                                .takeUnless { it.isNullOrEmpty() }
                                 ?: choice.optJSONObject("message")?.optString("content")
+                                    .takeUnless { it.isNullOrEmpty() }
                                 ?: ""
                         }.getOrDefault("")
                         if (delta.isNotEmpty()) {
@@ -547,12 +553,17 @@ class ChatApi(context: Context) {
                             val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
                             val choice = choices.optJSONObject(0) ?: return@runCatching ""
                             choice.optJSONObject("delta")?.optString("reasoning_content")
+                                .takeUnless { it.isNullOrEmpty() }
                                 ?: choice.optJSONObject("message")?.optString("reasoning_content")
+                                    .takeUnless { it.isNullOrEmpty() }
                                 ?: ""
                         }.getOrDefault("")
                         if (reasoning.isNotEmpty() && reasoned.length < REASONING_CAP) {
-                            reasoned.append(reasoning.take(REASONING_CAP - reasoned.length))
-                            trySend(ChatEvent.Reasoning(reasoning))
+                            // The event carries the truncated slice, so every
+                            // consumer stays under the shared cap.
+                            val slice = reasoning.take(REASONING_CAP - reasoned.length)
+                            reasoned.append(slice)
+                            trySend(ChatEvent.Reasoning(slice))
                         }
                     }
                     trySend(ChatEvent.Done(full.toString(), seenUsage))

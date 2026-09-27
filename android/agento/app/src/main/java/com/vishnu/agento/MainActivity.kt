@@ -21,6 +21,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -104,6 +105,7 @@ import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -3608,8 +3610,13 @@ private fun ChatScreen(
     // viewport is pinned to the latest message. A manual scroll-up unpins
     // (Jump-to-latest appears); reaching the bottom re-pins.
     var stick by remember(tab) { mutableStateOf(true) }
-    LaunchedEffect(listState.isScrollInProgress) {
-        if (listState.isScrollInProgress) stick = false
+    // Unpin on user drags only (#122): programmatic smooth-scrolls also
+    // raise isScrollInProgress, so gating on it would let every auto-scroll
+    // unpin itself mid-stream. DragInteraction.Start fires for touch drags.
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect {
+            if (it is DragInteraction.Start) stick = false
+        }
     }
     // Message-list head offset: the usage header item (when shown) shifts
     // message indices by one — every scroll target accounts for it.
@@ -4313,7 +4320,9 @@ private fun ChatScreen(
                                             // Reasoning trace (#122): collapsible
                                             // Thinking section above the reply.
                                             if (msg.reasoning.isNotEmpty()) {
-                                                var thinkingOpen by remember(msg.ts) { mutableStateOf(false) }
+                                                // Keyed on position + timestamp:
+                                                // two rapid turns can share a ms.
+                                                var thinkingOpen by remember(index, msg.ts) { mutableStateOf(false) }
                                                 TextButton(
                                                     onClick = { thinkingOpen = !thinkingOpen },
                                                     contentPadding = PaddingValues(0.dp),
