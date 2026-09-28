@@ -8,29 +8,19 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
-## [4.4.4]
-
-- DIAGNOSTIC: the widget style ladder is now C, D1–D5 and E, where each
-  D step adds exactly one element to the chrome C proved renders (rows,
-  divider, empty-state text, header toggle, title-to-settings tap), so
-  the first failing step names the culprit on issue #137.
-
-## [4.4.3]
-
-- Task widget settings (view, density, due line) move into the widget's
-  settings screen, now reachable from the Task Manager — the widget's own
-  header controls never rendered on some launchers (#137), and the view
-  name shows in the header title instead of a toggle button.
-
 ## [4.4.2]
 
 - FIX (attempt) for the task widget load error (issue #137): the widget
-  is rebuilt on the exact chrome the bisect proved renders (header text
-  + refresh, concrete backgrounds), with only the row container or
-  scrollable list added. The divider, header view toggle,
-  title-to-settings tap and empty-state tap are gone — none of them ever
-  rendered on the affected launcher. View switching and widget settings
-  now live in the Task Manager screen.
+  is rebuilt on the exact chrome the bisect proved renders, with a
+  diagnostic style ladder (C, D1-D5, E) where each D step adds exactly
+  one element - task rows, divider, empty-state text, header view
+  toggle, title-to-settings tap - so the first failing step names the
+  culprit. Removed: the platform Button (its default style resolves
+  theme attributes against the host's theme), the divider, the toggle
+  button, and the theme-attribute text colors.
+- Task widget settings (view, density, due line) move into the widget's
+  settings screen, reachable from the Task Manager; the header shows the
+  current view name.
 
 ## [4.4.1]
 

@@ -378,18 +378,24 @@ class TaskWidget : AppWidgetProvider() {
             val p = prefs(context)
             // Migration from the pre-ladder pref: a placement saved before
             // the ladder existed must keep the look the user last chose,
-            // not silently flip on update.
+            // not silently flip on update. No pref at all → the proven
+            // header-only style: the whole point of #137 is that the
+            // fuller widgets may not render on the host at all.
             if (!p.contains("task_widget_style_$appWidgetId")) {
-                return if (p.getBoolean("task_widget_scroll_$appWidgetId", false)) {
-                    STYLE_FULL_SCROLL
+                return if (p.contains("task_widget_scroll_$appWidgetId")) {
+                    if (p.getBoolean("task_widget_scroll_$appWidgetId", false)) {
+                        STYLE_FULL_SCROLL
+                    } else {
+                        STYLE_FULL_STATIC
+                    }
                 } else {
-                    STYLE_FULL_STATIC
+                    STYLE_CHROME
                 }
             }
             // Whitelist, not a range: A/B are gone, and a removed or
-            // corrupt value must fall back to the shipping widget.
-            val v = migrateStyle(p.getInt("task_widget_style_$appWidgetId", STYLE_FULL_SCROLL))
-            return if (v in STYLE_VALUES) v else STYLE_FULL_SCROLL
+            // corrupt value must fall back to something known to render.
+            val v = migrateStyle(p.getInt("task_widget_style_$appWidgetId", STYLE_CHROME))
+            return if (v in STYLE_VALUES) v else STYLE_CHROME
         }
 
         // Style ladder values. The original C/D/E numbers are FROZEN
@@ -417,14 +423,17 @@ class TaskWidget : AppWidgetProvider() {
         /** Legacy D (=3) meant the full static widget, which is now D5. */
         private fun migrateStyle(v: Int): Int = if (v == 3) STYLE_FULL_STATIC else v
 
-        /** How much chrome a style turns on: -1 = none (style C), 0..4 =
-         * rows, +divider, +empty text, +header toggle, +title tap. */
+        /** How much chrome a style turns on: 0..4 = rows, +divider,
+         * +empty text, +header toggle, +title tap. Unknown values fall
+         * back to the minimum, so a bad value can never switch chrome on
+         * by accident. */
         private fun styleLevel(style: Int): Int = when (style) {
             STYLE_ROWS -> 0
             STYLE_ROWS_DIVIDER -> 1
             STYLE_ROWS_EMPTY -> 2
             STYLE_PLUS_TOGGLE -> 3
-            else -> 4
+            STYLE_FULL_STATIC -> 4
+            else -> 0
         }
 
         /** One row with explicit per-row intents instead of the collection
@@ -759,8 +768,12 @@ class TaskWidget : AppWidgetProvider() {
                 setTextViewText(R.id.task_widget_title, view.title)
                 setTextViewText(R.id.task_widget_count,
                     countText(context, view, tasks, error))
-                setTextViewText(R.id.task_widget_empty,
-                    emptyText(context, tasks, error, errorDetail))
+                val empty = emptyText(context, tasks, error, errorDetail)
+                setTextViewText(R.id.task_widget_empty, empty)
+                // Hide the empty line when rows are showing: an empty
+                // string would still contribute its 8dp top padding.
+                setViewVisibility(R.id.task_widget_empty,
+                    if (empty.isEmpty()) View.GONE else View.VISIBLE)
             } // end RemoteViews apply
         }
 

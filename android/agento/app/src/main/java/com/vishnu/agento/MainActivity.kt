@@ -1364,7 +1364,9 @@ private fun TaskManagerScreen(
                 // Widget display settings live here: the widget's own header
                 // controls never rendered on some launchers (#137), so
                 // view/density/due are changed from the app instead.
-                val widgetIds = remember {
+                // Re-queried on every task refresh so a widget added or
+                // removed since the screen opened shows up here.
+                val widgetIds = remember(context, refreshTick) {
                     AppWidgetManager.getInstance(context)
                         .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
                         .toList()

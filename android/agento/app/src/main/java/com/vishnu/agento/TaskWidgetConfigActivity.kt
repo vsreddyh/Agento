@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -79,7 +81,13 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                     var widgetView by remember {
                         mutableStateOf(TaskWidget.viewFor(this, appWidgetId))
                     }
-                    Column(modifier = Modifier.padding(20.dp)) {
+                    // Scrollable: view + density + due + the style ladder
+                    // push Save off-screen on small screens / large fonts.
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(20.dp),
+                    ) {
                         Text(
                             getString(R.string.task_widget_display),
                             style = MaterialTheme.typography.headlineSmall,
@@ -108,11 +116,6 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                 )
                             }
                         }
-                        Text(
-                            "Density",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                         Text(
                             "Density",
                             style = MaterialTheme.typography.labelLarge,
