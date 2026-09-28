@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -218,7 +219,9 @@ class TaskWidget : AppWidgetProvider() {
                 }
             }
             if (views.isNotEmpty()) cachedViews = cachedViews + views
-            lastErrors = lastErrors + errors
+            // Drop errors for states that just succeeded so a stale
+            // message can never outlive its failure (#130 review).
+            lastErrors = (lastErrors + errors) - views.keys
             val mgr = AppWidgetManager.getInstance(appCtx)
             for (id in ids) {
                 val view = viewFor(appCtx, id)
@@ -227,7 +230,12 @@ class TaskWidget : AppWidgetProvider() {
                 // failed (a global flag would stick others on loading when
                 // only one state errored).
                 val detail = if (tasks == null) {
-                    lastErrors[view.state]?.let(::serverDetail)
+                    // serverDetail extracts server-sent validation text;
+                    // raw transport errors stay generic — lock-screen
+                    // visible widget text must not echo them verbatim.
+                    lastErrors[view.state]?.let { raw ->
+                        serverDetail(raw).takeIf { it != raw }
+                    }
                 } else {
                     null
                 }
@@ -235,12 +243,16 @@ class TaskWidget : AppWidgetProvider() {
                 runCatching {
                     mgr.updateAppWidget(
                         id, render(appCtx, id, view, tasks, tasks == null, detail))
+                }.onFailure {
+                    Log.w("TaskWidget", "updateAppWidget failed for id=$id", it)
                 }
             }
             // Notify after the update loop: render() re-sets the remote
             // adapter, which would invalidate an earlier notify.
             runCatching {
                 mgr.notifyAppWidgetViewDataChanged(ids, R.id.task_widget_list_view)
+            }.onFailure {
+                Log.w("TaskWidget", "notifyDataChanged failed", it)
             }
         }
 
