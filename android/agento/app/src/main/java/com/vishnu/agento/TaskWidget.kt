@@ -388,20 +388,44 @@ class TaskWidget : AppWidgetProvider() {
             }
             // Whitelist, not a range: A/B are gone, and a removed or
             // corrupt value must fall back to the shipping widget.
-            val v = p.getInt("task_widget_style_$appWidgetId", STYLE_FULL_SCROLL)
+            val v = migrateStyle(p.getInt("task_widget_style_$appWidgetId", STYLE_FULL_SCROLL))
             return if (v in STYLE_VALUES) v else STYLE_FULL_SCROLL
         }
 
-        // Style ladder values. Numbers are FROZEN: placements persist them,
-        // so renumbering would silently remap a saved choice. 0/1 (styles
-        // A/B) were removed once they proved the host renders our basics
-        // (#137) and are left as gaps.
+        // Style ladder values. The original C/D/E numbers are FROZEN
+        // (placements persist them, so renumbering would remap a saved
+        // choice): C=2, old full-static D=3, E=4. The D1→D5 steps take
+        // fresh values in the 10s, and the retired 3 maps to D5 — the same
+        // widget it used to mean.
         const val STYLE_CHROME = 2       // C: header only (known good)
-        const val STYLE_FULL_STATIC = 3  // D: full widget, plain rows
         const val STYLE_FULL_SCROLL = 4  // E: full widget, collection
+        const val STYLE_ROWS = 10        // D1: + task rows
+        const val STYLE_ROWS_DIVIDER = 11   // D2: + divider
+        const val STYLE_ROWS_EMPTY = 12     // D3: + empty-state text
+        const val STYLE_PLUS_TOGGLE = 13    // D4: + header view toggle
+        const val STYLE_FULL_STATIC = 14    // D5: + title→settings tap
 
         private val STYLE_VALUES = setOf(
-            STYLE_CHROME, STYLE_FULL_STATIC, STYLE_FULL_SCROLL)
+            STYLE_CHROME, STYLE_FULL_SCROLL, STYLE_ROWS, STYLE_ROWS_DIVIDER,
+            STYLE_ROWS_EMPTY, STYLE_PLUS_TOGGLE, STYLE_FULL_STATIC)
+
+        /** The D1→D5 steps: one layout, one more element per step. */
+        private val STYLE_STATIC_STEPS = setOf(
+            STYLE_ROWS, STYLE_ROWS_DIVIDER, STYLE_ROWS_EMPTY,
+            STYLE_PLUS_TOGGLE, STYLE_FULL_STATIC)
+
+        /** Legacy D (=3) meant the full static widget, which is now D5. */
+        private fun migrateStyle(v: Int): Int = if (v == 3) STYLE_FULL_STATIC else v
+
+        /** How much chrome a style turns on: -1 = none (style C), 0..4 =
+         * rows, +divider, +empty text, +header toggle, +title tap. */
+        private fun styleLevel(style: Int): Int = when (style) {
+            STYLE_ROWS -> 0
+            STYLE_ROWS_DIVIDER -> 1
+            STYLE_ROWS_EMPTY -> 2
+            STYLE_PLUS_TOGGLE -> 3
+            else -> 4
+        }
 
         /** One row with explicit per-row intents instead of the collection
          * template: all immutable, so hosts that balk at the mutable
@@ -597,10 +621,14 @@ class TaskWidget : AppWidgetProvider() {
                 context, REFRESH_CODE, refresh,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            // The header view toggle and the title-to-config tap are gone
-            // with their views: neither ever rendered on the affected host
-            // (#137). View switching and display settings live in the Task
-            // Manager screen; the config activity is still reachable there.
+            // D5 turns the title tap back on, so the config activity needs
+            // its PendingIntent again; D1–D4 simply don't set it.
+            val config = Intent(context, TaskWidgetConfigActivity::class.java)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+            val configPending = PendingIntent.getActivity(
+                context, CONFIG_CODE + appWidgetId, config,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
             // Trampoline template: per-row fill-ins carry either
             // EXTRA_TASK_ID (open detail) or EXTRA_COMPLETE_ID (complete
             // inline). MUTABLE is required: fill-in extras are silently
@@ -629,20 +657,14 @@ class TaskWidget : AppWidgetProvider() {
                 }
             }
             val scrollable = style == STYLE_FULL_SCROLL
-            // Chrome is deliberately C's: body + refresh taps only, concrete
-            // backgrounds, no divider/toggle/config/empty taps. Those are
-            // the pieces that never rendered on this host (#137); the row
-            // container and the ListView are the only additions.
-            return RemoteViews(context.packageName,
-                if (scrollable) R.layout.task_widget_list else R.layout.task_widget_full).apply {
-                setOnClickPendingIntent(R.id.task_widget_body, openPending)
-                setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
-                if (!scrollable) {
-                    // Diagnostic path (#137): plain rows, no collection,
-                    // no template, no service bind. Isolates a collection
-                    // failure from the rest of the widget. Each row keeps
-                    // its own immutable complete/open intents, so taps are
-                    // identical to the collection path.
+            val level = styleLevel(style)
+            if (style in STYLE_STATIC_STEPS) {
+                // D1→D5: same layout, one more element switched on per
+                // step. The header stays byte-identical to style C, so a
+                // failure can only come from what this step added.
+                return RemoteViews(context.packageName, R.layout.task_widget_full).apply {
+                    setOnClickPendingIntent(R.id.task_widget_body, openPending)
+                    setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
                     if (tasks != null) {
                         val today = java.time.LocalDate.now(IST)
                         val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
@@ -657,11 +679,42 @@ class TaskWidget : AppWidgetProvider() {
                                     context, appWidgetId, compact, due, today, t))
                         }
                     }
+                    val showList = !tasks.isNullOrEmpty()
                     setViewVisibility(R.id.task_widget_static_list,
-                        if (tasks.isNullOrEmpty()) View.GONE else View.VISIBLE)
+                        if (showList) View.VISIBLE else View.GONE)
+                    setViewVisibility(R.id.task_widget_divider,
+                        if (level >= 1) View.VISIBLE else View.GONE)
                     setViewVisibility(R.id.task_widget_empty,
-                        if (tasks.isNullOrEmpty()) View.VISIBLE else View.GONE)
-                } else if (tasks != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        if (level >= 2 && !showList) View.VISIBLE else View.GONE)
+                    setViewVisibility(R.id.task_widget_view,
+                        if (level >= 3) View.VISIBLE else View.GONE)
+                    if (level >= 3) {
+                        setTextViewText(R.id.task_widget_view, view.title)
+                        // The toggle cycles the slice; handled in onReceive
+                        // (ACTION_VIEW) so the broadcast path stays proven.
+                        val cycle = Intent(context, TaskWidget::class.java)
+                            .setAction(ACTION_VIEW)
+                            .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                        setOnClickPendingIntent(R.id.task_widget_view,
+                            PendingIntent.getBroadcast(
+                                context, VIEW_CODE + appWidgetId, cycle,
+                                PendingIntent.FLAG_UPDATE_CURRENT or
+                                    PendingIntent.FLAG_IMMUTABLE))
+                    }
+                    if (level >= 4) setOnClickPendingIntent(R.id.task_widget_title, configPending)
+                    setTextViewText(R.id.task_widget_title, view.title)
+                    setTextViewText(R.id.task_widget_count,
+                        countText(context, view, tasks, error, capped = true))
+                    if (level >= 2) {
+                        setTextViewText(R.id.task_widget_empty, emptyText(context, tasks, error, errorDetail))
+                    }
+                }
+            }
+            // E: the collection widget, on the same proven chrome.
+            return RemoteViews(context.packageName, R.layout.task_widget_list).apply {
+                setOnClickPendingIntent(R.id.task_widget_body, openPending)
+                setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
+                if (tasks != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     // Service-backed collections (setRemoteAdapter) broke
                     // on Android 16 — hand the rows over directly instead
                     // of binding the service (issue #137). Rows carry
@@ -704,22 +757,27 @@ class TaskWidget : AppWidgetProvider() {
                 // The header title doubles as the view name now that the
                 // toggle button is gone (it never rendered on this host).
                 setTextViewText(R.id.task_widget_title, view.title)
-                // capped only matters where rows are truncated; style C
-                // renders no rows, so it leaves this false on purpose.
                 setTextViewText(R.id.task_widget_count,
-                    countText(context, view, tasks, error, capped = !scrollable))
-                val emptyText = when {
-                    tasks == null && !error -> context.getString(R.string.task_widget_loading)
-                    // No "tap to retry" suffix: the empty view is no longer
-                    // tappable (the refresh button is) and promising a dead
-                    // tap is worse than none.
-                    tasks == null -> errorDetail?.take(140)
-                        ?: context.getString(R.string.task_widget_error)
-                    tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
-                    else -> ""
-                }
-                setTextViewText(R.id.task_widget_empty, emptyText)
+                    countText(context, view, tasks, error))
+                setTextViewText(R.id.task_widget_empty,
+                    emptyText(context, tasks, error, errorDetail))
             } // end RemoteViews apply
+        }
+
+        /** Empty/loading/error line under the list. No "tap to retry"
+         * suffix: the empty view is not tappable (the refresh button is),
+         * so promising a dead tap is worse than none. */
+        private fun emptyText(
+            context: Context,
+            tasks: List<ServerTask>?,
+            error: Boolean,
+            errorDetail: String?,
+        ): String = when {
+            tasks == null && !error -> context.getString(R.string.task_widget_loading)
+            tasks == null -> errorDetail?.take(140)
+                ?: context.getString(R.string.task_widget_error)
+            tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
+            else -> ""
         }
 
         /** Header count line, shared by the full widget and the diagnostic

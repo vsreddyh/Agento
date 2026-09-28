@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.4.4]
+
+- DIAGNOSTIC: the widget style ladder is now C, D1–D5 and E, where each
+  D step adds exactly one element to the chrome C proved renders (rows,
+  divider, empty-state text, header toggle, title-to-settings tap), so
+  the first failing step names the culprit on issue #137.
+
 ## [4.4.3]
 
 - Task widget settings (view, density, due line) move into the widget's

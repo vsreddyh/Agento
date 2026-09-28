@@ -168,7 +168,11 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                         )
                         listOf(
                             TaskWidget.STYLE_CHROME to R.string.task_widget_style_c,
-                            TaskWidget.STYLE_FULL_STATIC to R.string.task_widget_style_d,
+                            TaskWidget.STYLE_ROWS to R.string.task_widget_style_d1,
+                            TaskWidget.STYLE_ROWS_DIVIDER to R.string.task_widget_style_d2,
+                            TaskWidget.STYLE_ROWS_EMPTY to R.string.task_widget_style_d3,
+                            TaskWidget.STYLE_PLUS_TOGGLE to R.string.task_widget_style_d4,
+                            TaskWidget.STYLE_FULL_STATIC to R.string.task_widget_style_d5,
                             TaskWidget.STYLE_FULL_SCROLL to R.string.task_widget_style_e,
                         ).forEach { (value, labelRes) ->
                             Row(
