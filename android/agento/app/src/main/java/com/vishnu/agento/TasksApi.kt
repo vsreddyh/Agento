@@ -25,6 +25,7 @@ data class ServerTask(
     val dueTime: String = "",
     val estimatedMinutes: Int = 0,
     val repeatRule: String = "",
+    val parallelable: Boolean = false,
     val completedAt: String = "",
     val createdAt: String = "",
 )
@@ -93,6 +94,7 @@ class TasksApi(context: Context) {
             dueTime = optStr(o, "due_time"),
             estimatedMinutes = mins.coerceAtLeast(0),
             repeatRule = optStr(o, "repeat_rule"),
+            parallelable = o.optBoolean("parallelable", false),
             completedAt = optStr(o, "completedAt"),
             createdAt = optStr(o, "createdAt"),
         )
@@ -133,6 +135,7 @@ class TasksApi(context: Context) {
         dueTime: String = "",
         estimatedMinutes: Int? = null,
         repeatRule: String = "",
+        parallelable: Boolean = false,
     ): Result<ServerTask> = withContext(Dispatchers.IO) {
         if (name.trim().isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Name is required"))
@@ -143,6 +146,7 @@ class TasksApi(context: Context) {
         if (dueTime.isNotEmpty()) body.put("due_time", dueTime)
         if (repeatRule.isNotEmpty()) body.put("repeat_rule", repeatRule)
         if (estimatedMinutes != null) body.put("estimated_minutes", estimatedMinutes)
+        if (parallelable) body.put("parallelable", true)
         call("POST", "/api/tasks", body).map { parseOne(it) }
     }
 
@@ -156,6 +160,7 @@ class TasksApi(context: Context) {
         dueTime: String? = null,
         estimatedMinutes: Int? = null,
         repeatRule: String? = null,
+        parallelable: Boolean? = null,
     ): Result<ServerTask> = withContext(Dispatchers.IO) {
         val clean = encodeId(id)
         if (clean.isEmpty()) {
@@ -168,6 +173,7 @@ class TasksApi(context: Context) {
         if (dueTime != null) body.put("due_time", dueTime)
         if (estimatedMinutes != null) body.put("estimated_minutes", estimatedMinutes)
         if (repeatRule != null) body.put("repeat_rule", repeatRule)
+        if (parallelable != null) body.put("parallelable", parallelable)
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
     }
 

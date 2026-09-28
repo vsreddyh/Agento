@@ -1,7 +1,8 @@
 // Package tasks: MongoDB-backed personal task manager for the agent.
 //
 // Collection: tasks. One doc per task with name, description, due date/time,
-// estimated minutes, and a free-form repeat_rule string. There is NO status
+// estimated minutes, a free-form repeat_rule string, and a parallelable flag
+// (true = can run alongside other tasks). There is NO status
 // field: a task is open while completedAt is null and done once it is set.
 //
 // Completed tasks are retained 3 days via expiresAt TTL
@@ -123,8 +124,9 @@ func toDoc(doc bson.M) map[string]any {
 	return out
 }
 
-// Create inserts an open task. Name required; repeat_rule stored verbatim.
-func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes int, repeatRule string) (map[string]any, error) {
+// Create inserts an open task. Name required; repeat_rule stored verbatim;
+// parallelable marks tasks that can run alongside other tasks.
+func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes int, repeatRule string, parallelable bool) (map[string]any, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fail("name is required")
@@ -141,6 +143,7 @@ func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime 
 		"due_date": dueDate, "due_time": dueTime,
 		"estimated_minutes": estimatedMinutes,
 		"repeat_rule":       strings.TrimSpace(repeatRule),
+		"parallelable":      parallelable,
 		"completedAt":       nil, "createdAt": now,
 	}
 	res, err := s.tasks.InsertOne(ctx, doc)
@@ -277,6 +280,13 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	if str, ok := strField("repeat_rule"); ok {
 		set["repeat_rule"] = strings.TrimSpace(str)
 	}
+	if v, ok := fields["parallelable"]; ok {
+		b, ok := toBool(v)
+		if !ok {
+			return nil, fail("parallelable must be a boolean")
+		}
+		set["parallelable"] = b
+	}
 	if len(set) == 0 {
 		return toDoc(cur), nil
 	}
@@ -362,4 +372,11 @@ func toInt(v any) (int, bool) {
 		return int(n), true
 	}
 	return 0, false
+}
+
+// toBool accepts real booleans only — strings like "true" are caller bugs,
+// not values (same strictness as checkTaskFields on the HTTP layer).
+func toBool(v any) (bool, bool) {
+	b, ok := v.(bool)
+	return b, ok
 }

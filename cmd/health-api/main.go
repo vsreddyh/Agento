@@ -464,6 +464,11 @@ func checkTaskFields(fields map[string]any) error {
 			return &tasks.StoreError{Msg: "estimated_minutes must be an integer >= 0"}
 		}
 	}
+	if v, ok := fields["parallelable"]; ok && v != nil {
+		if _, ok := v.(bool); !ok {
+			return &tasks.StoreError{Msg: "parallelable must be a boolean"}
+		}
+	}
 	return nil
 }
 
@@ -518,6 +523,7 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		}
 		minutes = n
 	}
+	parallelable, _ := fields["parallelable"].(bool)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	doc, err := store.Create(ctx,
@@ -527,6 +533,7 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		taskStrField(fields, "due_time"),
 		minutes,
 		taskStrField(fields, "repeat_rule"),
+		parallelable,
 	)
 	if err != nil {
 		writeTaskErr(w, err)

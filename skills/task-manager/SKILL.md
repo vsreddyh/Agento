@@ -14,7 +14,8 @@ agent manages through the `project-manager` MCP server (see
 
 - **name** (required), **description**, **due_date** (YYYY-MM-DD),
   **due_time** (HH:MM, needs a date), **estimated_minutes**,
-  **repeat_rule** (free-form string, empty = one-shot).
+  **repeat_rule** (free-form string, empty = one-shot),
+  **parallelable** (true = can run alongside other tasks).
 - No status field. Open = not completed; done = `complete_task` called.
   Completed tasks vanish automatically 3 days later.
 
@@ -27,7 +28,7 @@ agent manages through the `project-manager` MCP server (see
    normalize to an enum.
 2. When you call `complete_task` and the response contains `follow_up`
    with a `repeat_rule`, you MUST call `create_task` for the next
-   occurrence: same name/description/estimated_minutes/repeat_rule, with
+   occurrence: same name/description/estimated_minutes/repeat_rule/parallelable, with
    the next due date/time that YOU compute from the rule and today.
 3. If the rule is ambiguous ("regularly"), ask the user for the next due
    date instead of guessing.

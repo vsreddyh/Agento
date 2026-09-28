@@ -35,7 +35,7 @@ func testStore(t *testing.T) *Store {
 func TestCreateAndList(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, err := s.Create(ctx, "Pay rent", "bank transfer", "2026-10-01", "09:00", 15, "monthly on the 1st")
+	doc, err := s.Create(ctx, "Pay rent", "bank transfer", "2026-10-01", "09:00", 15, "monthly on the 1st", false)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -58,22 +58,22 @@ func TestCreateAndList(t *testing.T) {
 func TestValidation(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, "  ", "", "", "", 0, ""); err == nil {
+	if _, err := s.Create(ctx, "  ", "", "", "", 0, "", false); err == nil {
 		t.Fatal("blank name must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "10-01", "", 0, ""); err == nil {
+	if _, err := s.Create(ctx, "x", "", "10-01", "", 0, "", false); err == nil {
 		t.Fatal("bad due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "2026-13-99", "", 0, ""); err == nil {
+	if _, err := s.Create(ctx, "x", "", "2026-13-99", "", 0, "", false); err == nil {
 		t.Fatal("non-calendar due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "9am", 0, ""); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "9am", 0, "", false); err == nil {
 		t.Fatal("bad due_time must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "09:00", 0, ""); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "09:00", 0, "", false); err == nil {
 		t.Fatal("due_time without due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "", -5, ""); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "", -5, "", false); err == nil {
 		t.Fatal("negative estimate must fail")
 	}
 }
@@ -81,7 +81,7 @@ func TestValidation(t *testing.T) {
 func TestCompleteReopenDelete(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, _ := s.Create(ctx, "Water plants", "", "", "", 5, "every Sunday")
+	doc, _ := s.Create(ctx, "Water plants", "", "", "", 5, "every Sunday", false)
 	id := doc["id"].(string)
 
 	done, err := s.Complete(ctx, id)
@@ -129,7 +129,7 @@ func TestCompleteReopenDelete(t *testing.T) {
 func TestReopenedExcludedFromDone(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, _ := s.Create(ctx, "reopen me", "", "", "", 0, "")
+	doc, _ := s.Create(ctx, "reopen me", "", "", "", 0, "", false)
 	id := doc["id"].(string)
 	if _, err := s.Complete(ctx, id); err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestReopenedExcludedFromDone(t *testing.T) {
 func TestSearchRegexCharsLiteral(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, "fix (auth) [urgent]", "", "", "", 0, ""); err != nil {
+	if _, err := s.Create(ctx, "fix (auth) [urgent]", "", "", "", 0, "", false); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.List(ctx, "open", false, "(auth) [urgent]")
@@ -161,15 +161,38 @@ func TestSearchRegexCharsLiteral(t *testing.T) {
 	}
 }
 
+func TestParallelableRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	doc, err := s.Create(ctx, "parallel job", "", "", "", 0, "", true)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if doc["parallelable"] != true {
+		t.Fatalf("create must store parallelable=true: %v", doc)
+	}
+	id := doc["id"].(string)
+	off, err := s.Update(ctx, id, map[string]any{"parallelable": false})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if off["parallelable"] != false {
+		t.Fatalf("update must clear parallelable: %v", off)
+	}
+	if _, err := s.Update(ctx, id, map[string]any{"parallelable": "yes"}); err == nil {
+		t.Fatal("non-boolean parallelable must fail")
+	}
+}
+
 func TestOverdueAndTTLIndex(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
-	if _, err := s.Create(ctx, "late", "", yesterday, "", 0, ""); err != nil {
+	if _, err := s.Create(ctx, "late", "", yesterday, "", 0, "", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Create(ctx, "future", "", tomorrow, "", 0, ""); err != nil {
+	if _, err := s.Create(ctx, "future", "", tomorrow, "", 0, "", false); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.List(ctx, "open", true, "")

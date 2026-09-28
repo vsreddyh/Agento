@@ -16,6 +16,9 @@ see GitHub Releases for older notes.
   the collapsed text, description + due + estimate + repeat in the
   expanded view, and a Done action that completes inline (reuses the
   widget trampoline — no app open).
+- Tasks gain a "Can run in parallel" tickbox (list badge, detail line,
+  reminder text, agent tools) marking tasks that can run alongside
+  other tasks.
 
 ## [3.20.1]
 

@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
@@ -1090,6 +1091,7 @@ private fun TaskManagerScreen(
                         dueTime = t.dueTime,
                         estimatedMinutes = t.estimatedMinutes.takeIf { it > 0 }?.toString().orEmpty(),
                         repeatRule = t.repeatRule,
+                        parallelable = t.parallelable,
                     )
                     refreshTick++
                     pokeWidget()
@@ -1383,6 +1385,7 @@ private fun TaskManagerScreen(
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
                             repeatRule = next.repeatRule,
+                            parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },
                             onFailure = ::fail,
@@ -1396,6 +1399,7 @@ private fun TaskManagerScreen(
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
                             repeatRule = next.repeatRule,
+                            parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },
                             onFailure = ::fail,
@@ -1441,6 +1445,7 @@ private fun TaskManagerScreen(
                             estimatedMinutes = again.estimatedMinutes.trim()
                                 .takeIf { it.isNotEmpty() }?.toIntOrNull(),
                             repeatRule = again.repeatRule,
+                            parallelable = again.parallelable,
                         ).fold(
                             onSuccess = { refreshTick++; pokeWidget() },
                             onFailure = ::fail,
@@ -1492,6 +1497,7 @@ private data class ServerTaskDraft(
     val dueTime: String = "",
     val estimatedMinutes: String = "",
     val repeatRule: String = "",
+    val parallelable: Boolean = false,
 )
 
 private fun ServerTask.toDraft() = ServerTaskDraft(
@@ -1502,6 +1508,7 @@ private fun ServerTask.toDraft() = ServerTaskDraft(
     dueTime = dueTime,
     estimatedMinutes = estimatedMinutes.takeIf { it > 0 }?.toString().orEmpty(),
     repeatRule = repeatRule,
+    parallelable = parallelable,
 )
 
 /** Flat task row: checkbox toggles complete/reopen, tap opens the
@@ -1561,6 +1568,7 @@ private fun ServerTaskRow(
                 if (dueLine.isNotEmpty()) add(dueLine)
                 if (task.estimatedMinutes > 0) add("~${task.estimatedMinutes} min")
                 if (task.repeatRule.isNotEmpty()) add(task.repeatRule)
+                if (task.parallelable) add("parallel")
             }
             if (dueBits.isNotEmpty()) {
                 Text(
@@ -1676,6 +1684,15 @@ private fun ServerTaskDetailSheet(
                 label = "Repeats",
                 value = task.repeatRule.ifEmpty { "Does not repeat" },
             )
+            DetailLine(
+                icon = Icons.Filled.Groups,
+                label = "Parallel",
+                value = if (task.parallelable) {
+                    "Yes — can run with other tasks"
+                } else {
+                    "No"
+                },
+            )
             if (task.createdAt.isNotEmpty() || task.completedAt.isNotEmpty()) {
                 DetailLine(
                     icon = Icons.Filled.History,
@@ -1779,6 +1796,7 @@ private fun ServerTaskDialog(
     var dueTime by remember(initial) { mutableStateOf(initial.dueTime) }
     var minutes by remember(initial) { mutableStateOf(initial.estimatedMinutes) }
     var repeatRule by remember(initial) { mutableStateOf(initial.repeatRule) }
+    var parallelable by remember(initial) { mutableStateOf(initial.parallelable) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1835,6 +1853,20 @@ private fun ServerTaskDialog(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Checkbox(
+                        checked = parallelable,
+                        onCheckedChange = { parallelable = it },
+                    )
+                    Text(
+                        "Can run in parallel with other tasks",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.clickable { parallelable = !parallelable },
+                    )
+                }
             }
         },
         confirmButton = {
@@ -1848,6 +1880,7 @@ private fun ServerTaskDialog(
                             dueTime = dueTime.trim(),
                             estimatedMinutes = minutes.trim(),
                             repeatRule = repeatRule.trim(),
+                            parallelable = parallelable,
                         )
                     )
                 },
