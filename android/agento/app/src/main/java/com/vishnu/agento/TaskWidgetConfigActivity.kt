@@ -262,22 +262,36 @@ private fun WidgetPreview(
     scrollable: Boolean,
 ) {
     val compact = density == TaskWidgetDensity.Compact
+    // A full set of samples, so the non-scrolling mode can actually
+    // demonstrate its cap instead of implying it with 3 rows and "showing 8".
     val samples = listOf(
         "Apply hair oil" to "Today, 09:00",
-        "Bath" to "Tomorrow",
-        "Buy vegetables" to "Fri, 18:00",
+        "Bath" to "Today, 20:00",
+        "Brush teeth" to "Today, 22:00",
+        "Buy vegetables" to "Tomorrow, 18:00",
+        "Change bedsheets" to "Fri, 11:00",
+        "Water plants" to "Sat, 09:00",
+        "Pay rent" to "Sun, 10:00",
+        "Plan the week" to "Mon, 08:00",
     )
-    // One fake total drives both the count line and the truncation hint, so
-    // the preview can't claim one number and demonstrate another.
+    // One fake total drives the count line, the rows shown and the
+    // truncation hint, so the preview can't claim one number and
+    // demonstrate another.
     val total = if (view == TaskWidgetView.Done) 1 else 12
     val cap = TaskWidget.STATIC_ROW_LIMIT
-    val shown = if (scrollable) samples else samples.take(min(samples.size, cap))
+    val shown = if (scrollable) {
+        samples
+    } else {
+        samples.take(minOf(total, cap))
+    }
     val hidden = (total - shown.size).coerceAtLeast(0)
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
+            // surfaceVariant, not surfaceContainerHighest: the rest of the
+            // app only uses the former, so this can't drift on an M3 bump.
+            containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -357,18 +371,21 @@ private fun WidgetPreview(
     }
 }
 
-/** Honest count line: the non-scrolling mode caps rows, so say so. Uses
- * the same fake total as the preview body. */
+/** Honest count line: the non-scrolling mode caps rows, so say so — and
+ * never claim a cap above the total it is capping. */
 private fun previewCount(view: TaskWidgetView, scrollable: Boolean): String {
     val noun = when (view) {
-        TaskWidgetView.Open -> "open tasks"
-        TaskWidgetView.Done -> "done tasks"
-        TaskWidgetView.All -> "tasks"
+        TaskWidgetView.Open -> "open task"
+        TaskWidgetView.Done -> "done task"
+        TaskWidgetView.All -> "task"
     }
     val total = if (view == TaskWidgetView.Done) 1 else 12
+    val shown = total.toString() +
+        if (total == 1) " $noun" else " ${noun}s"
     return if (scrollable) {
-        "$total $noun"
+        shown
     } else {
-        "$total $noun · showing ${TaskWidget.STATIC_ROW_LIMIT}"
+        val cap = minOf(total, TaskWidget.STATIC_ROW_LIMIT)
+        "$shown · showing $cap"
     }
 }
