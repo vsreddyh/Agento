@@ -56,9 +56,15 @@ class TaskWidget : AppWidgetProvider() {
         appWidgetIds: IntArray,
     ) {
         // Loading shell first so the widget never sits blank, then fill in.
+        // Per-id guard: one bad placement must not abort the rest (or the
+        // pull below) — an escaping throw here surfaces as a widget error.
         for (id in appWidgetIds) {
-            appWidgetManager.updateAppWidget(
-                id, render(context, id, viewFor(context, id), null, false))
+            runCatching {
+                appWidgetManager.updateAppWidget(
+                    id, render(context, id, viewFor(context, id), null, false))
+            }.onFailure {
+                Log.w("TaskWidget", "initial render failed for id=$id", it)
+            }
         }
         pull(context, appWidgetIds)
     }
