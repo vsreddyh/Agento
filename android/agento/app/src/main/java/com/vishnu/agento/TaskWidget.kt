@@ -152,6 +152,10 @@ class TaskWidget : AppWidgetProvider() {
         /** Rows rendered by the static (non-collection) path. */
         private const val STATIC_ROW_LIMIT = 8
 
+        // Row tap codes; per-task uniqueness comes from the data URI.
+        private const val ROW_COMPLETE_CODE = 1006
+        private const val ROW_OPEN_CODE = 1007
+
         // Snapshots per server state, read by TaskWidgetService's factory
         // (same process). Volatile: written on IO, read on the RemoteViews
         // service thread. Views are fetched together so mixed placements
@@ -371,15 +375,19 @@ class TaskWidget : AppWidgetProvider() {
             today: java.time.LocalDate,
             task: ServerTask,
         ): RemoteViews {
+            // PendingIntent identity is (requestCode + data URI), and the
+            // data URIs below are unique per task AND per action, so rows
+            // can never share a PendingIntent — the codes only have to be
+            // distinct constants, not a per-row hash (which can collide).
             val complete = PendingIntent.getActivity(
-                context, ("wc:$appWidgetId:${task.id}").hashCode(),
+                context, ROW_COMPLETE_CODE,
                 Intent(context, TaskCompleteActivity::class.java)
                     .putExtra(EXTRA_COMPLETE_ID, task.id)
                     .setData(Uri.parse("agento://task/${task.id}/complete")),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val openTask = PendingIntent.getActivity(
-                context, ("wo:$appWidgetId:${task.id}").hashCode(),
+                context, ROW_OPEN_CODE,
                 Intent(context, MainActivity::class.java)
                     .setAction(ACTION_TASKS)
                     .putExtra(EXTRA_TASK_ID, task.id)
