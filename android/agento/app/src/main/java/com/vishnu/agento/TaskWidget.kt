@@ -48,7 +48,9 @@ enum class TaskWidgetDensity(val title: String) {
  * Dynamic sizing: min footprint 3x2, resizable both ways. The list is a
  * RemoteViews collection ([TaskWidgetService]) with weight 1, so it
  * takes whatever height the placement offers. Display (density, due
- * line) is per-widget via [TaskWidgetConfigActivity].
+ * line) is per-widget via [TaskWidgetConfigActivity]. Static-rows mode
+ * (same screen) renders plain rows with no collection at all, for
+ * launchers whose collection binding is broken (#137).
  */
 class TaskWidget : AppWidgetProvider() {
 
@@ -95,13 +97,14 @@ class TaskWidget : AppWidgetProvider() {
     }
 
     override fun onDeleted(context: Context, appWidgetIds: IntArray) {
-        // Drop per-placement prefs (view/density/due) so removed widgets
-        // don't leak keys forever.
+        // Drop per-placement prefs (view/density/due/scroll) so removed
+        // widgets don't leak keys forever.
         val edit = prefs(context).edit()
         for (id in appWidgetIds) {
             edit.remove("task_widget_view_$id")
                 .remove("task_widget_density_$id")
                 .remove("task_widget_due_$id")
+                .remove("task_widget_scroll_$id")
         }
         edit.apply()
     }
@@ -184,7 +187,8 @@ class TaskWidget : AppWidgetProvider() {
                 appendLine("placements=${ids.size}")
                 for (id in ids) {
                     appendLine("id=$id view=${viewFor(ctx, id)} " +
-                        "density=${densityFor(ctx, id)} showDue=${showDueFor(ctx, id)}")
+                        "density=${densityFor(ctx, id)} showDue=${showDueFor(ctx, id)} " +
+                        "scrollable=${scrollableFor(ctx, id)}")
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
@@ -265,6 +269,44 @@ class TaskWidget : AppWidgetProvider() {
         fun showDueFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_due_$appWidgetId", true)
 
+        /** Whether this placement uses the scrollable collection. False
+         * renders plain static rows instead — for launchers whose
+         * collection binding is broken (issue #137). Defaults true. */
+        fun scrollableFor(context: Context, appWidgetId: Int): Boolean =
+            prefs(context).getBoolean("task_widget_scroll_$appWidgetId", true)
+
+        /** One static row with explicit per-row intents instead of the
+         * collection template: all immutable, so hosts that balk at the
+         * mutable template (or at collections entirely) still
+         * complete/open rows. */
+        fun buildStaticRow(
+            context: Context,
+            appWidgetId: Int,
+            compact: Boolean,
+            showDue: Boolean,
+            today: java.time.LocalDate,
+            task: ServerTask,
+        ): RemoteViews {
+            val complete = PendingIntent.getActivity(
+                context, ("sc:$appWidgetId:${task.id}").hashCode(),
+                Intent(context, TaskCompleteActivity::class.java)
+                    .putExtra(EXTRA_COMPLETE_ID, task.id)
+                    .setData(Uri.parse("agento://task/${task.id}/complete")),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val openTask = PendingIntent.getActivity(
+                context, ("so:$appWidgetId:${task.id}").hashCode(),
+                Intent(context, MainActivity::class.java)
+                    .setAction(ACTION_TASKS)
+                    .putExtra(EXTRA_TASK_ID, task.id)
+                    .setData(Uri.parse("agento://task/${task.id}")),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            return buildRow(context.packageName, compact, showDue, today, task).apply {
+                setOnClickPendingIntent(R.id.task_widget_row_check, complete)
+                setOnClickPendingIntent(R.id.task_widget_row, openTask)
+            }
+        }
         /** Builds one collection row. Shared by the legacy factory
          * (API <31) and the direct RemoteCollectionItems path (31+). */
         fun buildRow(
@@ -354,12 +396,17 @@ class TaskWidget : AppWidgetProvider() {
             val mgr = AppWidgetManager.getInstance(appCtx)
             // Legacy service path (API <31, or any placement without data
             // that fell back to setRemoteAdapter) is the only consumer of
-            // the data-changed notify — direct-path placements need none.
-            var needNotify = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+            // the data-changed notify — direct-path and static placements
+            // need none.
+            var needNotify = false
             for (id in ids) {
                 val view = viewFor(appCtx, id)
                 val tasks = views[view.state] ?: cachedViews[view.state]
-                if (tasks == null) needNotify = true
+                if (scrollableFor(appCtx, id) &&
+                    (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || tasks == null)
+                ) {
+                    needNotify = true
+                }
                 // Error is per-view: no data for THIS view means the fetch
                 // failed (a global flag would stick others on loading when
                 // only one state errored).
@@ -445,7 +492,9 @@ class TaskWidget : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = Uri.parse("agento://widget/$appWidgetId")
             }
-            return RemoteViews(context.packageName, R.layout.task_widget).apply {
+            return RemoteViews(context.packageName,
+                if (!scrollableFor(context, appWidgetId)) R.layout.task_widget_static
+                else R.layout.task_widget).apply {
                 setOnClickPendingIntent(R.id.task_widget_body, openPending)
                 setOnClickPendingIntent(R.id.task_widget_title, configPending)
                 setOnClickPendingIntent(R.id.task_widget_view, viewPending)
@@ -453,7 +502,26 @@ class TaskWidget : AppWidgetProvider() {
                 // Error/empty state is tappable: re-pull instead of sitting
                 // dead on a stale failure (#130).
                 setOnClickPendingIntent(R.id.task_widget_empty, refreshPending)
-                setPendingIntentTemplate(R.id.task_widget_list_view, rowPending)
+                if (!scrollableFor(context, appWidgetId)) {
+                    // Static rows: no collection, template, or service bind
+                    // at all — plain views for launchers whose collection
+                    // binding is broken (issue #137). Header count still
+                    // shows the true total; rows cap at 8.
+                    if (tasks != null) {
+                        val today = java.time.LocalDate.now(IST)
+                        val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
+                        val due = showDueFor(context, appWidgetId)
+                        tasks.take(8).forEach { t ->
+                            addView(R.id.task_widget_static_list,
+                                buildStaticRow(context, appWidgetId, compact, due, today, t))
+                        }
+                    }
+                    setViewVisibility(R.id.task_widget_static_list,
+                        if (tasks.isNullOrEmpty()) View.GONE else View.VISIBLE)
+                    setViewVisibility(R.id.task_widget_empty,
+                        if (tasks.isNullOrEmpty()) View.VISIBLE else View.GONE)
+                } else {
+                    setPendingIntentTemplate(R.id.task_widget_list_view, rowPending)
                 if (tasks != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     // Service-backed collections (setRemoteAdapter) broke
                     // on Android 16 — hand the rows over directly instead
@@ -508,6 +576,7 @@ class TaskWidget : AppWidgetProvider() {
                     else -> ""
                 }
                 setTextViewText(R.id.task_widget_empty, emptyText)
+                } // else: scrollable collection path
             }
         }
     }

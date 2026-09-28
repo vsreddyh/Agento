@@ -68,6 +68,9 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                     var showDue by remember {
                         mutableStateOf(TaskWidget.showDueFor(this, appWidgetId))
                     }
+                    var scrollable by remember {
+                        mutableStateOf(TaskWidget.scrollableFor(this, appWidgetId))
+                    }
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(
                             getString(R.string.task_widget_display),
@@ -116,6 +119,26 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                 modifier = Modifier.padding(start = 8.dp),
                             )
                         }
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .selectable(
+                                    selected = !scrollable,
+                                    onClick = { scrollable = !scrollable },
+                                    role = Role.Checkbox,
+                                )
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = !scrollable, onCheckedChange = null)
+                            Column(modifier = Modifier.padding(start = 8.dp)) {
+                                Text("Static rows")
+                                Text(
+                                    "No scrolling list — use when the widget shows a load error",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                         Spacer(modifier = Modifier.height(16.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -132,6 +155,7 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                         density.name,
                                     )
                                     .putBoolean("task_widget_due_$appWidgetId", showDue)
+                                    .putBoolean("task_widget_scroll_$appWidgetId", scrollable)
                                     .apply()
                                 TaskWidget.refresh(this@TaskWidgetConfigActivity)
                                 setResult(RESULT_OK, done)
