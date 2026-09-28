@@ -8,6 +8,24 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.3.0]
+
+- Task widget: the complete-ring drawable uses a concrete day/night
+  color instead of a theme attribute, and direct collection rows carry
+  explicit per-row taps instead of the mutable template + fill-ins —
+  both were host-sensitive pieces of the widget load path (issue #137).
+- Widget display settings gain a "Scrolling list" toggle: off renders
+  plain rows with no collection, template, or service bind, which
+  isolates a collection-binding failure from the rest of the widget.
+  Off by default while #137 is open; the collection path is unchanged
+  and is the intended end state.
+- Widget diagnostics (Settings → About) capture system-wide log
+  alongside our own — a host-side widget failure is thrown in the
+  launcher's process and is invisible in ours. Reports are capped,
+  filtered to widget signatures, and secret-redacted; the report can be
+  saved to a file for upload, and copy carries the same content.
+  Adds a best-effort "Clear system log" action.
+
 ## [4.2.4]
 
 - FIX: task widget load error on some launchers (issue #137) — direct

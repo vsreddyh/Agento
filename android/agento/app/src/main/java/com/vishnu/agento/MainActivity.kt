@@ -5879,13 +5879,15 @@ private fun WidgetDiagnosticsCard() {
     var copied by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf("") }
+    var clearing by remember { mutableStateOf(false) }
+    var cleared by remember { mutableStateOf("") }
     // Prefs/AppWidgetManager reads stay off Main (same as the log dump).
     LaunchedEffect(Unit) {
         summary = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
     }
     SectionCard(
         title = "Widget diagnostics",
-        subtitle = "Task-widget state and recent log. If the home-screen widget errors, copy this and paste it in chat.",
+        subtitle = "Task-widget state and recent log. If the home-screen widget errors, save the report and upload it — it includes system log, where a host-side widget failure shows up.",
     ) {
         if (summary.isNotEmpty()) {
             SelectionContainer {
@@ -5900,8 +5902,23 @@ private fun WidgetDiagnosticsCard() {
                     try {
                         val fresh = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
                         summary = fresh
-                        val log = withContext(Dispatchers.IO) { TaskWidget.dumpOwnLog() }
-                        clipboard.setText(AnnotatedString("$fresh\n--- log ---\n${log.take(6000)}"))
+                        // Same content as the file export (minus the long
+                        // log tail): copying must not silently miss the
+                        // host-side lines the subtitle promises.
+                        val mine = withContext(Dispatchers.IO) {
+                            TaskWidget.dumpLog(interestingLines = 60, tailLines = 15)
+                        }
+                        val sys = withContext(Dispatchers.IO) {
+                            TaskWidget.dumpLog(
+                                allProcesses = true,
+                                interestingLines = 120, tailLines = 0)
+                        }
+                        clipboard.setText(
+                            AnnotatedString(
+                                ("$fresh\n--- log (this app) ---\n$mine\n" +
+                                    "--- log (system, recent) ---\n$sys").take(6000)
+                            )
+                        )
                         copied = true
                     } catch (e: Exception) {
                         summary = "diagnostics failed: ${e.message ?: e.javaClass.simpleName}"
@@ -5910,7 +5927,7 @@ private fun WidgetDiagnosticsCard() {
                     }
                 }
             },
-            enabled = !copying && !saving,
+            enabled = !copying && !saving && !clearing,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (copying) "Copying…" else "Copy diagnostics")
@@ -5948,13 +5965,27 @@ private fun WidgetDiagnosticsCard() {
                     saving = false
                 }
             },
-            enabled = !copying && !saving,
+            enabled = !copying && !saving && !clearing,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (saving) "Saving…" else "Save to file")
+            Text(if (saving) "Saving…" else "Save report to file")
+        }
+        OutlinedButton(
+            onClick = {
+                clearing = true
+                scope.launch {
+                    cleared = withContext(Dispatchers.IO) { TaskWidget.clearSystemLog() }
+                    clearing = false
+                }
+            },
+            enabled = !copying && !saving && !clearing,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (clearing) "Clearing…" else "Clear system log")
         }
         if (copied) HintLine("Copied — paste it in chat.")
         if (saved.isNotEmpty()) HintLine(saved)
+        if (cleared.isNotEmpty()) HintLine(cleared)
     }
 }
 
