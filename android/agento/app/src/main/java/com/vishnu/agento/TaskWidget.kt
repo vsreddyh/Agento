@@ -149,6 +149,9 @@ class TaskWidget : AppWidgetProvider() {
         private const val ROW_CODE = 1004
         private const val CONFIG_CODE = 1005
 
+        /** Rows rendered by the static (non-collection) path. */
+        private const val STATIC_ROW_LIMIT = 8
+
         // Snapshots per server state, read by TaskWidgetService's factory
         // (same process). Volatile: written on IO, read on the RemoteViews
         // service thread. Views are fetched together so mixed placements
@@ -251,29 +254,47 @@ class TaskWidget : AppWidgetProvider() {
             tailLines: Int = 20,
         ): String = runCatching {
             val pid = android.os.Process.myPid().toString()
-            val cmd = if (allProcesses) {
-                // Launcher + AppWidgetManager lines live in other pids.
-                // -T trims to a fresh window so the report is all new
-                // signal (no hours of stale noise); -b all adds the
-                // crash buffer where a host-side failure lands.
-                val window = if (sinceMinutes > 0) listOf("-T", "${sinceMinutes}m") else
-                    listOf("-t", "2000")
-                listOf("logcat", "-d", "-b", "all", "-v", "brief") + window + listOf("*:W")
-            } else {
-                listOf("logcat", "-d", "--pid=$pid", "-v", "brief", "-t", "400")
+            // Read before wait: waiting first can deadlock on a full pipe.
+            fun runLogcat(cmd: List<String>): String {
+                val proc = ProcessBuilder(cmd).redirectErrorStream(true).start()
+                return try {
+                    val text = proc.inputStream.bufferedReader().readText()
+                    proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+                    text
+                } finally {
+                    proc.destroy()
+                }
             }
-            val proc = ProcessBuilder(cmd).redirectErrorStream(true).start()
-            try {
-                // Read before wait: waiting first can deadlock on a full
-                // pipe. destroy() in finally so a stuck proc never leaks.
-                val out = proc.inputStream.bufferedReader().readText()
-                proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+            val base = listOf("logcat", "-d", "-b", "all", "-v", "brief")
+            val out: String
+            if (allProcesses) {
+                // Launcher + AppWidgetManager lines live in other pids; -b
+                // all adds the crash buffer where a host failure lands.
+                // -T trims to a fresh window, but relative windows like
+                // "15m" are not honored everywhere, so fall back to a
+                // large -t count when the windowed read comes back empty.
+                out = if (sinceMinutes > 0) {
+                    val windowed = runLogcat(
+                        base + listOf("-T", "${sinceMinutes}m", "*:W"))
+                    if (windowed.isBlank()) {
+                        runLogcat(base + listOf("-t", "3000", "*:W"))
+                    } else {
+                        windowed
+                    }
+                } else {
+                    runLogcat(base + listOf("-t", "3000", "*:W"))
+                }
+            } else {
+                out = runLogcat(
+                    listOf("logcat", "-d", "--pid=$pid", "-v", "brief", "-t", "400"))
+            }
+            run {
                 val lines = out.lines()
                 val interesting = lines.filter(::widgetLine).takeLast(interestingLines)
-                // System-wide mode tails other apps' lines verbatim, so the
-                // tail is filtered with the same predicate: no unrelated PII
-                // riding along in an uploaded report. Self mode keeps the raw
-                // tail for context (own logs only).
+                // System-wide mode would otherwise tail other apps' lines
+                // verbatim, so the tail is filtered with the same
+                // predicate: no unrelated PII in an uploaded report. Self
+                // mode keeps the raw tail for context (own logs only).
                 val tail = if (allProcesses) {
                     lines.filter(::widgetLine).takeLast(tailLines)
                 } else {
@@ -294,19 +315,19 @@ class TaskWidget : AppWidgetProvider() {
                 } else {
                     redactSecrets(body)
                 }
-            } finally {
-                proc.destroy()
             }
         }.getOrDefault("(log unavailable)")
 
-        /** Lines worth keeping: our own widget code, or any widget/host
-         * failure signature. */
+        /** Lines worth keeping: our own widget code, or a host-side widget
+         * failure signature. Deliberately specific — a generic "widget"
+         * match would drag in every other app's widget lines from the
+         * system-wide buffer. */
         private fun widgetLine(l: String): Boolean =
             l.contains("TaskWidget") || l.contains("AndroidRuntime") ||
                 l.contains("FATAL") || l.contains("RemoteViews") ||
                 l.contains("AppWidget") || l.contains("System.err") ||
                 l.contains("agento") || l.contains("com.vishnu") ||
-                l.contains("RemoteCollection") || l.contains("widget", ignoreCase = true)
+                l.contains("RemoteCollection")
 
         // Bearer secrets must never ride along when the user pastes the
         // log into chat. Redacts key=value pairs for the usual secret
@@ -593,7 +614,7 @@ class TaskWidget : AppWidgetProvider() {
                         // each time would append, leaving ghost rows when
                         // the list shrinks.
                         removeAllViews(R.id.task_widget_static_list)
-                        tasks.take(8).forEach { t ->
+                        tasks.take(STATIC_ROW_LIMIT).forEach { t ->
                             addView(R.id.task_widget_static_list,
                                 buildRowWithIntents(
                                     context, appWidgetId, compact, due, today, t))
@@ -653,6 +674,11 @@ class TaskWidget : AppWidgetProvider() {
                     tasks == null && !error -> context.getString(R.string.task_widget_loading)
                     tasks == null -> context.getString(R.string.task_widget_error)
                     tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
+                    // Static rows cap at 8: say so, so the count and the
+                    // visible rows never silently disagree.
+                    !scrollable && tasks.size > STATIC_ROW_LIMIT ->
+                        context.resources.getQuantityString(plural, tasks.size, tasks.size) +
+                            " · showing " + STATIC_ROW_LIMIT
                     else -> context.resources.getQuantityString(
                         plural, tasks.size, tasks.size)
                 }
