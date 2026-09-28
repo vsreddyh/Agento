@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.5.0]
+
+- FIX: task widget load error on Android 16 / OxygenOS (issue #137) —
+  root cause was a single decorative 1dp divider `View` in the widget
+  layout; removing it makes the widget render again. The temporary
+  diagnostic style ladder is gone: the widget is back to two modes,
+  the scrolling list (default) and plain rows, with the view switched
+  in its settings screen.
+- Task widget rows carry explicit per-row taps instead of the mutable
+  pending-intent template, and widget text colors are concrete
+  day/night values rather than theme attributes.
+
 ## [4.4.4]
 
 - FIX: the task widget's 1dp divider `View` is the element this launcher
