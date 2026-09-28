@@ -4,4 +4,7 @@
     <!-- Task widget card surface (light). Night variant in values-night. -->
     <color name="task_widget_bg">#FFFFFF</color>
     <color name="task_widget_divider">#1F000000</color>
+    <!-- Row complete-ring (light). Mirrors secondary text; concrete so it
+         resolves in every widget host (issue #137). -->
+    <color name="task_widget_ring">#757575</color>
 </resources>

@@ -3,4 +3,5 @@
     <!-- Dark surface so the widget matches dark wallpapers / night mode. -->
     <color name="task_widget_bg">#201F2E</color>
     <color name="task_widget_divider">#33FFFFFF</color>
+    <color name="task_widget_ring">#B0B0B0</color>
 </resources>

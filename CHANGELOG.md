@@ -8,6 +8,12 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.2.3]
+
+- FIX: task widget load error on some launchers (issue #137) — the row
+  complete-ring drawable used a theme attribute that fails to resolve
+  in certain widget hosts; it now uses a concrete day/night color.
+
 ## [4.2.2]
 
 - Task UI for narrow screens: detail sheet stacks label above value so
