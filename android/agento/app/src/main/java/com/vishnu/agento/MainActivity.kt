@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -1714,7 +1715,8 @@ private fun ServerTaskDetailSheet(
     }
 }
 
-/** One icon + label + value line in the detail sheet. */
+/** One icon + label + value entry in the detail sheet. Stacked
+ * (label above value) so narrow screens never wrap labels mid-word. */
 @Composable
 private fun DetailLine(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -1722,7 +1724,9 @@ private fun DetailLine(
     value: String,
     highlight: Boolean = false,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        verticalAlignment = Alignment.Top,
+    ) {
         Icon(
             icon,
             contentDescription = null,
@@ -1731,29 +1735,32 @@ private fun DetailLine(
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
+            modifier = Modifier.padding(top = 2.dp),
         )
         Spacer(modifier = Modifier.width(12.dp))
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(72.dp),
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (highlight) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (highlight) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+        }
     }
 }
 
 /** New/edit dialog for a server task. Everything except Repeats is
  * required (save stays disabled until all are filled); due date/time are
- * picked, not typed. */
+ * picked, not typed. Single-column layout with scrolling chip rows for
+ * tall/narrow screens. */
 @Composable
 private fun ServerTaskDialog(
     initial: ServerTaskDraft,
@@ -1772,12 +1779,20 @@ private fun ServerTaskDialog(
     var parallelable by remember(initial) { mutableStateOf(initial.parallelable) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
+    val formValid = name.trim().isNotEmpty() &&
+        description.trim().isNotEmpty() &&
+        dueDate.trim().isNotEmpty() &&
+        dueTime.trim().isNotEmpty() &&
+        (minutes.trim().toIntOrNull()?.let { it >= 0 } == true)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isNew) "New task" else "Edit task") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -1789,52 +1804,52 @@ private fun ServerTaskDialog(
                     value = description,
                     onValueChange = { description = it },
                     label = { Text("Details *") },
+                    minLines = 2,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                FormLabel("Due")
                 DueQuickRow(onPick = { dueDate = it })
                 val dateInteraction = remember { MutableInteractionSource() }
                 val timeInteraction = remember { MutableInteractionSource() }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = dueDate,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Due date *") },
-                        placeholder = { Text("Tap to pick") },
-                        singleLine = true,
-                        interactionSource = dateInteraction,
-                        trailingIcon = {
-                            if (dueDate.isNotEmpty()) {
-                                IconButton(onClick = { dueDate = ""; dueTime = "" }) {
-                                    Icon(Icons.Filled.Close, contentDescription = "Clear due date")
-                                }
-                            } else {
-                                Icon(Icons.Filled.DateRange, contentDescription = null)
+                OutlinedTextField(
+                    value = dueDate,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Due date *") },
+                    placeholder = { Text("Tap to pick") },
+                    singleLine = true,
+                    interactionSource = dateInteraction,
+                    trailingIcon = {
+                        if (dueDate.isNotEmpty()) {
+                            IconButton(onClick = { dueDate = ""; dueTime = "" }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Clear due date")
                             }
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedTextField(
-                        value = dueTime,
-                        onValueChange = {},
-                        readOnly = true,
-                        enabled = dueDate.isNotEmpty(),
-                        label = { Text("Time *") },
-                        placeholder = { Text("Tap to pick") },
-                        singleLine = true,
-                        interactionSource = timeInteraction,
-                        trailingIcon = {
-                            if (dueTime.isNotEmpty()) {
-                                IconButton(onClick = { dueTime = "" }) {
-                                    Icon(Icons.Filled.Close, contentDescription = "Clear due time")
-                                }
-                            } else {
-                                Icon(Icons.Filled.AccessTime, contentDescription = null)
+                        } else {
+                            Icon(Icons.Filled.DateRange, contentDescription = null)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = dueTime,
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = dueDate.isNotEmpty(),
+                    label = { Text("Time *") },
+                    placeholder = { Text("Pick a date first") },
+                    singleLine = true,
+                    interactionSource = timeInteraction,
+                    trailingIcon = {
+                        if (dueTime.isNotEmpty()) {
+                            IconButton(onClick = { dueTime = "" }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Clear due time")
                             }
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                        } else {
+                            Icon(Icons.Filled.AccessTime, contentDescription = null)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 // Tapping a read-only field opens its picker (the trailing
                 // icon only clears); Release avoids firing while scrolling.
                 LaunchedEffect(dateInteraction) {
@@ -1847,47 +1862,90 @@ private fun ServerTaskDialog(
                         if (it is PressInteraction.Release && dueDate.isNotEmpty()) showTimePicker = true
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = minutes,
-                        onValueChange = { minutes = it.filter { c -> c.isDigit() } },
-                        label = { Text("Minutes *") },
-                        placeholder = { Text("30") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f),
+                FormLabel("Estimate")
+                OutlinedTextField(
+                    value = minutes,
+                    onValueChange = { minutes = it.filter { c -> c.isDigit() } },
+                    label = { Text("Minutes *") },
+                    placeholder = { Text("30") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    for (m in listOf("5", "15", "30", "60")) {
+                        FilterChip(
+                            selected = minutes == m,
+                            onClick = { minutes = m },
+                            label = { Text(m) },
+                        )
+                    }
+                }
+                FormLabel("Repeats")
+                OutlinedTextField(
+                    value = repeatRule,
+                    onValueChange = { repeatRule = it },
+                    label = { Text("Repeats") },
+                    placeholder = { Text("weekly, or custom like “every 3rd Friday”") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val rule = repeatRule.trim().lowercase(Locale.ROOT)
+                    FilterChip(
+                        selected = rule.isEmpty(),
+                        onClick = { repeatRule = "" },
+                        label = { Text("None") },
                     )
-                    OutlinedTextField(
-                        value = repeatRule,
-                        onValueChange = { repeatRule = it },
-                        label = { Text("Repeats") },
-                        placeholder = { Text("weekly") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
+                    for ((label, value) in listOf(
+                        "Daily" to "daily",
+                        "Weekly" to "weekly",
+                        "Monthly" to "monthly",
+                    )) {
+                        FilterChip(
+                            selected = rule == value,
+                            onClick = { repeatRule = value },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                if (!formValid) {
+                    HintLine("Fill all * fields to enable Save.")
                 }
                 Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .toggleable(
+                            value = parallelable,
+                            role = Role.Checkbox,
+                            onValueChange = { parallelable = it },
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Checkbox(
                         checked = parallelable,
-                        onCheckedChange = { parallelable = it },
+                        onCheckedChange = null,
                     )
-                    Text(
-                        "Can run in parallel with other tasks",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.clickable { parallelable = !parallelable },
-                    )
+                    Column {
+                        Text(
+                            "Can run in parallel",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            "Runs alongside other tasks",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
-            val valid = name.trim().isNotEmpty() &&
-                description.trim().isNotEmpty() &&
-                dueDate.trim().isNotEmpty() &&
-                dueTime.trim().isNotEmpty() &&
-                (minutes.trim().toIntOrNull()?.let { it >= 0 } == true)
             TextButton(
                 onClick = {
                     onSave(
@@ -1902,7 +1960,7 @@ private fun ServerTaskDialog(
                         )
                     )
                 },
-                enabled = !busy && valid,
+                enabled = !busy && formValid,
             ) { Text("Save") }
         },
         dismissButton = {
@@ -1930,15 +1988,30 @@ private fun ServerTaskDialog(
     }
 }
 
-/** Today/Tomorrow shortcuts (IST) for task due dates. */
+/** Today/Tomorrow shortcuts (IST) for task due dates. Scroll-safe for
+ * narrow screens. */
 @Composable
 private fun DueQuickRow(onPick: (String) -> Unit) {
     val today = remember { java.time.LocalDate.now(IST).toString() }
     val tomorrow = remember { java.time.LocalDate.now(IST).plusDays(1).toString() }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = { onPick(today) }) { Text("Today") }
-        TextButton(onClick = { onPick(tomorrow) }) { Text("Tomorrow") }
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        AssistChip(onClick = { onPick(today) }, label = { Text("Today") })
+        AssistChip(onClick = { onPick(tomorrow) }, label = { Text("Tomorrow") })
     }
+}
+
+/** Small section header inside the task dialog form. */
+@Composable
+private fun FormLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
 }
 
 /** Material3 date picker returning YYYY-MM-DD. The picker speaks
