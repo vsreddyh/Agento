@@ -1097,7 +1097,7 @@ private fun TaskManagerScreen(
                             description = t.description,
                             dueDate = "",
                             dueTime = "",
-                            estimatedMinutes = t.estimatedMinutes.takeIf { it > 0 }?.toString().orEmpty(),
+                            estimatedMinutes = t.estimatedMinutes.toString(),
                             repeatRule = t.repeatRule,
                             parallelable = t.parallelable,
                         )
@@ -1478,7 +1478,7 @@ private fun ServerTask.toDraft() = ServerTaskDraft(
     description = description,
     dueDate = dueDate,
     dueTime = dueTime,
-    estimatedMinutes = estimatedMinutes.takeIf { it > 0 }?.toString().orEmpty(),
+    estimatedMinutes = estimatedMinutes.toString(),
     repeatRule = repeatRule,
     parallelable = parallelable,
 )
