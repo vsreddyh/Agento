@@ -71,24 +71,30 @@ class TasksApi(context: Context) {
         return (prefs.getString("auth_token", "") ?: "").trim()
     }
 
+    /** Lenient string read: Android's `optString` coerces JSON null to
+     * the string "null", so every nullable/completedAt-style field must
+     * go through here (#130). */
+    private fun optStr(o: JSONObject, key: String): String =
+        if (o.isNull(key)) "" else o.optString(key, "").trim()
+
     private fun parseTask(o: JSONObject): ServerTask? {
-        val id = o.optString("id", "")
-            .ifEmpty { o.optString("_id", "") }.trim()
+        val id = optStr(o, "id")
+            .ifEmpty { optStr(o, "_id") }
         if (id.isEmpty()) return null
-        val name = o.optString("name", "").trim()
+        val name = optStr(o, "name")
         if (name.isEmpty()) return null
         // estimated_minutes may encode as int, long, or double.
         val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
         return ServerTask(
             id = id,
             name = name,
-            description = o.optString("description", "").trim(),
-            dueDate = o.optString("due_date", "").trim(),
-            dueTime = o.optString("due_time", "").trim(),
+            description = optStr(o, "description"),
+            dueDate = optStr(o, "due_date"),
+            dueTime = optStr(o, "due_time"),
             estimatedMinutes = mins.coerceAtLeast(0),
-            repeatRule = o.optString("repeat_rule", "").trim(),
-            completedAt = o.optString("completedAt", "").trim(),
-            createdAt = o.optString("createdAt", "").trim(),
+            repeatRule = optStr(o, "repeat_rule"),
+            completedAt = optStr(o, "completedAt"),
+            createdAt = optStr(o, "createdAt"),
         )
     }
 

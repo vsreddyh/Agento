@@ -8,6 +8,7 @@ import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import java.time.LocalDate
 
 /**
  * Collection adapter for the task widget's scrollable list. Each factory
@@ -34,6 +35,8 @@ private class TaskFactory(
 ) : RemoteViewsService.RemoteViewsFactory {
 
     private var items: List<ServerTask> = emptyList()
+    // Read once per dataset change, not per row (#130 review).
+    private var today: LocalDate = LocalDate.now(IST)
 
     override fun onCreate() = Unit
     override fun onDestroy() = Unit
@@ -64,6 +67,7 @@ private class TaskFactory(
         // unexpected throw) would stall/kill the host bind and surface
         // as a widget load error. Slow path just shows empty/stale.
         val state = view().state
+        today = LocalDate.now(IST)
         items = TaskWidget.cachedViews[state]
             ?: runCatching {
                 runBlocking {
@@ -93,8 +97,9 @@ private class TaskFactory(
             ?: return RemoteViews(appCtx.packageName, layout)
         return RemoteViews(appCtx.packageName, layout).apply {
             setTextViewText(R.id.task_widget_row_name, task.name)
-            val due = listOf(task.dueDate.trim(), task.dueTime.trim())
-                .filter { it.isNotEmpty() }.joinToString(" ")
+            // Same friendly due line as the Task Manager rows (#130),
+            // IST-pinned; blank collapses to gone below.
+            val due = friendlyDue(task.dueDate, task.dueTime, today)
             if (showDue() && due.isNotEmpty()) {
                 setTextViewText(R.id.task_widget_row_due, due)
                 setViewVisibility(R.id.task_widget_row_due, View.VISIBLE)

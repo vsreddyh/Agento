@@ -10,6 +10,18 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.20.1]
+
+- Task Manager bug fix: open tasks no longer render as completed — JSON
+  `completedAt: null` was coerced to the string `"null"` by `optString`
+  (all string fields now parse through a null-guarded helper), which also
+  restores the Overdue/Today date grouping.
+- Task Manager looks: flat rows with dividers instead of Card-per-row,
+  friendly due lines (`Today, 09:00`, `Tomorrow`, `Mon 29 Sep`),
+  section headers with counts, dim + strikethrough for done rows.
+- Task widget: the error view names the failure reason and taps to retry,
+  and one wedged placement can no longer abort the rest.
+
 ## [3.20.0]
 
 - Skills/Tools UI: rows tap to expand the full description and complete
