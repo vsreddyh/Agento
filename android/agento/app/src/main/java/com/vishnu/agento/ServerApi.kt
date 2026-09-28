@@ -247,7 +247,9 @@ class ServerApi(context: Context) {
 
     /**
      * Strict toggle parse: only real booleans count — strings, numbers and
-     * nulls read as unknown (null) instead of Off. First present key wins.
+     * nulls are skipped, so the first *boolean* value wins (a present but
+     * non-boolean key never masks a later real one) and absence reads as
+     * unknown (null) instead of Off.
      */
     private fun optFlag(o: JSONObject, vararg keys: String): Boolean? {
         for (k in keys) {

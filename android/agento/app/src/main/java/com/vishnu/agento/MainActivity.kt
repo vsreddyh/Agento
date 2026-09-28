@@ -1238,11 +1238,11 @@ private fun TaskManagerScreen(
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 // Derived once per composition: search narrows, sort orders.
-                // Computed directly (not remembered) so it can't go stale
-                // if the app stays open past midnight — LocalDate is cheap.
+                // `today` is a remember key below so buckets recompute
+                // past midnight while the app stays open.
                 // IST-pinned (#124) like every other displayed date.
                 val today = java.time.LocalDate.now(IST).toString()
-                val visible = remember(tasks, query, sort) {
+                val visible = remember(tasks, query, sort, today) {
                     val q = query.trim().lowercase(Locale.ROOT)
                     tasks
                         .filter { t ->
@@ -2763,10 +2763,11 @@ private enum class ToolsSort(val title: String) {
 }
 
 /** One skill row: name + description/category + On/Off badge. Tap expands
- * the full description (#123); collapsed text caps at 3 lines. */
+ * the full description (#123); collapsed text caps at 3 lines. Expansion
+ * is keyed by profile+name so switching assistants never leaks open rows. */
 @Composable
-private fun SkillCard(s: SkillInfo) {
-    var open by remember(s.name) { mutableStateOf(false) }
+private fun SkillCard(profile: String, s: SkillInfo) {
+    var open by remember(profile, s.name) { mutableStateOf(false) }
     Card(
         onClick = { open = !open },
         modifier = Modifier.fillMaxWidth(),
@@ -2815,10 +2816,11 @@ private fun SkillCard(s: SkillInfo) {
  * Tap expands the full description and the complete tool list (#123);
  * collapsed caps at the 10-tool summary. Off toolsets render an Off badge
  * (nothing is filtered); an explicit `configured: false` adds a
- * "Not configured" badge, invisible otherwise. */
+ * "Not configured" badge, invisible otherwise. Expansion is keyed by
+ * profile+name so switching assistants never leaks open rows. */
 @Composable
-private fun ToolsetCard(ts: ToolsetInfo) {
-    var open by remember(ts.name) { mutableStateOf(false) }
+private fun ToolsetCard(profile: String, ts: ToolsetInfo) {
+    var open by remember(profile, ts.name) { mutableStateOf(false) }
     Card(
         onClick = { open = !open },
         modifier = Modifier.fillMaxWidth(),
@@ -2895,10 +2897,11 @@ private fun ToolsetCard(ts: ToolsetInfo) {
 }
 
 /** One derived MCP server row: name + tool list. Tap expands the full
- * tool list (#123); collapsed caps at the 8-tool summary. */
+ * tool list (#123); collapsed caps at the 8-tool summary. Expansion is
+ * keyed by profile+name so switching assistants never leaks open rows. */
 @Composable
-private fun McpCard(server: McpServer) {
-    var open by remember(server.name) { mutableStateOf(false) }
+private fun McpCard(profile: String, server: McpServer) {
+    var open by remember(profile, server.name) { mutableStateOf(false) }
     Card(
         onClick = { open = !open },
         modifier = Modifier.fillMaxWidth(),
@@ -3150,7 +3153,7 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                         items(shownDefaultSkills, key = { "ds:" + it.name }) { s ->
-                            SkillCard(s)
+                            SkillCard(profile, s)
                         }
                     }
                     if (shownCustomSkills.isNotEmpty()) {
@@ -3162,7 +3165,7 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                         items(shownCustomSkills, key = { "cs:" + it.name }) { s ->
-                            SkillCard(s)
+                            SkillCard(profile, s)
                         }
                     }
                     if (loaded && skills.isNotEmpty()
@@ -3410,7 +3413,7 @@ private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                         items(shownDefaultTools, key = { "dt:" + it.name }) { ts ->
-                            ToolsetCard(ts)
+                            ToolsetCard(profile, ts)
                         }
                     }
                     if (shownCustomMcpToolsets.isNotEmpty() || shownCustomMcpServers.isNotEmpty()) {
@@ -3429,10 +3432,10 @@ private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                         items(shownCustomMcpToolsets, key = { "cm:" + it.name }) { ts ->
-                            ToolsetCard(ts)
+                            ToolsetCard(profile, ts)
                         }
                         items(shownCustomMcpServers, key = { "ms:" + it.name }) { server ->
-                            McpCard(server)
+                            McpCard(profile, server)
                         }
                     }
                     if (loaded && listedToolsets.isNotEmpty()
@@ -3462,12 +3465,9 @@ private fun humanSize(bytes: Long): String {
     return if (u == 0) "$bytes B" else "%.1f %s".format(v, units[u])
 }
 
-/** Display zone for every user-visible time (#124). Single-user app with
- * no per-user zone: IST is pinned so chat, tasks, reminders and sync
- * stamps read identically on any device zone. */
-val IST: java.time.ZoneId = java.time.ZoneId.of("Asia/Kolkata")
-
-/** Short HH:mm (plus date when not today); empty for unknown timestamps. */
+/** Short HH:mm (plus date when not today); empty for unknown timestamps.
+ * Month abbreviations pin to English so output never varies by device
+ * locale. */
 private fun shortTime(ts: Long): String {
     if (ts <= 0) return ""
     return try {
@@ -3476,7 +3476,7 @@ private fun shortTime(ts: Long): String {
         if (zdt.toLocalDate() == today) {
             zdt.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
         } else {
-            zdt.format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm"))
+            zdt.format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.ENGLISH))
         }
     } catch (e: Exception) {
         ""
@@ -3485,12 +3485,12 @@ private fun shortTime(ts: Long): String {
 
 /** Formats a stored `Instant.now().toString()` stamp (UTC ISO) for display
  * in IST (#124); blank stays blank, unparseable input falls back to raw
- * rather than hiding information. */
+ * rather than hiding information. Month abbreviations pin to English. */
 private fun formatSyncTime(raw: String): String {
     if (raw.isBlank()) return ""
     return runCatching {
         java.time.Instant.parse(raw.trim()).atZone(IST)
-            .format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm"))
+            .format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.ENGLISH))
     }.getOrDefault(raw)
 }
 
