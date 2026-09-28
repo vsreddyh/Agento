@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.4.4]
+
+- FIX: the task widget's 1dp divider `View` is the element this launcher
+  rejects outright — the style ladder isolated it (C and D1 render, D2
+  fails, and D2 only adds that separator). Removed for good; the ladder
+  continues with the empty-state text, header toggle and settings tap.
+
 ## [4.4.3]
 
 - DIAGNOSTIC: each widget style step (D1-D5) now inflates its own

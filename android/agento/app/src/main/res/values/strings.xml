@@ -13,11 +13,10 @@
     <!-- Diagnostic style ladder C, D1-D5, E (#137); removed with it. -->
     <string name="task_widget_style_label">Diagnostic style</string>
     <string name="task_widget_style_c">C — header only (works)</string>
-    <string name="task_widget_style_d1">D1 — + task rows</string>
-    <string name="task_widget_style_d2">D2 — + divider</string>
-    <string name="task_widget_style_d3">D3 — + empty-state text</string>
-    <string name="task_widget_style_d4">D4 — + header view toggle</string>
-    <string name="task_widget_style_d5">D5 — + title-to-settings tap</string>
+    <string name="task_widget_style_d1">D1 — + task rows (works)</string>
+    <string name="task_widget_style_d2">D2 — + empty-state text</string>
+    <string name="task_widget_style_d3">D3 — + header view toggle</string>
+    <string name="task_widget_style_d4">D4 — + title-to-settings tap</string>
     <string name="task_widget_style_e">E — scrolling list</string>
     <string name="task_widget_open_task">Open task</string>
     <string name="task_reminder_channel">Task reminders</string>

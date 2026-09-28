@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Diagnostic step D3 (issue #137). Header is byte-identical to
-     task_widget_style_c.xml — the only difference from the previous step is
-     the element(s) below, so the first step that fails names the culprit. -->
+     task_widget_style_c.xml; the only difference from the previous step is
+     the element below, so the first failing step names the culprit. The 1dp
+     divider View that used to sit here is removed for good — it alone made
+     this launcher reject the widget. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
     android:layout_width="match_parent"
@@ -41,6 +43,17 @@
 
         </LinearLayout>
 
+        <TextView
+            android:id="@+id/task_widget_view"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingLeft="8dp"
+            android:paddingRight="8dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:textSize="12sp"
+            android:textColor="@color/task_widget_text_secondary" />
+
         <ImageButton
             android:id="@+id/task_widget_refresh"
             android:layout_width="40dp"
@@ -57,14 +70,6 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical" />
-
-    <View
-        android:id="@+id/task_widget_divider"
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginBottom="4dp"
-        android:background="@color/task_widget_divider" />
 
     <TextView
         android:id="@+id/task_widget_empty"
