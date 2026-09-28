@@ -158,6 +158,17 @@ class TaskWidget : AppWidgetProvider() {
         // tap-to-retry) instead of a dead generic error.
         @Volatile private var lastErrors: Map<String, String> = emptyMap()
 
+        // Last RemoteViewsFactory failure (same process — the service has
+        // no android:process). Surfaced in diagnostics so an on-device
+        // widget crash names itself without adb.
+        @Volatile var lastFactoryError: String? = null
+            private set
+
+        fun recordFactoryError(where: String, e: Throwable) {
+            lastFactoryError = "$where: ${e.javaClass.simpleName}: ${e.message}".take(300)
+            Log.w("TaskWidget", "factory failure at $where", e)
+        }
+
         /** One-screen widget health summary for Settings → About, so
          * widget failures can be diagnosed without adb. Never throws
          * (a diagnostics call must not become a second crash). */
@@ -175,15 +186,24 @@ class TaskWidget : AppWidgetProvider() {
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
+                appendLine("factoryError=${lastFactoryError ?: "none"}")
             }.trim()
         }.getOrDefault("(diagnostics unavailable)")
+
+        /** Full diagnostics report for file export: health summary plus
+         * a larger redacted log slice than the clipboard variant. */
+        fun buildReport(appCtx: Context): String {
+            val head = diagnostics(appCtx)
+            val log = dumpOwnLog(interestingLines = 150, tailLines = 50)
+            return "$head\n--- log ---\n$log".take(100_000)
+        }
 
         /** Recent log lines from our own process. Self-reads need no
          * permission (unlike adb), so a broken widget's stack trace can
          * be copied out of the app. Call off the main thread.
          * Privacy: the output is user-copied into chat, so bearer secrets
          * are redacted before it leaves the device (see [redactSecrets]). */
-        fun dumpOwnLog(): String = runCatching {
+        fun dumpOwnLog(interestingLines: Int = 40, tailLines: Int = 20): String = runCatching {
             val pid = android.os.Process.myPid().toString()
             val proc = ProcessBuilder(
                 "logcat", "-d", "--pid=$pid", "-v", "brief", "-t", "400")
@@ -192,10 +212,19 @@ class TaskWidget : AppWidgetProvider() {
             try {
                 // Read before wait: waiting first can deadlock on a full
                 // pipe. destroy() in finally so a stuck proc never leaks.
+                // Crash lines first (a VRI/HWUI tail drowns them), then a
+                // short tail for context.
                 val out = proc.inputStream.bufferedReader().readText()
                 proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
-                val tail = out.lines().takeLast(80).joinToString("\n")
-                redactSecrets(tail).ifEmpty { "(empty log)" }
+                val lines = out.lines()
+                val interesting = lines.filter { l ->
+                    l.contains("TaskWidget") || l.contains("AndroidRuntime") ||
+                        l.contains("FATAL") || l.contains("RemoteViews") ||
+                        l.contains("AppWidget") || l.contains("System.err")
+                }.takeLast(interestingLines)
+                redactSecrets(
+                    (interesting + "--- tail ---" + lines.takeLast(tailLines)).joinToString("\n"),
+                ).ifEmpty { "(empty log)" }
             } finally {
                 proc.destroy()
             }

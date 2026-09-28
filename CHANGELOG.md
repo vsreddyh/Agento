@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.2.0]
+
+- Widget diagnostics can be saved to a file and shared for upload
+  (Settings → About), with a larger redacted log slice than the
+  clipboard variant. Factory throwables are recorded and crash log
+  lines surface first, so an on-device widget crash names itself
+  without adb.
+
 ## [4.1.0]
 
 - Widget hardening: one bad placement can no longer abort the initial

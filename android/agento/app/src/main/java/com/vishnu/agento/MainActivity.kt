@@ -5804,6 +5804,8 @@ private fun WidgetDiagnosticsCard() {
     var summary by remember { mutableStateOf("") }
     var copying by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var saved by remember { mutableStateOf("") }
     // Prefs/AppWidgetManager reads stay off Main (same as the log dump).
     LaunchedEffect(Unit) {
         summary = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
@@ -5835,13 +5837,67 @@ private fun WidgetDiagnosticsCard() {
                     }
                 }
             },
-            enabled = !copying,
+            enabled = !copying && !saving,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (copying) "Copying…" else "Copy diagnostics")
         }
+        OutlinedButton(
+            onClick = {
+                saving = true
+                saved = ""
+                scope.launch {
+                    runCatching {
+                        val report = withContext(Dispatchers.IO) { TaskWidget.buildReport(context) }
+                        val file = withContext(Dispatchers.IO) {
+                            saveDiagnosticsFile(context, report)
+                        }
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            context, "${context.packageName}.fileprovider", file)
+                        // Grant via ClipData on both intents: the flag on
+                        // the inner intent alone isn't reliably forwarded
+                        // by createChooser() on all API levels.
+                        val share = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            clipData = android.content.ClipData.newUri(
+                                context.contentResolver, "diagnostics", uri)
+                            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        val chooser = android.content.Intent.createChooser(share, "Share diagnostics").apply {
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(chooser)
+                        saved = "Saved ${file.name} — share it to upload."
+                    }.onFailure { e ->
+                        saved = "Save failed: ${e.message ?: e.javaClass.simpleName}"
+                    }
+                    saving = false
+                }
+            },
+            enabled = !copying && !saving,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (saving) "Saving…" else "Save to file")
+        }
         if (copied) HintLine("Copied — paste it in chat.")
+        if (saved.isNotEmpty()) HintLine(saved)
     }
+}
+
+/** Writes a diagnostics report under cache/diagnostics for upload.
+ * Millis-precision names avoid same-second collisions; only the newest
+ * 5 are kept so retries never grow the cache unbounded. */
+private fun saveDiagnosticsFile(context: Context, text: String): java.io.File {
+    val dir = java.io.File(context.cacheDir, "diagnostics").apply { mkdirs() }
+    val stamp = java.time.LocalDateTime.now(IST)
+        .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"))
+    val file = java.io.File(dir, "agento-diagnostics-$stamp.txt").apply { writeText(text) }
+    dir.listFiles()
+        ?.sortedByDescending { it.lastModified() }
+        ?.drop(5)
+        ?.forEach { runCatching { it.delete() } }
+    return file
 }
 
 /** Summarizes Health Connect install vs. permission state for Settings. */
