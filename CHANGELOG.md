@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.4.1]
+
+- FIX: task widget load error on some launchers (issue #137) — the
+  header's view toggle is a TextView instead of a platform Button,
+  whose default style resolves theme attributes against the host's
+  theme when a widget is inflated. The bisect (styles A–E) showed the
+  working styles contained no Button; this was the difference.
+
 ## [4.4.0]
 
 - DIAGNOSTIC: task widget display settings gain a style ladder (A–E)
