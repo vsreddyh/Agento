@@ -141,6 +141,12 @@ func TestCreateRequiresAllFields(t *testing.T) {
 			t.Fatalf("update %v must fail", fields)
 		}
 	}
+	// JSON null counts as absent on update (no-op success).
+	if _, err := s.Update(ctx, id, map[string]any{
+		"name": nil, "description": nil, "estimated_minutes": nil, "parallelable": nil,
+	}); err != nil {
+		t.Fatalf("null update must be a no-op: %v", err)
+	}
 }
 
 func TestCompleteReopenDelete(t *testing.T) {

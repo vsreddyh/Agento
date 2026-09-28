@@ -296,7 +296,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 			}
 		}
 	}
-	if v, ok := fields["name"]; ok {
+	if v, ok := fields["name"]; ok && v != nil {
 		name, _ := v.(string)
 		if strings.TrimSpace(name) == "" {
 			return nil, fail("name is required")
@@ -330,7 +330,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	if err := checkDue(dueDate, dueTime); err != nil {
 		return nil, err
 	}
-	if v, ok := fields["estimated_minutes"]; ok {
+	if v, ok := fields["estimated_minutes"]; ok && v != nil {
 		n, ok := toInt(v)
 		if !ok || n < 0 {
 			return nil, fail("estimated_minutes must be >= 0")
@@ -340,7 +340,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	if str, ok := strField("repeat_rule"); ok {
 		set["repeat_rule"] = strings.TrimSpace(str)
 	}
-	if v, ok := fields["parallelable"]; ok {
+	if v, ok := fields["parallelable"]; ok && v != nil {
 		b, ok := toBool(v)
 		if !ok {
 			return nil, fail("parallelable must be a boolean")

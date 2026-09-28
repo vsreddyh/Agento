@@ -1941,21 +1941,19 @@ private fun DueQuickRow(onPick: (String) -> Unit) {
     }
 }
 
-/** Material3 date picker returning YYYY-MM-DD (IST); defaults to today
- * when the field holds nothing parseable yet. */
+/** Material3 date picker returning YYYY-MM-DD. The picker speaks
+ * UTC-midnight millis, so seed and read back in UTC — seeding IST
+ * midnight shifts the highlight a day back on non-IST devices. */
 @Composable
 private fun DueDatePickerDialog(
     initial: String,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val todayMillis = remember {
-        java.time.LocalDate.now(IST).atStartOfDay(IST).toInstant().toEpochMilli()
-    }
     val initialMillis = remember(initial) {
-        runCatching {
-            java.time.LocalDate.parse(initial.trim()).atStartOfDay(IST).toInstant().toEpochMilli()
-        }.getOrNull() ?: todayMillis
+        val day = runCatching { java.time.LocalDate.parse(initial.trim()) }.getOrNull()
+            ?: java.time.LocalDate.now(IST)
+        day.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
     }
     val state = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
     DatePickerDialog(
@@ -1963,7 +1961,7 @@ private fun DueDatePickerDialog(
         confirmButton = {
             TextButton(onClick = {
                 val picked = state.selectedDateMillis?.let {
-                    java.time.Instant.ofEpochMilli(it).atZone(IST).toLocalDate().toString()
+                    java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString()
                 } ?: java.time.LocalDate.now(IST).toString()
                 onConfirm(picked)
             }) { Text("OK") }
