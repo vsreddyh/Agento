@@ -18,7 +18,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.ZoneId
 
 private val IsoDate = Regex("\\d{4}-\\d{2}-\\d{2}")
 private val ClockTime = Regex("(\\d{1,2}):(\\d{2})(?::(\\d{2}))?")
@@ -49,7 +48,7 @@ fun dueMillisOrNull(dueDate: String, dueTime: String): Long? {
     val at = runCatching {
         LocalDate.parse(dueDate).atTime(hh, mm, ss)
     }.getOrNull() ?: return null
-    return at.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    return at.atZone(IST).toInstant().toEpochMilli()
 }
 
 /**
@@ -97,15 +96,17 @@ object TaskReminders {
         if (!isEnabled(appCtx)) return Job().also { it.complete() }
         return scope.launch {
             val tasks = TasksApi(appCtx).list("open").getOrNull() ?: return@launch
-            val now = LocalDateTime.now()
-            val horizon = LocalDate.now().plusDays(HORIZON_DAYS).toString()
+            // IST-pinned (#124): due times are entered as wall-clock IST,
+            // so "now" and the arming horizon must read the same zone.
+            val now = LocalDateTime.now(IST)
+            val horizon = LocalDate.now(IST).plusDays(HORIZON_DAYS).toString()
             // Nearest fire time first so the cap keeps the urgent ones.
             val wanted = tasks
                 .filter { it.dueDate.isIsoDate() && it.dueTime.isNotBlank() }
                 .filter { it.dueDate <= horizon }
                 .mapNotNull { t ->
                     val at = dueMillisOrNull(t.dueDate, t.dueTime) ?: return@mapNotNull null
-                    if (at <= now.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()) {
+                    if (at <= now.atZone(IST).toInstant().toEpochMilli()) {
                         null
                     } else {
                         t.id to at
