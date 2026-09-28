@@ -472,7 +472,9 @@ class TaskWidget : AppWidgetProvider() {
                         setHasStableIds(false)
                         setViewTypeCount(1)
                     }.build()
-                    setRemoteCollectionItems(R.id.task_widget_list_view, items)
+                    // Overload taking the items directly (API 31+), not
+                    // the service Intent below.
+                    setRemoteAdapter(R.id.task_widget_list_view, items)
                 } else {
                     // API <31 has no RemoteCollectionItems: legacy service
                     // path (TaskWidgetService). tasks==null also lands
