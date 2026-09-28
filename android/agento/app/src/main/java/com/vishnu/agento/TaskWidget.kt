@@ -415,7 +415,8 @@ class TaskWidget : AppWidgetProvider() {
             STYLE_CHROME, STYLE_FULL_SCROLL, STYLE_ROWS, STYLE_ROWS_DIVIDER,
             STYLE_ROWS_EMPTY, STYLE_PLUS_TOGGLE, STYLE_FULL_STATIC)
 
-        /** The D1→D5 steps: one layout, one more element per step. */
+        /** The D1→D5 steps: one layout PER STEP, each adding one element
+         * to the previous. D5's only delta is a click, so it reuses d4. */
         private val STYLE_STATIC_STEPS = setOf(
             STYLE_ROWS, STYLE_ROWS_DIVIDER, STYLE_ROWS_EMPTY,
             STYLE_PLUS_TOGGLE, STYLE_FULL_STATIC)
@@ -672,7 +673,8 @@ class TaskWidget : AppWidgetProvider() {
                 // the header and adding exactly one element to the previous
                 // step. (An earlier single-layout version kept the later
                 // elements present-but-GONE, which meant D1's failure could
-                // have come from any of them, not just the rows.)
+                // have come from any of them, not just the rows.) D5's delta
+                // is a click only, so it reuses the d4 layout.
                 val stepLayout = when (style) {
                     STYLE_ROWS -> R.layout.task_widget_d1
                     STYLE_ROWS_DIVIDER -> R.layout.task_widget_d2

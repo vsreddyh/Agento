@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.4.3]
+
+- DIAGNOSTIC: each widget style step (D1-D5) now inflates its own
+  layout, byte-identical in the header to the known-good style C and
+  adding exactly one element — previously the later elements were
+  merely GONE in a shared layout, so a failing step did not isolate
+  its own element (issue #137).
+
 ## [4.4.2]
 
 - FIX (attempt) for the task widget load error (issue #137): the widget
