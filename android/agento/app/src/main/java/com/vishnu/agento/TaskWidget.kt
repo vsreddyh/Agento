@@ -668,10 +668,18 @@ class TaskWidget : AppWidgetProvider() {
             val scrollable = style == STYLE_FULL_SCROLL
             val level = styleLevel(style)
             if (style in STYLE_STATIC_STEPS) {
-                // D1→D5: same layout, one more element switched on per
-                // step. The header stays byte-identical to style C, so a
-                // failure can only come from what this step added.
-                return RemoteViews(context.packageName, R.layout.task_widget_full).apply {
+                // D1→D5: a real layout PER STEP, each byte-identical to C in
+                // the header and adding exactly one element to the previous
+                // step. (An earlier single-layout version kept the later
+                // elements present-but-GONE, which meant D1's failure could
+                // have come from any of them, not just the rows.)
+                val stepLayout = when (style) {
+                    STYLE_ROWS -> R.layout.task_widget_d1
+                    STYLE_ROWS_DIVIDER -> R.layout.task_widget_d2
+                    STYLE_ROWS_EMPTY -> R.layout.task_widget_d3
+                    else -> R.layout.task_widget_d4
+                }
+                return RemoteViews(context.packageName, stepLayout).apply {
                     setOnClickPendingIntent(R.id.task_widget_body, openPending)
                     setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
                     if (tasks != null) {
@@ -691,12 +699,13 @@ class TaskWidget : AppWidgetProvider() {
                     val showList = !tasks.isNullOrEmpty()
                     setViewVisibility(R.id.task_widget_static_list,
                         if (showList) View.VISIBLE else View.GONE)
-                    setViewVisibility(R.id.task_widget_divider,
-                        if (level >= 1) View.VISIBLE else View.GONE)
-                    setViewVisibility(R.id.task_widget_empty,
-                        if (level >= 2 && !showList) View.VISIBLE else View.GONE)
-                    setViewVisibility(R.id.task_widget_view,
-                        if (level >= 3) View.VISIBLE else View.GONE)
+                    if (level >= 1) setViewVisibility(R.id.task_widget_divider, View.VISIBLE)
+                    if (level >= 2) {
+                        val empty = emptyText(context, tasks, error, errorDetail)
+                        setTextViewText(R.id.task_widget_empty, empty)
+                        setViewVisibility(R.id.task_widget_empty,
+                            if (empty.isEmpty()) View.GONE else View.VISIBLE)
+                    }
                     if (level >= 3) {
                         setTextViewText(R.id.task_widget_view, view.title)
                         // The toggle cycles the slice; handled in onReceive
@@ -714,9 +723,6 @@ class TaskWidget : AppWidgetProvider() {
                     setTextViewText(R.id.task_widget_title, view.title)
                     setTextViewText(R.id.task_widget_count,
                         countText(context, view, tasks, error, capped = true))
-                    if (level >= 2) {
-                        setTextViewText(R.id.task_widget_empty, emptyText(context, tasks, error, errorDetail))
-                    }
                 }
             }
             // E: the collection widget, on the same proven chrome.

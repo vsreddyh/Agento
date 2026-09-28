@@ -12,10 +12,10 @@ see GitHub Releases for older notes.
 
 - FIX (attempt) for the task widget load error (issue #137): the widget
   is rebuilt on the exact chrome the bisect proved renders, with a
-  diagnostic style ladder (C, D1-D5, E) where each D step adds exactly
-  one element — task rows, divider, empty-state text, header view
-  toggle, title-to-settings tap — so the first failing step names the
-  culprit. The platform Button is gone for good (its default style
+  diagnostic style ladder (C, D1-D5, E). Each D step has its own
+  layout, byte-identical to C in the header and adding exactly one
+  element — task rows, divider, empty-state text, header view toggle,
+  title-to-settings tap — so the first failing step names the culprit. The platform Button is gone for good (its default style
   resolves theme attributes against the host's theme), as are the
   theme-attribute text colors; divider and toggle return only as
   diagnostic steps.
