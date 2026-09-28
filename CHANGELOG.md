@@ -10,7 +10,7 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
-## [3.20.2]
+## [3.21.0]
 
 - Task due notifications carry the task: friendly due line + estimate in
   the collapsed text, description + due + estimate + repeat in the

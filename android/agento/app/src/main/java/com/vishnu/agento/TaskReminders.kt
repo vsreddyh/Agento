@@ -26,7 +26,7 @@ private val ClockTime = Regex("(\\d{1,2}):(\\d{2})(?::(\\d{2}))?")
 private val alarmScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 /** Fixed notification id; identity comes from the per-task tag. */
-private const val ALARM_NOTIF_ID = 1
+internal const val ALARM_NOTIF_ID = 1
 
 /** True for strict ISO dates only; anything else is treated as undated
  * so one malformed row can never poison comparisons or alarms. */
@@ -238,11 +238,14 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             if (repeat.isNotEmpty()) add("Repeats $repeat")
         }.joinToString("\n")
         // Inline complete reuses the widget trampoline (no visible UI:
-        // completes, refreshes widget/alarms, finishes).
+        // completes, refreshes widget/alarms, finishes). Data URI + own
+        // request code: extras don't count for PendingIntent identity,
+        // so without these one task's Done could complete another.
         val done = PendingIntent.getActivity(
-            appCtx, taskId.hashCode(),
+            appCtx, ("done:$taskId").hashCode(),
             Intent(appCtx, TaskCompleteActivity::class.java)
-                .putExtra(TaskWidget.EXTRA_COMPLETE_ID, taskId),
+                .putExtra(TaskWidget.EXTRA_COMPLETE_ID, taskId)
+                .setData(Uri.parse("agento://reminder/$taskId/complete")),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE)
@@ -266,28 +269,29 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             appCtx, taskId.hashCode(), launch,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val notif = NotificationCompat.Builder(appCtx, TaskReminders.CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_menu_agenda)
+            .setContentTitle(name)
+            .setContentText(summary)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(tap)
+            // No icon (0): framework checkables render badly as action
+            // icons on some OEMs.
+            .addAction(0, "Done", done)
+        // Expanded view only when there's more than the summary —
+        // otherwise it's a redundant second page for plain tasks.
+        if (big.isNotEmpty()) {
+            notif.setStyle(
+                NotificationCompat.BigTextStyle().bigText(big),
+            )
+        }
         mgr.notify(
             // Tag-based identity: unique per task even if two ids ever
             // share a hashCode (the PendingIntent request code, by
             // contrast, is disambiguated by its data URI).
             taskId, ALARM_NOTIF_ID,
-            NotificationCompat.Builder(appCtx, TaskReminders.CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_menu_agenda)
-                .setContentTitle(name)
-                .setContentText(summary)
-                .setStyle(
-                    NotificationCompat.BigTextStyle()
-                        .bigText(big.ifEmpty { summary })
-                )
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setAutoCancel(true)
-                .setContentIntent(tap)
-                .addAction(
-                    android.R.drawable.checkbox_on_background,
-                    "Done",
-                    done,
-                )
-                .build(),
+            notif.build(),
         )
     }
 }
