@@ -205,8 +205,8 @@ class TaskWidget : AppWidgetProvider() {
             val all = dumpLog(
                 allProcesses = true, sinceMinutes = 15,
                 interestingLines = 250, tailLines = 40)
-            // Parens matter: the cap must cover the whole report, not just
-            // the last operand.
+            // Parenthesized: without them take() binds to the last string
+            // literal only and the head is never capped.
             return ("$head\n--- log (this app) ---\n$mine\n" +
                 "--- log (system, last 15 min) ---\n$all").take(200_000)
         }
@@ -470,17 +470,18 @@ class TaskWidget : AppWidgetProvider() {
             lastErrors = (lastErrors + errors) - views.keys
             val mgr = AppWidgetManager.getInstance(appCtx)
             // Only the service-backed collection listens for a data change;
-            // direct items and static rows are re-rendered whole. Notify
-            // just those ids — static placements have no list_view at all.
-            val notifyIds = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                ids.filter { id ->
-                    scrollableFor(appCtx, id) &&
-                        (views[viewFor(appCtx, id).state] ?:
-                            cachedViews[viewFor(appCtx, id).state]) != null
+            // direct items and static rows are re-rendered whole.
+            var needNotify = false
+            val notifyIds = mutableListOf<Int>()
+            for (id in ids) {
+                val view = viewFor(appCtx, id)
+                val tasks = views[view.state] ?: cachedViews[view.state]
+                if (scrollableFor(appCtx, id) && tasks != null &&
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                ) {
+                    needNotify = true
+                    notifyIds.add(id)
                 }
-            } else {
-                IntArray(0)
-            }
                 // Error is per-view: no data for THIS view means the fetch
                 // failed (a global flag would stick others on loading when
                 // only one state errored).
@@ -503,10 +504,12 @@ class TaskWidget : AppWidgetProvider() {
                 }
             }
             // Notify after the update loop: render() re-sets the remote
-            // adapter, which would invalidate an earlier notify.
-            if (notifyIds.isNotEmpty()) {
+            // adapter, which would invalidate an earlier notify. Only the
+            // service-backed placements have a list view to notify.
+            if (needNotify && notifyIds.isNotEmpty()) {
                 runCatching {
-                    mgr.notifyAppWidgetViewDataChanged(notifyIds, R.id.task_widget_list_view)
+                    mgr.notifyAppWidgetViewDataChanged(
+                        notifyIds.toIntArray(), R.id.task_widget_list_view)
                 }.onFailure {
                     Log.w("TaskWidget", "notifyDataChanged failed", it)
                 }
@@ -586,8 +589,9 @@ class TaskWidget : AppWidgetProvider() {
                         val today = java.time.LocalDate.now(IST)
                         val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
                         val due = showDueFor(context, appWidgetId)
-                        // Clear first: re-rendering with fewer tasks would
-                        // otherwise leave ghost rows from the last update.
+                        // Clear first: re-rendering into a fresh RemoteViews
+                        // each time would append, leaving ghost rows when
+                        // the list shrinks.
                         removeAllViews(R.id.task_widget_static_list)
                         tasks.take(8).forEach { t ->
                             addView(R.id.task_widget_static_list,
