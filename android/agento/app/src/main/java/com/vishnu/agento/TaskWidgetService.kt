@@ -66,16 +66,22 @@ private class TaskFactory(
         // thread, and the shared client's 30s read timeout (or any
         // unexpected throw) would stall/kill the host bind and surface
         // as a widget load error. Slow path just shows empty/stale.
-        val state = view().state
-        today = LocalDate.now(IST)
-        items = TaskWidget.cachedViews[state]
-            ?: runCatching {
-                runBlocking {
-                    withTimeoutOrNull(10_000) {
-                        TasksApi(appCtx).list(state).getOrNull()
-                    }.orEmpty()
-                }
-            }.getOrDefault(emptyList())
+        // Anything escaping is recorded for diagnostics (never rethrown:
+        // a factory throw IS the system error view).
+        runCatching {
+            val state = view().state
+            today = LocalDate.now(IST)
+            items = TaskWidget.cachedViews[state]
+                ?: runCatching {
+                    runBlocking {
+                        withTimeoutOrNull(10_000) {
+                            TasksApi(appCtx).list(state).getOrNull()
+                        }.orEmpty()
+                    }
+                }.getOrDefault(emptyList())
+        }.onFailure {
+            TaskWidget.recordFactoryError("onDataSetChanged", it)
+        }
     }
 
     override fun getCount(): Int = items.size
@@ -88,14 +94,17 @@ private class TaskFactory(
     override fun getItemId(position: Int): Long = position.toLong()
 
     override fun getViewAt(position: Int): RemoteViews {
-        val layout = if (compact()) {
-            R.layout.task_widget_row_compact
-        } else {
-            R.layout.task_widget_row
-        }
-        val task = items.getOrNull(position)
-            ?: return RemoteViews(appCtx.packageName, layout)
-        return RemoteViews(appCtx.packageName, layout).apply {
+        // A throw here is the host's system error view — never let one
+        // escape; record it for diagnostics and hand back a blank row.
+        return runCatching {
+            val layout = if (compact()) {
+                R.layout.task_widget_row_compact
+            } else {
+                R.layout.task_widget_row
+            }
+            val task = items.getOrNull(position)
+                ?: return@runCatching RemoteViews(appCtx.packageName, layout)
+            RemoteViews(appCtx.packageName, layout).apply {
             setTextViewText(R.id.task_widget_row_name, task.name)
             // Same friendly due line as the Task Manager rows (#130),
             // IST-pinned; blank collapses to gone below.
@@ -116,6 +125,10 @@ private class TaskFactory(
                 R.id.task_widget_row,
                 Intent().putExtra(TaskWidget.EXTRA_TASK_ID, task.id),
             )
+            }
+        }.getOrElse {
+            TaskWidget.recordFactoryError("getViewAt($position)", it)
+            RemoteViews(appCtx.packageName, R.layout.task_widget_row)
         }
     }
 }

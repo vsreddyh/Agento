@@ -158,6 +158,17 @@ class TaskWidget : AppWidgetProvider() {
         // tap-to-retry) instead of a dead generic error.
         @Volatile private var lastErrors: Map<String, String> = emptyMap()
 
+        // Last RemoteViewsFactory failure (same process — the service has
+        // no android:process). Surfaced in diagnostics so an on-device
+        // widget crash names itself without adb.
+        @Volatile var lastFactoryError: String? = null
+            private set
+
+        fun recordFactoryError(where: String, e: Throwable) {
+            lastFactoryError = "$where: ${e.javaClass.simpleName}: ${e.message}".take(300)
+            Log.w("TaskWidget", "factory failure at $where", e)
+        }
+
         /** One-screen widget health summary for Settings → About, so
          * widget failures can be diagnosed without adb. Never throws
          * (a diagnostics call must not become a second crash). */
@@ -175,6 +186,7 @@ class TaskWidget : AppWidgetProvider() {
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
+                appendLine("factoryError=${lastFactoryError ?: "none"}")
             }.trim()
         }.getOrDefault("(diagnostics unavailable)")
 
@@ -192,10 +204,19 @@ class TaskWidget : AppWidgetProvider() {
             try {
                 // Read before wait: waiting first can deadlock on a full
                 // pipe. destroy() in finally so a stuck proc never leaks.
+                // Crash lines first (a VRI/HWUI tail drowns them), then a
+                // short tail for context.
                 val out = proc.inputStream.bufferedReader().readText()
                 proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
-                val tail = out.lines().takeLast(80).joinToString("\n")
-                redactSecrets(tail).ifEmpty { "(empty log)" }
+                val lines = out.lines()
+                val interesting = lines.filter { l ->
+                    l.contains("TaskWidget") || l.contains("AndroidRuntime") ||
+                        l.contains("FATAL") || l.contains("RemoteViews") ||
+                        l.contains("AppWidget") || l.contains("System.err")
+                }.takeLast(40)
+                redactSecrets(
+                    (interesting + "--- tail ---" + lines.takeLast(20)).joinToString("\n"),
+                ).ifEmpty { "(empty log)" }
             } finally {
                 proc.destroy()
             }
