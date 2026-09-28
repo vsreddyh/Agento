@@ -10,8 +10,12 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
-## [3.21.0]
+## [4.0.0]
 
+- BREAKING: tasks require every field except Repeats — name, details,
+  due date + time, estimate, and the parallel tickbox. The agent and app
+  collect them all up front; old versions that create near-empty tasks
+  get a plain error instead. Repeat-less one-shot tasks still work.
 - Task due notifications carry the task: friendly due line + estimate in
   the collapsed text, description + due + estimate + repeat in the
   expanded view, and a Done action that completes inline (reuses the
@@ -19,6 +23,10 @@ see GitHub Releases for older notes.
 - Tasks gain a "Can run in parallel" tickbox (list badge, detail line,
   reminder text, agent tools) marking tasks that can run alongside
   other tasks.
+- New/edit task dialog: due date and time are picked (calendar + clock,
+  Today/Tomorrow shortcuts), not typed. Completing a task opens a
+  prefilled draft with the date cleared, so recreating means picking a
+  fresh date.
 
 ## [3.20.1]
 

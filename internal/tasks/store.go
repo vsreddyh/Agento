@@ -124,26 +124,45 @@ func toDoc(doc bson.M) map[string]any {
 	return out
 }
 
-// Create inserts an open task. Name required; repeat_rule stored verbatim;
-// parallelable marks tasks that can run alongside other tasks.
-func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes int, repeatRule string, parallelable bool) (map[string]any, error) {
+// Create inserts an open task. Every field except repeat_rule is required
+// (empty repeat_rule = one-shot task); parallelable marks tasks that can
+// run alongside other tasks.
+func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, repeatRule string, parallelable *bool) (map[string]any, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fail("name is required")
 	}
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return nil, fail("description is required")
+	}
+	dueDate = strings.TrimSpace(dueDate)
+	if dueDate == "" {
+		return nil, fail("due_date is required (YYYY-MM-DD)")
+	}
+	dueTime = strings.TrimSpace(dueTime)
+	if dueTime == "" {
+		return nil, fail("due_time is required (HH:MM)")
+	}
 	if err := checkDue(dueDate, dueTime); err != nil {
 		return nil, err
 	}
-	if estimatedMinutes < 0 {
+	if estimatedMinutes == nil {
+		return nil, fail("estimated_minutes is required")
+	}
+	if *estimatedMinutes < 0 {
 		return nil, fail("estimated_minutes must be >= 0")
+	}
+	if parallelable == nil {
+		return nil, fail("parallelable is required")
 	}
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{
 		"name": name, "description": description,
 		"due_date": dueDate, "due_time": dueTime,
-		"estimated_minutes": estimatedMinutes,
+		"estimated_minutes": *estimatedMinutes,
 		"repeat_rule":       strings.TrimSpace(repeatRule),
-		"parallelable":      parallelable,
+		"parallelable":      *parallelable,
 		"completedAt":       nil, "createdAt": now,
 	}
 	res, err := s.tasks.InsertOne(ctx, doc)
@@ -219,8 +238,10 @@ func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 	return toDoc(doc), nil
 }
 
-// Update edits mutable fields of any task (open or done). Empty repeat_rule
-// clears the rule; due fields validated together.
+// Update edits mutable fields of any task (open or done). Supplied values
+// must satisfy the same mandatory rules as Create (empty description /
+// due fields are rejected, not cleared); repeat_rule stays clearable with
+// "" (one-shot). Absent keys are untouched; due fields validated together.
 func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
@@ -253,6 +274,9 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		set["name"] = strings.TrimSpace(name)
 	}
 	if str, ok := strField("description"); ok {
+		if strings.TrimSpace(str) == "" {
+			return nil, fail("description is required")
+		}
 		set["description"] = str
 	}
 	// Due fields flow through only when the caller sent them, so a
@@ -260,10 +284,16 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	dueDate, _ := cur["due_date"].(string)
 	dueTime, _ := cur["due_time"].(string)
 	if str, ok := strField("due_date"); ok {
+		if strings.TrimSpace(str) == "" {
+			return nil, fail("due_date is required (YYYY-MM-DD)")
+		}
 		dueDate = str
 		set["due_date"] = str
 	}
 	if str, ok := strField("due_time"); ok {
+		if strings.TrimSpace(str) == "" {
+			return nil, fail("due_time is required (HH:MM)")
+		}
 		dueTime = str
 		set["due_time"] = str
 	}

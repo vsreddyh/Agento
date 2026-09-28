@@ -499,8 +499,9 @@ func taskMinutes(v any) (int, bool) {
 	return 0, false
 }
 
-// createTask inserts one open task. Name required; due/estimate/repeat
-// validated by the store (same rules as the agent's create_task).
+// createTask inserts one open task. Every field except repeat_rule is
+// required (same rules as the agent's create_task); missing keys 422
+// before any store touch.
 func createTask(w http.ResponseWriter, r *http.Request) {
 	fields, ok := decodeTaskBody(w, r)
 	if !ok {
@@ -510,18 +511,20 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		writeTaskErr(w, err)
 		return
 	}
+	for _, k := range []string{"description", "due_date", "due_time", "estimated_minutes", "parallelable"} {
+		if v, present := fields[k]; !present || v == nil {
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": k + " is required"})
+			return
+		}
+	}
 	store, ok := taskStore(w)
 	if !ok {
 		return
 	}
-	minutes := 0
-	if _, present := fields["estimated_minutes"]; present && fields["estimated_minutes"] != nil {
-		n, ok := taskMinutes(fields["estimated_minutes"])
-		if !ok {
-			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "estimated_minutes must be an integer >= 0"})
-			return
-		}
-		minutes = n
+	minutes, ok := taskMinutes(fields["estimated_minutes"])
+	if !ok {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "estimated_minutes must be an integer >= 0"})
+		return
 	}
 	parallelable, _ := fields["parallelable"].(bool)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -531,9 +534,9 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		taskStrField(fields, "description"),
 		taskStrField(fields, "due_date"),
 		taskStrField(fields, "due_time"),
-		minutes,
+		&minutes,
 		taskStrField(fields, "repeat_rule"),
-		parallelable,
+		&parallelable,
 	)
 	if err != nil {
 		writeTaskErr(w, err)
