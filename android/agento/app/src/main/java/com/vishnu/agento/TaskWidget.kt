@@ -368,8 +368,23 @@ class TaskWidget : AppWidgetProvider() {
          * incremental styles A→E exist to bisect a host that rejects our
          * full widget outright; E (the shipping widget) is the default.
          * Removed once the cause is found. */
-        fun styleFor(context: Context, appWidgetId: Int): Int =
-            prefs(context).getInt("task_widget_style_$appWidgetId", STYLE_FULL_SCROLL)
+        fun styleFor(context: Context, appWidgetId: Int): Int {
+            val p = prefs(context)
+            // Migration from the pre-ladder pref: a placement saved before
+            // the ladder existed must keep the look the user last chose,
+            // not silently flip on update.
+            if (!p.contains("task_widget_style_$appWidgetId")) {
+                return if (p.getBoolean("task_widget_scroll_$appWidgetId", false)) {
+                    STYLE_FULL_SCROLL
+                } else {
+                    STYLE_FULL_STATIC
+                }
+            }
+            val v = p.getInt("task_widget_style_$appWidgetId", STYLE_FULL_SCROLL)
+            // Clamp: a corrupt/removed value must not fall through to
+            // whatever the layout branch happens to default to.
+            return if (v in STYLE_PROBE..STYLE_FULL_SCROLL) v else STYLE_FULL_SCROLL
+        }
 
         // Style ladder values, shared with the config UI so labels and
         // values can't drift apart.
