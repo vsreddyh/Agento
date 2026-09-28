@@ -1238,10 +1238,11 @@ private fun TaskManagerScreen(
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 // Derived once per composition: search narrows, sort orders.
-                // Computed directly (not remembered) so it can't go stale
-                // if the app stays open past midnight — LocalDate is cheap.
-                val today = java.time.LocalDate.now().toString()
-                val visible = remember(tasks, query, sort) {
+                // `today` is a remember key below so buckets recompute
+                // past midnight while the app stays open.
+                // IST-pinned (#124) like every other displayed date.
+                val today = java.time.LocalDate.now(IST).toString()
+                val visible = remember(tasks, query, sort, today) {
                     val q = query.trim().lowercase(Locale.ROOT)
                     tasks
                         .filter { t ->
@@ -1296,7 +1297,8 @@ private fun TaskManagerScreen(
                     // buckets carry no meaning); within a section the
                     // current sort still applies. The date string is a
                     // remember key so buckets recompute past midnight.
-                    val day = java.time.LocalDate.now()
+                    // IST-pinned (#124).
+                    val day = java.time.LocalDate.now(IST)
                     val sections = remember(visible, groupByDay, filter, day.toString()) {
                         if (!groupByDay || filter == ServerTaskFilter.Done) {
                             listOf(null to visible)
@@ -1445,7 +1447,8 @@ private fun TaskManagerScreen(
 
     val open = selected?.let { s -> tasks.firstOrNull { it.id == s.id } ?: s }
     if (open != null) {
-        val sheetToday = java.time.LocalDate.now().toString()
+        // IST-pinned (#124) to match the list's overdue rule.
+        val sheetToday = java.time.LocalDate.now(IST).toString()
         ServerTaskDetailSheet(
             task = open,
             overdue = open.isOverdue(sheetToday),
@@ -2759,10 +2762,16 @@ private enum class ToolsSort(val title: String) {
     MostTools("Most tools"),
 }
 
-/** One skill row: name + description/category + On/Off badge. */
+/** One skill row: name + description/category + On/Off badge. Tap expands
+ * the full description (#123); collapsed text caps at 3 lines. Expansion
+ * is keyed by profile+name so switching assistants never leaks open rows. */
 @Composable
-private fun SkillCard(s: SkillInfo) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun SkillCard(profile: String, s: SkillInfo) {
+    var open by remember(profile, s.name) { mutableStateOf(false) }
+    Card(
+        onClick = { open = !open },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -2775,7 +2784,8 @@ private fun SkillCard(s: SkillInfo) {
                         blurb,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
+                        maxLines = if (open) Int.MAX_VALUE else 3,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -2792,14 +2802,29 @@ private fun SkillCard(s: SkillInfo) {
                 )
                 null -> { }
             }
+            Icon(
+                if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (open) "Collapse" else "Expand",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 }
 
-/** One toolset row: label + name + description/tool list + On badge. */
+/** One toolset row: label + name + description/tool list + state badges.
+ * Tap expands the full description and the complete tool list (#123);
+ * collapsed caps at the 10-tool summary. Off toolsets render an Off badge
+ * (nothing is filtered); an explicit `configured: false` adds a
+ * "Not configured" badge, invisible otherwise. Expansion is keyed by
+ * profile+name so switching assistants never leaks open rows. */
 @Composable
-private fun ToolsetCard(ts: ToolsetInfo) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun ToolsetCard(profile: String, ts: ToolsetInfo) {
+    var open by remember(profile, ts.name) { mutableStateOf(false) }
+    Card(
+        onClick = { open = !open },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -2814,47 +2839,99 @@ private fun ToolsetCard(ts: ToolsetInfo) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                val blurb = ts.description.ifEmpty {
-                    if (ts.tools.isEmpty()) "" else
-                        "${ts.tools.size} tool(s): " +
-                            ts.tools.take(10).joinToString(", ") +
-                            if (ts.tools.size > 10) "…" else ""
+                val blurb = if (open) {
+                    listOfNotNull(
+                        ts.description.ifEmpty { null },
+                        if (ts.tools.isEmpty()) null
+                        else "Tools (${ts.tools.size}): ${ts.tools.joinToString(", ")}",
+                    ).joinToString("\n")
+                } else {
+                    ts.description.ifEmpty {
+                        if (ts.tools.isEmpty()) "" else
+                            "${ts.tools.size} tool(s): " +
+                                ts.tools.take(10).joinToString(", ") +
+                                if (ts.tools.size > 10) "…" else ""
+                    }
                 }
                 if (blurb.isNotEmpty()) {
                     Text(
                         blurb,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 4,
+                        maxLines = if (open) Int.MAX_VALUE else 4,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-            // Off items are filtered above; unknown
-            // state shows no badge rather than Off.
-            when (ts.enabled) {
-                true -> Text(
-                    "On",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
+            Column(horizontalAlignment = Alignment.End) {
+                when (ts.enabled) {
+                    true -> Text(
+                        "On",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    false -> Text(
+                        "Off",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    // Unknown state shows no badge rather than Off.
+                    null -> { }
+                }
+                if (ts.configured == false) {
+                    Text(
+                        "Not configured",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Icon(
+                    if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (open) "Collapse" else "Expand",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
                 )
-                else -> { }
             }
         }
     }
 }
 
-/** One derived MCP server row: name + tool list. */
+/** One derived MCP server row: name + tool list. Tap expands the full
+ * tool list (#123); collapsed caps at the 8-tool summary. Expansion is
+ * keyed by profile+name so switching assistants never leaks open rows. */
 @Composable
-private fun McpCard(server: McpServer) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun McpCard(profile: String, server: McpServer) {
+    var open by remember(profile, server.name) { mutableStateOf(false) }
+    Card(
+        onClick = { open = !open },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            Text(server.name, style = MaterialTheme.typography.bodyLarge)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    server.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (open) "Collapse" else "Expand",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
             Text(
                 if (server.tools.isEmpty()) "No tools listed"
+                else if (open) "${server.tools.size} tool(s): ${server.tools.joinToString(", ")}"
                 else "${server.tools.size} tool(s): ${server.tools.take(8).joinToString(", ")}" +
                     if (server.tools.size > 8) "…" else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = if (open) Int.MAX_VALUE else 3,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -3021,6 +3098,20 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
                         )
                     }
+                    // Totals header (#123): inventory size as a rough
+                    // context-load proxy for this assistant.
+                    if (loaded && skillsError.isEmpty()) {
+                        item {
+                            val totalDefault =
+                                if (!anyCategorized) skills.size
+                                else skills.count { it.isDefault() }
+                            HintLine(
+                                "${skills.size} skills · " +
+                                    "$totalDefault default · " +
+                                    "${skills.size - totalDefault} custom"
+                            )
+                        }
+                    }
                     item {
                         Row(
                             modifier = Modifier.fillMaxWidth()
@@ -3062,7 +3153,7 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                         items(shownDefaultSkills, key = { "ds:" + it.name }) { s ->
-                            SkillCard(s)
+                            SkillCard(profile, s)
                         }
                     }
                     if (shownCustomSkills.isNotEmpty()) {
@@ -3074,7 +3165,7 @@ private fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                         items(shownCustomSkills, key = { "cs:" + it.name }) { s ->
-                            SkillCard(s)
+                            SkillCard(profile, s)
                         }
                     }
                     if (loaded && skills.isNotEmpty()
@@ -3139,14 +3230,16 @@ private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     LaunchedEffect(profile) { load() }
 
     val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Resume and Portfolio")
-    // UI hides explicitly-off toolsets only; unknown toggle state (null)
-    // stays visible so flag-less server shapes never blank the section.
-    val visibleToolsets = remember(toolsets) { toolsets.filter { it.enabled != false } }
+    // Everything stays visible (#123, consistent with Skills): explicitly-off
+    // toolsets render an Off badge instead of being dropped, and unknown
+    // toggle state (null) shows no badge — so flag-less server shapes never
+    // blank the section.
+    val listedToolsets = toolsets
     // Dedupe: explicit mcp-* toolset rows already render the server, so
     // derived rows parsed from their mcp__<server>__* tools are fallback
     // only (otherwise each server shows twice: 4 servers -> 8 rows).
-    val mcp = remember(visibleToolsets) {
-        dedupMcpServers(visibleToolsets, mcpServersFrom(visibleToolsets))
+    val mcp = remember(listedToolsets) {
+        dedupMcpServers(listedToolsets, mcpServersFrom(listedToolsets))
     }
 
     // Search + origin filter + sort (Tasks-style).
@@ -3163,11 +3256,11 @@ private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         )
         ToolsSort.NameAz -> list.sortedBy { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
     }
-    val defaultTools = remember(visibleToolsets, query, toolsSort) {
-        sortToolsets(visibleToolsets.filter { !it.isCustomMcp() && it.matches(query) })
+    val defaultTools = remember(listedToolsets, query, toolsSort) {
+        sortToolsets(listedToolsets.filter { !it.isCustomMcp() && it.matches(query) })
     }
-    val customMcpToolsets = remember(visibleToolsets, query, toolsSort) {
-        sortToolsets(visibleToolsets.filter { it.isCustomMcp() && it.matches(query) })
+    val customMcpToolsets = remember(listedToolsets, query, toolsSort) {
+        sortToolsets(listedToolsets.filter { it.isCustomMcp() && it.matches(query) })
     }
     val customMcpServers = remember(mcp, query, toolsSort) {
         val filtered = mcp.filter { it.matches(query) }
@@ -3244,12 +3337,12 @@ private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp),
                 ) {
-                    if (visibleToolsets.isEmpty() && toolsError.isNotEmpty() && loaded) {
+                    if (listedToolsets.isEmpty() && toolsError.isNotEmpty() && loaded) {
                         item {
                             ErrorCard(raw = toolsError, onRetry = { load() })
                         }
                     }
-                    if (loaded && visibleToolsets.isEmpty() && toolsError.isEmpty()) {
+                    if (loaded && listedToolsets.isEmpty() && toolsError.isEmpty()) {
                         item {
                             EmptyState(
                                 icon = Icons.Filled.Build,
@@ -3267,6 +3360,17 @@ private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
                         )
+                    }
+                    // Totals header (#123): inventory size as a rough
+                    // context-load proxy for this assistant.
+                    if (loaded && toolsError.isEmpty()) {
+                        item {
+                            HintLine(
+                                "${listedToolsets.size} toolsets · " +
+                                    "${listedToolsets.sumOf { it.tools.size }} tools · " +
+                                    "${mcp.size} MCP servers"
+                            )
+                        }
                     }
                     item {
                         Row(
@@ -3309,7 +3413,7 @@ private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                         items(shownDefaultTools, key = { "dt:" + it.name }) { ts ->
-                            ToolsetCard(ts)
+                            ToolsetCard(profile, ts)
                         }
                     }
                     if (shownCustomMcpToolsets.isNotEmpty() || shownCustomMcpServers.isNotEmpty()) {
@@ -3328,13 +3432,13 @@ private fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                         items(shownCustomMcpToolsets, key = { "cm:" + it.name }) { ts ->
-                            ToolsetCard(ts)
+                            ToolsetCard(profile, ts)
                         }
                         items(shownCustomMcpServers, key = { "ms:" + it.name }) { server ->
-                            McpCard(server)
+                            McpCard(profile, server)
                         }
                     }
-                    if (loaded && visibleToolsets.isNotEmpty()
+                    if (loaded && listedToolsets.isNotEmpty()
                         && shownDefaultTools.isEmpty()
                         && shownCustomMcpToolsets.isEmpty() && shownCustomMcpServers.isEmpty()
                         && toolsError.isEmpty()
@@ -3361,21 +3465,33 @@ private fun humanSize(bytes: Long): String {
     return if (u == 0) "$bytes B" else "%.1f %s".format(v, units[u])
 }
 
-/** Short HH:mm (plus date when not today); empty for unknown timestamps. */
+/** Short HH:mm (plus date when not today); empty for unknown timestamps.
+ * Month abbreviations pin to English so output never varies by device
+ * locale. */
 private fun shortTime(ts: Long): String {
     if (ts <= 0) return ""
     return try {
-        val zdt = java.time.Instant.ofEpochMilli(ts)
-            .atZone(java.time.ZoneId.systemDefault())
-        val today = java.time.LocalDate.now()
+        val zdt = java.time.Instant.ofEpochMilli(ts).atZone(IST)
+        val today = java.time.LocalDate.now(IST)
         if (zdt.toLocalDate() == today) {
             zdt.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
         } else {
-            zdt.format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm"))
+            zdt.format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.ENGLISH))
         }
     } catch (e: Exception) {
         ""
     }
+}
+
+/** Formats a stored `Instant.now().toString()` stamp (UTC ISO) for display
+ * in IST (#124); blank stays blank, unparseable input falls back to raw
+ * rather than hiding information. Month abbreviations pin to English. */
+private fun formatSyncTime(raw: String): String {
+    if (raw.isBlank()) return ""
+    return runCatching {
+        java.time.Instant.parse(raw.trim()).atZone(IST)
+            .format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.ENGLISH))
+    }.getOrDefault(raw)
 }
 
 /** Stable TTS key per message (timestamp + content hash; ms precision
@@ -4983,7 +5099,7 @@ private fun SettingsScreen(
 
 
                         if (state.lastSyncAt.isNotEmpty()) {
-                            HintLine("Last sync: ${state.lastSyncAt}")
+                            HintLine("Last sync: ${formatSyncTime(state.lastSyncAt)}")
                         }
                         if (state.lastResult.isNotEmpty() && state.lastResult != "syncing…") {
                             if (state.lastResult.startsWith("FAILED")) {

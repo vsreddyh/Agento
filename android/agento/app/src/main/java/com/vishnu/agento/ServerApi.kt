@@ -26,6 +26,8 @@ data class ToolsetInfo(
     val label: String = "",
     val description: String = "",
     val enabled: Boolean? = null,
+    /** Null when the server doesn't report setup state. */
+    val configured: Boolean? = null,
     val tools: List<String> = emptyList(),
 )
 
@@ -114,7 +116,7 @@ class ServerApi(context: Context) {
                         name = name,
                         description = o.optString("description", "").trim(),
                         category = o.optString("category", "").trim(),
-                        enabled = optBool(o),
+                        enabled = optFlag(o, "enabled", "active"),
                     ))
                 }
                 out.distinctBy { it.name.lowercase(Locale.ROOT) }.sortedBy { it.name.lowercase(Locale.ROOT) }
@@ -159,7 +161,8 @@ class ServerApi(context: Context) {
                         name = name,
                         label = o.optString("label", "").trim(),
                         description = o.optString("description", "").trim(),
-                        enabled = optBool(o),
+                        enabled = optFlag(o, "enabled", "active"),
+                        configured = optFlag(o, "configured"),
                         tools = tools,
                     ))
                 }
@@ -244,10 +247,12 @@ class ServerApi(context: Context) {
 
     /**
      * Strict toggle parse: only real booleans count — strings, numbers and
-     * nulls read as unknown (null) instead of Off.
+     * nulls are skipped, so the first *boolean* value wins (a present but
+     * non-boolean key never masks a later real one) and absence reads as
+     * unknown (null) instead of Off.
      */
-    private fun optBool(o: JSONObject): Boolean? {
-        for (k in listOf("enabled", "active")) {
+    private fun optFlag(o: JSONObject, vararg keys: String): Boolean? {
+        for (k in keys) {
             if (!o.isNull(k)) {
                 val v = o.opt(k)
                 if (v is Boolean) return v

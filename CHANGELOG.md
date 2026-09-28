@@ -10,6 +10,17 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.20.0]
+
+- Skills/Tools UI: rows tap to expand the full description and complete
+  tool list, each assistant gets a totals header (skills / toolsets /
+  tools / MCP servers) as a context-load proxy, explicitly-off toolsets
+  stay visible with an Off badge, and an explicit `configured: false`
+  adds a "Not configured" badge (invisible otherwise).
+- All displayed times are pinned to IST: chat/thread/project stamps, task
+  today-comparisons, due-reminder parse/compare, and the Settings last-sync
+  stamp (previously raw UTC ISO) render through one `Asia/Kolkata` zone.
+
 ## [3.19.0]
 
 - Chat feel and control: auto-scroll pins to the latest message (a manual
