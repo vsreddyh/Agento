@@ -1,12 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Task widget with ALL chrome, used by the D1→D5 diagnostic steps
-     (issue #137). Style C (task_widget_style_c.xml) proved the header
-     structure renders; each D step turns on exactly one more element of
-     this layout, so the first D that fails names the culprit:
-       D1 rows · D2 +divider · D3 +empty text · D4 +header toggle
-       D5 +title→settings tap
-     Elements below the header start GONE so a step that doesn't use them
-     never touches them. Keep the header identical to style C. -->
+<!-- Diagnostic step D3 (issue #137). Header is byte-identical to
+     task_widget_style_c.xml — the only difference from the previous step is
+     the element(s) below, so the first step that fails names the culprit. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
     android:layout_width="match_parent"
@@ -46,18 +41,6 @@
 
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/task_widget_view"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp"
-            android:textSize="12sp"
-            android:textColor="@color/task_widget_text_secondary"
-            android:visibility="gone" />
-
         <ImageButton
             android:id="@+id/task_widget_refresh"
             android:layout_width="40dp"
@@ -68,14 +51,6 @@
 
     </LinearLayout>
 
-    <View
-        android:id="@+id/task_widget_divider"
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginBottom="4dp"
-        android:background="@color/task_widget_divider"
-        android:visibility="gone" />
 
     <LinearLayout
         android:id="@+id/task_widget_static_list"
@@ -83,13 +58,20 @@
         android:layout_height="wrap_content"
         android:orientation="vertical" />
 
+    <View
+        android:id="@+id/task_widget_divider"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="4dp"
+        android:background="@color/task_widget_divider" />
+
     <TextView
         android:id="@+id/task_widget_empty"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingTop="8dp"
         android:textSize="13sp"
-        android:textColor="@color/task_widget_text_secondary"
-        android:visibility="gone" />
+        android:textColor="@color/task_widget_text_secondary" />
 
 </LinearLayout>

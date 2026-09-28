@@ -1,11 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Style C (diagnostic, #137): style B plus one platform ImageButton
-     with a PendingIntent and the card background drawable — the remaining
-     suspects (clickable chrome + shape drawable). The button background is
-     a concrete color, not ?android:attr/selectableItemBackgroundBorderless,
-     so the theme-attr variable stays fixed across the whole ladder.
-     IDs match the task_widget_d*.xml steps and task_widget_list.xml so
-     render() shares the header wiring. -->
+<!-- Diagnostic step D2 (issue #137). Header is byte-identical to
+     task_widget_style_c.xml — the only difference from the previous step is
+     the element(s) below, so the first step that fails names the culprit. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
     android:layout_width="match_parent"
@@ -54,5 +50,20 @@
             android:contentDescription="@string/task_widget_refresh" />
 
     </LinearLayout>
+
+
+    <LinearLayout
+        android:id="@+id/task_widget_static_list"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical" />
+
+    <View
+        android:id="@+id/task_widget_divider"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="4dp"
+        android:background="@color/task_widget_divider" />
 
 </LinearLayout>

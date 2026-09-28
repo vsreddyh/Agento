@@ -1,10 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Collection variant of the task widget: the SAME chrome as
-     task_widget_full.xml (which is built on the structure style C proved
+<!-- Collection variant of the task widget: the SAME chrome as the
+     diagnostic steps (which are built on the structure style C proved
      renders — issue #137), with a scrollable ListView in place of the
-     static row container. No divider, no header view toggle, no
-     title-to-config tap, no empty-view tap: none of those have ever
-     rendered successfully on the affected launcher. -->
+     static row container. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
     android:layout_width="match_parent"
