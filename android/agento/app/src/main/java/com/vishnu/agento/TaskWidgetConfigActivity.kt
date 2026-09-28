@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -32,11 +34,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 
 /**
- * Display settings for one task-widget placement: row density and
- * whether rows show the due line. Launched by the system at add time
- * (android:configure) and later by tapping the widget's title, which
- * passes the placement id for reconfiguration. Cancelling at add time
- * aborts the placement; saving re-renders that widget via [TaskWidget].
+ * Display settings for one task-widget placement: which slice it shows,
+ * row density, the due line, and the diagnostic style ladder (#137).
+ * Launched by the system at add time (android:configure) and from the
+ * Task Manager screen afterwards. Cancelling at add time aborts the
+ * placement; saving re-renders that widget via [TaskWidget].
  */
 class TaskWidgetConfigActivity : ComponentActivity() {
 
@@ -73,12 +75,47 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                     var style by remember {
                         mutableStateOf(TaskWidget.styleFor(this, appWidgetId))
                     }
-                    Column(modifier = Modifier.padding(20.dp)) {
+                    // The widget's own header toggle never rendered on the
+                    // affected launcher (#137), so view switching moved here
+                    // rather than being dropped.
+                    var widgetView by remember {
+                        mutableStateOf(TaskWidget.viewFor(this, appWidgetId))
+                    }
+                    // Scrollable: view + density + due + the style ladder
+                    // push Save off-screen on small screens / large fonts.
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(20.dp),
+                    ) {
                         Text(
                             getString(R.string.task_widget_display),
                             style = MaterialTheme.typography.headlineSmall,
                         )
                         Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "Show",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TaskWidgetView.entries.forEach { v ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .selectable(
+                                        selected = widgetView == v,
+                                        onClick = { widgetView = v },
+                                        role = Role.RadioButton,
+                                    )
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = widgetView == v, onClick = null)
+                                Text(
+                                    v.title,
+                                    modifier = Modifier.padding(start = 8.dp),
+                                )
+                            }
+                        }
                         Text(
                             "Density",
                             style = MaterialTheme.typography.labelLarge,
@@ -121,7 +158,9 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                 modifier = Modifier.padding(start = 8.dp),
                             )
                         }
-                        // Diagnostic style ladder (#137): A→E add one suspect
+                        // Diagnostic style ladder (#137): C, then D1→D5 each
+                        // add one more element, then E (the collection
+                        // widget). C is the header known to render.
                         // back at a time so the failing piece is identified
                         // in one install. E is the real widget; the ladder
                         // also owns scrolling vs plain rows (D/E), so there
@@ -133,10 +172,12 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                             modifier = Modifier.padding(top = 8.dp),
                         )
                         listOf(
-                            TaskWidget.STYLE_PROBE to R.string.task_widget_style_a,
-                            TaskWidget.STYLE_TEXT to R.string.task_widget_style_b,
                             TaskWidget.STYLE_CHROME to R.string.task_widget_style_c,
-                            TaskWidget.STYLE_FULL_STATIC to R.string.task_widget_style_d,
+                            TaskWidget.STYLE_ROWS to R.string.task_widget_style_d1,
+                            TaskWidget.STYLE_ROWS_DIVIDER to R.string.task_widget_style_d2,
+                            TaskWidget.STYLE_ROWS_EMPTY to R.string.task_widget_style_d3,
+                            TaskWidget.STYLE_PLUS_TOGGLE to R.string.task_widget_style_d4,
+                            TaskWidget.STYLE_FULL_STATIC to R.string.task_widget_style_d5,
                             TaskWidget.STYLE_FULL_SCROLL to R.string.task_widget_style_e,
                         ).forEach { (value, labelRes) ->
                             Row(
@@ -179,6 +220,10 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                         "task_widget_scroll_$appWidgetId",
                                         style == TaskWidget.STYLE_FULL_SCROLL)
                                     .putInt("task_widget_style_$appWidgetId", style)
+                                    .putString(
+                                        "task_widget_view_$appWidgetId",
+                                        widgetView.name,
+                                    )
                                     .apply()
                                 TaskWidget.refresh(this@TaskWidgetConfigActivity)
                                 setResult(RESULT_OK, done)

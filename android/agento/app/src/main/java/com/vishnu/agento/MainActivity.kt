@@ -7,6 +7,8 @@ import android.app.Activity
 import android.app.AlarmManager
 import android.content.ActivityNotFoundException
 import android.content.Context
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -1355,6 +1357,49 @@ private fun TaskManagerScreen(
                                         modifier = Modifier.padding(start = 56.dp),
                                     )
                                 }
+                            }
+                        }
+                    }
+                }
+                // Widget display settings live here: the widget's own header
+                // controls never rendered on some launchers (#137), so
+                // view/density/due are changed from the app instead.
+                // Re-queried on every task refresh, and again when the
+                // settings screen returns, so a changed view shows up in
+                // the button label right away.
+                val openWidgetConfig = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartActivityForResult(),
+                ) { refreshTick++ }
+                val widgetIds = remember(context, refreshTick) {
+                    AppWidgetManager.getInstance(context)
+                        .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
+                        .toList()
+                }
+                if (widgetIds.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        widgetIds.forEach { id ->
+                            OutlinedButton(
+                                onClick = {
+                                    // Guarded like the old direct launch:
+                                    // a missing activity must not crash the
+                                    // Task Manager.
+                                    runCatching {
+                                        openWidgetConfig.launch(
+                                            Intent(context, TaskWidgetConfigActivity::class.java)
+                                                .putExtra(
+                                                    AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    "Home-screen widget settings " +
+                                        "(${TaskWidget.viewFor(context, id).title})"
+                                )
                             }
                         }
                     }

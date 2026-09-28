@@ -8,6 +8,21 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.4.2]
+
+- FIX (attempt) for the task widget load error (issue #137): the widget
+  is rebuilt on the exact chrome the bisect proved renders, with a
+  diagnostic style ladder (C, D1-D5, E) where each D step adds exactly
+  one element — task rows, divider, empty-state text, header view
+  toggle, title-to-settings tap — so the first failing step names the
+  culprit. The platform Button is gone for good (its default style
+  resolves theme attributes against the host's theme), as are the
+  theme-attribute text colors; divider and toggle return only as
+  diagnostic steps.
+- Task widget settings (view, density, due line) move into the widget's
+  settings screen, reachable from the Task Manager; the header shows the
+  current view name.
+
 ## [4.4.1]
 
 - FIX: task widget load error on some launchers (issue #137) — the
