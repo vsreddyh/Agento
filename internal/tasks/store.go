@@ -121,6 +121,26 @@ func toDoc(doc bson.M) map[string]any {
 		}
 		out[k] = v
 	}
+	// Backfill keys that pre-mandatory docs lack, so every response
+	// speaks the same contract (readers default the same way).
+	if _, ok := out["description"]; !ok {
+		out["description"] = ""
+	}
+	if _, ok := out["due_date"]; !ok {
+		out["due_date"] = ""
+	}
+	if _, ok := out["due_time"]; !ok {
+		out["due_time"] = ""
+	}
+	if _, ok := out["estimated_minutes"]; !ok {
+		out["estimated_minutes"] = 0
+	}
+	if _, ok := out["repeat_rule"]; !ok {
+		out["repeat_rule"] = ""
+	}
+	if _, ok := out["parallelable"]; !ok {
+		out["parallelable"] = false
+	}
 	return out
 }
 
@@ -266,6 +286,16 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		}
 		return str, true
 	}
+	// Wrong types fail loudly instead of becoming mystery no-ops
+	// (strField above treats them as absent). JSON null still counts
+	// as absent, matching the HTTP layer's convention.
+	for _, k := range []string{"description", "due_date", "due_time", "repeat_rule"} {
+		if v, ok := fields[k]; ok && v != nil {
+			if _, ok := v.(string); !ok {
+				return nil, fail("%s must be a string", k)
+			}
+		}
+	}
 	if v, ok := fields["name"]; ok {
 		name, _ := v.(string)
 		if strings.TrimSpace(name) == "" {
@@ -277,7 +307,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		if strings.TrimSpace(str) == "" {
 			return nil, fail("description is required")
 		}
-		set["description"] = str
+		set["description"] = strings.TrimSpace(str)
 	}
 	// Due fields flow through only when the caller sent them, so a
 	// no-change update stays a no-op and the len(set)==0 path can fire.
@@ -287,15 +317,15 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		if strings.TrimSpace(str) == "" {
 			return nil, fail("due_date is required (YYYY-MM-DD)")
 		}
-		dueDate = str
-		set["due_date"] = str
+		dueDate = strings.TrimSpace(str)
+		set["due_date"] = dueDate
 	}
 	if str, ok := strField("due_time"); ok {
 		if strings.TrimSpace(str) == "" {
 			return nil, fail("due_time is required (HH:MM)")
 		}
-		dueTime = str
-		set["due_time"] = str
+		dueTime = strings.TrimSpace(str)
+		set["due_time"] = dueTime
 	}
 	if err := checkDue(dueDate, dueTime); err != nil {
 		return nil, err

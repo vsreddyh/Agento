@@ -66,9 +66,9 @@ import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
@@ -1087,19 +1087,24 @@ private fun TaskManagerScreen(
                     // Done tasks vanish server-side after 3 days: open a
                     // prefilled new-task draft with the date cleared, so
                     // recreating means picking a fresh date (save is
-                    // gated on one). Dismiss to skip recreating.
-                    editing = ServerTaskDraft(
-                        name = t.name,
-                        description = t.description,
-                        dueDate = "",
-                        dueTime = "",
-                        estimatedMinutes = t.estimatedMinutes.takeIf { it > 0 }?.toString().orEmpty(),
-                        repeatRule = t.repeatRule,
-                        parallelable = t.parallelable,
-                    )
+                    // gated on one) — unless an editor is already open,
+                    // which must not be discarded. Dismiss to skip.
                     refreshTick++
                     pokeWidget()
-                    snackbar.showSnackbar("Task completed — pick a new date and save to recreate it.")
+                    if (editing == null) {
+                        editing = ServerTaskDraft(
+                            name = t.name,
+                            description = t.description,
+                            dueDate = "",
+                            dueTime = "",
+                            estimatedMinutes = t.estimatedMinutes.takeIf { it > 0 }?.toString().orEmpty(),
+                            repeatRule = t.repeatRule,
+                            parallelable = t.parallelable,
+                        )
+                        snackbar.showSnackbar("Task completed — pick a new date and save to recreate it.")
+                    } else {
+                        snackbar.showSnackbar("Task completed.")
+                    }
                 },
                 onFailure = ::fail,
             )

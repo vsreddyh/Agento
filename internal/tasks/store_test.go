@@ -130,6 +130,17 @@ func TestCreateRequiresAllFields(t *testing.T) {
 			t.Fatalf("update %v must fail", fields)
 		}
 	}
+	// Wrong types on update fail instead of silent no-ops.
+	for _, fields := range []map[string]any{
+		{"description": 42},
+		{"due_date": 20261005},
+		{"repeat_rule": true},
+		{"parallelable": "yes"},
+	} {
+		if _, err := s.Update(ctx, id, fields); err == nil {
+			t.Fatalf("update %v must fail", fields)
+		}
+	}
 }
 
 func TestCompleteReopenDelete(t *testing.T) {

@@ -517,6 +517,12 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	for _, k := range []string{"description", "due_date", "due_time"} {
+		if s, ok := fields[k].(string); !ok || strings.TrimSpace(s) == "" {
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": k + " is required"})
+			return
+		}
+	}
 	store, ok := taskStore(w)
 	if !ok {
 		return
