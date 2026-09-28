@@ -29,12 +29,15 @@ class TaskCompleteActivity : ComponentActivity() {
         val openId = intent.getStringExtra(TaskWidget.EXTRA_TASK_ID)
         if (!completeId.isNullOrEmpty()) {
             lifecycleScope.launch {
-                runCatching { TasksApi(this@TaskCompleteActivity).complete(completeId) }
+                val completed = runCatching { TasksApi(this@TaskCompleteActivity).complete(completeId) }.isSuccess
                 // Action taps don't auto-cancel: dismiss the due alert
-                // this completion came from (tag + id match the post).
-                runCatching {
-                    (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-                        .cancel(completeId, ALARM_NOTIF_ID)
+                // this completion came from (tag + id match the post) —
+                // but only on success, so an offline tap keeps the alert.
+                if (completed) {
+                    runCatching {
+                        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                            .cancel(completeId, ALARM_NOTIF_ID)
+                    }
                 }
                 // Join before finishing: the scopes are static and would
                 // survive, but a process death right after the tap must

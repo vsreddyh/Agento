@@ -228,11 +228,11 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             task?.estimatedMinutes?.takeIf { it > 0 }?.let { "~$it min" },
         ).filterNotNull().joinToString(" · ").ifEmpty { "Due now" }
         // Locals: task is nullable and conditions below don't smart-cast.
-        val description = task?.description.orEmpty()
+        val taskDesc = task?.description.orEmpty()
         val mins = task?.estimatedMinutes ?: 0
         val repeat = task?.repeatRule.orEmpty()
         val big = buildList {
-            if (description.isNotEmpty()) add(description)
+            if (taskDesc.isNotEmpty()) add(taskDesc)
             if (dueLine.isNotEmpty()) add(dueLine)
             if (mins > 0) add("Estimate ~$mins min")
             if (repeat.isNotEmpty()) add("Repeats $repeat")
@@ -257,7 +257,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                     appCtx.getString(R.string.task_reminder_channel),
                     NotificationManager.IMPORTANCE_HIGH,
                 ).apply {
-                    description = appCtx.getString(R.string.task_reminder_channel_desc)
+                    this.description = appCtx.getString(R.string.task_reminder_channel_desc)
                 },
             )
         }
@@ -279,9 +279,9 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             // No icon (0): framework checkables render badly as action
             // icons on some OEMs.
             .addAction(0, "Done", done)
-        // Expanded view only when there's more than the summary —
-        // otherwise it's a redundant second page for plain tasks.
-        if (big.isNotEmpty()) {
+        // Expanded view only when there's a description —
+        // otherwise it duplicates the summary in a second page.
+        if (taskDesc.isNotEmpty()) {
             notif.setStyle(
                 NotificationCompat.BigTextStyle().bigText(big),
             )
