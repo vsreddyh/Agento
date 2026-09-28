@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +70,9 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                             .putString("task_widget_density_$appWidgetId", d.name)
                             .putBoolean("task_widget_due_$appWidgetId", due)
                             .putBoolean("task_widget_scroll_$appWidgetId", scroll)
+                            // Retired diagnostic ladder: drop the key here
+                            // too, not just on widget delete.
+                            .remove("task_widget_style_$appWidgetId")
                             .apply()
                         TaskWidget.refresh(this@TaskWidgetConfigActivity)
                         setResult(RESULT_OK, done)
@@ -116,6 +120,10 @@ private fun WidgetSettingsScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    // Scaffold does not inset a custom bottom bar for the
+                    // system nav bar; without this the actions sit under it
+                    // on gesture navigation.
+                    .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -259,7 +267,12 @@ private fun WidgetPreview(
         "Bath" to "Tomorrow",
         "Buy vegetables" to "Fri, 18:00",
     )
-    val shown = if (scrollable) samples else samples.take(2)
+    // One fake total drives both the count line and the truncation hint, so
+    // the preview can't claim one number and demonstrate another.
+    val total = if (view == TaskWidgetView.Done) 1 else 12
+    val cap = TaskWidget.STATIC_ROW_LIMIT
+    val shown = if (scrollable) samples else samples.take(min(samples.size, cap))
+    val hidden = (total - shown.size).coerceAtLeast(0)
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -332,9 +345,9 @@ private fun WidgetPreview(
                     }
                 }
             }
-            if (!scrollable) {
+            if (!scrollable && hidden > 0) {
                 Text(
-                    "+ ${samples.size - shown.size} more in the app",
+                    "+ $hidden more in the app",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp),
@@ -344,17 +357,18 @@ private fun WidgetPreview(
     }
 }
 
-/** Honest count line: the static mode caps rows, so say so. */
+/** Honest count line: the non-scrolling mode caps rows, so say so. Uses
+ * the same fake total as the preview body. */
 private fun previewCount(view: TaskWidgetView, scrollable: Boolean): String {
     val noun = when (view) {
         TaskWidgetView.Open -> "open tasks"
         TaskWidgetView.Done -> "done tasks"
         TaskWidgetView.All -> "tasks"
     }
-    val sample = if (view == TaskWidgetView.Done) 1 else 12
+    val total = if (view == TaskWidgetView.Done) 1 else 12
     return if (scrollable) {
-        "$sample $noun"
+        "$total $noun"
     } else {
-        "$sample $noun · showing ${TaskWidget.STATIC_ROW_LIMIT}"
+        "$total $noun · showing ${TaskWidget.STATIC_ROW_LIMIT}"
     }
 }
