@@ -11,6 +11,13 @@
     <string name="task_widget_view">Change view</string>
     <string name="task_widget_display">Widget display settings</string>
     <string name="task_widget_complete">Complete task</string>
+    <!-- Diagnostic style ladder (#137); removed with the ladder. -->
+    <string name="task_widget_style_label">Diagnostic style</string>
+    <string name="task_widget_style_a">A — one text label</string>
+    <string name="task_widget_style_b">B — header text only</string>
+    <string name="task_widget_style_c">C — text + button + background</string>
+    <string name="task_widget_style_d">D — full widget, plain rows</string>
+    <string name="task_widget_style_e">E — full widget, scrolling list</string>
     <string name="task_widget_open_task">Open task</string>
     <string name="task_reminder_channel">Task reminders</string>
     <string name="task_reminder_channel_desc">Alerts when your tasks are due</string>

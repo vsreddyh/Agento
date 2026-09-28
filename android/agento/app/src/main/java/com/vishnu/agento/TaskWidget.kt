@@ -365,17 +365,19 @@ class TaskWidget : AppWidgetProvider() {
             prefs(context).getBoolean("task_widget_scroll_$appWidgetId", false)
 
         /** Widget shape for one placement. DIAGNOSTIC (#137): the
-         * incremental styles A→D exist to bisect a host that rejects our
-         * full widget outright; D (the shipping widget) is the default.
+         * incremental styles A→E exist to bisect a host that rejects our
+         * full widget outright; E (the shipping widget) is the default.
          * Removed once the cause is found. */
         fun styleFor(context: Context, appWidgetId: Int): Int =
             prefs(context).getInt("task_widget_style_$appWidgetId", STYLE_FULL_SCROLL)
 
-        private const val STYLE_PROBE = 0        // A: one TextView
-        private const val STYLE_TEXT = 1         // B: header text only
-        private const val STYLE_CHROME = 2       // C: text + button + bg
-        private const val STYLE_FULL_STATIC = 3  // D: full, plain rows
-        const val STYLE_FULL_SCROLL = 4          // E: full, collection
+        // Style ladder values, shared with the config UI so labels and
+        // values can't drift apart.
+        const val STYLE_PROBE = 0        // A: one TextView
+        const val STYLE_TEXT = 1         // B: header text only
+        const val STYLE_CHROME = 2       // C: text + button + card background
+        const val STYLE_FULL_STATIC = 3  // D: full, plain rows
+        const val STYLE_FULL_SCROLL = 4  // E: full, collection
 
         /** One row with explicit per-row intents instead of the collection
          * template: all immutable, so hosts that balk at the mutable
@@ -695,6 +697,8 @@ class TaskWidget : AppWidgetProvider() {
                     )
                 }
                 setTextViewText(R.id.task_widget_view, view.title)
+                // capped only matters where rows are truncated; styles B/C
+                // render no rows, so they leave it false on purpose.
                 setTextViewText(R.id.task_widget_count,
                     countText(context, view, tasks, error, capped = !scrollable))
                 val emptyText = when {

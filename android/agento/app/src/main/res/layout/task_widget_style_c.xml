@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Style C (diagnostic, #137): style B plus one platform ImageButton
-     with a PendingIntent and the card background drawable — i.e. the two
-     remaining suspects (clickable chrome + shape drawable) added at once.
+     with a PendingIntent and the card background drawable — the remaining
+     suspects (clickable chrome + shape drawable). The button background is
+     a concrete color, not ?android:attr/selectableItemBackgroundBorderless,
+     so the theme-attr variable stays fixed across the whole ladder.
      IDs match task_widget.xml so render() shares the header wiring. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
@@ -47,7 +49,7 @@
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:src="@android:drawable/ic_menu_rotate"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:background="@android:color/transparent"
             android:contentDescription="@string/task_widget_refresh" />
 
     </LinearLayout>
