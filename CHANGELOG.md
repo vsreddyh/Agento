@@ -10,6 +10,13 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [4.1.0]
+
+- Widget hardening: one bad placement can no longer abort the initial
+  render for the rest, and Settings → About gains a Widget diagnostics
+  card (placement state plus one-tap copy of recent device log, so
+  widget failures are debuggable without adb).
+
 ## [4.0.0]
 
 - BREAKING: tasks require every field except Repeats — name, details,
@@ -27,9 +34,6 @@ see GitHub Releases for older notes.
   Today/Tomorrow shortcuts), not typed. Completing a task opens a
   prefilled draft with the date cleared, so recreating means picking a
   fresh date.
-- Settings → About gains a Widget diagnostics card: placement state plus
-  one-tap copy of recent device log, so widget failures are debuggable
-  without adb.
 
 ## [3.20.1]
 
