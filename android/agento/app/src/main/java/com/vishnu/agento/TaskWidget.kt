@@ -362,18 +362,18 @@ class TaskWidget : AppWidgetProvider() {
         fun showDueFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_due_$appWidgetId", true)
 
-        /** Whether this placement uses the scrollable collection. Retained
-         * for the pre-ladder pref: a placement saved before the style
-         * ladder keeps this value through [styleFor]'s migration. The
-         * style ladder is authoritative now, and a placement with neither
-         * pref lands on [STYLE_CHROME], the header known to render (#137). */
+        /** Whether this placement uses the scrollable collection. Legacy:
+         * the style ladder decides the rendered shape, and [styleFor]
+         * migrates a saved value here once. Still read for the
+         * data-changed notify gate and for diagnostics. */
         fun scrollableFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_scroll_$appWidgetId", false)
 
-        /** Widget shape for one placement. DIAGNOSTIC (#137): the
-         * incremental styles A→E exist to bisect a host that rejects our
-         * full widget outright; E (the shipping widget) is the default.
-         * Removed once the cause is found. */
+        /** Widget shape for one placement. DIAGNOSTIC (#137): styles
+         * C, D1→D5 and E bisect a host that rejects our full widget
+         * outright. C (the header known to render) is the default and the
+         * fallback, because the fuller styles may not render at all. The
+         * ladder is removed once the cause is found. */
         fun styleFor(context: Context, appWidgetId: Int): Int {
             val p = prefs(context)
             // Migration from the pre-ladder pref: a placement saved before

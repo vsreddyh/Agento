@@ -158,7 +158,9 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                 modifier = Modifier.padding(start = 8.dp),
                             )
                         }
-                        // Diagnostic style ladder (#137): A→E add one suspect
+                        // Diagnostic style ladder (#137): C, then D1→D5 each
+                        // add one more element, then E (the collection
+                        // widget). C is the header known to render.
                         // back at a time so the failing piece is identified
                         // in one install. E is the real widget; the ladder
                         // also owns scrolling vs plain rows (D/E), so there

@@ -1383,11 +1383,16 @@ private fun TaskManagerScreen(
                         widgetIds.forEach { id ->
                             OutlinedButton(
                                 onClick = {
-                                    openWidgetConfig.launch(
-                                        Intent(context, TaskWidgetConfigActivity::class.java)
-                                            .putExtra(
-                                                AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                                    )
+                                    // Guarded like the old direct launch:
+                                    // a missing activity must not crash the
+                                    // Task Manager.
+                                    runCatching {
+                                        openWidgetConfig.launch(
+                                            Intent(context, TaskWidgetConfigActivity::class.java)
+                                                .putExtra(
+                                                    AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                                        )
+                                    }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
