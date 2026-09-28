@@ -5804,7 +5804,10 @@ private fun WidgetDiagnosticsCard() {
     var summary by remember { mutableStateOf("") }
     var copying by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { summary = TaskWidget.diagnostics(context) }
+    // Prefs/AppWidgetManager reads stay off Main (same as the log dump).
+    LaunchedEffect(Unit) {
+        summary = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
+    }
     SectionCard(
         title = "Widget diagnostics",
         subtitle = "Task-widget state and recent log. If the home-screen widget errors, copy this and paste it in chat.",
@@ -5820,7 +5823,7 @@ private fun WidgetDiagnosticsCard() {
                 copied = false
                 scope.launch {
                     try {
-                        val fresh = TaskWidget.diagnostics(context)
+                        val fresh = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
                         summary = fresh
                         val log = withContext(Dispatchers.IO) { TaskWidget.dumpOwnLog() }
                         clipboard.setText(AnnotatedString("$fresh\n--- log ---\n${log.take(6000)}"))

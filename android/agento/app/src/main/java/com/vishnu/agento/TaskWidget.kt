@@ -174,13 +174,15 @@ class TaskWidget : AppWidgetProvider() {
                         "density=${densityFor(ctx, id)} showDue=${showDueFor(ctx, id)}")
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
-                appendLine("errors=$lastErrors")
+                appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
             }.trim()
         }.getOrDefault("(diagnostics unavailable)")
 
         /** Recent log lines from our own process. Self-reads need no
          * permission (unlike adb), so a broken widget's stack trace can
-         * be copied out of the app. Call off the main thread. */
+         * be copied out of the app. Call off the main thread.
+         * Privacy: the output is user-copied into chat, so bearer secrets
+         * are redacted before it leaves the device (see [redactSecrets]). */
         fun dumpOwnLog(): String = runCatching {
             val pid = android.os.Process.myPid().toString()
             val proc = ProcessBuilder(
@@ -192,11 +194,23 @@ class TaskWidget : AppWidgetProvider() {
                 // pipe. destroy() in finally so a stuck proc never leaks.
                 val out = proc.inputStream.bufferedReader().readText()
                 proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
-                out.lines().takeLast(80).joinToString("\n").ifEmpty { "(empty log)" }
+                val tail = out.lines().takeLast(80).joinToString("\n")
+                redactSecrets(tail).ifEmpty { "(empty log)" }
             } finally {
                 proc.destroy()
             }
         }.getOrDefault("(log unavailable)")
+
+        // Bearer secrets must never ride along when the user pastes the
+        // log into chat. Redacts key=value pairs for the usual secret
+        // names (case-insensitive); the diagnostics summary itself never
+        // carries secrets (counts and error strings only).
+        private val secretRE =
+            Regex("""(?i)\b(token|bearer|password|passwd|api[_-]?key|secret)\b\s*[:=]\s*\S+""")
+
+        private fun redactSecrets(s: String): String =
+            s.replace(Regex("""(?i)\bbearer\s+\S+"""), "bearer <redacted>")
+                .replace(secretRE, "$1=<redacted>")
 
         private fun prefs(context: Context) =
             context.applicationContext.getSharedPreferences(
