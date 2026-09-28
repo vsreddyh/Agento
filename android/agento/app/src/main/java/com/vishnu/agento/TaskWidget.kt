@@ -103,6 +103,7 @@ class TaskWidget : AppWidgetProvider() {
                 .remove("task_widget_density_$id")
                 .remove("task_widget_due_$id")
                 .remove("task_widget_scroll_$id")
+                .remove("task_widget_style_$id")
         }
         edit.apply()
     }
@@ -193,7 +194,7 @@ class TaskWidget : AppWidgetProvider() {
                 for (id in ids) {
                     appendLine("id=$id view=${viewFor(ctx, id)} " +
                         "density=${densityFor(ctx, id)} showDue=${showDueFor(ctx, id)} " +
-                        "scrollable=${scrollableFor(ctx, id)}")
+                        "scrollable=${scrollableFor(ctx, id)} style=${styleFor(ctx, id)}")
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
@@ -362,6 +363,36 @@ class TaskWidget : AppWidgetProvider() {
          * compare; the collection path stays the intended end state. */
         fun scrollableFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_scroll_$appWidgetId", false)
+
+        /** Widget shape for one placement. DIAGNOSTIC (#137): the
+         * incremental styles A→E exist to bisect a host that rejects our
+         * full widget outright; E (the shipping widget) is the default.
+         * Removed once the cause is found. */
+        fun styleFor(context: Context, appWidgetId: Int): Int {
+            val p = prefs(context)
+            // Migration from the pre-ladder pref: a placement saved before
+            // the ladder existed must keep the look the user last chose,
+            // not silently flip on update.
+            if (!p.contains("task_widget_style_$appWidgetId")) {
+                return if (p.getBoolean("task_widget_scroll_$appWidgetId", false)) {
+                    STYLE_FULL_SCROLL
+                } else {
+                    STYLE_FULL_STATIC
+                }
+            }
+            val v = p.getInt("task_widget_style_$appWidgetId", STYLE_FULL_SCROLL)
+            // Clamp: a corrupt/removed value must not fall through to
+            // whatever the layout branch happens to default to.
+            return if (v in STYLE_PROBE..STYLE_FULL_SCROLL) v else STYLE_FULL_SCROLL
+        }
+
+        // Style ladder values, shared with the config UI so labels and
+        // values can't drift apart.
+        const val STYLE_PROBE = 0        // A: one TextView
+        const val STYLE_TEXT = 1         // B: header text only
+        const val STYLE_CHROME = 2       // C: text + button + card background
+        const val STYLE_FULL_STATIC = 3  // D: full, plain rows
+        const val STYLE_FULL_SCROLL = 4  // E: full, collection
 
         /** One row with explicit per-row intents instead of the collection
          * template: all immutable, so hosts that balk at the mutable
@@ -587,7 +618,26 @@ class TaskWidget : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = Uri.parse("agento://widget/$appWidgetId")
             }
-            val scrollable = scrollableFor(context, appWidgetId)
+            val style = styleFor(context, appWidgetId)
+            // Diagnostic styles (#137): bail out early with the smallest
+            // RemoteViews that still answers "does this host render ours
+            // at all?". Each style adds one more suspect back in.
+            if (style == STYLE_PROBE) {
+                return RemoteViews(context.packageName, R.layout.task_widget_style_a)
+            }
+            if (style == STYLE_TEXT) {
+                return RemoteViews(context.packageName, R.layout.task_widget_style_b).apply {
+                    setTextViewText(R.id.task_widget_count, countText(context, view, tasks, error))
+                }
+            }
+            if (style == STYLE_CHROME) {
+                return RemoteViews(context.packageName, R.layout.task_widget_style_c).apply {
+                    setOnClickPendingIntent(R.id.task_widget_body, openPending)
+                    setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
+                    setTextViewText(R.id.task_widget_count, countText(context, view, tasks, error))
+                }
+            }
+            val scrollable = style == STYLE_FULL_SCROLL
             return RemoteViews(context.packageName,
                 if (scrollable) R.layout.task_widget else R.layout.task_widget_static).apply {
                 setOnClickPendingIntent(R.id.task_widget_body, openPending)
@@ -662,24 +712,10 @@ class TaskWidget : AppWidgetProvider() {
                     )
                 }
                 setTextViewText(R.id.task_widget_view, view.title)
-                val plural = when (view) {
-                    TaskWidgetView.Open -> R.plurals.task_widget_open
-                    TaskWidgetView.Done -> R.plurals.task_widget_done
-                    TaskWidgetView.All -> R.plurals.task_widget_all
-                }
-                val count = when {
-                    tasks == null && !error -> context.getString(R.string.task_widget_loading)
-                    tasks == null -> context.getString(R.string.task_widget_error)
-                    tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
-                    // Static rows cap at 8: say so, so the count and the
-                    // visible rows never silently disagree.
-                    !scrollable && tasks.size > STATIC_ROW_LIMIT ->
-                        context.resources.getQuantityString(plural, tasks.size, tasks.size) +
-                            " · showing " + STATIC_ROW_LIMIT
-                    else -> context.resources.getQuantityString(
-                        plural, tasks.size, tasks.size)
-                }
-                setTextViewText(R.id.task_widget_count, count)
+                // capped only matters where rows are truncated; styles B/C
+                // render no rows, so they leave it false on purpose.
+                setTextViewText(R.id.task_widget_count,
+                    countText(context, view, tasks, error, capped = !scrollable))
                 val emptyText = when {
                     tasks == null && !error -> context.getString(R.string.task_widget_loading)
                     tasks == null -> (errorDetail?.take(140)
@@ -690,6 +726,32 @@ class TaskWidget : AppWidgetProvider() {
                 }
                 setTextViewText(R.id.task_widget_empty, emptyText)
             } // end RemoteViews apply
+        }
+
+        /** Header count line, shared by the full widget and the diagnostic
+         * styles. [capped] notes the static-row limit so the count and the
+         * visible rows never silently disagree. */
+        private fun countText(
+            context: Context,
+            view: TaskWidgetView,
+            tasks: List<ServerTask>?,
+            error: Boolean,
+            capped: Boolean = false,
+        ): String {
+            val plural = when (view) {
+                TaskWidgetView.Open -> R.plurals.task_widget_open
+                TaskWidgetView.Done -> R.plurals.task_widget_done
+                TaskWidgetView.All -> R.plurals.task_widget_all
+            }
+            return when {
+                tasks == null && !error -> context.getString(R.string.task_widget_loading)
+                tasks == null -> context.getString(R.string.task_widget_error)
+                tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
+                capped && tasks.size > STATIC_ROW_LIMIT ->
+                    context.resources.getQuantityString(plural, tasks.size, tasks.size) +
+                        " · showing " + STATIC_ROW_LIMIT
+                else -> context.resources.getQuantityString(plural, tasks.size, tasks.size)
+            }
         }
     }
 }

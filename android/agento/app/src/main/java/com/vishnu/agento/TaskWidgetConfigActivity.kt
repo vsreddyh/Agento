@@ -68,8 +68,10 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                     var showDue by remember {
                         mutableStateOf(TaskWidget.showDueFor(this, appWidgetId))
                     }
-                    var scrollable by remember {
-                        mutableStateOf(TaskWidget.scrollableFor(this, appWidgetId))
+                    // Removed: the standalone "Scrolling list" checkbox —
+                    // the style ladder's D/E own that choice (#137).
+                    var style by remember {
+                        mutableStateOf(TaskWidget.styleFor(this, appWidgetId))
                     }
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(
@@ -119,23 +121,38 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                 modifier = Modifier.padding(start = 8.dp),
                             )
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth()
-                                .selectable(
-                                    selected = scrollable,
-                                    onClick = { scrollable = !scrollable },
-                                    role = Role.Checkbox,
-                                )
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Checkbox(checked = scrollable, onCheckedChange = null)
-                            Column(modifier = Modifier.padding(start = 8.dp)) {
-                                Text("Scrolling list")
+                        // Diagnostic style ladder (#137): A→E add one suspect
+                        // back at a time so the failing piece is identified
+                        // in one install. E is the real widget; the ladder
+                        // also owns scrolling vs plain rows (D/E), so there
+                        // is no separate checkbox to disagree with it.
+                        Text(
+                            getString(R.string.task_widget_style_label),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                        listOf(
+                            TaskWidget.STYLE_PROBE to R.string.task_widget_style_a,
+                            TaskWidget.STYLE_TEXT to R.string.task_widget_style_b,
+                            TaskWidget.STYLE_CHROME to R.string.task_widget_style_c,
+                            TaskWidget.STYLE_FULL_STATIC to R.string.task_widget_style_d,
+                            TaskWidget.STYLE_FULL_SCROLL to R.string.task_widget_style_e,
+                        ).forEach { (value, labelRes) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .selectable(
+                                        selected = style == value,
+                                        onClick = { style = value },
+                                        role = Role.RadioButton,
+                                    )
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = style == value, onClick = null)
                                 Text(
-                                    "Off renders plain rows (diagnostic for widget load errors, #137)",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    getString(labelRes),
+                                    modifier = Modifier.padding(start = 8.dp),
                                 )
                             }
                         }
@@ -155,7 +172,13 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                         density.name,
                                     )
                                     .putBoolean("task_widget_due_$appWidgetId", showDue)
-                                    .putBoolean("task_widget_scroll_$appWidgetId", scrollable)
+                                    // Style owns scrolling: keep the old
+                                    // pref in sync so it still reads
+                                    // correctly after the ladder is removed.
+                                    .putBoolean(
+                                        "task_widget_scroll_$appWidgetId",
+                                        style == TaskWidget.STYLE_FULL_SCROLL)
+                                    .putInt("task_widget_style_$appWidgetId", style)
                                     .apply()
                                 TaskWidget.refresh(this@TaskWidgetConfigActivity)
                                 setResult(RESULT_OK, done)

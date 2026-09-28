@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.4.0]
+
+- DIAGNOSTIC: task widget display settings gain a style ladder (A–E)
+  that swaps progressively simpler widget layouts — one text label up
+  to the full scrolling widget — to identify which piece a launcher
+  rejects (issue #137). Default is the full widget; the styles are
+  removed once the cause is found.
+
 ## [4.3.1]
 
 - FIX: task widget load error on some launchers (issue #137) — widget
