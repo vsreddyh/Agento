@@ -362,11 +362,11 @@ class TaskWidget : AppWidgetProvider() {
         fun showDueFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_due_$appWidgetId", true)
 
-        /** Whether this placement uses the scrollable collection.
-         * DIAGNOSTIC (#137): defaults to FALSE — static rows — so the
-         * collection path is isolated from the rest of the widget on
-         * first install. Flip it in the widget's display settings to
-         * compare; the collection path stays the intended end state. */
+        /** Whether this placement uses the scrollable collection. Retained
+         * for the pre-ladder pref: a placement saved before the style
+         * ladder keeps this value through [styleFor]'s migration. The
+         * style ladder is authoritative now, and a placement with neither
+         * pref lands on [STYLE_CHROME], the header known to render (#137). */
         fun scrollableFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_scroll_$appWidgetId", false)
 

@@ -1364,8 +1364,12 @@ private fun TaskManagerScreen(
                 // Widget display settings live here: the widget's own header
                 // controls never rendered on some launchers (#137), so
                 // view/density/due are changed from the app instead.
-                // Re-queried on every task refresh so a widget added or
-                // removed since the screen opened shows up here.
+                // Re-queried on every task refresh, and again when the
+                // settings screen returns, so a changed view shows up in
+                // the button label right away.
+                val openWidgetConfig = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartActivityForResult(),
+                ) { refreshTick++ }
                 val widgetIds = remember(context, refreshTick) {
                     AppWidgetManager.getInstance(context)
                         .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
@@ -1379,13 +1383,11 @@ private fun TaskManagerScreen(
                         widgetIds.forEach { id ->
                             OutlinedButton(
                                 onClick = {
-                                    runCatching {
-                                        context.startActivity(
-                                            Intent(context, TaskWidgetConfigActivity::class.java)
-                                                .putExtra(
-                                                    AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                                        )
-                                    }
+                                    openWidgetConfig.launch(
+                                        Intent(context, TaskWidgetConfigActivity::class.java)
+                                            .putExtra(
+                                                AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                                    )
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
