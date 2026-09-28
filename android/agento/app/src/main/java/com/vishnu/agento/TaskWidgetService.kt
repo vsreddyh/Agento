@@ -11,13 +11,15 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 
 /**
- * Collection adapter for the task widget's scrollable list. Each factory
- * instance belongs to one placement (the widget id arrives on its
- * service intent) and shows that placement's view (Open/Done/All) in its
- * density (Comfortable/Compact). Snapshots come from [TaskWidget]'s
- * per-state cache (same process, no IPC payload) so getViewAt stays
- * cheap; row taps and the ring button fill in to the
- * [TaskCompleteActivity] template pending intent.
+ * Collection adapter for the task widget's scrollable list. LEGACY path
+ * (API <31): newer devices get rows directly via RemoteCollectionItems
+ * in render(), since service-backed collections broke on Android 16
+ * (issue #137). Each factory instance belongs to one placement (the
+ * widget id arrives on its service intent) and shows that placement's
+ * view (Open/Done/All) in its density (Comfortable/Compact). Snapshots
+ * come from [TaskWidget]'s per-state cache (same process, no IPC
+ * payload) so getViewAt stays cheap; row taps and the ring button fill
+ * in to the [TaskCompleteActivity] template pending intent.
  */
 class TaskWidgetService : RemoteViewsService() {
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory {
@@ -95,37 +97,14 @@ private class TaskFactory(
 
     override fun getViewAt(position: Int): RemoteViews {
         // A throw here is the host's system error view — never let one
-        // escape; record it for diagnostics and hand back a blank row.
+        // escape; record it for diagnostics and hand back a visible
+        // failure row. Legacy path only (API <31); newer devices get
+        // their rows directly via RemoteCollectionItems in render().
         return runCatching {
-            val layout = if (compact()) {
-                R.layout.task_widget_row_compact
-            } else {
-                R.layout.task_widget_row
-            }
             val task = items.getOrNull(position)
-                ?: return@runCatching RemoteViews(appCtx.packageName, layout)
-            RemoteViews(appCtx.packageName, layout).apply {
-                setTextViewText(R.id.task_widget_row_name, task.name)
-                // Same friendly due line as the Task Manager rows (#130),
-                // IST-pinned; blank collapses to gone below.
-                val due = friendlyDue(task.dueDate, task.dueTime, today)
-                if (showDue() && due.isNotEmpty()) {
-                    setTextViewText(R.id.task_widget_row_due, due)
-                    setViewVisibility(R.id.task_widget_row_due, View.VISIBLE)
-                } else {
-                    setViewVisibility(R.id.task_widget_row_due, View.GONE)
-                }
-                // Ring completes inline; anywhere else opens the detail
-                // sheet. Both ride the trampoline template pending intent.
-                setOnClickFillInIntent(
-                    R.id.task_widget_row_check,
-                    Intent().putExtra(TaskWidget.EXTRA_COMPLETE_ID, task.id),
-                )
-                setOnClickFillInIntent(
-                    R.id.task_widget_row,
-                    Intent().putExtra(TaskWidget.EXTRA_TASK_ID, task.id),
-                )
-            }
+                ?: return@runCatching RemoteViews(appCtx.packageName,
+                    if (compact()) R.layout.task_widget_row_compact else R.layout.task_widget_row)
+            TaskWidget.buildRow(appCtx.packageName, compact(), showDue(), today, task)
         }.getOrElse {
             TaskWidget.recordFactoryError("getViewAt($position)", it)
             // Visible failure, not a mysteriously empty row (the error is
