@@ -159,14 +159,15 @@ class TaskWidget : AppWidgetProvider() {
         @Volatile private var lastErrors: Map<String, String> = emptyMap()
 
         /** One-screen widget health summary for Settings → About, so
-         * widget failures can be diagnosed without adb. */
-        fun diagnostics(appCtx: Context): String {
+         * widget failures can be diagnosed without adb. Never throws
+         * (a diagnostics call must not become a second crash). */
+        fun diagnostics(appCtx: Context): String = runCatching {
             val ctx = appCtx.applicationContext
             val mgr = AppWidgetManager.getInstance(ctx)
             val ids = runCatching {
                 mgr.getAppWidgetIds(ComponentName(ctx, TaskWidget::class.java))
             }.getOrDefault(intArrayOf())
-            return buildString {
+            buildString {
                 appendLine("placements=${ids.size}")
                 for (id in ids) {
                     appendLine("id=$id view=${viewFor(ctx, id)} " +
@@ -175,7 +176,7 @@ class TaskWidget : AppWidgetProvider() {
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=$lastErrors")
             }.trim()
-        }
+        }.getOrDefault("(diagnostics unavailable)")
 
         /** Recent log lines from our own process. Self-reads need no
          * permission (unlike adb), so a broken widget's stack trace can

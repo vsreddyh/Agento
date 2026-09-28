@@ -5825,6 +5825,8 @@ private fun WidgetDiagnosticsCard() {
                         val log = withContext(Dispatchers.IO) { TaskWidget.dumpOwnLog() }
                         clipboard.setText(AnnotatedString("$fresh\n--- log ---\n${log.take(6000)}"))
                         copied = true
+                    } catch (e: Exception) {
+                        summary = "diagnostics failed: ${e.message ?: e.javaClass.simpleName}"
                     } finally {
                         copying = false
                     }
