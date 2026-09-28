@@ -71,6 +71,9 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                     var scrollable by remember {
                         mutableStateOf(TaskWidget.scrollableFor(this, appWidgetId))
                     }
+                    var style by remember {
+                        mutableStateOf(TaskWidget.styleFor(this, appWidgetId))
+                    }
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(
                             getString(R.string.task_widget_display),
@@ -139,6 +142,36 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                 )
                             }
                         }
+                        // Diagnostic style ladder (#137): A→E add one suspect
+                        // back at a time so the failing piece is identified
+                        // in one install. E is the real widget.
+                        Text(
+                            "Diagnostic style",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                        listOf(
+                            0 to "A — one text label",
+                            1 to "B — header text only",
+                            2 to "C — text + button + background",
+                            3 to "D — full widget, plain rows",
+                            4 to "E — full widget, scrolling list",
+                        ).forEach { (value, label) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .selectable(
+                                        selected = style == value,
+                                        onClick = { style = value },
+                                        role = Role.RadioButton,
+                                    )
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = style == value, onClick = null)
+                                Text(label, modifier = Modifier.padding(start = 8.dp))
+                            }
+                        }
                         Spacer(modifier = Modifier.height(16.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -156,6 +189,7 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                     )
                                     .putBoolean("task_widget_due_$appWidgetId", showDue)
                                     .putBoolean("task_widget_scroll_$appWidgetId", scrollable)
+                                    .putInt("task_widget_style_$appWidgetId", style)
                                     .apply()
                                 TaskWidget.refresh(this@TaskWidgetConfigActivity)
                                 setResult(RESULT_OK, done)
