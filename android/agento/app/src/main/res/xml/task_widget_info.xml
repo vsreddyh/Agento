@@ -12,7 +12,7 @@
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="0"
     android:configure="com.vishnu.agento.TaskWidgetConfigActivity"
-    android:initialLayout="@layout/task_widget"
-    android:previewLayout="@layout/task_widget"
+    android:initialLayout="@layout/task_widget_full"
+    android:previewLayout="@layout/task_widget_full"
     android:description="@string/task_widget_desc"
     android:previewImage="@android:drawable/ic_menu_agenda" />

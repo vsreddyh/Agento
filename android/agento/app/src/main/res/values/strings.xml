@@ -13,8 +13,6 @@
     <string name="task_widget_complete">Complete task</string>
     <!-- Diagnostic style ladder (#137); removed with the ladder. -->
     <string name="task_widget_style_label">Diagnostic style</string>
-    <string name="task_widget_style_a">A — one text label</string>
-    <string name="task_widget_style_b">B — header text only</string>
     <string name="task_widget_style_c">C — text + button + background</string>
     <string name="task_widget_style_d">D — full widget, plain rows</string>
     <string name="task_widget_style_e">E — full widget, scrolling list</string>

@@ -133,8 +133,6 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                             modifier = Modifier.padding(top = 8.dp),
                         )
                         listOf(
-                            TaskWidget.STYLE_PROBE to R.string.task_widget_style_a,
-                            TaskWidget.STYLE_TEXT to R.string.task_widget_style_b,
                             TaskWidget.STYLE_CHROME to R.string.task_widget_style_c,
                             TaskWidget.STYLE_FULL_STATIC to R.string.task_widget_style_d,
                             TaskWidget.STYLE_FULL_SCROLL to R.string.task_widget_style_e,

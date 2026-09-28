@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.4.2]
+
+- FIX (attempt) for the task widget load error (issue #137): the widget
+  is rebuilt on the exact chrome the bisect proved renders (header text
+  + refresh, concrete backgrounds), with only the row container or
+  scrollable list added. The divider, header view toggle,
+  title-to-settings tap and empty-state tap are gone — none of them ever
+  rendered on the affected launcher. View switching and widget settings
+  now live in the Task Manager screen.
+
 ## [4.4.1]
 
 - FIX: task widget load error on some launchers (issue #137) — the

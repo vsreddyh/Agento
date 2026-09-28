@@ -380,19 +380,22 @@ class TaskWidget : AppWidgetProvider() {
                     STYLE_FULL_STATIC
                 }
             }
+            // Whitelist, not a range: A/B are gone, and a removed or
+            // corrupt value must fall back to the shipping widget.
             val v = p.getInt("task_widget_style_$appWidgetId", STYLE_FULL_SCROLL)
-            // Clamp: a corrupt/removed value must not fall through to
-            // whatever the layout branch happens to default to.
-            return if (v in STYLE_PROBE..STYLE_FULL_SCROLL) v else STYLE_FULL_SCROLL
+            return if (v in STYLE_VALUES) v else STYLE_FULL_SCROLL
         }
 
         // Style ladder values, shared with the config UI so labels and
-        // values can't drift apart.
-        const val STYLE_PROBE = 0        // A: one TextView
-        const val STYLE_TEXT = 1         // B: header text only
-        const val STYLE_CHROME = 2       // C: text + button + card background
-        const val STYLE_FULL_STATIC = 3  // D: full, plain rows
-        const val STYLE_FULL_SCROLL = 4  // E: full, collection
+        // values can't drift apart. A/B were removed once they proved the
+        // host renders our basics (#137); C is the known-good baseline
+        // and D/E are the shipping widgets, rebuilt on C's structure.
+        const val STYLE_CHROME = 0       // C: header only (known good)
+        const val STYLE_FULL_STATIC = 1  // D: full widget, plain rows
+        const val STYLE_FULL_SCROLL = 2  // E: full widget, collection
+
+        private val STYLE_VALUES = setOf(
+            STYLE_CHROME, STYLE_FULL_STATIC, STYLE_FULL_SCROLL)
 
         /** One row with explicit per-row intents instead of the collection
          * template: all immutable, so hosts that balk at the mutable
@@ -588,19 +591,10 @@ class TaskWidget : AppWidgetProvider() {
                 context, REFRESH_CODE, refresh,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            val cycle = Intent(context, TaskWidget::class.java)
-                .setAction(ACTION_VIEW)
-                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-            val viewPending = PendingIntent.getBroadcast(
-                context, VIEW_CODE + appWidgetId, cycle,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-            val config = Intent(context, TaskWidgetConfigActivity::class.java)
-                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-            val configPending = PendingIntent.getActivity(
-                context, CONFIG_CODE + appWidgetId, config,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
+            // The header view toggle and the title-to-config tap are gone
+            // with their views: neither ever rendered on the affected host
+            // (#137). View switching and display settings live in the Task
+            // Manager screen; the config activity is still reachable there.
             // Trampoline template: per-row fill-ins carry either
             // EXTRA_TASK_ID (open detail) or EXTRA_COMPLETE_ID (complete
             // inline). MUTABLE is required: fill-in extras are silently
@@ -619,34 +613,24 @@ class TaskWidget : AppWidgetProvider() {
                 data = Uri.parse("agento://widget/$appWidgetId")
             }
             val style = styleFor(context, appWidgetId)
-            // Diagnostic styles (#137): bail out early with the smallest
-            // RemoteViews that still answers "does this host render ours
-            // at all?". Each style adds one more suspect back in.
-            if (style == STYLE_PROBE) {
-                return RemoteViews(context.packageName, R.layout.task_widget_style_a)
-            }
-            if (style == STYLE_TEXT) {
-                return RemoteViews(context.packageName, R.layout.task_widget_style_b).apply {
-                    setTextViewText(R.id.task_widget_count, countText(context, view, tasks, error))
-                }
-            }
+            // Known-good baseline (#137): header only, no row container.
             if (style == STYLE_CHROME) {
                 return RemoteViews(context.packageName, R.layout.task_widget_style_c).apply {
                     setOnClickPendingIntent(R.id.task_widget_body, openPending)
                     setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
-                    setTextViewText(R.id.task_widget_count, countText(context, view, tasks, error))
+                    setTextViewText(R.id.task_widget_count,
+                        countText(context, view, tasks, error))
                 }
             }
             val scrollable = style == STYLE_FULL_SCROLL
+            // Chrome is deliberately C's: body + refresh taps only, concrete
+            // backgrounds, no divider/toggle/config/empty taps. Those are
+            // the pieces that never rendered on this host (#137); the row
+            // container and the ListView are the only additions.
             return RemoteViews(context.packageName,
-                if (scrollable) R.layout.task_widget else R.layout.task_widget_static).apply {
+                if (scrollable) R.layout.task_widget_list else R.layout.task_widget_full).apply {
                 setOnClickPendingIntent(R.id.task_widget_body, openPending)
-                setOnClickPendingIntent(R.id.task_widget_title, configPending)
-                setOnClickPendingIntent(R.id.task_widget_view, viewPending)
                 setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
-                // Error/empty state is tappable: re-pull instead of sitting
-                // dead on a stale failure (#130).
-                setOnClickPendingIntent(R.id.task_widget_empty, refreshPending)
                 if (!scrollable) {
                     // Diagnostic path (#137): plain rows, no collection,
                     // no template, no service bind. Isolates a collection
@@ -711,9 +695,11 @@ class TaskWidget : AppWidgetProvider() {
                         R.id.task_widget_empty,
                     )
                 }
-                setTextViewText(R.id.task_widget_view, view.title)
-                // capped only matters where rows are truncated; styles B/C
-                // render no rows, so they leave it false on purpose.
+                // The header title doubles as the view name now that the
+                // toggle button is gone (it never rendered on this host).
+                setTextViewText(R.id.task_widget_title, view.title)
+                // capped only matters where rows are truncated; style C
+                // renders no rows, so it leaves this false on purpose.
                 setTextViewText(R.id.task_widget_count,
                     countText(context, view, tasks, error, capped = !scrollable))
                 val emptyText = when {

@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Task manager widget (#101): card with header (title + count + refresh),
-     divider, then a scrollable ListView fed by TaskWidgetService. The list
-     takes all remaining height (weight 1), so any placement at/above the
-     3x2 minimum fills instead of leaving a blank slab; all 30 tasks are
-     reachable by scroll, no "+N more" truncation. -->
+<!-- Collection variant of the task widget: the SAME chrome as
+     task_widget_full.xml (which is built on the structure style C proved
+     renders — issue #137), with a scrollable ListView in place of the
+     static row container. No divider, no header view toggle, no
+     title-to-config tap, no empty-view tap: none of those have ever
+     rendered successfully on the affected launcher. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
     android:layout_width="match_parent"
@@ -43,47 +44,24 @@
 
         </LinearLayout>
 
-        <!-- TextView, not Button (#137): a platform Button pulls its
-             default style (theme attrs for background/textAppearance)
-             from the HOST's theme when a widget is inflated, and this
-             launcher rejects the whole RemoteViews. Styles A-C, which
-             render, contain no Button — this one is the difference. -->
-        <TextView
-            android:id="@+id/task_widget_view"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp"
-            android:textSize="12sp"
-            android:textColor="@color/task_widget_text_secondary"
-            android:contentDescription="@string/task_widget_view" />
-
         <ImageButton
             android:id="@+id/task_widget_refresh"
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:src="@android:drawable/ic_menu_rotate"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:background="@android:color/transparent"
             android:contentDescription="@string/task_widget_refresh" />
 
     </LinearLayout>
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginBottom="4dp"
-        android:background="@color/task_widget_divider" />
 
     <ListView
         android:id="@+id/task_widget_list_view"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:divider="@color/task_widget_divider"
-        android:dividerHeight="1dp"
+        android:layout_marginTop="4dp"
+        android:divider="@null"
+        android:dividerHeight="0dp"
         android:clipToPadding="false" />
 
     <TextView
