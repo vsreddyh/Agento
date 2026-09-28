@@ -8,31 +8,23 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
-## [4.2.7]
+## [4.3.0]
 
-- Diagnostic build fixes: static rows clear before re-render (no ghost
-  rows), report/copy caps cover the whole string, the data-changed
-  notify targets only service-backed placements, and the diagnostics
-  actions no longer race each other.
-
-## [4.2.6]
-
-- DIAGNOSTIC build for the task widget load error (issue #137): the
-  widget renders plain rows (no scrollable collection) by default, with
-  a "Scrolling list" toggle in the widget's display settings to compare
-  the collection path. Isolates a collection-binding failure from the
-  rest of the widget; the collection path itself is unchanged.
-- Widget diagnostics: reports no longer truncate the wrong operand, the
-  system slice is filtered like the rest (no other apps' lines), clear
-  reports real exit status, and copy carries the same content as the
-  file export.
-
-## [4.2.5]
-
-- Widget diagnostics now capture system-wide log (last 15 minutes)
-  alongside our own, so a host-side widget failure — thrown in the
-  launcher's process, invisible in ours — is captured. Adds a
-  best-effort "Clear system log" action.
+- Task widget: the complete-ring drawable uses a concrete day/night
+  color instead of a theme attribute, and direct collection rows carry
+  explicit per-row taps instead of the mutable template + fill-ins —
+  both were host-sensitive pieces of the widget load path (issue #137).
+- Widget display settings gain a "Scrolling list" toggle: off renders
+  plain rows with no collection, template, or service bind, which
+  isolates a collection-binding failure from the rest of the widget.
+  Off by default while #137 is open; the collection path is unchanged
+  and is the intended end state.
+- Widget diagnostics (Settings → About) capture system-wide log
+  alongside our own — a host-side widget failure is thrown in the
+  launcher's process and is invisible in ours. Reports are capped,
+  filtered to widget signatures, and secret-redacted; the report can be
+  saved to a file for upload, and copy carries the same content.
+  Adds a best-effort "Clear system log" action.
 
 ## [4.2.4]
 

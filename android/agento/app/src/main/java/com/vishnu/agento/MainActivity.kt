@@ -5910,13 +5910,13 @@ private fun WidgetDiagnosticsCard() {
                         }
                         val sys = withContext(Dispatchers.IO) {
                             TaskWidget.dumpLog(
-                                allProcesses = true, sinceMinutes = 15,
+                                allProcesses = true,
                                 interestingLines = 120, tailLines = 0)
                         }
                         clipboard.setText(
                             AnnotatedString(
                                 ("$fresh\n--- log (this app) ---\n$mine\n" +
-                                    "--- log (system, last 15 min) ---\n$sys").take(6000)
+                                    "--- log (system, recent) ---\n$sys").take(6000)
                             )
                         )
                         copied = true

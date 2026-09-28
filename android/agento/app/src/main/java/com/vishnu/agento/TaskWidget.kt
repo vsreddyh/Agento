@@ -206,12 +206,12 @@ class TaskWidget : AppWidgetProvider() {
             val head = diagnostics(appCtx)
             val mine = dumpLog(interestingLines = 100, tailLines = 30)
             val all = dumpLog(
-                allProcesses = true, sinceMinutes = 15,
+                allProcesses = true,
                 interestingLines = 250, tailLines = 40)
             // Parenthesized: without them take() binds to the last string
             // literal only and the head is never capped.
             return ("$head\n--- log (this app) ---\n$mine\n" +
-                "--- log (system, last 15 min) ---\n$all").take(200_000)
+                "--- log (system, recent) ---\n$all").take(200_000)
         }
 
         /** Best-effort wipe of the log buffers. Android gates `logcat -c`
@@ -230,7 +230,7 @@ class TaskWidget : AppWidgetProvider() {
             when {
                 denied -> "Clearing the system log needs a privileged " +
                     "permission the app doesn't have. Nothing lost: reports " +
-                    "capture the last 15 minutes only."
+                    "capture only the recent slice."
                 // Silent failure is the common case, so trust exit status.
                 !finished -> "logcat didn't finish — buffers probably unchanged."
                 code != 0 -> "logcat exited $code (permission denied) — " +
@@ -249,7 +249,6 @@ class TaskWidget : AppWidgetProvider() {
          * are redacted before it leaves the device (see [redactSecrets]). */
         fun dumpLog(
             allProcesses: Boolean = false,
-            sinceMinutes: Int = 0,
             interestingLines: Int = 40,
             tailLines: Int = 20,
         ): String = runCatching {
@@ -270,20 +269,10 @@ class TaskWidget : AppWidgetProvider() {
             if (allProcesses) {
                 // Launcher + AppWidgetManager lines live in other pids; -b
                 // all adds the crash buffer where a host failure lands.
-                // -T trims to a fresh window, but relative windows like
-                // "15m" are not honored everywhere, so fall back to a
-                // large -t count when the windowed read comes back empty.
-                out = if (sinceMinutes > 0) {
-                    val windowed = runLogcat(
-                        base + listOf("-T", "${sinceMinutes}m", "*:W"))
-                    if (windowed.isBlank()) {
-                        runLogcat(base + listOf("-t", "3000", "*:W"))
-                    } else {
-                        windowed
-                    }
-                } else {
-                    runLogcat(base + listOf("-t", "3000", "*:W"))
-                }
+                // -t caps the read (relative -T windows are not honored
+                // everywhere and an uncapped read can be megabytes on a
+                // noisy device), so a bounded recent slice it is.
+                out = runLogcat(base + listOf("-t", "3000", "*:W"))
             } else {
                 out = runLogcat(
                     listOf("logcat", "-d", "--pid=$pid", "-v", "brief", "-t", "400"))
