@@ -61,6 +61,8 @@
             android:background="@android:color/transparent"
             android:contentDescription="@string/task_widget_refresh" />
 
+    </LinearLayout>
+
 
     <LinearLayout
         android:id="@+id/task_widget_static_list"
