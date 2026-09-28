@@ -398,42 +398,49 @@ class TaskWidget : AppWidgetProvider() {
             return if (v in STYLE_VALUES) v else STYLE_CHROME
         }
 
-        // Style ladder values. The original C/D/E numbers are FROZEN
-        // (placements persist them, so renumbering would remap a saved
-        // choice): C=2, old full-static D=3, E=4. The D1→D5 steps take
-        // fresh values in the 10s, and the retired 3 maps to D5 — the same
-        // widget it used to mean.
+        // Style ladder values. C=2 and E=4 are FROZEN (placements persist
+        // them, so renumbering would remap a saved choice). D1 kept 10
+        // (unchanged meaning); D2-D4 took FRESH values because 11/12/13
+        // still name the retired divider-era steps — reusing them would
+        // make migrateStyle non-idempotent and quietly downgrade a fresh
+        // selection on every load.
         const val STYLE_CHROME = 2       // C: header only (known good)
         const val STYLE_FULL_SCROLL = 4  // E: full widget, collection
-        const val STYLE_ROWS = 10        // D1: + task rows
-        const val STYLE_ROWS_DIVIDER = 11   // D2: + divider
-        const val STYLE_ROWS_EMPTY = 12     // D3: + empty-state text
-        const val STYLE_PLUS_TOGGLE = 13    // D4: + header view toggle
-        const val STYLE_FULL_STATIC = 14    // D5: + title→settings tap
+        const val STYLE_ROWS = 10        // D1: + task rows (known good)
+        const val STYLE_ROWS_EMPTY = 15  // D2: + empty-state text
+        const val STYLE_PLUS_TOGGLE = 16 // D3: + header view toggle
+        const val STYLE_FULL_STATIC = 17 // D4: + title→settings tap
 
         private val STYLE_VALUES = setOf(
-            STYLE_CHROME, STYLE_FULL_SCROLL, STYLE_ROWS, STYLE_ROWS_DIVIDER,
-            STYLE_ROWS_EMPTY, STYLE_PLUS_TOGGLE, STYLE_FULL_STATIC)
-
-        /** The D1→D5 steps: one layout PER STEP, each adding one element
-         * to the previous. D5's only delta is a click, so it reuses d4. */
-        private val STYLE_STATIC_STEPS = setOf(
-            STYLE_ROWS, STYLE_ROWS_DIVIDER, STYLE_ROWS_EMPTY,
+            STYLE_CHROME, STYLE_FULL_SCROLL, STYLE_ROWS, STYLE_ROWS_EMPTY,
             STYLE_PLUS_TOGGLE, STYLE_FULL_STATIC)
 
-        /** Legacy D (=3) meant the full static widget, which is now D5. */
-        private fun migrateStyle(v: Int): Int = if (v == 3) STYLE_FULL_STATIC else v
+        /** The D1→D4 steps: one layout PER STEP, each adding one element
+         * to the previous. D4's only delta is a click, so it reuses d3. */
+        private val STYLE_STATIC_STEPS = setOf(
+            STYLE_ROWS, STYLE_ROWS_EMPTY, STYLE_PLUS_TOGGLE, STYLE_FULL_STATIC)
 
-        /** How much chrome a style turns on: 0..4 = rows, +divider,
-         * +empty text, +header toggle, +title tap. Unknown values fall
-         * back to the minimum, so a bad value can never switch chrome on
-         * by accident. */
+        /** Translates saved ladder values from the pre-divider-removal
+         * numbering, preserving the chrome the user chose minus the divider
+         * that broke their widget: 3/14 were the old full-static D/D5, and
+         * 11/12/13 the divider-era steps. Idempotent — no output value is
+         * itself a case, so a current value passes through unchanged. */
+        private fun migrateStyle(v: Int): Int = when (v) {
+            3, 14 -> STYLE_FULL_STATIC    // full static (with divider)
+            11 -> STYLE_ROWS             // rows+divider        → rows
+            12 -> STYLE_ROWS_EMPTY       // +divider+empty      → rows+empty
+            13 -> STYLE_PLUS_TOGGLE      // +toggle             → +toggle
+            else -> v
+        }
+
+        /** How much chrome a style turns on: 0..3 = rows, +empty text,
+         * +header toggle, +title tap. Unknown values fall back to the
+         * minimum, so a bad value can never switch chrome on by accident. */
         private fun styleLevel(style: Int): Int = when (style) {
             STYLE_ROWS -> 0
-            STYLE_ROWS_DIVIDER -> 1
-            STYLE_ROWS_EMPTY -> 2
-            STYLE_PLUS_TOGGLE -> 3
-            STYLE_FULL_STATIC -> 4
+            STYLE_ROWS_EMPTY -> 1
+            STYLE_PLUS_TOGGLE -> 2
+            STYLE_FULL_STATIC -> 3
             else -> 0
         }
 
@@ -669,17 +676,13 @@ class TaskWidget : AppWidgetProvider() {
             val scrollable = style == STYLE_FULL_SCROLL
             val level = styleLevel(style)
             if (style in STYLE_STATIC_STEPS) {
-                // D1→D5: a real layout PER STEP, each byte-identical to C in
+                // D1→D4: a real layout PER STEP, each byte-identical to C in
                 // the header and adding exactly one element to the previous
-                // step. (An earlier single-layout version kept the later
-                // elements present-but-GONE, which meant D1's failure could
-                // have come from any of them, not just the rows.) D5's delta
-                // is a click only, so it reuses the d4 layout.
+                // step. D4's delta is a click only, so it reuses d3.
                 val stepLayout = when (style) {
                     STYLE_ROWS -> R.layout.task_widget_d1
-                    STYLE_ROWS_DIVIDER -> R.layout.task_widget_d2
-                    STYLE_ROWS_EMPTY -> R.layout.task_widget_d3
-                    else -> R.layout.task_widget_d4
+                    STYLE_ROWS_EMPTY -> R.layout.task_widget_d2
+                    else -> R.layout.task_widget_d3
                 }
                 return RemoteViews(context.packageName, stepLayout).apply {
                     setOnClickPendingIntent(R.id.task_widget_body, openPending)
@@ -701,14 +704,13 @@ class TaskWidget : AppWidgetProvider() {
                     val showList = !tasks.isNullOrEmpty()
                     setViewVisibility(R.id.task_widget_static_list,
                         if (showList) View.VISIBLE else View.GONE)
-                    if (level >= 1) setViewVisibility(R.id.task_widget_divider, View.VISIBLE)
-                    if (level >= 2) {
+                    if (level >= 1) {
                         val empty = emptyText(context, tasks, error, errorDetail)
                         setTextViewText(R.id.task_widget_empty, empty)
                         setViewVisibility(R.id.task_widget_empty,
                             if (empty.isEmpty()) View.GONE else View.VISIBLE)
                     }
-                    if (level >= 3) {
+                    if (level >= 2) {
                         setTextViewText(R.id.task_widget_view, view.title)
                         // The toggle cycles the slice; handled in onReceive
                         // (ACTION_VIEW) so the broadcast path stays proven.
@@ -721,7 +723,7 @@ class TaskWidget : AppWidgetProvider() {
                                 PendingIntent.FLAG_UPDATE_CURRENT or
                                     PendingIntent.FLAG_IMMUTABLE))
                     }
-                    if (level >= 4) setOnClickPendingIntent(R.id.task_widget_title, configPending)
+                    if (level >= 3) setOnClickPendingIntent(R.id.task_widget_title, configPending)
                     setTextViewText(R.id.task_widget_title, view.title)
                     setTextViewText(R.id.task_widget_count,
                         countText(context, view, tasks, error, capped = true))

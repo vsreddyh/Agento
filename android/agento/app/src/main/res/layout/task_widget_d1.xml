@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Diagnostic step D1 (issue #137). Header is byte-identical to
-     task_widget_style_c.xml — the only difference from the previous step is
-     the element(s) below, so the first step that fails names the culprit. -->
+     task_widget_style_c.xml; the only difference from the previous step is
+     the element below, so the first failing step names the culprit. The 1dp
+     divider View that used to sit here is removed for good — it alone made
+     this launcher reject the widget. (Steps that carried it were removed.) -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
     android:layout_width="match_parent"
