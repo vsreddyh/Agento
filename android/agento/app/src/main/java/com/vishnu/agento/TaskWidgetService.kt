@@ -93,8 +93,10 @@ private class TaskFactory(
             ?: return RemoteViews(appCtx.packageName, layout)
         return RemoteViews(appCtx.packageName, layout).apply {
             setTextViewText(R.id.task_widget_row_name, task.name)
-            val due = listOf(task.dueDate.trim(), task.dueTime.trim())
-                .filter { it.isNotEmpty() }.joinToString(" ")
+            // Same friendly due line as the Task Manager rows (#130),
+            // IST-pinned; blank collapses to gone below.
+            val today = java.time.LocalDate.now(IST)
+            val due = friendlyDue(task.dueDate, task.dueTime, today)
             if (showDue() && due.isNotEmpty()) {
                 setTextViewText(R.id.task_widget_row_due, due)
                 setViewVisibility(R.id.task_widget_row_due, View.VISIBLE)

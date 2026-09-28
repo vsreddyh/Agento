@@ -79,6 +79,11 @@ class TasksApi(context: Context) {
         if (name.isEmpty()) return null
         // estimated_minutes may encode as int, long, or double.
         val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
+        // completedAt is JSON null for open tasks; Android's optString
+        // coerces null to the string "null", which would mark every open
+        // task done — guard with isNull first (#130).
+        val completedAt = if (o.isNull("completedAt")) "" else o.optString("completedAt", "").trim()
+        val createdAt = if (o.isNull("createdAt")) "" else o.optString("createdAt", "").trim()
         return ServerTask(
             id = id,
             name = name,
@@ -87,8 +92,8 @@ class TasksApi(context: Context) {
             dueTime = o.optString("due_time", "").trim(),
             estimatedMinutes = mins.coerceAtLeast(0),
             repeatRule = o.optString("repeat_rule", "").trim(),
-            completedAt = o.optString("completedAt", "").trim(),
-            createdAt = o.optString("createdAt", "").trim(),
+            completedAt = completedAt,
+            createdAt = createdAt,
         )
     }
 

@@ -146,6 +146,11 @@ class TaskWidget : AppWidgetProvider() {
         @Volatile var cachedViews: Map<String, List<ServerTask>> = emptyMap()
             private set
 
+        // Last fetch failure per server state (#130). Survives across
+        // pulls so the empty view can name the reason (and offer a
+        // tap-to-retry) instead of a dead generic error.
+        @Volatile private var lastErrors: Map<String, String> = emptyMap()
+
         private fun prefs(context: Context) =
             context.applicationContext.getSharedPreferences(
                 AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
@@ -200,14 +205,20 @@ class TaskWidget : AppWidgetProvider() {
             if (ids.isEmpty()) return
             val api = TasksApi(appCtx)
             val views = mutableMapOf<String, List<ServerTask>>()
+            val errors = mutableMapOf<String, String>()
             coroutineScope {
                 TaskWidgetView.entries.map { v ->
-                    async { v.state to api.list(v.state).getOrNull() }
-                }.awaitAll().forEach { (state, list) ->
-                    if (list != null) views[state] = list
+                    async { v.state to api.list(v.state) }
+                }.awaitAll().forEach { (state, res) ->
+                    res.getOrNull()?.let { views[state] = it }
+                        ?: run {
+                            errors[state] = res.exceptionOrNull()?.message
+                                ?: "unknown error"
+                        }
                 }
             }
             if (views.isNotEmpty()) cachedViews = cachedViews + views
+            lastErrors = lastErrors + errors
             val mgr = AppWidgetManager.getInstance(appCtx)
             for (id in ids) {
                 val view = viewFor(appCtx, id)
@@ -215,12 +226,22 @@ class TaskWidget : AppWidgetProvider() {
                 // Error is per-view: no data for THIS view means the fetch
                 // failed (a global flag would stick others on loading when
                 // only one state errored).
-                mgr.updateAppWidget(
-                    id, render(appCtx, id, view, tasks, tasks == null))
+                val detail = if (tasks == null) {
+                    lastErrors[view.state]?.let(::serverDetail)
+                } else {
+                    null
+                }
+                // One wedged placement must not abort the rest (#130).
+                runCatching {
+                    mgr.updateAppWidget(
+                        id, render(appCtx, id, view, tasks, tasks == null, detail))
+                }
             }
             // Notify after the update loop: render() re-sets the remote
             // adapter, which would invalidate an earlier notify.
-            mgr.notifyAppWidgetViewDataChanged(ids, R.id.task_widget_list_view)
+            runCatching {
+                mgr.notifyAppWidgetViewDataChanged(ids, R.id.task_widget_list_view)
+            }
         }
 
         /** Full widget view: header reflects this placement's view and the
@@ -234,6 +255,7 @@ class TaskWidget : AppWidgetProvider() {
             view: TaskWidgetView,
             tasks: List<ServerTask>?,
             error: Boolean,
+            errorDetail: String? = null,
         ): RemoteViews {
             val open = Intent(context, MainActivity::class.java).setAction(ACTION_TASKS)
             val openPending = PendingIntent.getActivity(
@@ -280,6 +302,9 @@ class TaskWidget : AppWidgetProvider() {
                 setOnClickPendingIntent(R.id.task_widget_title, configPending)
                 setOnClickPendingIntent(R.id.task_widget_view, viewPending)
                 setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
+                // Error/empty state is tappable: re-pull instead of sitting
+                // dead on a stale failure (#130).
+                setOnClickPendingIntent(R.id.task_widget_empty, refreshPending)
                 setPendingIntentTemplate(R.id.task_widget_list_view, rowPending)
                 setRemoteAdapter(R.id.task_widget_list_view, svc)
                 setEmptyView(
@@ -302,7 +327,9 @@ class TaskWidget : AppWidgetProvider() {
                 setTextViewText(R.id.task_widget_count, count)
                 val emptyText = when {
                     tasks == null && !error -> context.getString(R.string.task_widget_loading)
-                    tasks == null -> context.getString(R.string.task_widget_error)
+                    tasks == null -> (errorDetail?.take(140)
+                        ?: context.getString(R.string.task_widget_error)) +
+                        " — tap to retry"
                     tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
                     else -> ""
                 }

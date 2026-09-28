@@ -91,9 +91,11 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -1310,29 +1312,37 @@ private fun TaskManagerScreen(
                         }
                     }
                     sections.forEach { (bucket, rows) ->
-                        if (bucket != null) {
-                            Text(
-                                bucket.title,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = if (bucket == DueBucket.Overdue) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.primary
-                                },
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-                        }
-                        rows.forEach { t ->
-                            ServerTaskRow(
-                                task = t,
-                                overdue = t.isOverdue(today),
-                                actionsEnabled = !busy,
-                                onOpen = { selected = t },
-                                onToggle = {
-                                    if (t.isOpen()) doComplete(t) else doReopen(t)
-                                    selected = null
-                                },
-                            )
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            if (bucket != null) {
+                                Text(
+                                    "${bucket.title} · ${rows.size}",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = if (bucket == DueBucket.Overdue) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    },
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                                )
+                            }
+                            rows.forEachIndexed { i, t ->
+                                ServerTaskRow(
+                                    task = t,
+                                    overdue = t.isOverdue(today),
+                                    today = day,
+                                    actionsEnabled = !busy,
+                                    onOpen = { selected = t },
+                                    onToggle = {
+                                        if (t.isOpen()) doComplete(t) else doReopen(t)
+                                        selected = null
+                                    },
+                                )
+                                if (i < rows.lastIndex) {
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(start = 56.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1449,9 +1459,11 @@ private fun TaskManagerScreen(
     if (open != null) {
         // IST-pinned (#124) to match the list's overdue rule.
         val sheetToday = java.time.LocalDate.now(IST).toString()
+        val sheetDay = java.time.LocalDate.now(IST)
         ServerTaskDetailSheet(
             task = open,
             overdue = open.isOverdue(sheetToday),
+            today = sheetDay,
             actionsEnabled = !busy,
             onDismiss = { selected = null },
             onEdit = {
@@ -1492,92 +1504,94 @@ private fun ServerTask.toDraft() = ServerTaskDraft(
     repeatRule = repeatRule,
 )
 
-/** Compact server task row: checkbox toggles complete/reopen, tap opens
- * the detail sheet. Only name + one due line show here; description,
- * estimate, repeat, and timestamps live on the detail page. Overdue
- * open tasks render the due line in error color. */
+/** Flat task row: checkbox toggles complete/reopen, tap opens the
+ * detail sheet. Name + one friendly due line; description, estimate,
+ * repeat, and timestamps live on the detail page. Overdue open tasks
+ * render the due line in error color; done rows dim with a
+ * strikethrough. Deliberately cardless — the section stacks the rows
+ * with inset dividers. */
 @Composable
 private fun ServerTaskRow(
     task: ServerTask,
     overdue: Boolean,
+    today: java.time.LocalDate,
     actionsEnabled: Boolean,
     onOpen: () -> Unit,
     onToggle: () -> Unit,
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = onOpen,
+    val done = !task.isOpen()
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onToggle, enabled = actionsEnabled) {
-                if (task.isOpen()) {
-                    Icon(
-                        Icons.Filled.RadioButtonUnchecked,
-                        contentDescription = "Complete task",
-                    )
-                } else {
-                    Icon(
-                        Icons.Filled.CheckCircle,
-                        contentDescription = "Reopen task",
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
+        IconButton(onClick = onToggle, enabled = actionsEnabled) {
+            if (task.isOpen()) {
+                Icon(
+                    Icons.Filled.RadioButtonUnchecked,
+                    contentDescription = "Complete task",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(26.dp),
+                )
+            } else {
+                Icon(
+                    Icons.Filled.CheckCircle,
+                    contentDescription = "Reopen task",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(26.dp),
+                )
             }
-            Column(modifier = Modifier.weight(1f)) {
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                task.name,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textDecoration = if (done) TextDecoration.LineThrough else null,
+                color = if (done) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+            val dueLine = friendlyDue(task.dueDate, task.dueTime, today)
+            val dueBits = buildList {
+                if (dueLine.isNotEmpty()) add(dueLine)
+                if (task.estimatedMinutes > 0) add("~${task.estimatedMinutes} min")
+                if (task.repeatRule.isNotEmpty()) add(task.repeatRule)
+            }
+            if (dueBits.isNotEmpty()) {
                 Text(
-                    task.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    dueBits.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    color = if (task.isOpen()) {
-                        MaterialTheme.colorScheme.onSurface
+                    fontWeight = if (overdue) FontWeight.SemiBold else null,
+                    color = if (overdue) {
+                        MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
-                val dueBits = buildList {
-                    if (task.dueDate.isNotEmpty()) {
-                        add(
-                            task.dueDate +
-                                (if (task.dueTime.isNotEmpty()) " ${task.dueTime}" else "")
-                        )
-                    }
-                    if (task.estimatedMinutes > 0) add("~${task.estimatedMinutes} min")
-                    if (task.repeatRule.isNotEmpty()) add(task.repeatRule)
-                }
-                if (dueBits.isNotEmpty()) {
-                    Text(
-                        dueBits.joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = if (overdue) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                } else if (task.description.isNotEmpty()) {
-                    Text(
-                        task.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (task.description.isNotEmpty()) {
-                Icon(
-                    Icons.Filled.Description,
-                    contentDescription = "Has details",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(end = 4.dp),
+            } else if (task.description.isNotEmpty()) {
+                Text(
+                    task.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+        if (task.description.isNotEmpty()) {
+            Icon(
+                Icons.Filled.Description,
+                contentDescription = "Has details",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 4.dp),
+            )
         }
     }
 }
@@ -1588,6 +1602,7 @@ private fun ServerTaskRow(
 private fun ServerTaskDetailSheet(
     task: ServerTask,
     overdue: Boolean,
+    today: java.time.LocalDate,
     actionsEnabled: Boolean,
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
@@ -1642,8 +1657,8 @@ private fun ServerTaskDetailSheet(
                 label = "Due",
                 value = when {
                     task.dueDate.isEmpty() -> "No due date"
-                    else -> task.dueDate +
-                        (if (task.dueTime.isNotEmpty()) " at ${task.dueTime}" else "")
+                    else -> friendlyDue(task.dueDate, task.dueTime, today)
+                        .ifEmpty { task.dueDate }
                 },
                 highlight = overdue,
             )
