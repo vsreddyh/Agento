@@ -215,6 +215,36 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             return
         }
         val name = task?.name.orEmpty().ifEmpty { "Task due" }
+        // The fetch already carries the whole task — surface it instead
+        // of a bare "Due now" (#130 follow-up).
+        val today = LocalDate.now(IST)
+        val dueLine = if (task != null) {
+            friendlyDue(task.dueDate, task.dueTime, today)
+        } else {
+            ""
+        }
+        val summary = listOf(
+            dueLine.ifEmpty { null },
+            task?.estimatedMinutes?.takeIf { it > 0 }?.let { "~$it min" },
+        ).filterNotNull().joinToString(" · ").ifEmpty { "Due now" }
+        // Locals: task is nullable and conditions below don't smart-cast.
+        val description = task?.description.orEmpty()
+        val mins = task?.estimatedMinutes ?: 0
+        val repeat = task?.repeatRule.orEmpty()
+        val big = buildList {
+            if (description.isNotEmpty()) add(description)
+            if (dueLine.isNotEmpty()) add(dueLine)
+            if (mins > 0) add("Estimate ~$mins min")
+            if (repeat.isNotEmpty()) add("Repeats $repeat")
+        }.joinToString("\n")
+        // Inline complete reuses the widget trampoline (no visible UI:
+        // completes, refreshes widget/alarms, finishes).
+        val done = PendingIntent.getActivity(
+            appCtx, taskId.hashCode(),
+            Intent(appCtx, TaskCompleteActivity::class.java)
+                .putExtra(TaskWidget.EXTRA_COMPLETE_ID, taskId),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE)
             as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -244,10 +274,19 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             NotificationCompat.Builder(appCtx, TaskReminders.CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_menu_agenda)
                 .setContentTitle(name)
-                .setContentText("Due now")
+                .setContentText(summary)
+                .setStyle(
+                    NotificationCompat.BigTextStyle()
+                        .bigText(big.ifEmpty { summary })
+                )
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .setContentIntent(tap)
+                .addAction(
+                    android.R.drawable.checkbox_on_background,
+                    "Done",
+                    done,
+                )
                 .build(),
         )
     }

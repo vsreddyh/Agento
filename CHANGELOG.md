@@ -10,6 +10,13 @@ see GitHub Releases for older notes.
 
 ## [Unreleased]
 
+## [3.20.2]
+
+- Task due notifications carry the task: friendly due line + estimate in
+  the collapsed text, description + due + estimate + repeat in the
+  expanded view, and a Done action that completes inline (reuses the
+  widget trampoline — no app open).
+
 ## [3.20.1]
 
 - Task Manager bug fix: open tasks no longer render as completed — JSON
