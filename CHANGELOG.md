@@ -21,9 +21,7 @@ see GitHub Releases for older notes.
 - Widget hardening: one bad placement can no longer abort the initial
   render for the rest, and Settings → About gains a Widget diagnostics
   card (placement state plus one-tap copy of recent device log, so
-  widget failures are debuggable without adb). Factory throwables are
-  recorded, crash log lines surface first, and the report can be saved
-  to a file for upload.
+  widget failures are debuggable without adb).
 
 ## [4.0.0]
 

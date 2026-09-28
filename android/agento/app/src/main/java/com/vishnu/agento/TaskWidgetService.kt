@@ -105,30 +105,38 @@ private class TaskFactory(
             val task = items.getOrNull(position)
                 ?: return@runCatching RemoteViews(appCtx.packageName, layout)
             RemoteViews(appCtx.packageName, layout).apply {
-            setTextViewText(R.id.task_widget_row_name, task.name)
-            // Same friendly due line as the Task Manager rows (#130),
-            // IST-pinned; blank collapses to gone below.
-            val due = friendlyDue(task.dueDate, task.dueTime, today)
-            if (showDue() && due.isNotEmpty()) {
-                setTextViewText(R.id.task_widget_row_due, due)
-                setViewVisibility(R.id.task_widget_row_due, View.VISIBLE)
-            } else {
-                setViewVisibility(R.id.task_widget_row_due, View.GONE)
-            }
-            // Ring completes inline; anywhere else opens the detail
-            // sheet. Both ride the trampoline template pending intent.
-            setOnClickFillInIntent(
-                R.id.task_widget_row_check,
-                Intent().putExtra(TaskWidget.EXTRA_COMPLETE_ID, task.id),
-            )
-            setOnClickFillInIntent(
-                R.id.task_widget_row,
-                Intent().putExtra(TaskWidget.EXTRA_TASK_ID, task.id),
-            )
+                setTextViewText(R.id.task_widget_row_name, task.name)
+                // Same friendly due line as the Task Manager rows (#130),
+                // IST-pinned; blank collapses to gone below.
+                val due = friendlyDue(task.dueDate, task.dueTime, today)
+                if (showDue() && due.isNotEmpty()) {
+                    setTextViewText(R.id.task_widget_row_due, due)
+                    setViewVisibility(R.id.task_widget_row_due, View.VISIBLE)
+                } else {
+                    setViewVisibility(R.id.task_widget_row_due, View.GONE)
+                }
+                // Ring completes inline; anywhere else opens the detail
+                // sheet. Both ride the trampoline template pending intent.
+                setOnClickFillInIntent(
+                    R.id.task_widget_row_check,
+                    Intent().putExtra(TaskWidget.EXTRA_COMPLETE_ID, task.id),
+                )
+                setOnClickFillInIntent(
+                    R.id.task_widget_row,
+                    Intent().putExtra(TaskWidget.EXTRA_TASK_ID, task.id),
+                )
             }
         }.getOrElse {
             TaskWidget.recordFactoryError("getViewAt($position)", it)
-            RemoteViews(appCtx.packageName, R.layout.task_widget_row)
+            // Visible failure, not a mysteriously empty row (the error is
+            // also in diagnostics via recordFactoryError above).
+            RemoteViews(appCtx.packageName, R.layout.task_widget_row).apply {
+                setTextViewText(
+                    R.id.task_widget_row_name,
+                    appCtx.getString(R.string.task_widget_error),
+                )
+                setViewVisibility(R.id.task_widget_row_due, View.GONE)
+            }
         }
     }
 }
