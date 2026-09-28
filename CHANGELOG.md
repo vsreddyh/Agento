@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.2.6]
+
+- DIAGNOSTIC build for the task widget load error (issue #137): the
+  widget renders plain rows (no scrollable collection) by default, with
+  a "Scrolling list" toggle in the widget's display settings to compare
+  the collection path. Isolates a collection-binding failure from the
+  rest of the widget; the collection path itself is unchanged.
+- Widget diagnostics: reports no longer truncate the wrong operand, the
+  system slice is filtered like the rest (no other apps' lines), clear
+  reports real exit status, and copy carries the same content as the
+  file export.
+
 ## [4.2.5]
 
 - Widget diagnostics now capture system-wide log (last 15 minutes)

@@ -5879,6 +5879,8 @@ private fun WidgetDiagnosticsCard() {
     var copied by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf("") }
+    var clearing by remember { mutableStateOf(false) }
+    var cleared by remember { mutableStateOf("") }
     // Prefs/AppWidgetManager reads stay off Main (same as the log dump).
     LaunchedEffect(Unit) {
         summary = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
@@ -5900,8 +5902,23 @@ private fun WidgetDiagnosticsCard() {
                     try {
                         val fresh = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
                         summary = fresh
-                        val log = withContext(Dispatchers.IO) { TaskWidget.dumpLog() }
-                        clipboard.setText(AnnotatedString("$fresh\n--- log ---\n${log.take(6000)}"))
+                        // Same content as the file export (minus the long
+                        // log tail): copying must not silently miss the
+                        // host-side lines the subtitle promises.
+                        val mine = withContext(Dispatchers.IO) {
+                            TaskWidget.dumpLog(interestingLines = 60, tailLines = 15)
+                        }
+                        val sys = withContext(Dispatchers.IO) {
+                            TaskWidget.dumpLog(
+                                allProcesses = true, sinceMinutes = 15,
+                                interestingLines = 120, tailLines = 0)
+                        }
+                        clipboard.setText(
+                            AnnotatedString(
+                                "$fresh\n--- log (this app) ---\n$mine\n" +
+                                    "--- log (system, last 15 min) ---\n$sys".take(6000)
+                            )
+                        )
                         copied = true
                     } catch (e: Exception) {
                         summary = "diagnostics failed: ${e.message ?: e.javaClass.simpleName}"
@@ -5955,17 +5972,20 @@ private fun WidgetDiagnosticsCard() {
         }
         OutlinedButton(
             onClick = {
+                clearing = true
                 scope.launch {
-                    saved = withContext(Dispatchers.IO) { TaskWidget.clearSystemLog() }
+                    cleared = withContext(Dispatchers.IO) { TaskWidget.clearSystemLog() }
+                    clearing = false
                 }
             },
-            enabled = !copying && !saving,
+            enabled = !copying && !saving && !clearing,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Clear system log")
+            Text(if (clearing) "Clearing…" else "Clear system log")
         }
         if (copied) HintLine("Copied — paste it in chat.")
         if (saved.isNotEmpty()) HintLine(saved)
+        if (cleared.isNotEmpty()) HintLine(cleared)
     }
 }
 

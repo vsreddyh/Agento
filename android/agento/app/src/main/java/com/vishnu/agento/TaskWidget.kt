@@ -102,6 +102,7 @@ class TaskWidget : AppWidgetProvider() {
             edit.remove("task_widget_view_$id")
                 .remove("task_widget_density_$id")
                 .remove("task_widget_due_$id")
+                .remove("task_widget_scroll_$id")
         }
         edit.apply()
     }
@@ -184,7 +185,8 @@ class TaskWidget : AppWidgetProvider() {
                 appendLine("placements=${ids.size}")
                 for (id in ids) {
                     appendLine("id=$id view=${viewFor(ctx, id)} " +
-                        "density=${densityFor(ctx, id)} showDue=${showDueFor(ctx, id)}")
+                        "density=${densityFor(ctx, id)} showDue=${showDueFor(ctx, id)} " +
+                        "scrollable=${scrollableFor(ctx, id)}")
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
@@ -203,8 +205,9 @@ class TaskWidget : AppWidgetProvider() {
             val all = dumpLog(
                 allProcesses = true, sinceMinutes = 15,
                 interestingLines = 250, tailLines = 40)
+            // One string before take(): the cap must cover the whole report.
             return "$head\n--- log (this app) ---\n$mine\n" +
-                "--- log (system, last 15 min) ---\n$all".take(200_000)
+                "--- log (system, last 15 min) ---\n$all".let { it.take(200_000) }
         }
 
         /** Best-effort wipe of the log buffers. Android gates `logcat -c`
@@ -215,18 +218,21 @@ class TaskWidget : AppWidgetProvider() {
             val proc = ProcessBuilder("logcat", "-b", "all", "-c")
                 .redirectErrorStream(true).start()
             val out = proc.inputStream.bufferedReader().readText().trim()
-            proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            val finished = proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            val code = runCatching { proc.exitValue() }.getOrDefault(-1)
             proc.destroy()
-            if (out.contains("Permission denied", ignoreCase = true) ||
+            val denied = out.contains("Permission denied", ignoreCase = true) ||
                 out.contains("SecurityException", ignoreCase = true)
-            ) {
-                "Clearing the system log needs a privileged permission — " +
-                    "not available to the app. Nothing lost: reports capture " +
-                    "the last 15 minutes only."
-            } else if (out.isEmpty()) {
-                "Log buffers cleared."
-            } else {
-                "logcat said: ${out.take(160)}"
+            when {
+                denied -> "Clearing the system log needs a privileged " +
+                    "permission the app doesn't have. Nothing lost: reports " +
+                    "capture the last 15 minutes only."
+                // Silent failure is the common case, so trust exit status.
+                !finished -> "logcat didn't finish — buffers probably unchanged."
+                code != 0 -> "logcat exited $code (permission denied) — " +
+                    "nothing cleared."
+                out.isEmpty() -> "Log buffers cleared."
+                else -> "logcat said: ${out.take(160)}"
             }
         }.getOrDefault("logcat unavailable")
 
@@ -262,22 +268,44 @@ class TaskWidget : AppWidgetProvider() {
                 val out = proc.inputStream.bufferedReader().readText()
                 proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
                 val lines = out.lines()
-                val interesting = lines.filter { l ->
-                    l.contains("TaskWidget") || l.contains("AndroidRuntime") ||
-                        l.contains("FATAL") || l.contains("RemoteViews") ||
-                        l.contains("AppWidget") || l.contains("System.err") ||
-                        // Host-side widget failure signatures.
-                        l.contains("agento") || l.contains("com.vishnu") ||
-                        l.contains("AppWidgetManager") || l.contains("AppWidgetHost") ||
-                        l.contains("RemoteCollection") || l.contains("widget", ignoreCase = true)
-                }.takeLast(interestingLines)
-                redactSecrets(
-                    (interesting + "--- tail ---" + lines.takeLast(tailLines)).joinToString("\n"),
-                ).ifEmpty { "(empty log)" }
+                val interesting = lines.filter(::widgetLine).takeLast(interestingLines)
+                // System-wide mode tails other apps' lines verbatim, so the
+                // tail is filtered with the same predicate: no unrelated PII
+                // riding along in an uploaded report. Self mode keeps the raw
+                // tail for context (own logs only).
+                val tail = if (allProcesses) {
+                    lines.filter(::widgetLine).takeLast(tailLines)
+                } else {
+                    lines.takeLast(tailLines)
+                }
+                val body = (interesting + "--- tail ---" + tail).joinToString("\n")
+                if (interesting.isEmpty() && tail.isEmpty()) {
+                    if (allProcesses) {
+                        // Android 4.1+ hides other processes' logs from apps
+                        // without READ_LOGS (never grantable), so this is
+                        // expected on most devices, not a capture failure.
+                        "(no widget lines visible — this OS hides other " +
+                            "processes' logs from apps, so the host's own " +
+                            "error cannot be read here; adb logcat is needed)"
+                    } else {
+                        "(empty log)"
+                    }
+                } else {
+                    redactSecrets(body)
+                }
             } finally {
                 proc.destroy()
             }
         }.getOrDefault("(log unavailable)")
+
+        /** Lines worth keeping: our own widget code, or any widget/host
+         * failure signature. */
+        private fun widgetLine(l: String): Boolean =
+            l.contains("TaskWidget") || l.contains("AndroidRuntime") ||
+                l.contains("FATAL") || l.contains("RemoteViews") ||
+                l.contains("AppWidget") || l.contains("System.err") ||
+                l.contains("agento") || l.contains("com.vishnu") ||
+                l.contains("RemoteCollection") || l.contains("widget", ignoreCase = true)
 
         // Bearer secrets must never ride along when the user pastes the
         // log into chat. Redacts key=value pairs for the usual secret
@@ -311,6 +339,14 @@ class TaskWidget : AppWidgetProvider() {
         /** Whether this placement's rows show the due line. */
         fun showDueFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_due_$appWidgetId", true)
+
+        /** Whether this placement uses the scrollable collection.
+         * DIAGNOSTIC (#137): defaults to FALSE — static rows — so the
+         * collection path is isolated from the rest of the widget on
+         * first install. Flip it in the widget's display settings to
+         * compare; the collection path stays the intended end state. */
+        fun scrollableFor(context: Context, appWidgetId: Int): Boolean =
+            prefs(context).getBoolean("task_widget_scroll_$appWidgetId", false)
 
         /** One row with explicit per-row intents instead of the collection
          * template: all immutable, so hosts that balk at the mutable
@@ -432,14 +468,17 @@ class TaskWidget : AppWidgetProvider() {
             // message can never outlive its failure (#130 review).
             lastErrors = (lastErrors + errors) - views.keys
             val mgr = AppWidgetManager.getInstance(appCtx)
-            // Legacy service path (API <31, or any placement without data
-            // that fell back to setRemoteAdapter) is the only consumer of
-            // the data-changed notify — direct-path placements need none.
-            var needNotify = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+            // Only the service-backed collection listens for a data change;
+            // direct items and static rows are re-rendered whole.
+            var needNotify = false
             for (id in ids) {
                 val view = viewFor(appCtx, id)
                 val tasks = views[view.state] ?: cachedViews[view.state]
-                if (tasks == null) needNotify = true
+                if (scrollableFor(appCtx, id) && tasks != null &&
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                ) {
+                    needNotify = true
+                }
                 // Error is per-view: no data for THIS view means the fetch
                 // failed (a global flag would stick others on loading when
                 // only one state errored).
@@ -525,7 +564,9 @@ class TaskWidget : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = Uri.parse("agento://widget/$appWidgetId")
             }
-            return RemoteViews(context.packageName, R.layout.task_widget).apply {
+            val scrollable = scrollableFor(context, appWidgetId)
+            return RemoteViews(context.packageName,
+                if (scrollable) R.layout.task_widget else R.layout.task_widget_static).apply {
                 setOnClickPendingIntent(R.id.task_widget_body, openPending)
                 setOnClickPendingIntent(R.id.task_widget_title, configPending)
                 setOnClickPendingIntent(R.id.task_widget_view, viewPending)
@@ -533,7 +574,27 @@ class TaskWidget : AppWidgetProvider() {
                 // Error/empty state is tappable: re-pull instead of sitting
                 // dead on a stale failure (#130).
                 setOnClickPendingIntent(R.id.task_widget_empty, refreshPending)
-                if (tasks != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (!scrollable) {
+                    // Diagnostic path (#137): plain rows, no collection,
+                    // no template, no service bind. Isolates a collection
+                    // failure from the rest of the widget. Each row keeps
+                    // its own immutable complete/open intents, so taps are
+                    // identical to the collection path.
+                    if (tasks != null) {
+                        val today = java.time.LocalDate.now(IST)
+                        val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
+                        val due = showDueFor(context, appWidgetId)
+                        tasks.take(8).forEach { t ->
+                            addView(R.id.task_widget_static_list,
+                                buildRowWithIntents(
+                                    context, appWidgetId, compact, due, today, t))
+                        }
+                    }
+                    setViewVisibility(R.id.task_widget_static_list,
+                        if (tasks.isNullOrEmpty()) View.GONE else View.VISIBLE)
+                    setViewVisibility(R.id.task_widget_empty,
+                        if (tasks.isNullOrEmpty()) View.VISIBLE else View.GONE)
+                } else if (tasks != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     // Service-backed collections (setRemoteAdapter) broke
                     // on Android 16 — hand the rows over directly instead
                     // of binding the service (issue #137). Rows carry
@@ -557,6 +618,10 @@ class TaskWidget : AppWidgetProvider() {
                     // Overload taking the items directly (API 31+), not
                     // the service Intent below.
                     setRemoteAdapter(R.id.task_widget_list_view, items)
+                    setEmptyView(
+                        R.id.task_widget_list_view,
+                        R.id.task_widget_empty,
+                    )
                 } else {
                     // API <31 has no RemoteCollectionItems: legacy service
                     // path (TaskWidgetService) with the fill-in template.
@@ -564,11 +629,11 @@ class TaskWidget : AppWidgetProvider() {
                     // list stays empty).
                     setPendingIntentTemplate(R.id.task_widget_list_view, rowPending)
                     setRemoteAdapter(R.id.task_widget_list_view, svc)
+                    setEmptyView(
+                        R.id.task_widget_list_view,
+                        R.id.task_widget_empty,
+                    )
                 }
-                setEmptyView(
-                    R.id.task_widget_list_view,
-                    R.id.task_widget_empty,
-                )
                 setTextViewText(R.id.task_widget_view, view.title)
                 val plural = when (view) {
                     TaskWidgetView.Open -> R.plurals.task_widget_open
@@ -592,7 +657,7 @@ class TaskWidget : AppWidgetProvider() {
                     else -> ""
                 }
                 setTextViewText(R.id.task_widget_empty, emptyText)
-            }
+            } // end RemoteViews apply
         }
     }
 }
