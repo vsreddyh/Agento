@@ -31,7 +31,7 @@
                 android:text="@string/task_widget_title"
                 android:textSize="16sp"
                 android:textStyle="bold"
-                android:textColor="?android:attr/textColorPrimary" />
+                android:textColor="@color/task_widget_text_primary" />
 
             <TextView
                 android:id="@+id/task_widget_count"
@@ -39,7 +39,7 @@
                 android:layout_height="wrap_content"
                 android:textSize="13sp"
                 android:text="@string/task_widget_loading"
-                android:textColor="?android:attr/textColorSecondary" />
+                android:textColor="@color/task_widget_text_secondary" />
 
         </LinearLayout>
 
@@ -85,6 +85,6 @@
         android:paddingTop="8dp"
         android:textSize="13sp"
         android:text="@string/task_widget_loading"
-        android:textColor="?android:attr/textColorSecondary" />
+        android:textColor="@color/task_widget_text_secondary" />
 
 </LinearLayout>
