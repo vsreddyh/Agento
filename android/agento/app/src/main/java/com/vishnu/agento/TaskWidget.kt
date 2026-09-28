@@ -56,9 +56,15 @@ class TaskWidget : AppWidgetProvider() {
         appWidgetIds: IntArray,
     ) {
         // Loading shell first so the widget never sits blank, then fill in.
+        // Per-id guard: one bad placement must not abort the rest (or the
+        // pull below) — an escaping throw here surfaces as a widget error.
         for (id in appWidgetIds) {
-            appWidgetManager.updateAppWidget(
-                id, render(context, id, viewFor(context, id), null, false))
+            runCatching {
+                appWidgetManager.updateAppWidget(
+                    id, render(context, id, viewFor(context, id), null, false))
+            }.onFailure {
+                Log.w("TaskWidget", "initial render failed for id=$id", it)
+            }
         }
         pull(context, appWidgetIds)
     }
@@ -151,6 +157,60 @@ class TaskWidget : AppWidgetProvider() {
         // pulls so the empty view can name the reason (and offer a
         // tap-to-retry) instead of a dead generic error.
         @Volatile private var lastErrors: Map<String, String> = emptyMap()
+
+        /** One-screen widget health summary for Settings → About, so
+         * widget failures can be diagnosed without adb. Never throws
+         * (a diagnostics call must not become a second crash). */
+        fun diagnostics(appCtx: Context): String = runCatching {
+            val ctx = appCtx.applicationContext
+            val mgr = AppWidgetManager.getInstance(ctx)
+            val ids = runCatching {
+                mgr.getAppWidgetIds(ComponentName(ctx, TaskWidget::class.java))
+            }.getOrDefault(intArrayOf())
+            buildString {
+                appendLine("placements=${ids.size}")
+                for (id in ids) {
+                    appendLine("id=$id view=${viewFor(ctx, id)} " +
+                        "density=${densityFor(ctx, id)} showDue=${showDueFor(ctx, id)}")
+                }
+                appendLine("cached=${cachedViews.mapValues { it.value.size }}")
+                appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
+            }.trim()
+        }.getOrDefault("(diagnostics unavailable)")
+
+        /** Recent log lines from our own process. Self-reads need no
+         * permission (unlike adb), so a broken widget's stack trace can
+         * be copied out of the app. Call off the main thread.
+         * Privacy: the output is user-copied into chat, so bearer secrets
+         * are redacted before it leaves the device (see [redactSecrets]). */
+        fun dumpOwnLog(): String = runCatching {
+            val pid = android.os.Process.myPid().toString()
+            val proc = ProcessBuilder(
+                "logcat", "-d", "--pid=$pid", "-v", "brief", "-t", "400")
+                .redirectErrorStream(true)
+                .start()
+            try {
+                // Read before wait: waiting first can deadlock on a full
+                // pipe. destroy() in finally so a stuck proc never leaks.
+                val out = proc.inputStream.bufferedReader().readText()
+                proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+                val tail = out.lines().takeLast(80).joinToString("\n")
+                redactSecrets(tail).ifEmpty { "(empty log)" }
+            } finally {
+                proc.destroy()
+            }
+        }.getOrDefault("(log unavailable)")
+
+        // Bearer secrets must never ride along when the user pastes the
+        // log into chat. Redacts key=value pairs for the usual secret
+        // names (case-insensitive); the diagnostics summary itself never
+        // carries secrets (counts and error strings only).
+        private val secretRE =
+            Regex("""(?i)\b(token|bearer|password|passwd|api[_-]?key|secret)\b\s*[:=]\s*\S+""")
+
+        private fun redactSecrets(s: String): String =
+            s.replace(Regex("""(?i)\bbearer\s+\S+"""), "bearer <redacted>")
+                .replace(secretRE, "$1=<redacted>")
 
         private fun prefs(context: Context) =
             context.applicationContext.getSharedPreferences(
