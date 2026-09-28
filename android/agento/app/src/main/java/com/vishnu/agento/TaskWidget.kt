@@ -193,36 +193,83 @@ class TaskWidget : AppWidgetProvider() {
         }.getOrDefault("(diagnostics unavailable)")
 
         /** Full diagnostics report for file export: health summary plus
-         * a larger redacted log slice than the clipboard variant. */
+         * a larger redacted log slice than the clipboard variant. The
+         * file variant captures system-wide logs: a host-side widget
+         * failure is thrown in the LAUNCHER's process, so our own log
+         * never contains the reason (#137). */
         fun buildReport(appCtx: Context): String {
             val head = diagnostics(appCtx)
-            val log = dumpOwnLog(interestingLines = 150, tailLines = 50)
-            return "$head\n--- log ---\n$log".take(100_000)
+            val mine = dumpLog(interestingLines = 100, tailLines = 30)
+            val all = dumpLog(
+                allProcesses = true, sinceMinutes = 15,
+                interestingLines = 250, tailLines = 40)
+            return "$head\n--- log (this app) ---\n$mine\n" +
+                "--- log (system, last 15 min) ---\n$all".take(200_000)
         }
 
-        /** Recent log lines from our own process. Self-reads need no
-         * permission (unlike adb), so a broken widget's stack trace can
-         * be copied out of the app. Call off the main thread.
-         * Privacy: the output is user-copied into chat, so bearer secrets
+        /** Best-effort wipe of the log buffers. Android gates `logcat -c`
+         * behind CLEAR_LOGS (signature|privileged), so a normal app is
+         * usually denied — reported either way instead of failing
+         * silently. Fresh-window capture (-T) is the workable path. */
+        fun clearSystemLog(): String = runCatching {
+            val proc = ProcessBuilder("logcat", "-b", "all", "-c")
+                .redirectErrorStream(true).start()
+            val out = proc.inputStream.bufferedReader().readText().trim()
+            proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            proc.destroy()
+            if (out.contains("Permission denied", ignoreCase = true) ||
+                out.contains("SecurityException", ignoreCase = true)
+            ) {
+                "Clearing the system log needs a privileged permission — " +
+                    "not available to the app. Nothing lost: reports capture " +
+                    "the last 15 minutes only."
+            } else if (out.isEmpty()) {
+                "Log buffers cleared."
+            } else {
+                "logcat said: ${out.take(160)}"
+            }
+        }.getOrDefault("logcat unavailable")
+
+        /** Recent log lines, self-read so no adb is needed. Self-process
+         * only by default (light, privacy-safe). [allProcesses] widens to
+         * the whole system buffer at Warn+, which is what a HOST-side
+         * widget failure looks like: the launcher throws in its own
+         * process, so our pid's log never shows it (issue #137).
+         * Privacy: output is user-initiated and shared, so bearer secrets
          * are redacted before it leaves the device (see [redactSecrets]). */
-        fun dumpOwnLog(interestingLines: Int = 40, tailLines: Int = 20): String = runCatching {
+        fun dumpLog(
+            allProcesses: Boolean = false,
+            sinceMinutes: Int = 0,
+            interestingLines: Int = 40,
+            tailLines: Int = 20,
+        ): String = runCatching {
             val pid = android.os.Process.myPid().toString()
-            val proc = ProcessBuilder(
-                "logcat", "-d", "--pid=$pid", "-v", "brief", "-t", "400")
-                .redirectErrorStream(true)
-                .start()
+            val cmd = if (allProcesses) {
+                // Launcher + AppWidgetManager lines live in other pids.
+                // -T trims to a fresh window so the report is all new
+                // signal (no hours of stale noise); -b all adds the
+                // crash buffer where a host-side failure lands.
+                val window = if (sinceMinutes > 0) listOf("-T", "${sinceMinutes}m") else
+                    listOf("-t", "2000")
+                listOf("logcat", "-d", "-b", "all", "-v", "brief") + window + listOf("*:W")
+            } else {
+                listOf("logcat", "-d", "--pid=$pid", "-v", "brief", "-t", "400")
+            }
+            val proc = ProcessBuilder(cmd).redirectErrorStream(true).start()
             try {
                 // Read before wait: waiting first can deadlock on a full
                 // pipe. destroy() in finally so a stuck proc never leaks.
-                // Crash lines first (a VRI/HWUI tail drowns them), then a
-                // short tail for context.
                 val out = proc.inputStream.bufferedReader().readText()
-                proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+                proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
                 val lines = out.lines()
                 val interesting = lines.filter { l ->
                     l.contains("TaskWidget") || l.contains("AndroidRuntime") ||
                         l.contains("FATAL") || l.contains("RemoteViews") ||
-                        l.contains("AppWidget") || l.contains("System.err")
+                        l.contains("AppWidget") || l.contains("System.err") ||
+                        // Host-side widget failure signatures.
+                        l.contains("agento") || l.contains("com.vishnu") ||
+                        l.contains("AppWidgetManager") || l.contains("AppWidgetHost") ||
+                        l.contains("RemoteCollection") || l.contains("widget", ignoreCase = true)
                 }.takeLast(interestingLines)
                 redactSecrets(
                     (interesting + "--- tail ---" + lines.takeLast(tailLines)).joinToString("\n"),

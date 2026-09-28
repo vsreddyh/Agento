@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.2.5]
+
+- Widget diagnostics now capture system-wide log (last 15 minutes)
+  alongside our own, so a host-side widget failure — thrown in the
+  launcher's process, invisible in ours — is captured. Adds a
+  best-effort "Clear system log" action.
+
 ## [4.2.4]
 
 - FIX: task widget load error on some launchers (issue #137) — direct

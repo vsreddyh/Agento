@@ -5885,7 +5885,7 @@ private fun WidgetDiagnosticsCard() {
     }
     SectionCard(
         title = "Widget diagnostics",
-        subtitle = "Task-widget state and recent log. If the home-screen widget errors, copy this and paste it in chat.",
+        subtitle = "Task-widget state and recent log. If the home-screen widget errors, save the report and upload it — it includes system log, where a host-side widget failure shows up.",
     ) {
         if (summary.isNotEmpty()) {
             SelectionContainer {
@@ -5900,7 +5900,7 @@ private fun WidgetDiagnosticsCard() {
                     try {
                         val fresh = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
                         summary = fresh
-                        val log = withContext(Dispatchers.IO) { TaskWidget.dumpOwnLog() }
+                        val log = withContext(Dispatchers.IO) { TaskWidget.dumpLog() }
                         clipboard.setText(AnnotatedString("$fresh\n--- log ---\n${log.take(6000)}"))
                         copied = true
                     } catch (e: Exception) {
@@ -5951,7 +5951,18 @@ private fun WidgetDiagnosticsCard() {
             enabled = !copying && !saving,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (saving) "Saving…" else "Save to file")
+            Text(if (saving) "Saving…" else "Save report to file")
+        }
+        OutlinedButton(
+            onClick = {
+                scope.launch {
+                    saved = withContext(Dispatchers.IO) { TaskWidget.clearSystemLog() }
+                }
+            },
+            enabled = !copying && !saving,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Clear system log")
         }
         if (copied) HintLine("Copied — paste it in chat.")
         if (saved.isNotEmpty()) HintLine(saved)
