@@ -20,11 +20,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -99,10 +100,13 @@ private fun WidgetSettingsScreen(
     onCancel: () -> Unit,
     onSave: (TaskWidgetView, TaskWidgetDensity, Boolean, Boolean) -> Unit,
 ) {
-    var pickedView by remember { mutableStateOf(view) }
-    var pickedDensity by remember { mutableStateOf(density) }
-    var pickedDue by remember { mutableStateOf(showDue) }
-    var pickedScroll by remember { mutableStateOf(scrollable) }
+    // rememberSaveable: rotating before Save must not reset the picks
+    // (this screen is a system-launched configure activity, so rotation
+    // is routine).
+    var pickedView by rememberSaveable { mutableStateOf(view) }
+    var pickedDensity by rememberSaveable { mutableStateOf(density) }
+    var pickedDue by rememberSaveable { mutableStateOf(showDue) }
+    var pickedScroll by rememberSaveable { mutableStateOf(scrollable) }
 
     Scaffold(
         topBar = {
@@ -248,7 +252,13 @@ private fun SwitchRow(
             )
         }
         Spacer(modifier = Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = null)
+        // The row is the single switch control; the visual switch is
+        // decoration, so hide it from TalkBack to avoid two switch nodes.
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            modifier = Modifier.clearAndSetSemantics { },
+        )
     }
 }
 
@@ -359,9 +369,13 @@ private fun WidgetPreview(
                     }
                 }
             }
-            if (!scrollable && hidden > 0) {
+            if (hidden > 0) {
                 Text(
-                    "+ $hidden more in the app",
+                    if (scrollable) {
+                        "Scroll for $hidden more"
+                    } else {
+                        "+ $hidden more in the app"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp),
