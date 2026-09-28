@@ -352,9 +352,14 @@ class TaskWidget : AppWidgetProvider() {
             // message can never outlive its failure (#130 review).
             lastErrors = (lastErrors + errors) - views.keys
             val mgr = AppWidgetManager.getInstance(appCtx)
+            // Legacy service path (API <31, or any placement without data
+            // that fell back to setRemoteAdapter) is the only consumer of
+            // the data-changed notify — direct-path placements need none.
+            var needNotify = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
             for (id in ids) {
                 val view = viewFor(appCtx, id)
                 val tasks = views[view.state] ?: cachedViews[view.state]
+                if (tasks == null) needNotify = true
                 // Error is per-view: no data for THIS view means the fetch
                 // failed (a global flag would stick others on loading when
                 // only one state errored).
@@ -378,10 +383,12 @@ class TaskWidget : AppWidgetProvider() {
             }
             // Notify after the update loop: render() re-sets the remote
             // adapter, which would invalidate an earlier notify.
-            runCatching {
-                mgr.notifyAppWidgetViewDataChanged(ids, R.id.task_widget_list_view)
-            }.onFailure {
-                Log.w("TaskWidget", "notifyDataChanged failed", it)
+            if (needNotify) {
+                runCatching {
+                    mgr.notifyAppWidgetViewDataChanged(ids, R.id.task_widget_list_view)
+                }.onFailure {
+                    Log.w("TaskWidget", "notifyDataChanged failed", it)
+                }
             }
         }
 
@@ -450,12 +457,15 @@ class TaskWidget : AppWidgetProvider() {
                 if (tasks != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     // Service-backed collections (setRemoteAdapter) broke
                     // on Android 16 — hand the rows over directly instead
-                    // of binding the service (issue #137).
+                    // of binding the service (issue #137). Capped: the
+                    // whole list rides one parcel, so a huge "All" view
+                    // would TransactionTooLarge the update (the header
+                    // count below still shows the true total).
                     val today = java.time.LocalDate.now(IST)
                     val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
                     val due = showDueFor(context, appWidgetId)
                     val items = RemoteViews.RemoteCollectionItems.Builder().apply {
-                        tasks.forEachIndexed { i, t ->
+                        tasks.take(100).forEachIndexed { i, t ->
                             addItem(i.toLong(),
                                 buildRow(context.packageName, compact, due, today, t))
                         }
