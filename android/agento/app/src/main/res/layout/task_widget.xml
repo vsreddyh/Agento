@@ -43,16 +43,21 @@
 
         </LinearLayout>
 
-        <Button
+        <!-- TextView, not Button (#137): a platform Button pulls its
+             default style (theme attrs for background/textAppearance)
+             from the HOST's theme when a widget is inflated, and this
+             launcher rejects the whole RemoteViews. Styles A-C, which
+             render, contain no Button — this one is the difference. -->
+        <TextView
             android:id="@+id/task_widget_view"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minWidth="0dp"
-            android:minHeight="0dp"
             android:paddingLeft="8dp"
             android:paddingRight="8dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
             android:textSize="12sp"
-            android:textAllCaps="false"
+            android:textColor="@color/task_widget_text_secondary"
             android:contentDescription="@string/task_widget_view" />
 
         <ImageButton
