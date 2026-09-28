@@ -7,23 +7,16 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.*
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,14 +24,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /**
  * Display settings for one task-widget placement: which slice it shows,
- * row density, the due line, and the diagnostic style ladder (#137).
- * Launched by the system at add time (android:configure) and from the
- * Task Manager screen afterwards. Cancelling at add time aborts the
- * placement; saving re-renders that widget via [TaskWidget].
+ * row density, the due line, and whether the list scrolls. Launched by
+ * the system at add time (android:configure) and from the Task Manager
+ * screen afterwards. Cancelling at add time aborts the placement;
+ * saving re-renders that widget via [TaskWidget].
  */
 class TaskWidgetConfigActivity : ComponentActivity() {
 
@@ -60,159 +54,307 @@ class TaskWidgetConfigActivity : ComponentActivity() {
         setContent {
             val dark = isSystemInDarkTheme()
             AgentoTheme(dark = dark) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.background,
-                ) {
-                    var density by remember {
-                        mutableStateOf(TaskWidget.densityFor(this, appWidgetId))
-                    }
-                    var showDue by remember {
-                        mutableStateOf(TaskWidget.showDueFor(this, appWidgetId))
-                    }
-                    var scrollable by remember {
-                        mutableStateOf(TaskWidget.scrollableFor(this, appWidgetId))
-                    }
-                    // The widget's own header toggle never rendered on the
-                    // affected launcher (#137), so view switching moved here
-                    // rather than being dropped.
-                    var widgetView by remember {
-                        mutableStateOf(TaskWidget.viewFor(this, appWidgetId))
-                    }
-                    // Scrollable: view + density + due + the style ladder
-                    // push Save off-screen on small screens / large fonts.
-                    Column(
-                        modifier = Modifier
-                            .verticalScroll(rememberScrollState())
-                            .padding(20.dp),
-                    ) {
-                        Text(
-                            getString(R.string.task_widget_display),
-                            style = MaterialTheme.typography.headlineSmall,
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            "Show",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        TaskWidgetView.entries.forEach { v ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth()
-                                    .selectable(
-                                        selected = widgetView == v,
-                                        onClick = { widgetView = v },
-                                        role = Role.RadioButton,
-                                    )
-                                    .padding(vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                RadioButton(selected = widgetView == v, onClick = null)
-                                Text(
-                                    v.title,
-                                    modifier = Modifier.padding(start = 8.dp),
-                                )
-                            }
-                        }
-                        Text(
-                            "Density",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        TaskWidgetDensity.entries.forEach { d ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth()
-                                    .selectable(
-                                        selected = density == d,
-                                        onClick = { density = d },
-                                        role = Role.RadioButton,
-                                    )
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                RadioButton(
-                                    selected = density == d,
-                                    onClick = null,
-                                )
-                                Text(
-                                    d.title,
-                                    modifier = Modifier.padding(start = 8.dp),
-                                )
-                            }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth()
-                                .selectable(
-                                    selected = showDue,
-                                    onClick = { showDue = !showDue },
-                                    role = Role.Checkbox,
-                                )
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Checkbox(checked = showDue, onCheckedChange = null)
-                            Text(
-                                "Show due dates",
-                                modifier = Modifier.padding(start = 8.dp),
-                            )
-                        }
-                        // Diagnostic style ladder removed (#137): the divider
-                        // View was the culprit, so the two proven shapes
-                        // (scrolling list / plain rows) are the only modes.
-                        Row(
-                            modifier = Modifier.fillMaxWidth()
-                                .selectable(
-                                    selected = scrollable,
-                                    onClick = { scrollable = !scrollable },
-                                    role = Role.Checkbox,
-                                )
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Checkbox(checked = scrollable, onCheckedChange = null)
-                            Column(modifier = Modifier.padding(start = 8.dp)) {
-                                Text("Scrolling list")
-                                Text(
-                                    "Off shows the first 8 tasks without scrolling",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
-                        ) {
-                            TextButton(onClick = {
-                                setResult(RESULT_CANCELED, done)
-                                finish()
-                            }) { Text("Cancel") }
-                            Button(onClick = {
-                                prefs().edit()
-                                    .putString(
-                                        "task_widget_density_$appWidgetId",
-                                        density.name,
-                                    )
-                                    .putBoolean("task_widget_due_$appWidgetId", showDue)
-                                    .putBoolean(
-                                        "task_widget_scroll_$appWidgetId", scrollable)
-                                    .putString(
-                                        "task_widget_view_$appWidgetId",
-                                        widgetView.name,
-                                    )
-                                    .apply()
-                                TaskWidget.refresh(this@TaskWidgetConfigActivity)
-                                setResult(RESULT_OK, done)
-                                finish()
-                            }) { Text("Save") }
-                        }
-                    }
-                }
+                WidgetSettingsScreen(
+                    view = TaskWidget.viewFor(this, appWidgetId),
+                    density = TaskWidget.densityFor(this, appWidgetId),
+                    showDue = TaskWidget.showDueFor(this, appWidgetId),
+                    scrollable = TaskWidget.scrollableFor(this, appWidgetId),
+                    onCancel = {
+                        setResult(RESULT_CANCELED, done)
+                        finish()
+                    },
+                    onSave = { v, d, due, scroll ->
+                        prefs().edit()
+                            .putString("task_widget_view_$appWidgetId", v.name)
+                            .putString("task_widget_density_$appWidgetId", d.name)
+                            .putBoolean("task_widget_due_$appWidgetId", due)
+                            .putBoolean("task_widget_scroll_$appWidgetId", scroll)
+                            .apply()
+                        TaskWidget.refresh(this@TaskWidgetConfigActivity)
+                        setResult(RESULT_OK, done)
+                        finish()
+                    },
+                )
             }
         }
     }
 
     private fun prefs() = applicationContext.getSharedPreferences(
         AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+}
+
+/** Settings for one placement. Everything is live: the preview above the
+ * controls redraws as you pick, so a choice never has to be imagined. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WidgetSettingsScreen(
+    view: TaskWidgetView,
+    density: TaskWidgetDensity,
+    showDue: Boolean,
+    scrollable: Boolean,
+    onCancel: () -> Unit,
+    onSave: (TaskWidgetView, TaskWidgetDensity, Boolean, Boolean) -> Unit,
+) {
+    var pickedView by remember { mutableStateOf(view) }
+    var pickedDensity by remember { mutableStateOf(density) }
+    var pickedDue by remember { mutableStateOf(showDue) }
+    var pickedScroll by remember { mutableStateOf(scrollable) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Widget settings") },
+                navigationIcon = {
+                    IconButton(onClick = onCancel) {
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
+        bottomBar = {
+            // Sticky actions: Save must never scroll out of reach.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TextButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
+                    Text("Cancel")
+                }
+                Button(
+                    onClick = {
+                        onSave(pickedView, pickedDensity, pickedDue, pickedScroll)
+                    },
+                    modifier = Modifier.weight(2f),
+                ) {
+                    Text("Save")
+                }
+            }
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            WidgetPreview(
+                view = pickedView,
+                density = pickedDensity,
+                showDue = pickedDue,
+                scrollable = pickedScroll,
+            )
+            SettingsGroup("Tasks shown") {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    TaskWidgetView.entries.forEachIndexed { i, v ->
+                        SegmentedButton(
+                            selected = pickedView == v,
+                            onClick = { pickedView = v },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = i, count = TaskWidgetView.entries.size),
+                        ) { Text(v.title) }
+                    }
+                }
+            }
+            SettingsGroup("Row style") {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    TaskWidgetDensity.entries.forEachIndexed { i, d ->
+                        SegmentedButton(
+                            selected = pickedDensity == d,
+                            onClick = { pickedDensity = d },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = i, count = TaskWidgetDensity.entries.size),
+                        ) { Text(d.title) }
+                    }
+                }
+            }
+            SettingsGroup("Options") {
+                SwitchRow(
+                    title = "Show due dates",
+                    subtitle = "A friendly line under each task name",
+                    checked = pickedDue,
+                    onChange = { pickedDue = it },
+                )
+                SwitchRow(
+                    title = "Scrolling list",
+                    subtitle = if (pickedScroll) {
+                        "All tasks, scroll through them"
+                    } else {
+                        "First ${TaskWidget.STATIC_ROW_LIMIT} tasks, no scrolling"
+                    },
+                    checked = pickedScroll,
+                    onChange = { pickedScroll = it },
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+    }
+}
+
+/** A card per group of controls, with a small heading. */
+@Composable
+private fun SettingsGroup(title: String, content: @Composable () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) { content() }
+        }
+    }
+}
+
+/** One switch with an explanatory subtitle; the whole row toggles. */
+@Composable
+private fun SwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(
+                selected = checked,
+                onClick = { onChange(!checked) },
+                role = Role.Switch,
+            )
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
+/** Miniature of the real widget, so each choice is visible immediately:
+ * same header, row shape, due line and truncation as the placement. */
+@Composable
+private fun WidgetPreview(
+    view: TaskWidgetView,
+    density: TaskWidgetDensity,
+    showDue: Boolean,
+    scrollable: Boolean,
+) {
+    val compact = density == TaskWidgetDensity.Compact
+    val samples = listOf(
+        "Apply hair oil" to "Today, 09:00",
+        "Bath" to "Tomorrow",
+        "Buy vegetables" to "Fri, 18:00",
+    )
+    val shown = if (scrollable) samples else samples.take(2)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Tasks",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        previewCount(view, scrollable),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    view.title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Icon(
+                    Icons.Filled.Refresh,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 10.dp),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+            shown.forEach { (name, due) ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = if (compact) 2.dp else 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.RadioButtonUnchecked,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(if (compact) 18.dp else 22.dp),
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            name,
+                            style = if (compact) {
+                                MaterialTheme.typography.bodyMedium
+                            } else {
+                                MaterialTheme.typography.bodyLarge
+                            },
+                            maxLines = 1,
+                        )
+                        if (showDue) {
+                            Text(
+                                due,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+            if (!scrollable) {
+                Text(
+                    "+ ${samples.size - shown.size} more in the app",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Honest count line: the static mode caps rows, so say so. */
+private fun previewCount(view: TaskWidgetView, scrollable: Boolean): String {
+    val noun = when (view) {
+        TaskWidgetView.Open -> "open tasks"
+        TaskWidgetView.Done -> "done tasks"
+        TaskWidgetView.All -> "tasks"
+    }
+    val sample = if (view == TaskWidgetView.Done) 1 else 12
+    return if (scrollable) {
+        "$sample $noun"
+    } else {
+        "$sample $noun · showing ${TaskWidget.STATIC_ROW_LIMIT}"
+    }
 }

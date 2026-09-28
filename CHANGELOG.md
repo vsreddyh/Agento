@@ -19,6 +19,9 @@ see GitHub Releases for older notes.
 - Task widget rows carry explicit per-row taps instead of the mutable
   pending-intent template, and widget text colors are concrete
   day/night values rather than theme attributes.
+- Widget settings screen rebuilt: live preview of the placement, grouped
+  cards, segmented choices for the shown slice and row style, switches
+  with explanations, and a sticky Cancel/Save bar.
 
 ## [4.4.4]
 

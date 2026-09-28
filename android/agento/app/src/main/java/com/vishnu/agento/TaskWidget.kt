@@ -157,8 +157,9 @@ class TaskWidget : AppWidgetProvider() {
         private const val ROW_CODE = 1004
         private const val CONFIG_CODE = 1005
 
-        /** Rows rendered by the static (non-collection) path. */
-        private const val STATIC_ROW_LIMIT = 8
+        /** Rows rendered by the non-scrolling (plain-rows) path. Shown in
+         * the widget settings preview so the cap isn't a surprise. */
+        internal const val STATIC_ROW_LIMIT = 8
 
         // Row tap codes; per-task uniqueness comes from the data URI.
         private const val ROW_COMPLETE_CODE = 1006

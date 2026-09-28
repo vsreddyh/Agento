@@ -8,7 +8,6 @@
     <string name="task_widget_error">Couldn\'t load tasks</string>
     <string name="task_widget_empty">All done!</string>
     <string name="task_widget_refresh">Refresh tasks</string>
-    <string name="task_widget_display">Widget display settings</string>
     <string name="task_widget_complete">Complete task</string>
     <string name="task_widget_open_task">Open task</string>
     <string name="task_reminder_channel">Task reminders</string>
