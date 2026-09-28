@@ -25,6 +25,7 @@ data class ServerTask(
     val dueTime: String = "",
     val estimatedMinutes: Int = 0,
     val repeatRule: String = "",
+    val parallelable: Boolean = false,
     val completedAt: String = "",
     val createdAt: String = "",
 )
@@ -93,6 +94,7 @@ class TasksApi(context: Context) {
             dueTime = optStr(o, "due_time"),
             estimatedMinutes = mins.coerceAtLeast(0),
             repeatRule = optStr(o, "repeat_rule"),
+            parallelable = o.optBoolean("parallelable", false),
             completedAt = optStr(o, "completedAt"),
             createdAt = optStr(o, "createdAt"),
         )
@@ -124,25 +126,40 @@ class TasksApi(context: Context) {
             }
         }
 
-    /** Creates an open task; name required, the rest validated server-side.
-     * Blank optionals are omitted (the store treats absent and "" alike). */
+    /** Creates a task. Everything except repeat_rule is required —
+     * the server rejects missing keys (empty repeat_rule = one-shot). */
     suspend fun create(
         name: String,
-        description: String = "",
-        dueDate: String = "",
-        dueTime: String = "",
-        estimatedMinutes: Int? = null,
+        description: String,
+        dueDate: String,
+        dueTime: String,
+        estimatedMinutes: Int,
         repeatRule: String = "",
+        parallelable: Boolean = false,
     ): Result<ServerTask> = withContext(Dispatchers.IO) {
         if (name.trim().isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Name is required"))
         }
-        val body = JSONObject().put("name", name.trim())
-        if (description.isNotEmpty()) body.put("description", description)
-        if (dueDate.isNotEmpty()) body.put("due_date", dueDate)
-        if (dueTime.isNotEmpty()) body.put("due_time", dueTime)
+        if (description.trim().isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("Description is required"))
+        }
+        if (dueDate.trim().isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("Due date is required"))
+        }
+        if (dueTime.trim().isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("Due time is required"))
+        }
+        if (estimatedMinutes < 0) {
+            return@withContext Result.failure(IllegalArgumentException("Estimated minutes must be 0 or above"))
+        }
+        val body = JSONObject()
+            .put("name", name.trim())
+            .put("description", description.trim())
+            .put("due_date", dueDate.trim())
+            .put("due_time", dueTime.trim())
+            .put("estimated_minutes", estimatedMinutes)
+            .put("parallelable", parallelable)
         if (repeatRule.isNotEmpty()) body.put("repeat_rule", repeatRule)
-        if (estimatedMinutes != null) body.put("estimated_minutes", estimatedMinutes)
         call("POST", "/api/tasks", body).map { parseOne(it) }
     }
 
@@ -156,6 +173,7 @@ class TasksApi(context: Context) {
         dueTime: String? = null,
         estimatedMinutes: Int? = null,
         repeatRule: String? = null,
+        parallelable: Boolean? = null,
     ): Result<ServerTask> = withContext(Dispatchers.IO) {
         val clean = encodeId(id)
         if (clean.isEmpty()) {
@@ -168,6 +186,7 @@ class TasksApi(context: Context) {
         if (dueTime != null) body.put("due_time", dueTime)
         if (estimatedMinutes != null) body.put("estimated_minutes", estimatedMinutes)
         if (repeatRule != null) body.put("repeat_rule", repeatRule)
+        if (parallelable != null) body.put("parallelable", parallelable)
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
     }
 

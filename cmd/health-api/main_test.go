@@ -139,6 +139,12 @@ func TestTaskFieldValidation(t *testing.T) {
 		`{"name":"x","estimated_minutes":-3}`,
 		`{"name":"x","description":42}`,
 		`{"name":"x","due_date":20260926}`,
+		`{"name":"x","parallelable":"yes"}`,
+		`{"name":"x","parallelable":1}`,
+		`{"name":"x"}`,
+		`{"name":"x","description":"d","due_date":"2026-10-05","due_time":"08:00","estimated_minutes":30}`,
+		`{"name":"x","description":"","due_date":"2026-10-05","due_time":"08:00","estimated_minutes":30,"parallelable":false}`,
+		`{"name":"x","description":"d","due_date":"  ","due_time":"08:00","estimated_minutes":30,"parallelable":false}`,
 	} {
 		if w := post("/api/tasks", body); w.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("%s: got %d (%s)", body, w.Code, w.Body.String())

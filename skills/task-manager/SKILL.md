@@ -12,9 +12,11 @@ agent manages through the `project-manager` MCP server (see
 
 ## Columns
 
-- **name** (required), **description**, **due_date** (YYYY-MM-DD),
-  **due_time** (HH:MM, needs a date), **estimated_minutes**,
-  **repeat_rule** (free-form string, empty = one-shot).
+- **name**, **description**, **due_date** (YYYY-MM-DD), **due_time**
+  (HH:MM), **estimated_minutes** (>= 0), **parallelable** (true = can run
+  alongside other tasks) — ALL required on `create_task`.
+  **repeat_rule** is the only optional field (free-form string,
+  empty = one-shot).
 - No status field. Open = not completed; done = `complete_task` called.
   Completed tasks vanish automatically 3 days later.
 
@@ -27,7 +29,7 @@ agent manages through the `project-manager` MCP server (see
    normalize to an enum.
 2. When you call `complete_task` and the response contains `follow_up`
    with a `repeat_rule`, you MUST call `create_task` for the next
-   occurrence: same name/description/estimated_minutes/repeat_rule, with
+   occurrence: same name/description/estimated_minutes/repeat_rule/parallelable, with
    the next due date/time that YOU compute from the rule and today.
 3. If the rule is ambiguous ("regularly"), ask the user for the next due
    date instead of guessing.
@@ -35,8 +37,10 @@ agent manages through the `project-manager` MCP server (see
 
 ## Everyday use
 
-- Capture fast: `create_task` with just a name; fill in due/estimate when
-  the user says them ("takes about an hour" → `estimated_minutes: 60`).
+- Capture fast: collect name + description + due date/time + estimate +
+  parallelable BEFORE calling `create_task` — it rejects missing fields.
+  ("takes about an hour" → `estimated_minutes: 60`; "I can do it alongside
+  X" → `parallelable: true`; no repeat mentioned → omit `repeat_rule`.)
 - Morning check: `list_tasks` with `overdue: true`, then state=open.
 - Done for now but not finished: leave open. Only `complete_task` finishes.
 - Mistake: `reopen_task`. Never `delete_task` to "undo" a completion.

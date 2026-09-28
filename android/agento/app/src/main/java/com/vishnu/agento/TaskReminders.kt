@@ -236,6 +236,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             if (dueLine.isNotEmpty()) add(dueLine)
             if (mins > 0) add("Estimate ~$mins min")
             if (repeat.isNotEmpty()) add("Repeats $repeat")
+            if (task?.parallelable == true) add("Can run in parallel")
         }.joinToString("\n")
         // Inline complete reuses the widget trampoline (no visible UI:
         // completes, refreshes widget/alarms, finishes). Data URI + own

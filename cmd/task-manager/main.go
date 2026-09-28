@@ -42,16 +42,17 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "task-manager", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_task",
-		Description: "Create an open task. name required; due_date YYYY-MM-DD, due_time HH:MM (needs due_date), estimated_minutes >= 0, repeat_rule free-form (empty = one-shot, never interpreted server-side)."},
+		Description: "Create an open task. ALL fields except repeat_rule are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). repeat_rule is free-form, empty = one-shot (never interpreted server-side)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			Name             string `json:"name"`
 			Description      string `json:"description"`
 			DueDate          string `json:"due_date"`
 			DueTime          string `json:"due_time"`
-			EstimatedMinutes int    `json:"estimated_minutes"`
+			EstimatedMinutes *int   `json:"estimated_minutes"`
 			RepeatRule       string `json:"repeat_rule"`
+			Parallelable     *bool  `json:"parallelable"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			doc, err := store.Create(ctx, in.Name, in.Description, in.DueDate, in.DueTime, in.EstimatedMinutes, in.RepeatRule)
+			doc, err := store.Create(ctx, in.Name, in.Description, in.DueDate, in.DueTime, in.EstimatedMinutes, in.RepeatRule, in.Parallelable)
 			if err != nil {
 				return fail(err)
 			}
@@ -85,7 +86,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_task",
-		Description: "Edit name/description/due_date/due_time/estimated_minutes/repeat_rule (empty repeat_rule clears the rule). Works on open or done tasks."},
+		Description: "Edit name/description/due_date/due_time/estimated_minutes/repeat_rule/parallelable. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected); empty repeat_rule clears the rule (one-shot). Works on open or done tasks."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			ID               string  `json:"id"`
 			Name             string  `json:"name"`
@@ -94,6 +95,7 @@ func main() {
 			DueTime          *string `json:"due_time"`
 			EstimatedMinutes *int    `json:"estimated_minutes"`
 			RepeatRule       *string `json:"repeat_rule"`
+			Parallelable     *bool   `json:"parallelable"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
 			fields := map[string]any{}
 			// Plain strings can't tell "" from absent, so only name (which
@@ -117,6 +119,9 @@ func main() {
 			if in.RepeatRule != nil {
 				fields["repeat_rule"] = *in.RepeatRule
 			}
+			if in.Parallelable != nil {
+				fields["parallelable"] = *in.Parallelable
+			}
 			doc, err := store.Update(ctx, in.ID, fields)
 			if err != nil {
 				return fail(err)
@@ -136,7 +141,7 @@ func main() {
 			out := map[string]any{"ok": true, "task": doc}
 			if rule, _ := doc["repeat_rule"].(string); rule != "" {
 				out["repeat_rule"] = rule
-				out["follow_up"] = "repeat_rule is '" + rule + "' — add task with '" + rule + "' repeat rule via create_task (same name/description/estimate, next due date you compute)."
+				out["follow_up"] = "repeat_rule is '" + rule + "' — add task with '" + rule + "' repeat rule via create_task (same name/description/estimated_minutes/parallelable, next due date/time you compute; all create_task fields except repeat_rule are required)."
 			}
 			return result(out)
 		})

@@ -32,10 +32,13 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
+func intP(n int) *int    { return &n }
+func boolP(b bool) *bool { return &b }
+
 func TestCreateAndList(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, err := s.Create(ctx, "Pay rent", "bank transfer", "2026-10-01", "09:00", 15, "monthly on the 1st")
+	doc, err := s.Create(ctx, "Pay rent", "bank transfer", "2026-10-01", "09:00", intP(15), "monthly on the 1st", boolP(false))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -58,30 +61,98 @@ func TestCreateAndList(t *testing.T) {
 func TestValidation(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, "  ", "", "", "", 0, ""); err == nil {
+	if _, err := s.Create(ctx, "  ", "", "", "", intP(0), "", boolP(false)); err == nil {
 		t.Fatal("blank name must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "10-01", "", 0, ""); err == nil {
+	if _, err := s.Create(ctx, "x", "", "10-01", "", intP(0), "", boolP(false)); err == nil {
 		t.Fatal("bad due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "2026-13-99", "", 0, ""); err == nil {
+	if _, err := s.Create(ctx, "x", "", "2026-13-99", "", intP(0), "", boolP(false)); err == nil {
 		t.Fatal("non-calendar due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "9am", 0, ""); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "9am", intP(0), "", boolP(false)); err == nil {
 		t.Fatal("bad due_time must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "09:00", 0, ""); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "09:00", intP(0), "", boolP(false)); err == nil {
 		t.Fatal("due_time without due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "", -5, ""); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "", intP(-5), "", boolP(false)); err == nil {
 		t.Fatal("negative estimate must fail")
+	}
+}
+
+func TestCreateRequiresAllFields(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	full := func() (string, string, string, string, *int, string, *bool) {
+		return "job", "do the thing", "2026-10-05", "08:00", intP(30), "", boolP(false)
+	}
+	cases := map[string]func(string, string, string, string, *int, string, *bool) (string, string, string, string, *int, string, *bool){
+		"empty description": func(n, d, dd, dt string, m *int, r string, p *bool) (string, string, string, string, *int, string, *bool) {
+			return n, "  ", dd, dt, m, r, p
+		},
+		"empty due_date": func(n, d, dd, dt string, m *int, r string, p *bool) (string, string, string, string, *int, string, *bool) {
+			return n, d, "", dt, m, r, p
+		},
+		"empty due_time": func(n, d, dd, dt string, m *int, r string, p *bool) (string, string, string, string, *int, string, *bool) {
+			return n, d, dd, "", m, r, p
+		},
+		"nil estimated_minutes": func(n, d, dd, dt string, m *int, r string, p *bool) (string, string, string, string, *int, string, *bool) {
+			return n, d, dd, dt, nil, r, p
+		},
+		"nil parallelable": func(n, d, dd, dt string, m *int, r string, p *bool) (string, string, string, string, *int, string, *bool) {
+			return n, d, dd, dt, m, r, nil
+		},
+	}
+	for name, mutate := range cases {
+		n, d, dd, dt, m, r, p := mutate(full())
+		if _, err := s.Create(ctx, n, d, dd, dt, m, r, p); err == nil {
+			t.Fatalf("%s must fail", name)
+		}
+	}
+	// Empty repeat_rule stays valid (one-shot).
+	n, d, dd, dt, m, r, p := full()
+	if _, err := s.Create(ctx, n, d, dd, dt, m, "", p); err != nil {
+		t.Fatalf("empty repeat_rule (one-shot) must stay valid: %v", err)
+	}
+	// Clearing a required field via update must fail too.
+	doc, err := s.Create(ctx, n+"-upd", d, dd, dt, m, r, p)
+	if err != nil {
+		t.Fatalf("setup create: %v", err)
+	}
+	id := doc["id"].(string)
+	for _, fields := range []map[string]any{
+		{"description": "  "},
+		{"due_date": ""},
+		{"due_time": ""},
+	} {
+		if _, err := s.Update(ctx, id, fields); err == nil {
+			t.Fatalf("update %v must fail", fields)
+		}
+	}
+	// Wrong types on update fail instead of silent no-ops.
+	for _, fields := range []map[string]any{
+		{"description": 42},
+		{"due_date": 20261005},
+		{"repeat_rule": true},
+		{"parallelable": "yes"},
+	} {
+		if _, err := s.Update(ctx, id, fields); err == nil {
+			t.Fatalf("update %v must fail", fields)
+		}
+	}
+	// JSON null counts as absent on update (no-op success).
+	if _, err := s.Update(ctx, id, map[string]any{
+		"name": nil, "description": nil, "estimated_minutes": nil, "parallelable": nil,
+	}); err != nil {
+		t.Fatalf("null update must be a no-op: %v", err)
 	}
 }
 
 func TestCompleteReopenDelete(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, _ := s.Create(ctx, "Water plants", "", "", "", 5, "every Sunday")
+	doc, _ := s.Create(ctx, "Water plants", "balcony pots", "2026-10-05", "08:00", intP(5), "every Sunday", boolP(false))
 	id := doc["id"].(string)
 
 	done, err := s.Complete(ctx, id)
@@ -129,7 +200,7 @@ func TestCompleteReopenDelete(t *testing.T) {
 func TestReopenedExcludedFromDone(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, _ := s.Create(ctx, "reopen me", "", "", "", 0, "")
+	doc, _ := s.Create(ctx, "reopen me", "test task", "2026-10-05", "08:00", intP(0), "", boolP(false))
 	id := doc["id"].(string)
 	if _, err := s.Complete(ctx, id); err != nil {
 		t.Fatal(err)
@@ -152,7 +223,7 @@ func TestReopenedExcludedFromDone(t *testing.T) {
 func TestSearchRegexCharsLiteral(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, "fix (auth) [urgent]", "", "", "", 0, ""); err != nil {
+	if _, err := s.Create(ctx, "fix (auth) [urgent]", "login flow", "2026-10-05", "08:00", intP(0), "", boolP(false)); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.List(ctx, "open", false, "(auth) [urgent]")
@@ -161,15 +232,38 @@ func TestSearchRegexCharsLiteral(t *testing.T) {
 	}
 }
 
+func TestParallelableRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	doc, err := s.Create(ctx, "parallel job", "runs alongside others", "2026-10-05", "08:00", intP(0), "", boolP(true))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if doc["parallelable"] != true {
+		t.Fatalf("create must store parallelable=true: %v", doc)
+	}
+	id := doc["id"].(string)
+	off, err := s.Update(ctx, id, map[string]any{"parallelable": false})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if off["parallelable"] != false {
+		t.Fatalf("update must clear parallelable: %v", off)
+	}
+	if _, err := s.Update(ctx, id, map[string]any{"parallelable": "yes"}); err == nil {
+		t.Fatal("non-boolean parallelable must fail")
+	}
+}
+
 func TestOverdueAndTTLIndex(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
-	if _, err := s.Create(ctx, "late", "", yesterday, "", 0, ""); err != nil {
+	if _, err := s.Create(ctx, "late", "overdue task", yesterday, "08:00", intP(0), "", boolP(false)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Create(ctx, "future", "", tomorrow, "", 0, ""); err != nil {
+	if _, err := s.Create(ctx, "future", "upcoming task", tomorrow, "08:00", intP(0), "", boolP(false)); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.List(ctx, "open", true, "")

@@ -22,6 +22,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,11 +43,13 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Undo
@@ -62,8 +66,9 @@ import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
@@ -944,11 +949,9 @@ private fun TaskManagerScreen(
     var error by remember { mutableStateOf("") }
     // Bumped after every load/mutation so the loader below reruns.
     var refreshTick by remember { mutableIntStateOf(0) }
-    // Editor draft (id empty = new task), delete target, and the
-    // post-complete recreate prompt (snapshot of the finished task).
+    // Editor draft (id empty = new task) and delete target.
     var editing by remember { mutableStateOf<ServerTaskDraft?>(null) }
     var deleting by remember { mutableStateOf<ServerTask?>(null) }
-    var recreate by remember { mutableStateOf<ServerTaskDraft?>(null) }
     var busy by remember { mutableStateOf(false) }
     // Day-grouped sections (Overdue/Today/…); flat list when off or on
     // the Done filter, where buckets carry no meaning.
@@ -1081,18 +1084,27 @@ private fun TaskManagerScreen(
         scope.launch {
             api.complete(t.id).fold(
                 onSuccess = {
-                    // Done tasks vanish server-side after 3 days, so offer
-                    // to spin the same task up again right away.
-                    recreate = ServerTaskDraft(
-                        name = t.name,
-                        description = t.description,
-                        dueDate = t.dueDate,
-                        dueTime = t.dueTime,
-                        estimatedMinutes = t.estimatedMinutes.takeIf { it > 0 }?.toString().orEmpty(),
-                        repeatRule = t.repeatRule,
-                    )
+                    // Done tasks vanish server-side after 3 days: open a
+                    // prefilled new-task draft with the date cleared, so
+                    // recreating means picking a fresh date (save is
+                    // gated on one) — unless an editor is already open,
+                    // which must not be discarded. Dismiss to skip.
                     refreshTick++
                     pokeWidget()
+                    if (editing == null) {
+                        editing = ServerTaskDraft(
+                            name = t.name,
+                            description = t.description,
+                            dueDate = "",
+                            dueTime = "",
+                            estimatedMinutes = t.estimatedMinutes.toString(),
+                            repeatRule = t.repeatRule,
+                            parallelable = t.parallelable,
+                        )
+                        snackbar.showSnackbar("Task completed — pick a new date and save to recreate it.")
+                    } else {
+                        snackbar.showSnackbar("Task completed.")
+                    }
                 },
                 onFailure = ::fail,
             )
@@ -1365,13 +1377,9 @@ private fun TaskManagerScreen(
             onSave = { next ->
                 busy = true
                 scope.launch {
-                    val minsText = next.estimatedMinutes.trim()
-                    val mins = when {
-                        minsText.isEmpty() -> null
-                        else -> minsText.toIntOrNull()
-                    }
-                    if (minsText.isNotEmpty() && (mins == null || mins < 0)) {
-                        snackbar.showSnackbar("Estimated minutes must be a number 0 or above.")
+                    val mins = next.estimatedMinutes.trim().toIntOrNull()
+                    if (mins == null || mins < 0) {
+                        snackbar.showSnackbar("Estimated minutes is required (a number 0 or above).")
                         busy = false
                         return@launch
                     }
@@ -1383,6 +1391,7 @@ private fun TaskManagerScreen(
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
                             repeatRule = next.repeatRule,
+                            parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },
                             onFailure = ::fail,
@@ -1396,6 +1405,7 @@ private fun TaskManagerScreen(
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
                             repeatRule = next.repeatRule,
+                            parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },
                             onFailure = ::fail,
@@ -1418,39 +1428,6 @@ private fun TaskManagerScreen(
             },
             dismissButton = {
                 TextButton(onClick = { deleting = null }) { Text("Cancel") }
-            },
-        )
-    }
-
-    val again = recreate
-    if (again != null) {
-        AlertDialog(
-            onDismissRequest = { recreate = null },
-            title = { Text("Task completed") },
-            text = { Text("Completed tasks are removed after 3 days. Create “${again.name}” again as a new task?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    recreate = null
-                    busy = true
-                    scope.launch {
-                        api.create(
-                            name = again.name,
-                            description = again.description,
-                            dueDate = again.dueDate,
-                            dueTime = again.dueTime,
-                            estimatedMinutes = again.estimatedMinutes.trim()
-                                .takeIf { it.isNotEmpty() }?.toIntOrNull(),
-                            repeatRule = again.repeatRule,
-                        ).fold(
-                            onSuccess = { refreshTick++; pokeWidget() },
-                            onFailure = ::fail,
-                        )
-                        busy = false
-                    }
-                }) { Text("Recreate") }
-            },
-            dismissButton = {
-                TextButton(onClick = { recreate = null }) { Text("Not now") }
             },
         )
     }
@@ -1492,6 +1469,7 @@ private data class ServerTaskDraft(
     val dueTime: String = "",
     val estimatedMinutes: String = "",
     val repeatRule: String = "",
+    val parallelable: Boolean = false,
 )
 
 private fun ServerTask.toDraft() = ServerTaskDraft(
@@ -1500,8 +1478,9 @@ private fun ServerTask.toDraft() = ServerTaskDraft(
     description = description,
     dueDate = dueDate,
     dueTime = dueTime,
-    estimatedMinutes = estimatedMinutes.takeIf { it > 0 }?.toString().orEmpty(),
+    estimatedMinutes = estimatedMinutes.toString(),
     repeatRule = repeatRule,
+    parallelable = parallelable,
 )
 
 /** Flat task row: checkbox toggles complete/reopen, tap opens the
@@ -1561,6 +1540,7 @@ private fun ServerTaskRow(
                 if (dueLine.isNotEmpty()) add(dueLine)
                 if (task.estimatedMinutes > 0) add("~${task.estimatedMinutes} min")
                 if (task.repeatRule.isNotEmpty()) add(task.repeatRule)
+                if (task.parallelable) add("parallel")
             }
             if (dueBits.isNotEmpty()) {
                 Text(
@@ -1676,6 +1656,15 @@ private fun ServerTaskDetailSheet(
                 label = "Repeats",
                 value = task.repeatRule.ifEmpty { "Does not repeat" },
             )
+            DetailLine(
+                icon = Icons.Filled.Groups,
+                label = "Parallel",
+                value = if (task.parallelable) {
+                    "Yes — can run with other tasks"
+                } else {
+                    "No"
+                },
+            )
             if (task.createdAt.isNotEmpty() || task.completedAt.isNotEmpty()) {
                 DetailLine(
                     icon = Icons.Filled.History,
@@ -1762,8 +1751,9 @@ private fun DetailLine(
     }
 }
 
-/** New/edit dialog for a server task. Name required; due/estimate formats
- * are validated server-side and reported back on save. */
+/** New/edit dialog for a server task. Everything except Repeats is
+ * required (save stays disabled until all are filled); due date/time are
+ * picked, not typed. */
 @Composable
 private fun ServerTaskDialog(
     initial: ServerTaskDraft,
@@ -1779,6 +1769,9 @@ private fun ServerTaskDialog(
     var dueTime by remember(initial) { mutableStateOf(initial.dueTime) }
     var minutes by remember(initial) { mutableStateOf(initial.estimatedMinutes) }
     var repeatRule by remember(initial) { mutableStateOf(initial.repeatRule) }
+    var parallelable by remember(initial) { mutableStateOf(initial.parallelable) }
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showTimePicker by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1788,39 +1781,77 @@ private fun ServerTaskDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Name") },
+                    label = { Text("Name *") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
-                    label = { Text("Details (optional)") },
+                    label = { Text("Details *") },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                DueQuickRow(onPick = { dueDate = it })
+                val dateInteraction = remember { MutableInteractionSource() }
+                val timeInteraction = remember { MutableInteractionSource() }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = dueDate,
-                        onValueChange = { dueDate = it },
-                        label = { Text("Due date") },
-                        placeholder = { Text("YYYY-MM-DD") },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Due date *") },
+                        placeholder = { Text("Tap to pick") },
                         singleLine = true,
+                        interactionSource = dateInteraction,
+                        trailingIcon = {
+                            if (dueDate.isNotEmpty()) {
+                                IconButton(onClick = { dueDate = ""; dueTime = "" }) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Clear due date")
+                                }
+                            } else {
+                                Icon(Icons.Filled.DateRange, contentDescription = null)
+                            }
+                        },
                         modifier = Modifier.weight(1f),
                     )
                     OutlinedTextField(
                         value = dueTime,
-                        onValueChange = { dueTime = it },
-                        label = { Text("Time") },
-                        placeholder = { Text("HH:MM") },
+                        onValueChange = {},
+                        readOnly = true,
+                        enabled = dueDate.isNotEmpty(),
+                        label = { Text("Time *") },
+                        placeholder = { Text("Tap to pick") },
                         singleLine = true,
+                        interactionSource = timeInteraction,
+                        trailingIcon = {
+                            if (dueTime.isNotEmpty()) {
+                                IconButton(onClick = { dueTime = "" }) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Clear due time")
+                                }
+                            } else {
+                                Icon(Icons.Filled.AccessTime, contentDescription = null)
+                            }
+                        },
                         modifier = Modifier.weight(1f),
                     )
+                }
+                // Tapping a read-only field opens its picker (the trailing
+                // icon only clears); Release avoids firing while scrolling.
+                LaunchedEffect(dateInteraction) {
+                    dateInteraction.interactions.collect {
+                        if (it is PressInteraction.Release) showDatePicker = true
+                    }
+                }
+                LaunchedEffect(timeInteraction) {
+                    timeInteraction.interactions.collect {
+                        if (it is PressInteraction.Release && dueDate.isNotEmpty()) showTimePicker = true
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = minutes,
                         onValueChange = { minutes = it.filter { c -> c.isDigit() } },
-                        label = { Text("Minutes") },
+                        label = { Text("Minutes *") },
                         placeholder = { Text("30") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -1835,9 +1866,28 @@ private fun ServerTaskDialog(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Checkbox(
+                        checked = parallelable,
+                        onCheckedChange = { parallelable = it },
+                    )
+                    Text(
+                        "Can run in parallel with other tasks",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.clickable { parallelable = !parallelable },
+                    )
+                }
             }
         },
         confirmButton = {
+            val valid = name.trim().isNotEmpty() &&
+                description.trim().isNotEmpty() &&
+                dueDate.trim().isNotEmpty() &&
+                dueTime.trim().isNotEmpty() &&
+                (minutes.trim().toIntOrNull()?.let { it >= 0 } == true)
             TextButton(
                 onClick = {
                     onSave(
@@ -1848,10 +1898,11 @@ private fun ServerTaskDialog(
                             dueTime = dueTime.trim(),
                             estimatedMinutes = minutes.trim(),
                             repeatRule = repeatRule.trim(),
+                            parallelable = parallelable,
                         )
                     )
                 },
-                enabled = !busy && name.trim().isNotEmpty(),
+                enabled = !busy && valid,
             ) { Text("Save") }
         },
         dismissButton = {
@@ -1862,6 +1913,93 @@ private fun ServerTaskDialog(
                 TextButton(onClick = onDismiss) { Text("Cancel") }
             }
         },
+    )
+    if (showDatePicker) {
+        DueDatePickerDialog(
+            initial = dueDate,
+            onConfirm = { dueDate = it; showDatePicker = false },
+            onDismiss = { showDatePicker = false },
+        )
+    }
+    if (showTimePicker) {
+        DueTimePickerDialog(
+            initial = dueTime,
+            onConfirm = { dueTime = it; showTimePicker = false },
+            onDismiss = { showTimePicker = false },
+        )
+    }
+}
+
+/** Today/Tomorrow shortcuts (IST) for task due dates. */
+@Composable
+private fun DueQuickRow(onPick: (String) -> Unit) {
+    val today = remember { java.time.LocalDate.now(IST).toString() }
+    val tomorrow = remember { java.time.LocalDate.now(IST).plusDays(1).toString() }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(onClick = { onPick(today) }) { Text("Today") }
+        TextButton(onClick = { onPick(tomorrow) }) { Text("Tomorrow") }
+    }
+}
+
+/** Material3 date picker returning YYYY-MM-DD. The picker speaks
+ * UTC-midnight millis, so seed and read back in UTC — seeding IST
+ * midnight shifts the highlight a day back on non-IST devices. */
+@Composable
+private fun DueDatePickerDialog(
+    initial: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val initialMillis = remember(initial) {
+        val day = runCatching { java.time.LocalDate.parse(initial.trim()) }.getOrNull()
+            ?: java.time.LocalDate.now(IST)
+        day.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
+    }
+    val state = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                val picked = state.selectedDateMillis?.let {
+                    java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString()
+                } ?: java.time.LocalDate.now(IST).toString()
+                onConfirm(picked)
+            }) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    ) {
+        DatePicker(state = state)
+    }
+}
+
+/** Material3 24-hour time picker returning HH:MM; defaults to 09:00. */
+@Composable
+private fun DueTimePickerDialog(
+    initial: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val (initHour, initMinute) = remember(initial) {
+        val parts = initial.trim().split(":")
+        val h = parts.getOrNull(0)?.toIntOrNull()?.takeIf { it in 0..23 } ?: 9
+        val m = parts.getOrNull(1)?.toIntOrNull()?.takeIf { it in 0..59 } ?: 0
+        h to m
+    }
+    val state = rememberTimePickerState(
+        initialHour = initHour,
+        initialMinute = initMinute,
+        is24Hour = true,
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Due time") },
+        text = { TimePicker(state = state) },
+        confirmButton = {
+            TextButton(onClick = {
+                onConfirm("%02d:%02d".format(Locale.US, state.hour, state.minute))
+            }) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

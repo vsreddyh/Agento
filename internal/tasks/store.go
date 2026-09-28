@@ -1,7 +1,8 @@
 // Package tasks: MongoDB-backed personal task manager for the agent.
 //
 // Collection: tasks. One doc per task with name, description, due date/time,
-// estimated minutes, and a free-form repeat_rule string. There is NO status
+// estimated minutes, a free-form repeat_rule string, and a parallelable flag
+// (true = can run alongside other tasks). There is NO status
 // field: a task is open while completedAt is null and done once it is set.
 //
 // Completed tasks are retained 3 days via expiresAt TTL
@@ -120,27 +121,68 @@ func toDoc(doc bson.M) map[string]any {
 		}
 		out[k] = v
 	}
+	// Backfill keys that pre-mandatory docs lack, so every response
+	// speaks the same contract (readers default the same way).
+	if _, ok := out["description"]; !ok {
+		out["description"] = ""
+	}
+	if _, ok := out["due_date"]; !ok {
+		out["due_date"] = ""
+	}
+	if _, ok := out["due_time"]; !ok {
+		out["due_time"] = ""
+	}
+	if _, ok := out["estimated_minutes"]; !ok {
+		out["estimated_minutes"] = 0
+	}
+	if _, ok := out["repeat_rule"]; !ok {
+		out["repeat_rule"] = ""
+	}
+	if _, ok := out["parallelable"]; !ok {
+		out["parallelable"] = false
+	}
 	return out
 }
 
-// Create inserts an open task. Name required; repeat_rule stored verbatim.
-func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes int, repeatRule string) (map[string]any, error) {
+// Create inserts an open task. Every field except repeat_rule is required
+// (empty repeat_rule = one-shot task); parallelable marks tasks that can
+// run alongside other tasks.
+func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, repeatRule string, parallelable *bool) (map[string]any, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fail("name is required")
 	}
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return nil, fail("description is required")
+	}
+	dueDate = strings.TrimSpace(dueDate)
+	if dueDate == "" {
+		return nil, fail("due_date is required (YYYY-MM-DD)")
+	}
+	dueTime = strings.TrimSpace(dueTime)
+	if dueTime == "" {
+		return nil, fail("due_time is required (HH:MM)")
+	}
 	if err := checkDue(dueDate, dueTime); err != nil {
 		return nil, err
 	}
-	if estimatedMinutes < 0 {
+	if estimatedMinutes == nil {
+		return nil, fail("estimated_minutes is required")
+	}
+	if *estimatedMinutes < 0 {
 		return nil, fail("estimated_minutes must be >= 0")
+	}
+	if parallelable == nil {
+		return nil, fail("parallelable is required")
 	}
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{
 		"name": name, "description": description,
 		"due_date": dueDate, "due_time": dueTime,
-		"estimated_minutes": estimatedMinutes,
+		"estimated_minutes": *estimatedMinutes,
 		"repeat_rule":       strings.TrimSpace(repeatRule),
+		"parallelable":      *parallelable,
 		"completedAt":       nil, "createdAt": now,
 	}
 	res, err := s.tasks.InsertOne(ctx, doc)
@@ -216,8 +258,10 @@ func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 	return toDoc(doc), nil
 }
 
-// Update edits mutable fields of any task (open or done). Empty repeat_rule
-// clears the rule; due fields validated together.
+// Update edits mutable fields of any task (open or done). Supplied values
+// must satisfy the same mandatory rules as Create (empty description /
+// due fields are rejected, not cleared); repeat_rule stays clearable with
+// "" (one-shot). Absent keys are untouched; due fields validated together.
 func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
@@ -242,7 +286,17 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		}
 		return str, true
 	}
-	if v, ok := fields["name"]; ok {
+	// Wrong types fail loudly instead of becoming mystery no-ops
+	// (strField above treats them as absent). JSON null still counts
+	// as absent, matching the HTTP layer's convention.
+	for _, k := range []string{"description", "due_date", "due_time", "repeat_rule"} {
+		if v, ok := fields[k]; ok && v != nil {
+			if _, ok := v.(string); !ok {
+				return nil, fail("%s must be a string", k)
+			}
+		}
+	}
+	if v, ok := fields["name"]; ok && v != nil {
 		name, _ := v.(string)
 		if strings.TrimSpace(name) == "" {
 			return nil, fail("name is required")
@@ -250,24 +304,33 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		set["name"] = strings.TrimSpace(name)
 	}
 	if str, ok := strField("description"); ok {
-		set["description"] = str
+		if strings.TrimSpace(str) == "" {
+			return nil, fail("description is required")
+		}
+		set["description"] = strings.TrimSpace(str)
 	}
 	// Due fields flow through only when the caller sent them, so a
 	// no-change update stays a no-op and the len(set)==0 path can fire.
 	dueDate, _ := cur["due_date"].(string)
 	dueTime, _ := cur["due_time"].(string)
 	if str, ok := strField("due_date"); ok {
-		dueDate = str
-		set["due_date"] = str
+		if strings.TrimSpace(str) == "" {
+			return nil, fail("due_date is required (YYYY-MM-DD)")
+		}
+		dueDate = strings.TrimSpace(str)
+		set["due_date"] = dueDate
 	}
 	if str, ok := strField("due_time"); ok {
-		dueTime = str
-		set["due_time"] = str
+		if strings.TrimSpace(str) == "" {
+			return nil, fail("due_time is required (HH:MM)")
+		}
+		dueTime = strings.TrimSpace(str)
+		set["due_time"] = dueTime
 	}
 	if err := checkDue(dueDate, dueTime); err != nil {
 		return nil, err
 	}
-	if v, ok := fields["estimated_minutes"]; ok {
+	if v, ok := fields["estimated_minutes"]; ok && v != nil {
 		n, ok := toInt(v)
 		if !ok || n < 0 {
 			return nil, fail("estimated_minutes must be >= 0")
@@ -276,6 +339,13 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	}
 	if str, ok := strField("repeat_rule"); ok {
 		set["repeat_rule"] = strings.TrimSpace(str)
+	}
+	if v, ok := fields["parallelable"]; ok && v != nil {
+		b, ok := toBool(v)
+		if !ok {
+			return nil, fail("parallelable must be a boolean")
+		}
+		set["parallelable"] = b
 	}
 	if len(set) == 0 {
 		return toDoc(cur), nil
@@ -362,4 +432,11 @@ func toInt(v any) (int, bool) {
 		return int(n), true
 	}
 	return 0, false
+}
+
+// toBool accepts real booleans only — strings like "true" are caller bugs,
+// not values (same strictness as checkTaskFields on the HTTP layer).
+func toBool(v any) (bool, bool) {
+	b, ok := v.(bool)
+	return b, ok
 }
