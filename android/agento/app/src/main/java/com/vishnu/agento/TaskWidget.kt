@@ -399,8 +399,9 @@ class TaskWidget : AppWidgetProvider() {
         }
 
         // Style ladder values. C=2 and E=4 are FROZEN (placements persist
-        // them, so renumbering would remap a saved choice); the old
-        // full-static D=3 maps to the current last step.
+        // them, so renumbering would remap a saved choice). The D steps were
+        // renumbered once, when the fatal divider View was removed — the
+        // saved values are translated by migrateStyle below, not reused.
         const val STYLE_CHROME = 2       // C: header only (known good)
         const val STYLE_FULL_SCROLL = 4  // E: full widget, collection
         const val STYLE_ROWS = 10        // D1: + task rows (known good)
@@ -417,10 +418,17 @@ class TaskWidget : AppWidgetProvider() {
         private val STYLE_STATIC_STEPS = setOf(
             STYLE_ROWS, STYLE_ROWS_EMPTY, STYLE_PLUS_TOGGLE, STYLE_FULL_STATIC)
 
-        /** Retired ladder values: 3 was the old full-static D, 14 the old
-         * D5. Both mean "the full static widget", now D4. */
-        private fun migrateStyle(v: Int): Int =
-            if (v == 3 || v == 14) STYLE_FULL_STATIC else v
+        /** Translates saved ladder values from the pre-divider-removal
+         * numbering, preserving the chrome the user chose minus the divider
+         * that broke their widget (3 and 14 were the old full-static D and
+         * D5; 11/12/13 were the divider-era steps). */
+        private fun migrateStyle(v: Int): Int = when (v) {
+            3, 14 -> STYLE_FULL_STATIC
+            11 -> STYLE_ROWS          // rows+divider   → rows
+            12 -> STYLE_ROWS_EMPTY    // +divider+empty → rows+empty
+            13 -> STYLE_PLUS_TOGGLE   // +toggle        → +toggle
+            else -> v
+        }
 
         /** How much chrome a style turns on: 0..3 = rows, +empty text,
          * +header toggle, +title tap. Unknown values fall back to the
