@@ -399,15 +399,17 @@ class TaskWidget : AppWidgetProvider() {
         }
 
         // Style ladder values. C=2 and E=4 are FROZEN (placements persist
-        // them, so renumbering would remap a saved choice). The D steps were
-        // renumbered once, when the fatal divider View was removed — the
-        // saved values are translated by migrateStyle below, not reused.
+        // them, so renumbering would remap a saved choice). D1 kept 10
+        // (unchanged meaning); D2-D4 took FRESH values because 11/12/13
+        // still name the retired divider-era steps — reusing them would
+        // make migrateStyle non-idempotent and quietly downgrade a fresh
+        // selection on every load.
         const val STYLE_CHROME = 2       // C: header only (known good)
         const val STYLE_FULL_SCROLL = 4  // E: full widget, collection
         const val STYLE_ROWS = 10        // D1: + task rows (known good)
-        const val STYLE_ROWS_EMPTY = 11  // D2: + empty-state text
-        const val STYLE_PLUS_TOGGLE = 12 // D3: + header view toggle
-        const val STYLE_FULL_STATIC = 13 // D4: + title→settings tap
+        const val STYLE_ROWS_EMPTY = 15  // D2: + empty-state text
+        const val STYLE_PLUS_TOGGLE = 16 // D3: + header view toggle
+        const val STYLE_FULL_STATIC = 17 // D4: + title→settings tap
 
         private val STYLE_VALUES = setOf(
             STYLE_CHROME, STYLE_FULL_SCROLL, STYLE_ROWS, STYLE_ROWS_EMPTY,
@@ -420,13 +422,14 @@ class TaskWidget : AppWidgetProvider() {
 
         /** Translates saved ladder values from the pre-divider-removal
          * numbering, preserving the chrome the user chose minus the divider
-         * that broke their widget (3 and 14 were the old full-static D and
-         * D5; 11/12/13 were the divider-era steps). */
+         * that broke their widget: 3/14 were the old full-static D/D5, and
+         * 11/12/13 the divider-era steps. Idempotent — no output value is
+         * itself a case, so a current value passes through unchanged. */
         private fun migrateStyle(v: Int): Int = when (v) {
-            3, 14 -> STYLE_FULL_STATIC
-            11 -> STYLE_ROWS          // rows+divider   → rows
-            12 -> STYLE_ROWS_EMPTY    // +divider+empty → rows+empty
-            13 -> STYLE_PLUS_TOGGLE   // +toggle        → +toggle
+            3, 14 -> STYLE_FULL_STATIC    // full static (with divider)
+            11 -> STYLE_ROWS             // rows+divider        → rows
+            12 -> STYLE_ROWS_EMPTY       // +divider+empty      → rows+empty
+            13 -> STYLE_PLUS_TOGGLE      // +toggle             → +toggle
             else -> v
         }
 

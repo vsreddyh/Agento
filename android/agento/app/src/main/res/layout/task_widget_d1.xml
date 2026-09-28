@@ -3,7 +3,7 @@
      task_widget_style_c.xml; the only difference from the previous step is
      the element below, so the first failing step names the culprit. The 1dp
      divider View that used to sit here is removed for good — it alone made
-     this launcher reject the widget. -->
+     this launcher reject the widget. (Steps that carried it were removed.) -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
     android:layout_width="match_parent"
