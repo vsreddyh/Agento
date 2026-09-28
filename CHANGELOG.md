@@ -8,6 +8,12 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.2.4]
+
+- FIX: task widget load error on some launchers (issue #137) — direct
+  collection rows now carry explicit per-row taps instead of the
+  mutable template + fill-ins. Same taps, zero functional loss.
+
 ## [4.2.3]
 
 - FIX: task widget load error on some launchers (issue #137) — the row

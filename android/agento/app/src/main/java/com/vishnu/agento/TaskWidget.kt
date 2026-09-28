@@ -265,6 +265,39 @@ class TaskWidget : AppWidgetProvider() {
         fun showDueFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_due_$appWidgetId", true)
 
+        /** One row with explicit per-row intents instead of the collection
+         * template: all immutable, so hosts that balk at the mutable
+         * template (or at fill-in merging) still complete/open rows
+         * (issue #137). Same layout and content as [buildRow]. */
+        fun buildRowWithIntents(
+            context: Context,
+            appWidgetId: Int,
+            compact: Boolean,
+            showDue: Boolean,
+            today: java.time.LocalDate,
+            task: ServerTask,
+        ): RemoteViews {
+            val complete = PendingIntent.getActivity(
+                context, ("wc:$appWidgetId:${task.id}").hashCode(),
+                Intent(context, TaskCompleteActivity::class.java)
+                    .putExtra(EXTRA_COMPLETE_ID, task.id)
+                    .setData(Uri.parse("agento://task/${task.id}/complete")),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val openTask = PendingIntent.getActivity(
+                context, ("wo:$appWidgetId:${task.id}").hashCode(),
+                Intent(context, MainActivity::class.java)
+                    .setAction(ACTION_TASKS)
+                    .putExtra(EXTRA_TASK_ID, task.id)
+                    .setData(Uri.parse("agento://task/${task.id}")),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            return buildRow(context.packageName, compact, showDue, today, task).apply {
+                setOnClickPendingIntent(R.id.task_widget_row_check, complete)
+                setOnClickPendingIntent(R.id.task_widget_row, openTask)
+            }
+        }
+
         /** Builds one collection row. Shared by the legacy factory
          * (API <31) and the direct RemoteCollectionItems path (31+). */
         fun buildRow(
@@ -453,21 +486,23 @@ class TaskWidget : AppWidgetProvider() {
                 // Error/empty state is tappable: re-pull instead of sitting
                 // dead on a stale failure (#130).
                 setOnClickPendingIntent(R.id.task_widget_empty, refreshPending)
-                setPendingIntentTemplate(R.id.task_widget_list_view, rowPending)
                 if (tasks != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     // Service-backed collections (setRemoteAdapter) broke
                     // on Android 16 — hand the rows over directly instead
-                    // of binding the service (issue #137). Capped: the
-                    // whole list rides one parcel, so a huge "All" view
-                    // would TransactionTooLarge the update (the header
-                    // count below still shows the true total).
+                    // of binding the service (issue #137). Rows carry
+                    // explicit immutable intents (no mutable template or
+                    // fill-ins: the other host-sensitive piece). Capped:
+                    // the whole list rides one parcel, so a huge "All"
+                    // view would TransactionTooLarge the update (the
+                    // header count below still shows the true total).
                     val today = java.time.LocalDate.now(IST)
                     val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
                     val due = showDueFor(context, appWidgetId)
                     val items = RemoteViews.RemoteCollectionItems.Builder().apply {
                         tasks.take(100).forEachIndexed { i, t ->
                             addItem(i.toLong(),
-                                buildRow(context.packageName, compact, due, today, t))
+                                buildRowWithIntents(
+                                    context, appWidgetId, compact, due, today, t))
                         }
                         setHasStableIds(false)
                         setViewTypeCount(1)
@@ -477,8 +512,10 @@ class TaskWidget : AppWidgetProvider() {
                     setRemoteAdapter(R.id.task_widget_list_view, items)
                 } else {
                     // API <31 has no RemoteCollectionItems: legacy service
-                    // path (TaskWidgetService). tasks==null also lands
-                    // here (loading/error shell, list stays empty).
+                    // path (TaskWidgetService) with the fill-in template.
+                    // tasks==null also lands here (loading/error shell,
+                    // list stays empty).
+                    setPendingIntentTemplate(R.id.task_widget_list_view, rowPending)
                     setRemoteAdapter(R.id.task_widget_list_view, svc)
                 }
                 setEmptyView(
