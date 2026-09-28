@@ -29,7 +29,7 @@
         android:textSize="14sp"
         android:maxLines="1"
         android:ellipsize="end"
-        android:textColor="?android:attr/textColorPrimary" />
+        android:textColor="@color/task_widget_text_primary" />
 
     <TextView
         android:id="@+id/task_widget_row_due"
@@ -38,6 +38,6 @@
         android:paddingStart="8dp"
         android:textSize="12sp"
         android:maxLines="1"
-        android:textColor="?android:attr/textColorSecondary" />
+        android:textColor="@color/task_widget_text_secondary" />
 
 </LinearLayout>

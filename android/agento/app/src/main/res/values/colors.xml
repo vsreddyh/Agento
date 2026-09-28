@@ -7,4 +7,9 @@
     <!-- Row complete-ring (light). Mirrors secondary text; concrete so it
          resolves in every widget host (issue #137). -->
     <color name="task_widget_ring">#757575</color>
+    <!-- Widget text colors. Concrete, NOT ?android:attr/textColor*:
+         hosts that inflate widget layouts with a bare theme can fail to
+         resolve theme attrs and reject the whole RemoteViews (#137). -->
+    <color name="task_widget_text_primary">#1C1B1F</color>
+    <color name="task_widget_text_secondary">#49454F</color>
 </resources>
