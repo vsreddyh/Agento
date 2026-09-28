@@ -158,6 +158,39 @@ class TaskWidget : AppWidgetProvider() {
         // tap-to-retry) instead of a dead generic error.
         @Volatile private var lastErrors: Map<String, String> = emptyMap()
 
+        /** One-screen widget health summary for Settings → About, so
+         * widget failures can be diagnosed without adb. */
+        fun diagnostics(appCtx: Context): String {
+            val ctx = appCtx.applicationContext
+            val mgr = AppWidgetManager.getInstance(ctx)
+            val ids = runCatching {
+                mgr.getAppWidgetIds(ComponentName(ctx, TaskWidget::class.java))
+            }.getOrDefault(intArrayOf())
+            return buildString {
+                appendLine("placements=${ids.size}")
+                for (id in ids) {
+                    appendLine("id=$id view=${viewFor(ctx, id)} " +
+                        "density=${densityFor(ctx, id)} showDue=${showDueFor(ctx, id)}")
+                }
+                appendLine("cached=${cachedViews.mapValues { it.value.size }}")
+                appendLine("errors=$lastErrors")
+            }.trim()
+        }
+
+        /** Recent log lines from our own process. Self-reads need no
+         * permission (unlike adb), so a broken widget's stack trace can
+         * be copied out of the app. Call off the main thread. */
+        fun dumpOwnLog(): String = runCatching {
+            val pid = android.os.Process.myPid().toString()
+            val proc = ProcessBuilder(
+                "logcat", "-d", "--pid=$pid", "-v", "brief", "-t", "400")
+                .redirectErrorStream(true)
+                .start()
+            val done = proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            val lines = proc.inputStream.bufferedReader().readText().lines()
+            (if (done) lines else lines + "(timed out)").takeLast(80).joinToString("\n")
+        }.getOrDefault("(log unavailable)")
+
         private fun prefs(context: Context) =
             context.applicationContext.getSharedPreferences(
                 AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)

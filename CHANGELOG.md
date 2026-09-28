@@ -27,7 +27,9 @@ see GitHub Releases for older notes.
   Today/Tomorrow shortcuts), not typed. Completing a task opens a
   prefilled draft with the date cleared, so recreating means picking a
   fresh date.
-
+- Settings → About gains a Widget diagnostics card: placement state plus
+  one-tap copy of recent device log, so widget failures are debuggable
+  without adb.
 ## [3.20.1]
 
 - Task Manager bug fix: open tasks no longer render as completed — JSON

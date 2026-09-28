@@ -5160,6 +5160,7 @@ private fun SettingsScreen(
                     }
                     SettingSection.About -> {
                         AppUpdateSection()
+                        WidgetDiagnosticsCard()
                     }
                     SettingSection.Health -> {
                         HealthStatusCard(state)
@@ -5789,6 +5790,49 @@ private fun AppUpdateSection() {
         if (status.isNotEmpty()) {
             if (failed) ErrorCard(raw = status) else HintLine(status)
         }
+    }
+}
+
+/** Task-widget health + one-tap log copy (Settings → About), so a broken
+ * widget can be diagnosed without adb: placements, cached counts, last
+ * fetch errors, plus recent log lines from our own process. */
+@Composable
+private fun WidgetDiagnosticsCard() {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var summary by remember { mutableStateOf("") }
+    var copying by remember { mutableStateOf(false) }
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { summary = TaskWidget.diagnostics(context) }
+    SectionCard(
+        title = "Widget diagnostics",
+        subtitle = "Task-widget state and recent log. If the home-screen widget errors, copy this and paste it in chat.",
+    ) {
+        if (summary.isNotEmpty()) {
+            SelectionContainer {
+                Text(summary, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        Button(
+            onClick = {
+                copying = true
+                copied = false
+                scope.launch {
+                    val fresh = TaskWidget.diagnostics(context)
+                    summary = fresh
+                    val log = withContext(Dispatchers.IO) { TaskWidget.dumpOwnLog() }
+                    clipboard.setText(AnnotatedString("$fresh\n--- log ---\n${log.take(6000)}"))
+                    copying = false
+                    copied = true
+                }
+            },
+            enabled = !copying,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (copying) "Copying…" else "Copy diagnostics")
+        }
+        if (copied) HintLine("Copied — paste it in chat.")
     }
 }
 
