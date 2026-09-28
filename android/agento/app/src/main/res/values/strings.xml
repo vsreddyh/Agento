@@ -8,7 +8,6 @@
     <string name="task_widget_error">Couldn\'t load tasks</string>
     <string name="task_widget_empty">All done!</string>
     <string name="task_widget_refresh">Refresh tasks</string>
-    <string name="task_widget_view">Change view</string>
     <string name="task_widget_display">Widget display settings</string>
     <string name="task_widget_complete">Complete task</string>
     <!-- Diagnostic style ladder (#137); removed with the ladder. -->

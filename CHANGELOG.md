@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.4.3]
+
+- Task widget settings (view, density, due line) move into the widget's
+  settings screen, now reachable from the Task Manager — the widget's own
+  header controls never rendered on some launchers (#137), and the view
+  name shows in the header title instead of a toggle button.
+
 ## [4.4.2]
 
 - FIX (attempt) for the task widget load error (issue #137): the widget

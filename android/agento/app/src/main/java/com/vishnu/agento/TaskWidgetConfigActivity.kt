@@ -32,11 +32,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 
 /**
- * Display settings for one task-widget placement: row density and
- * whether rows show the due line. Launched by the system at add time
- * (android:configure) and later by tapping the widget's title, which
- * passes the placement id for reconfiguration. Cancelling at add time
- * aborts the placement; saving re-renders that widget via [TaskWidget].
+ * Display settings for one task-widget placement: which slice it shows,
+ * row density, the due line, and the diagnostic style ladder (#137).
+ * Launched by the system at add time (android:configure) and from the
+ * Task Manager screen afterwards. Cancelling at add time aborts the
+ * placement; saving re-renders that widget via [TaskWidget].
  */
 class TaskWidgetConfigActivity : ComponentActivity() {
 
@@ -73,12 +73,46 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                     var style by remember {
                         mutableStateOf(TaskWidget.styleFor(this, appWidgetId))
                     }
+                    // The widget's own header toggle never rendered on the
+                    // affected launcher (#137), so view switching moved here
+                    // rather than being dropped.
+                    var widgetView by remember {
+                        mutableStateOf(TaskWidget.viewFor(this, appWidgetId))
+                    }
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(
                             getString(R.string.task_widget_display),
                             style = MaterialTheme.typography.headlineSmall,
                         )
                         Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "Show",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TaskWidgetView.entries.forEach { v ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .selectable(
+                                        selected = widgetView == v,
+                                        onClick = { widgetView = v },
+                                        role = Role.RadioButton,
+                                    )
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = widgetView == v, onClick = null)
+                                Text(
+                                    v.title,
+                                    modifier = Modifier.padding(start = 8.dp),
+                                )
+                            }
+                        }
+                        Text(
+                            "Density",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Text(
                             "Density",
                             style = MaterialTheme.typography.labelLarge,
@@ -177,6 +211,10 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                                         "task_widget_scroll_$appWidgetId",
                                         style == TaskWidget.STYLE_FULL_SCROLL)
                                     .putInt("task_widget_style_$appWidgetId", style)
+                                    .putString(
+                                        "task_widget_view_$appWidgetId",
+                                        widgetView.name,
+                                    )
                                     .apply()
                                 TaskWidget.refresh(this@TaskWidgetConfigActivity)
                                 setResult(RESULT_OK, done)

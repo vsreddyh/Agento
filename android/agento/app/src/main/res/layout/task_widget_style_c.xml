@@ -4,7 +4,8 @@
      suspects (clickable chrome + shape drawable). The button background is
      a concrete color, not ?android:attr/selectableItemBackgroundBorderless,
      so the theme-attr variable stays fixed across the whole ladder.
-     IDs match task_widget.xml so render() shares the header wiring. -->
+     IDs match task_widget_full.xml / task_widget_list.xml so render()
+     shares the header wiring. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/task_widget_body"
     android:layout_width="match_parent"

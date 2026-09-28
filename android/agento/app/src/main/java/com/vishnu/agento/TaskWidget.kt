@@ -35,8 +35,11 @@ enum class TaskWidgetDensity(val title: String) {
 }
 
 /**
- * Home-screen task manager widget (#101): header (title + count + view
- * toggle + refresh) above a scrollable task list. Row taps deep-link
+ * Home-screen task manager widget (#101): header (title + count +
+ * refresh) above a scrollable task list. View switching and display
+ * settings live in [TaskWidgetConfigActivity], reachable from the Task
+ * Manager screen — the widget's own controls never rendered on some
+ * launchers (#137). Row taps deep-link
  * into the task's detail sheet and the ring button completes inline —
  * both via the translucent [TaskCompleteActivity] trampoline, which
  * keeps widget taps BAL-safe on all API levels. Reads the same shared
@@ -73,23 +76,23 @@ class TaskWidget : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        when (intent.action) {
-            ACTION_REFRESH -> {
-                val mgr = AppWidgetManager.getInstance(context)
-                val ids = mgr.getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
-                if (ids.isNotEmpty()) pull(context, ids)
-            }
-            ACTION_VIEW -> {
-                // Header view toggle: cycle this placement only, then
-                // re-pull it so the list matches the new view.
-                val id = intent.getIntExtra(
-                    AppWidgetManager.EXTRA_APPWIDGET_ID,
-                    AppWidgetManager.INVALID_APPWIDGET_ID,
-                )
-                if (id != AppWidgetManager.INVALID_APPWIDGET_ID) {
-                    cycleView(context, id)
-                    pull(context, intArrayOf(id))
-                }
+        // The header view toggle is gone (#137 — it never rendered on the
+        // affected launcher); view switching now happens in the config
+        // activity, reachable from the Task Manager screen. ACTION_VIEW is
+        // still handled so a PendingIntent fired by an already-placed older
+        // build still cycles instead of erroring.
+        if (intent.action == ACTION_REFRESH) {
+            val mgr = AppWidgetManager.getInstance(context)
+            val ids = mgr.getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
+            if (ids.isNotEmpty()) pull(context, ids)
+        } else if (intent.action == ACTION_VIEW) {
+            val id = intent.getIntExtra(
+                AppWidgetManager.EXTRA_APPWIDGET_ID,
+                AppWidgetManager.INVALID_APPWIDGET_ID,
+            )
+            if (id != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                cycleView(context, id)
+                pull(context, intArrayOf(id))
             }
         }
     }
@@ -143,7 +146,10 @@ class TaskWidget : AppWidgetProvider() {
         private val widgetScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
         // Distinct PendingIntent codes (review #109): actions already keep
-        // the intents apart, but codes make that explicit.
+        // the intents apart, but codes make that explicit. VIEW_CODE and
+        // CONFIG_CODE are reserved for the removed header toggle/settings
+        // taps: gaps in the numbering are deliberate, so a PendingIntent
+        // already cached by an older build still matches its own code.
         private const val OPEN_CODE = 1001
         private const val REFRESH_CODE = 1002
         private const val VIEW_CODE = 1003
@@ -386,13 +392,13 @@ class TaskWidget : AppWidgetProvider() {
             return if (v in STYLE_VALUES) v else STYLE_FULL_SCROLL
         }
 
-        // Style ladder values, shared with the config UI so labels and
-        // values can't drift apart. A/B were removed once they proved the
-        // host renders our basics (#137); C is the known-good baseline
-        // and D/E are the shipping widgets, rebuilt on C's structure.
-        const val STYLE_CHROME = 0       // C: header only (known good)
-        const val STYLE_FULL_STATIC = 1  // D: full widget, plain rows
-        const val STYLE_FULL_SCROLL = 2  // E: full widget, collection
+        // Style ladder values. Numbers are FROZEN: placements persist them,
+        // so renumbering would silently remap a saved choice. 0/1 (styles
+        // A/B) were removed once they proved the host renders our basics
+        // (#137) and are left as gaps.
+        const val STYLE_CHROME = 2       // C: header only (known good)
+        const val STYLE_FULL_STATIC = 3  // D: full widget, plain rows
+        const val STYLE_FULL_SCROLL = 4  // E: full widget, collection
 
         private val STYLE_VALUES = setOf(
             STYLE_CHROME, STYLE_FULL_STATIC, STYLE_FULL_SCROLL)
@@ -704,9 +710,11 @@ class TaskWidget : AppWidgetProvider() {
                     countText(context, view, tasks, error, capped = !scrollable))
                 val emptyText = when {
                     tasks == null && !error -> context.getString(R.string.task_widget_loading)
-                    tasks == null -> (errorDetail?.take(140)
-                        ?: context.getString(R.string.task_widget_error)) +
-                        " — tap to retry"
+                    // No "tap to retry" suffix: the empty view is no longer
+                    // tappable (the refresh button is) and promising a dead
+                    // tap is worse than none.
+                    tasks == null -> errorDetail?.take(140)
+                        ?: context.getString(R.string.task_widget_error)
                     tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
                     else -> ""
                 }
