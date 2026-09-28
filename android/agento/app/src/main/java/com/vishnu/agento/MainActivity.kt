@@ -5915,8 +5915,8 @@ private fun WidgetDiagnosticsCard() {
                         }
                         clipboard.setText(
                             AnnotatedString(
-                                "$fresh\n--- log (this app) ---\n$mine\n" +
-                                    "--- log (system, last 15 min) ---\n$sys".take(6000)
+                                ("$fresh\n--- log (this app) ---\n$mine\n" +
+                                    "--- log (system, last 15 min) ---\n$sys").take(6000)
                             )
                         )
                         copied = true
@@ -5927,7 +5927,7 @@ private fun WidgetDiagnosticsCard() {
                     }
                 }
             },
-            enabled = !copying && !saving,
+            enabled = !copying && !saving && !clearing,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (copying) "Copying…" else "Copy diagnostics")
@@ -5965,7 +5965,7 @@ private fun WidgetDiagnosticsCard() {
                     saving = false
                 }
             },
-            enabled = !copying && !saving,
+            enabled = !copying && !saving && !clearing,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (saving) "Saving…" else "Save report to file")

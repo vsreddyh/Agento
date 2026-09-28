@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.2.7]
+
+- Diagnostic build fixes: static rows clear before re-render (no ghost
+  rows), report/copy caps cover the whole string, the data-changed
+  notify targets only service-backed placements, and the diagnostics
+  actions no longer race each other.
+
 ## [4.2.6]
 
 - DIAGNOSTIC build for the task widget load error (issue #137): the
