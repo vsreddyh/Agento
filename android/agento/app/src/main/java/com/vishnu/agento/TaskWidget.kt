@@ -186,9 +186,15 @@ class TaskWidget : AppWidgetProvider() {
                 "logcat", "-d", "--pid=$pid", "-v", "brief", "-t", "400")
                 .redirectErrorStream(true)
                 .start()
-            val done = proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
-            val lines = proc.inputStream.bufferedReader().readText().lines()
-            (if (done) lines else lines + "(timed out)").takeLast(80).joinToString("\n")
+            try {
+                // Read before wait: waiting first can deadlock on a full
+                // pipe. destroy() in finally so a stuck proc never leaks.
+                val out = proc.inputStream.bufferedReader().readText()
+                proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+                out.lines().takeLast(80).joinToString("\n").ifEmpty { "(empty log)" }
+            } finally {
+                proc.destroy()
+            }
         }.getOrDefault("(log unavailable)")
 
         private fun prefs(context: Context) =

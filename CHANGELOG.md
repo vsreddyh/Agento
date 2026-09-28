@@ -30,6 +30,7 @@ see GitHub Releases for older notes.
 - Settings → About gains a Widget diagnostics card: placement state plus
   one-tap copy of recent device log, so widget failures are debuggable
   without adb.
+
 ## [3.20.1]
 
 - Task Manager bug fix: open tasks no longer render as completed — JSON

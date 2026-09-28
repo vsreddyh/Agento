@@ -5819,12 +5819,15 @@ private fun WidgetDiagnosticsCard() {
                 copying = true
                 copied = false
                 scope.launch {
-                    val fresh = TaskWidget.diagnostics(context)
-                    summary = fresh
-                    val log = withContext(Dispatchers.IO) { TaskWidget.dumpOwnLog() }
-                    clipboard.setText(AnnotatedString("$fresh\n--- log ---\n${log.take(6000)}"))
-                    copying = false
-                    copied = true
+                    try {
+                        val fresh = TaskWidget.diagnostics(context)
+                        summary = fresh
+                        val log = withContext(Dispatchers.IO) { TaskWidget.dumpOwnLog() }
+                        clipboard.setText(AnnotatedString("$fresh\n--- log ---\n${log.take(6000)}"))
+                        copied = true
+                    } finally {
+                        copying = false
+                    }
                 }
             },
             enabled = !copying,
