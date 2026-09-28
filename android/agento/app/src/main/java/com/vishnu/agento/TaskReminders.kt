@@ -26,7 +26,7 @@ private val ClockTime = Regex("(\\d{1,2}):(\\d{2})(?::(\\d{2}))?")
 private val alarmScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 /** Fixed notification id; identity comes from the per-task tag. */
-private const val ALARM_NOTIF_ID = 1
+internal const val ALARM_NOTIF_ID = 1
 
 /** True for strict ISO dates only; anything else is treated as undated
  * so one malformed row can never poison comparisons or alarms. */
@@ -215,6 +215,39 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             return
         }
         val name = task?.name.orEmpty().ifEmpty { "Task due" }
+        // The fetch already carries the whole task — surface it instead
+        // of a bare "Due now" (#130 follow-up).
+        val today = LocalDate.now(IST)
+        val dueLine = if (task != null) {
+            friendlyDue(task.dueDate, task.dueTime, today)
+        } else {
+            ""
+        }
+        val summary = listOf(
+            dueLine.ifEmpty { null },
+            task?.estimatedMinutes?.takeIf { it > 0 }?.let { "~$it min" },
+        ).filterNotNull().joinToString(" · ").ifEmpty { "Due now" }
+        // Locals: task is nullable and conditions below don't smart-cast.
+        val taskDesc = task?.description.orEmpty()
+        val mins = task?.estimatedMinutes ?: 0
+        val repeat = task?.repeatRule.orEmpty()
+        val big = buildList {
+            if (taskDesc.isNotEmpty()) add(taskDesc)
+            if (dueLine.isNotEmpty()) add(dueLine)
+            if (mins > 0) add("Estimate ~$mins min")
+            if (repeat.isNotEmpty()) add("Repeats $repeat")
+        }.joinToString("\n")
+        // Inline complete reuses the widget trampoline (no visible UI:
+        // completes, refreshes widget/alarms, finishes). Data URI + own
+        // request code: extras don't count for PendingIntent identity,
+        // so without these one task's Done could complete another.
+        val done = PendingIntent.getActivity(
+            appCtx, ("done:$taskId").hashCode(),
+            Intent(appCtx, TaskCompleteActivity::class.java)
+                .putExtra(TaskWidget.EXTRA_COMPLETE_ID, taskId)
+                .setData(Uri.parse("agento://reminder/$taskId/complete")),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE)
             as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -224,7 +257,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                     appCtx.getString(R.string.task_reminder_channel),
                     NotificationManager.IMPORTANCE_HIGH,
                 ).apply {
-                    description = appCtx.getString(R.string.task_reminder_channel_desc)
+                    this.description = appCtx.getString(R.string.task_reminder_channel_desc)
                 },
             )
         }
@@ -236,19 +269,29 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             appCtx, taskId.hashCode(), launch,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val notif = NotificationCompat.Builder(appCtx, TaskReminders.CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_menu_agenda)
+            .setContentTitle(name)
+            .setContentText(summary)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(tap)
+            // No icon (0): framework checkables render badly as action
+            // icons on some OEMs.
+            .addAction(0, "Done", done)
+        // Expanded view only when there's a description —
+        // otherwise it duplicates the summary in a second page.
+        if (taskDesc.isNotEmpty()) {
+            notif.setStyle(
+                NotificationCompat.BigTextStyle().bigText(big),
+            )
+        }
         mgr.notify(
             // Tag-based identity: unique per task even if two ids ever
             // share a hashCode (the PendingIntent request code, by
             // contrast, is disambiguated by its data URI).
             taskId, ALARM_NOTIF_ID,
-            NotificationCompat.Builder(appCtx, TaskReminders.CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_menu_agenda)
-                .setContentTitle(name)
-                .setContentText("Due now")
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setAutoCancel(true)
-                .setContentIntent(tap)
-                .build(),
+            notif.build(),
         )
     }
 }
