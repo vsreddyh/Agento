@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -1723,7 +1724,9 @@ private fun DetailLine(
     value: String,
     highlight: Boolean = false,
 ) {
-    Row {
+    Row(
+        verticalAlignment = Alignment.Top,
+    ) {
         Icon(
             icon,
             contentDescription = null,
@@ -1732,6 +1735,7 @@ private fun DetailLine(
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
+            modifier = Modifier.padding(top = 2.dp),
         )
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -1915,14 +1919,19 @@ private fun ServerTaskDialog(
                     HintLine("Fill all * fields to enable Save.")
                 }
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth()
+                        .toggleable(
+                            value = parallelable,
+                            role = Role.Checkbox,
+                            onValueChange = { parallelable = it },
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Checkbox(
                         checked = parallelable,
-                        onCheckedChange = { parallelable = it },
+                        onCheckedChange = null,
                     )
-                    Column(modifier = Modifier.clickable { parallelable = !parallelable }) {
+                    Column {
                         Text(
                             "Can run in parallel",
                             style = MaterialTheme.typography.bodyMedium,
