@@ -7,7 +7,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.util.Log
+import android.view.View
 import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -263,6 +265,44 @@ class TaskWidget : AppWidgetProvider() {
         fun showDueFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_due_$appWidgetId", true)
 
+        /** Builds one collection row. Shared by the legacy factory
+         * (API <31) and the direct RemoteCollectionItems path (31+). */
+        fun buildRow(
+            packageName: String,
+            compact: Boolean,
+            showDue: Boolean,
+            today: java.time.LocalDate,
+            task: ServerTask,
+        ): RemoteViews {
+            val layout = if (compact) {
+                R.layout.task_widget_row_compact
+            } else {
+                R.layout.task_widget_row
+            }
+            return RemoteViews(packageName, layout).apply {
+                setTextViewText(R.id.task_widget_row_name, task.name)
+                // Same friendly due line as the Task Manager rows (#130),
+                // IST-pinned; blank collapses to gone below.
+                val due = friendlyDue(task.dueDate, task.dueTime, today)
+                if (showDue && due.isNotEmpty()) {
+                    setTextViewText(R.id.task_widget_row_due, due)
+                    setViewVisibility(R.id.task_widget_row_due, View.VISIBLE)
+                } else {
+                    setViewVisibility(R.id.task_widget_row_due, View.GONE)
+                }
+                // Ring completes inline; anywhere else opens the detail
+                // sheet. Both ride the trampoline template pending intent.
+                setOnClickFillInIntent(
+                    R.id.task_widget_row_check,
+                    Intent().putExtra(TaskWidget.EXTRA_COMPLETE_ID, task.id),
+                )
+                setOnClickFillInIntent(
+                    R.id.task_widget_row,
+                    Intent().putExtra(TaskWidget.EXTRA_TASK_ID, task.id),
+                )
+            }
+        }
+
         /** Advance Open → Done → All → Open for one placement. */
         private fun cycleView(context: Context, appWidgetId: Int) {
             val next = when (viewFor(context, appWidgetId)) {
@@ -407,7 +447,28 @@ class TaskWidget : AppWidgetProvider() {
                 // dead on a stale failure (#130).
                 setOnClickPendingIntent(R.id.task_widget_empty, refreshPending)
                 setPendingIntentTemplate(R.id.task_widget_list_view, rowPending)
-                setRemoteAdapter(R.id.task_widget_list_view, svc)
+                if (tasks != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    // Service-backed collections (setRemoteAdapter) broke
+                    // on Android 16 — hand the rows over directly instead
+                    // of binding the service (issue #137).
+                    val today = java.time.LocalDate.now(IST)
+                    val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
+                    val due = showDueFor(context, appWidgetId)
+                    val items = RemoteViews.RemoteCollectionItems.Builder().apply {
+                        tasks.forEachIndexed { i, t ->
+                            addItem(i.toLong(),
+                                buildRow(context.packageName, compact, due, today, t))
+                        }
+                        setHasStableIds(false)
+                        setViewTypeCount(1)
+                    }.build()
+                    setRemoteCollectionItems(R.id.task_widget_list_view, items)
+                } else {
+                    // API <31 has no RemoteCollectionItems: legacy service
+                    // path (TaskWidgetService). tasks==null also lands
+                    // here (loading/error shell, list stays empty).
+                    setRemoteAdapter(R.id.task_widget_list_view, svc)
+                }
                 setEmptyView(
                     R.id.task_widget_list_view,
                     R.id.task_widget_empty,

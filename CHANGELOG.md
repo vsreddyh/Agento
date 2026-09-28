@@ -10,6 +10,11 @@ see GitHub Releases for older notes.
 
 ## [4.2.0]
 
+- FIX: task widget on Android 16 — service-backed collections broke
+  there, so API 31+ devices now get rows directly via
+  RemoteCollectionItems (no service bind); older devices keep the
+  legacy factory path.
+
 - Widget diagnostics can be saved to a file and shared for upload
   (Settings → About), with a larger redacted log slice than the
   clipboard variant. Factory throwables are recorded and crash log
