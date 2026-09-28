@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.2.2]
+
+- Task UI for narrow screens: detail sheet stacks label above value so
+  nothing wraps mid-word, and the task dialog is a single scrolling
+  column with section headers, quick chips (Today/Tomorrow, minutes,
+  repeat presets), and a Save hint until all required fields are set.
+
 ## [4.2.1]
 
 - FIX: task widget on Android 16 — service-backed collections broke
