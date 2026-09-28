@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- FileProvider paths for the in-app updater (issue #6): downloaded release
-     APKs live under cache/updates and are handed to the platform installer. -->
+     APKs live under cache/updates and are handed to the platform installer.
+     Diagnostics reports (Settings → About) live under cache/diagnostics and
+     are shared out so failures are debuggable without adb. -->
 <paths>
     <cache-path name="updates" path="updates/" />
+    <cache-path name="diagnostics" path="diagnostics/" />
 </paths>

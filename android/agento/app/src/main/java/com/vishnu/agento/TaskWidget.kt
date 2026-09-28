@@ -190,12 +190,20 @@ class TaskWidget : AppWidgetProvider() {
             }.trim()
         }.getOrDefault("(diagnostics unavailable)")
 
+        /** Full diagnostics report for file export: health summary plus
+         * a larger redacted log slice than the clipboard variant. */
+        fun buildReport(appCtx: Context): String {
+            val head = diagnostics(appCtx)
+            val log = dumpOwnLog(interestingLines = 150, tailLines = 50)
+            return "$head\n--- log ---\n$log".take(100_000)
+        }
+
         /** Recent log lines from our own process. Self-reads need no
          * permission (unlike adb), so a broken widget's stack trace can
          * be copied out of the app. Call off the main thread.
          * Privacy: the output is user-copied into chat, so bearer secrets
          * are redacted before it leaves the device (see [redactSecrets]). */
-        fun dumpOwnLog(): String = runCatching {
+        fun dumpOwnLog(interestingLines: Int = 40, tailLines: Int = 20): String = runCatching {
             val pid = android.os.Process.myPid().toString()
             val proc = ProcessBuilder(
                 "logcat", "-d", "--pid=$pid", "-v", "brief", "-t", "400")
@@ -213,9 +221,9 @@ class TaskWidget : AppWidgetProvider() {
                     l.contains("TaskWidget") || l.contains("AndroidRuntime") ||
                         l.contains("FATAL") || l.contains("RemoteViews") ||
                         l.contains("AppWidget") || l.contains("System.err")
-                }.takeLast(40)
+                }.takeLast(interestingLines)
                 redactSecrets(
-                    (interesting + "--- tail ---" + lines.takeLast(20)).joinToString("\n"),
+                    (interesting + "--- tail ---" + lines.takeLast(tailLines)).joinToString("\n"),
                 ).ifEmpty { "(empty log)" }
             } finally {
                 proc.destroy()
