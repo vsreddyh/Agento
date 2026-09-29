@@ -194,43 +194,48 @@ func repeatSet(rep tasks.Repeat) bson.M {
 	}
 }
 
-// "every N unit" is the only pattern that becomes a cadence, and only
-// while N fits 1-28. Everything else — including a count outside the
-// range — keeps the user's words, because a custom condition that says
-// "every 12 days" is honest where a clamped "every 28 days" is a lie.
-var everyN = regexp.MustCompile(`(?i)^every\s+(\d{1,3})\s+(day|week|month|year)s?$`)
+// The vocabulary of a cadence, not a list of the strings that happen to be
+// in the database: the unit words, and the adverbs that mean "every one of
+// them". Anything outside this vocabulary is a custom condition.
+var (
+	unitWords = map[string]string{
+		"day": "days", "days": "days",
+		"week": "weeks", "weeks": "weeks",
+		"month": "months", "months": "months",
+		"year": "years", "years": "years",
+	}
+	adverbUnits = map[string]string{
+		"daily": "days", "weekly": "weeks", "monthly": "months",
+		"yearly": "years", "annually": "years",
+	}
+	// "<count> <unit>", with an optional "every ". Anchored, so a rule
+	// that continues past the cadence ("every 2 weeks unless it rains")
+	// fails to match and stays custom instead of losing its tail.
+	countedUnit = regexp.MustCompile(`^(?:every\s+)?(\d{1,3})\s+([a-z]+)$`)
+)
 
 // classify maps a legacy free-text rule onto the recurrence to store.
-// Whitelist, not a loose regex: a rule carrying an exception ("daily, skip
-// Wednesdays") must never be flattened into a plain cadence.
+// A whole-string match or nothing: a rule carrying an exception ("daily,
+// skip Wednesdays") must never be flattened into a plain cadence, and a
+// count outside 1-28 keeps the words rather than being clamped to fit.
 func classify(rule string) tasks.Repeat {
-	rule = strings.TrimSpace(rule)
-	if rule == "" {
+	trimmed := strings.TrimSpace(rule)
+	if trimmed == "" {
 		return tasks.Repeat{}
 	}
-	lowered := strings.ToLower(rule)
-	for _, word := range []struct {
-		text string
-		unit string
-	}{
-		{"daily", "days"},
-		{"weekly", "weeks"},
-		{"monthly", "months"},
-		{"yearly", "years"},
-		{"annually", "years"},
-	} {
-		if lowered == word.text {
-			return tasks.Repeat{Every: 1, Unit: word.unit}
+	lowered := strings.ToLower(trimmed)
+	if unit, ok := adverbUnits[lowered]; ok {
+		return tasks.Repeat{Every: 1, Unit: unit}
+	}
+	if m := countedUnit.FindStringSubmatch(lowered); m != nil {
+		if unit, ok := unitWords[m[2]]; ok {
+			if n, err := strconv.Atoi(m[1]); err == nil &&
+				n >= tasks.RepeatEveryMin && n <= tasks.RepeatEveryMax {
+				return tasks.Repeat{Every: n, Unit: unit}
+			}
 		}
 	}
-	if m := everyN.FindStringSubmatch(lowered); m != nil {
-		n, err := strconv.Atoi(m[1])
-		if err == nil && n >= tasks.RepeatEveryMin && n <= tasks.RepeatEveryMax {
-			return tasks.Repeat{Every: n, Unit: m[2] + "s"}
-		}
-	}
-	// Anything else stays exactly as written.
-	return tasks.Repeat{Custom: true, Text: rule}
+	return tasks.Repeat{Custom: true, Text: trimmed}
 }
 
 func writeBackup(path string, changes []change) error {

@@ -2189,7 +2189,7 @@ private fun DueQuickRow(estimateMinutes: Int, onPick: (String, String) -> Unit) 
         // estimate, and its heads-up lands 5 minutes before that.
         AssistChip(
             onClick = {
-                val (d, t) = dueParts(java.time.LocalDateTime.now(IST).atTime(23, 59))
+                val (d, t) = dueParts(java.time.LocalDate.now(IST).atTime(23, 59))
                 onPick(d, t)
             },
             label = { Text("end of today") },
