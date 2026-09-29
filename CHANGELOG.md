@@ -8,14 +8,33 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.8.0]
+
+- The task list now groups by **how long is left** instead of showing one
+  undifferentiated "Today" pile. Today is split into **This hour**, **Next
+  hour**, **Next 1-3 hours**, **Next 3-6 hours**, **Next 6-12 hours** and
+  **Later today**; days from tomorrow on keep their plain day groups, where
+  a time-of-day split adds nothing. The horizons stop at the end of today on
+  purpose — a task due in three hours is not "tomorrow", and hiding it there
+  is what makes a list untrustworthy.
+- A task due earlier today now counts as **overdue** (red row, Overdue
+  group) instead of sitting in "Today" as if it were still ahead. The
+  reminder engine has been nagging those every 15 minutes all along, so the
+  list and the alerts now agree.
+- The grouping toggle reads **Group by time**, and a minute ticker re-buckets
+  the list as the clock moves, so a task walks from "This hour" into "Next
+  hour" on its own instead of only on the next refresh.
+- The due quick-picks are out of the task editor: the date and time pickers
+  are the only way to set a due moment.
+
 ## [4.7.1]
 
-- The due shortcuts are now **horizons** rather than calendar words:
-  **Next hour**, **3 hours**, **8 hours** and **Later today**, each setting
-  the date *and* time together. "Today" and "Tomorrow" are gone — they only
-  filled a date and left the mandatory time to be picked by hand, so every
-  one of them was a dead end that still looked like an answer. The date and
-  time pickers are unchanged for anything further out.
+- Due shortcuts became horizons — **Next hour**, **3 hours**, **8 hours**,
+  **Later today** — each setting the date *and* time together, with "Today"
+  and "Tomorrow" removed (they filled a date and left the mandatory time to
+  be picked by hand, so each was a dead end that looked like an answer).
+  Superseded by 4.8.0, which moves those horizons out of the editor and into
+  the task list as groups, and refines them into six time buckets.
 
 ## [4.7.0]
 
