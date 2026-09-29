@@ -996,7 +996,6 @@ private fun ServerTask.dueBucket(
         // Which day a task belongs to is the day it *starts* on, not the
         // day it is due: due tomorrow 00:30 with a one-hour estimate is
         // something to start tonight, and tonight is today.
-        startDay < t -> DueBucket.Overdue
         startDay == t -> {
             val left = startAt - nowMillis
             when {
@@ -1893,6 +1892,9 @@ private fun ServerTaskDetailSheet(
                 label = "Starts",
                 value = when {
                     task.dueDate.isBlank() -> "No due time set"
+                    // A date with no time has no start instant at all, so
+                    // there is nothing to subtract an estimate from.
+                    task.dueMillisOrNull() == null -> "Needs a due time"
                     else -> task.startParts()
                         ?.let { (d, t) -> friendlyDue(d, t, today) }
                         ?.takeIf { it.isNotEmpty() }

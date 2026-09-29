@@ -22,9 +22,10 @@ see GitHub Releases for older notes.
 - A task now belongs to the day it **starts** on, not the day it is due:
   due tomorrow at 00:30 with a one-hour estimate starts tonight, so it
   shows under tonight and becomes **Current** the moment it should begin.
-  Rows predating mandatory due times — 11 of 59 at time of writing — keep
-  their day group (a today one lands in Later today, since nothing is known
-  about when).
+  Rows predating mandatory due times — 11 of 59 when this was written —
+  keep their day group (a today one lands in Later today, since nothing is
+  known about when), and their detail sheet says the start needs a due time
+  rather than echoing one.
 - **Everything sorts by start time** (the default order; the due time
   breaks ties). Tasks with no usable due time sort last rather than first —
   an undated task is not the most urgent thing you have.

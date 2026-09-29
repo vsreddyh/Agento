@@ -82,8 +82,12 @@ fun ServerTask.startToDueLine(today: java.time.LocalDate): String {
     // due time is repeated. Compared on the date parts, not by stripping
     // text off a formatted line.
     if (parts.first == dueDate) {
-        val time = dueTime.trim()
-        return if (time.isEmpty()) start else "$start → $time"
+        // Formatted from the parsed instant, not the raw string, so a
+        // stored "9:00" cannot render unpadded next to a zero-padded start.
+        val at = dueMillisOrNull() ?: return start
+        val d = java.time.Instant.ofEpochMilli(at).atZone(IST).toLocalDateTime()
+        val time = String.format(Locale.ROOT, "%02d:%02d", d.hour, d.minute)
+        return "$start → $time"
     }
     return "$start → $due"
 }
