@@ -2167,8 +2167,17 @@ private fun ServerTaskDialog(
     }
 }
 
-/** Today/Tomorrow shortcuts (IST) for task due dates. Scroll-safe for
- * narrow screens. */
+/** Small section header inside the task dialog form. */
+@Composable
+private fun FormLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
 /** Resolves an instant to the (date, HH:mm) pair the form stores. */
 private fun dueParts(at: java.time.LocalDateTime): Pair<String, String> =
     at.toLocalDate().toString() to
@@ -2216,13 +2225,21 @@ private fun DueHorizonRow(estimateMinutes: Int, onPick: (String, String) -> Unit
         }
         AssistChip(
             onClick = {
-                onPick(dueParts(java.time.LocalDate.now(IST).atTime(23, 59)))
+                // 23:59 tapped at 23:59 would hand back a due time already
+                // gone, so past the day's end this rolls to tomorrow.
+                val now = java.time.LocalDateTime.now(IST)
+                val end = java.time.LocalDate.now(IST).atTime(23, 59)
+                onPick(dueParts(if (now.isAfter(end)) end.plusDays(1) else end))
             },
             label = { Text("Later today") },
         )
     }
 }
 
+/** Material3 date picker returning YYYY-MM-DD. The picker speaks
+ * UTC-midnight millis, so seed and read back in UTC — seeding IST
+ * midnight shifts the highlight a day back on non-IST devices. */
+@Composable
 private fun DueDatePickerDialog(
     initial: String,
     onConfirm: (String) -> Unit,
