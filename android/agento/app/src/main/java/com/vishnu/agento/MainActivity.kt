@@ -934,14 +934,6 @@ private enum class DueBucket(val title: String) {
     Completed("Completed"),
 }
 
-/** Minutes from now until this task's due moment, or null when it has no
- * usable time. A today task whose time has already gone returns a
- * negative delta, so the caller can treat it as overdue. */
-private fun ServerTask.minutesUntil(now: java.time.LocalDateTime): Int? {
-    val at = dueMillisOrNull(dueDate, dueTime) ?: return null
-    return ((at - now.atZone(IST).toInstant().toEpochMilli()) / 60_000L).toInt()
-}
-
 /**
  * The group this task belongs to. A task due today is placed by the time
  * left; a task whose time has already passed today is Overdue, which is
@@ -967,23 +959,26 @@ private fun ServerTask.dueBucket(
             else -> DueBucket.Later
         }
         else -> {
-            val minutes = minutesUntil(now)
+            // Parsed once: the overdue test and the bucket range both need
+            // it, and a second parse is a second chance to disagree.
+            val at = dueMillisOrNull(dueDate, dueTime)
             when {
-                minutes == null -> DueBucket.LaterToday
-                // Millis, not the truncated minute count: a task 30 seconds
-                // past due is overdue now, and isOverdue() already says so.
-                // Without this it sat in "This hour" for up to a minute
-                // while wearing the overdue colour.
-                dueMillisOrNull(dueDate, dueTime)
-                    ?.let { it <= nowMillis } == true -> DueBucket.Overdue
-                // Each name is the range it actually covers: this hour,
-                // then the hour after it, then the rest of 1-3h, 3-6h and
-                // 6-12h, and everything still left today.
-                minutes < 60 -> DueBucket.ThisHour
-                minutes < 120 -> DueBucket.NextHour
-                minutes < 180 -> DueBucket.In1To3Hours
-                minutes < 360 -> DueBucket.In3To6Hours
-                minutes < 720 -> DueBucket.In6To12Hours
+                at == null -> DueBucket.LaterToday
+                // Compared in millis, not as truncated whole minutes: a task
+                // 30 seconds past due is overdue now, matching isOverdue()
+                // and the nag already going off. Otherwise it sat in
+                // "This hour" for up to a minute while wearing the overdue
+                // colour.
+                at <= nowMillis -> DueBucket.Overdue
+                // The names are nested windows, as asked for: this hour
+                // (0-1h), the hour after it (1-2h), then the rest of the
+                // 1-3h window (2-3h), 3-6h, 6-12h, and everything still
+                // left today.
+                (at - nowMillis) < 60L * 60_000 -> DueBucket.ThisHour
+                (at - nowMillis) < 120L * 60_000 -> DueBucket.NextHour
+                (at - nowMillis) < 180L * 60_000 -> DueBucket.In1To3Hours
+                (at - nowMillis) < 360L * 60_000 -> DueBucket.In3To6Hours
+                (at - nowMillis) < 720L * 60_000 -> DueBucket.In6To12Hours
                 else -> DueBucket.LaterToday
             }
         }
