@@ -293,12 +293,13 @@ object TaskReminders {
     /** Alarm identity is one per task *and* kind: "<taskId>#<kind>". */
     private fun alarmKey(taskId: String, kind: ReminderKind) = "$taskId#${kind.key}"
 
-    /** Drop every armed alarm (reminders disabled). */
+    /** Drop every armed alarm (reminders disabled). Legacy bare-id keys
+     * need the old identity, exactly as in refresh — otherwise a
+     * pre-4.5 alarm survives the switch-off and fires afterwards. */
     fun cancelAll(context: Context) {
         val appCtx = context.applicationContext
-        val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        for (id in prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()) {
-            mgr.cancel(operation(appCtx, id))
+        for (key in prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()) {
+            if (key.contains('#')) cancelKind(appCtx, key) else cancelLegacy(appCtx, key)
         }
         prefs(appCtx).edit().remove(PREF_ARMED).apply()
     }
@@ -371,9 +372,14 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             val due = task?.let { dueMillisOrNull(it.dueDate, it.dueTime) }
             if (task != null && due != null && due <= System.currentTimeMillis()) {
                 TaskReminders.rearmOverdue(appCtx, taskId)
-            } else {
+            } else if (open != null) {
+                // The fetch worked and the task is no longer past due: it
+                // was rescheduled, so stop the nag and say nothing.
                 TaskReminders.cancelOne(appCtx, taskId)
+                return
             }
+            // Fetch failed: unknowable, and unknowable must never mean
+            // "cancel" — the alarm set is left exactly as it is.
         }
         val name = task?.name.orEmpty().ifEmpty { "Task due" }
         // The fetch already carries the whole task — surface it instead
@@ -451,10 +457,12 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(tap)
-            // One notification per reminder, never bundled: a group key
-            // unique to this single notification stops the system folding
-            // simultaneous alerts (or the same task's start/heads-up/nag)
-            // into one summary the user has to expand to read.
+            // One notification per reminder. The group key is unique to
+            // this single notification, so no group summary can be built
+            // from it (that needs two members sharing a key) — the app
+            // never folds alerts together. The platform's own optional
+            // auto-grouping is a user setting, not something an app can
+            // override.
             .setGroup("agento.reminder.$taskId.${kind.key}")
             // No icon (0): framework checkables render badly as action
             // icons on some OEMs.

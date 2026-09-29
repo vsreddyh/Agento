@@ -46,9 +46,11 @@ see GitHub Releases for older notes.
   rules that genuinely need words ("mon-fri only", "daily, skip
   Wednesdays", "end of every month"). The task editor replaces the
   free-text box and its four chips with a count, a unit, a custom tickbox
-  and the custom text; a blank count means the task doesn't repeat. Every
-  existing task was migrated: 43 became a structured cadence, 6 kept their
-  exact words as a custom condition.
+  and the custom text; a blank count means the task doesn't repeat.
+  Existing tasks were migrated: plain cadences ("daily", "every 5 days")
+  became structured repeats, and the rules carrying an exception ("mon-fri
+  only", "daily, skip Wednesdays", "end of every month") kept their exact
+  words as a custom condition.
 
 ## [4.5.1]
 

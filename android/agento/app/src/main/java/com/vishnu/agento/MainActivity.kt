@@ -5193,6 +5193,11 @@ private fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var error by remember { mutableStateOf("") }
+    // Bumped on every resume so the hub's widget count reflects a
+    // placement added (or removed) while the app was in the background —
+    // same reason the widget section re-reads.
+    var resumeTick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     // Bumped after a settings import so the fields below reload from prefs.
@@ -5277,10 +5282,8 @@ private fun SettingsScreen(
                                 else -> "System"
                             },
                             notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
-                            // Counted per hub visit: adding a widget means
-                            // leaving the app, so the composable is rebuilt
-                            // on the way back.
-                            widgetStatus = remember(context) {
+                            // Re-read on resume, keyed above.
+                            widgetStatus = remember(context, resumeTick) {
                                 val placed = AppWidgetManager.getInstance(context)
                                     .getAppWidgetIds(
                                         ComponentName(context, TaskWidget::class.java))
@@ -6102,6 +6105,9 @@ private fun WidgetSettingsSection() {
             .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
             .toList()
     }
+    val canPin = remember(context) {
+        AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported
+    }
     val config = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { tick++ }
@@ -6120,17 +6126,23 @@ private fun WidgetSettingsSection() {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            OutlinedButton(
-                onClick = {
-                    // Asks the launcher to add it; a launcher that refuses
-                    // must not take Settings down with it.
-                    runCatching {
-                        AppWidgetManager.getInstance(context)
-                            .requestPinAppWidget(
-                                ComponentName(context, TaskWidget::class.java), null, null)
-                    }
-                },
-            ) { Text("Add the widget") }
+            // Only where the launcher supports pinning: on the ones that
+            // don't, requestPinAppWidget is a silent no-op, so a button
+            // that does nothing would be worse than no button. The
+            // instructions above still apply there.
+            if (canPin) {
+                OutlinedButton(
+                    onClick = {
+                        // A launcher that refuses must not take Settings
+                        // down with it.
+                        runCatching {
+                            AppWidgetManager.getInstance(context)
+                                .requestPinAppWidget(
+                                    ComponentName(context, TaskWidget::class.java), null, null)
+                        }
+                    },
+                ) { Text("Add the widget") }
+            }
         } else {
             widgetIds.forEachIndexed { i, id ->
                 if (i > 0) {
