@@ -398,8 +398,17 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         }
         // The estimate is an input, not something to show: what the user
         // needs is when to start and when it is due.
-        val startLine = task?.startParts()?.let { (d, t) -> friendlyDue(d, t, today) }
-            ?.takeIf { it.isNotEmpty() && it != dueLine }
+        // A zero estimate has no start of its own, so the start line would
+        // repeat the due line. Compared as instants, not as rendered text:
+        // the start is zero-padded and the due side is echoed from storage,
+        // so equal moments can compare unequal as strings.
+        val startIsDue = task != null && task.startMillisOrNull() == task.dueMillisOrNull()
+        val startLine = if (startIsDue) {
+            null
+        } else {
+            task?.startParts()?.let { (d, t) -> friendlyDue(d, t, today) }
+                ?.takeIf { it.isNotEmpty() }
+        }
         val summary = listOf(
             kind.lead,
             dueLine.ifEmpty { null },

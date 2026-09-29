@@ -1895,11 +1895,14 @@ private fun ServerTaskDetailSheet(
                     // A date with no time has no start instant at all, so
                     // there is nothing to subtract an estimate from.
                     task.dueMillisOrNull() == null -> "Needs a due time"
+                    // A zero estimate has no start of its own. Compared as
+                    // instants: the two sides are rendered from different
+                    // sources, so equal moments can differ as text.
+                    task.startMillisOrNull() == task.dueMillisOrNull() ->
+                        "Same as the due time"
                     else -> task.startParts()
                         ?.let { (d, t) -> friendlyDue(d, t, today) }
                         ?.takeIf { it.isNotEmpty() }
-                        // A zero estimate has no start of its own.
-                        ?.takeIf { it != friendlyDue(task.dueDate, task.dueTime, today) }
                         ?: "Same as the due time"
                 },
             )
