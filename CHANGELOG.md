@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.7.1]
+
+- The due shortcuts are now **horizons** rather than calendar words:
+  **Next hour**, **3 hours**, **8 hours** and **Later today**, each setting
+  the date *and* time together. "Today" and "Tomorrow" are gone — they only
+  filled a date and left the mandatory time to be picked by hand, so every
+  one of them was a dead end that still looked like an answer. The date and
+  time pickers are unchanged for anything further out.
+
 ## [4.7.0]
 
 - Repeats that can be computed now roll themselves over. Completing a task
