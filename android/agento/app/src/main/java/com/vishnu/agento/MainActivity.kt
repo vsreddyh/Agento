@@ -1443,20 +1443,20 @@ private fun TaskManagerScreen(
                             clockTick++
                         }
                     }
-                    // Only the *key* is truncated. LocalDateTime.now()
-                    // carries nanos, so a raw value in the key would miss
-                    // every time and rebuild the sections on every
-                    // recomposition — but the decisions themselves must use
-                    // the full instant, or a task due at 14:00:30 would sit
-                    // in "This hour" while the sheet already calls it
-                    // overdue.
+                    // Everything time-derived in this list reads clockKey,
+                    // the minute-truncated instant the groups are keyed on —
+                    // not the raw now(): nanos would miss the memo on every
+                    // recomposition, and two different instants would let a
+                    // row be coloured overdue inside a group that disagrees.
+                    // The cost is a whole minute's granularity, which is the
+                    // same cadence the minute ticker already refreshes at.
                     val clockKey = now.truncatedTo(java.time.temporal.ChronoUnit.MINUTES)
                     val sections = remember(visible, bucketing, filter, day, clockKey, clockTick) {
                         if (!groupByDay || filter == ServerTaskFilter.Done) {
                             listOf(null to visible)
                         } else {
                             DueBucket.entries.mapNotNull { b ->
-                                val rows = visible.filter { it.dueBucket(day, now) == b }
+                                val rows = visible.filter { it.dueBucket(day, clockKey) == b }
                                 if (rows.isEmpty()) null else b to rows
                             }
                         }
@@ -1478,7 +1478,11 @@ private fun TaskManagerScreen(
                             rows.forEachIndexed { i, t ->
                                 ServerTaskRow(
                                     task = t,
-                                    overdue = t.isOverdue(today, now),
+                                    // Same instant the groups were built
+                                    // from, so a row can never be coloured
+                                    // overdue inside a group that says
+                                    // otherwise.
+                                    overdue = t.isOverdue(today, clockKey),
                                     today = day,
                                     actionsEnabled = !busy,
                                     onOpen = { selected = t },
