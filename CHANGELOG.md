@@ -32,6 +32,11 @@ see GitHub Releases for older notes.
     readable instead of overwriting each other.
 - The reminder channel description now spells out the three reminders
   and the 15-minute overdue repeat.
+- The due quick-picks no longer stop at "Today", which left the mandatory
+  time to be set by hand. Same-day due moments are now one tap each — in 1
+  hour, in 3 hours, in 8 hours, or the end of today — and each fills the
+  date *and* time together, so the two can't disagree. "Tomorrow" stays
+  date-only, because "tomorrow at what time?" is worth asking.
 - Repeats are now real values instead of a sentence: **every N
   days/weeks/months/years** (N = 1-28), or a **custom condition** for the
   rules that genuinely need words ("mon-fri only", "daily, skip

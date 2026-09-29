@@ -1890,7 +1890,11 @@ private fun ServerTaskDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 FormLabel("Due")
-                DueQuickRow(onPick = { dueDate = it })
+                // A preset fills the time too, so the two always agree.
+                DueQuickRow(onPick = { d, t ->
+                    dueDate = d
+                    if (t.isNotEmpty()) dueTime = t
+                })
                 val dateInteraction = remember { MutableInteractionSource() }
                 val timeInteraction = remember { MutableInteractionSource() }
                 OutlinedTextField(
@@ -2136,15 +2140,48 @@ private fun ServerTaskDialog(
 /** Today/Tomorrow shortcuts (IST) for task due dates. Scroll-safe for
  * narrow screens. */
 @Composable
-private fun DueQuickRow(onPick: (String) -> Unit) {
-    val today = remember { java.time.LocalDate.now(IST).toString() }
+/** Resolves an instant to the (date, HH:mm) pair the form stores. */
+private fun dueParts(at: java.time.LocalDateTime): Pair<String, String> =
+    at.toLocalDate().toString() to
+        String.format(Locale.ROOT, "%02d:%02d", at.hour, at.minute)
+
+/**
+ * Quick due presets. A bare "Today" only filled the date, which left the
+ * mandatory time still to be picked by hand — so the same-day options
+ * resolve to a whole moment instead: in an hour, in three, in eight, or
+ * the end of today. "Tomorrow" stays date-only, since "tomorrow at what
+ * time?" is a question worth asking.
+ *
+ * The clock is read on tap, not remembered: a dialog left open for a while
+ * would otherwise hand out presets an hour stale.
+ */
+private fun DueQuickRow(onPick: (String, String) -> Unit) {
     val tomorrow = remember { java.time.LocalDate.now(IST).plusDays(1).toString() }
     Row(
         modifier = Modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        AssistChip(onClick = { onPick(today) }, label = { Text("Today") })
-        AssistChip(onClick = { onPick(tomorrow) }, label = { Text("Tomorrow") })
+        for ((label, hours) in listOf(
+            "in 1 hour" to 1L,
+            "in 3 hours" to 3L,
+            "in 8 hours" to 8L,
+        )) {
+            AssistChip(
+                onClick = {
+                    val (d, t) = dueParts(java.time.LocalDateTime.now(IST).plusHours(hours))
+                    onPick(d, t)
+                },
+                label = { Text(label) },
+            )
+        }
+        AssistChip(
+            onClick = {
+                val (d, t) = dueParts(java.time.LocalDate.now(IST).atTime(23, 59))
+                onPick(d, t)
+            },
+            label = { Text("End of day") },
+        )
+        AssistChip(onClick = { onPick(tomorrow, "") }, label = { Text("Tomorrow") })
     }
 }
 
