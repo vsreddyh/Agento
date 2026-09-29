@@ -958,6 +958,7 @@ private fun ServerTask.dueBucket(
     if (!dueDate.isIsoDate()) return DueBucket.NoDate
     val s = dueDate
     val t = today.toString()
+    val nowMillis = now.atZone(IST).toInstant().toEpochMilli()
     return when {
         s < t -> DueBucket.Overdue
         s > t -> when {
@@ -969,7 +970,12 @@ private fun ServerTask.dueBucket(
             val minutes = minutesUntil(now)
             when {
                 minutes == null -> DueBucket.LaterToday
-                minutes < 0 -> DueBucket.Overdue
+                // Millis, not the truncated minute count: a task 30 seconds
+                // past due is overdue now, and isOverdue() already says so.
+                // Without this it sat in "This hour" for up to a minute
+                // while wearing the overdue colour.
+                dueMillisOrNull(dueDate, dueTime)
+                    ?.let { it <= nowMillis } == true -> DueBucket.Overdue
                 // Each name is the range it actually covers: this hour,
                 // then the hour after it, then the rest of 1-3h, 3-6h and
                 // 6-12h, and everything still left today.
@@ -1425,16 +1431,26 @@ private fun TaskManagerScreen(
                     // with the wall clock: a minute ticker drives the
                     // remember key, and one `now` is read per pass so every
                     // row in the same frame is decided from the same instant.
+                    // The ticker only runs while the time groups are on
+                    // screen; on the Done filter and with grouping off,
+                    // nothing here is bucketed and a minute of recomposition
+                    // would be wasted.
+                    val bucketing = groupByDay && filter != ServerTaskFilter.Done
                     var clockTick by remember { mutableIntStateOf(0) }
-                    LaunchedEffect(Unit) {
-                        while (true) {
+                    LaunchedEffect(bucketing) {
+                        while (bucketing) {
                             delay(60_000)
                             clockTick++
                         }
                     }
                     val day = java.time.LocalDate.now(IST)
+                    // Truncated to the minute, because LocalDateTime.now()
+                    // carries nanos: a raw value in the remember key would
+                    // miss every time and rebuild the sections on every
+                    // recomposition.
                     val now = java.time.LocalDateTime.now(IST)
-                    val sections = remember(visible, groupByDay, filter, day, now, clockTick) {
+                        .truncatedTo(java.time.temporal.ChronoUnit.MINUTES)
+                    val sections = remember(visible, bucketing, filter, day, now, clockTick) {
                         if (!groupByDay || filter == ServerTaskFilter.Done) {
                             listOf(null to visible)
                         } else {

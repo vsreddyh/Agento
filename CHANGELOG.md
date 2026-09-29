@@ -33,7 +33,7 @@ see GitHub Releases for older notes.
   **Later today** — each setting the date *and* time together, with "Today"
   and "Tomorrow" removed (they filled a date and left the mandatory time to
   be picked by hand, so each was a dead end that looked like an answer).
-  Superseded by 4.7.2, which moves those horizons out of the editor and into
+  Superseded by 4.8.0, which moves those horizons out of the editor and into
   the task list as groups, and refines them into six time buckets.
 
 ## [4.7.0]
