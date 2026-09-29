@@ -2070,8 +2070,8 @@ private fun ServerTaskDialog(
                 )
                 if (repeatCustom && repeatRule.isBlank()) {
                     HintLine("A custom condition needs the words.")
-                } else if (!repeatCustom && repeatEvery.isNotEmpty() &&
-                    (repeatEvery.toIntOrNull()?.let { it > REPEAT_EVERY_MAX } == true)
+                } else if (!repeatCustom && repeatEvery.trim().toIntOrNull()
+                    ?.let { it < REPEAT_EVERY_MIN || it > REPEAT_EVERY_MAX } == true
                 ) {
                     HintLine("Every $REPEAT_EVERY_MIN-$REPEAT_EVERY_MAX only.")
                 }
@@ -6144,13 +6144,9 @@ private fun WidgetSettingsSection() {
             if (canPin) {
                 OutlinedButton(
                     onClick = {
-                        // A launcher that refuses must not take Settings
-                        // down with it.
-                        runCatching {
-                            AppWidgetManager.getInstance(context)
-                                .requestPinAppWidget(
-                                    ComponentName(context, TaskWidget::class.java), null, null)
-                        }
+                        AppWidgetManager.getInstance(context)
+                            .requestPinAppWidget(
+                                ComponentName(context, TaskWidget::class.java), null, null)
                     },
                 ) { Text("Add the widget") }
             }
@@ -6183,14 +6179,10 @@ private fun WidgetSettingsSection() {
                     Spacer(modifier = Modifier.width(12.dp))
                     OutlinedButton(
                         onClick = {
-                            // Guarded like the old direct launch: a missing
-                            // activity must not crash Settings.
-                            runCatching {
-                                config.launch(
-                                    Intent(context, TaskWidgetConfigActivity::class.java)
-                                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                                )
-                            }
+                            config.launch(
+                                Intent(context, TaskWidgetConfigActivity::class.java)
+                                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                            )
                         },
                     ) { Text("Configure") }
                 }

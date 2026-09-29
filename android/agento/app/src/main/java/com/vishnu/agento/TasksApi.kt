@@ -42,7 +42,9 @@ fun ServerTask.repeatLabel(): String =
 
 /** The same rendering for any source of the four fields. */
 fun repeatLabel(every: Int, unit: String, custom: Boolean, text: String): String {
-    if (custom || (every == 0 && unit.isEmpty())) return text
+    // every <= 0 rather than == 0: a stray or half-migrated doc must never
+    // render "Every day" from a zero count.
+    if (custom || every <= 0 || unit.isEmpty()) return text
     val singular = if (unit.endsWith("s")) unit.dropLast(1) else unit
     return if (every <= 1) "Every $singular" else "Every $every $unit"
 }
