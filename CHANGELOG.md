@@ -33,10 +33,14 @@ see GitHub Releases for older notes.
 - The reminder channel description now spells out the three reminders
   and the 15-minute overdue repeat.
 - The due quick-picks no longer stop at "Today", which left the mandatory
-  time to be set by hand. Same-day due moments are now one tap each — in 1
-  hour, in 3 hours, in 8 hours, or the end of today — and each fills the
-  date *and* time together, so the two can't disagree. "Tomorrow" stays
-  date-only, because "tomorrow at what time?" is worth asking.
+  time to be set by hand. They are now **reminder presets** — remind me in
+  1h / 3h / 8h, or by the end of today — and each fills the date *and*
+  time together. They are counted from the reminder, not the due time: the
+  "start now" alert fires `estimated_minutes` before due, so the estimate
+  is added to the offset and the due time lands that much later. "End of
+  today" is wall-clock (23:59, with its heads-up 5 minutes before), and
+  "Tomorrow" stays date-only, because "tomorrow at what time?" is worth
+  asking.
 - Repeats are now real values instead of a sentence: **every N
   days/weeks/months/years** (N = 1-28), or a **custom condition** for the
   rules that genuinely need words ("mon-fri only", "daily, skip

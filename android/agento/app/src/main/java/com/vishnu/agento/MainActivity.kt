@@ -1891,10 +1891,13 @@ private fun ServerTaskDialog(
                 )
                 FormLabel("Due")
                 // A preset fills the time too, so the two always agree.
-                DueQuickRow(onPick = { d, t ->
-                    dueDate = d
-                    if (t.isNotEmpty()) dueTime = t
-                })
+                DueQuickRow(
+                    estimateMinutes = minutes.trim().toIntOrNull() ?: 0,
+                    onPick = { d, t ->
+                        dueDate = d
+                        if (t.isNotEmpty()) dueTime = t
+                    },
+                )
                 val dateInteraction = remember { MutableInteractionSource() }
                 val timeInteraction = remember { MutableInteractionSource() }
                 OutlinedTextField(
@@ -2139,7 +2142,6 @@ private fun ServerTaskDialog(
 
 /** Today/Tomorrow shortcuts (IST) for task due dates. Scroll-safe for
  * narrow screens. */
-@Composable
 /** Resolves an instant to the (date, HH:mm) pair the form stores. */
 private fun dueParts(at: java.time.LocalDateTime): Pair<String, String> =
     at.toLocalDate().toString() to
@@ -2155,31 +2157,42 @@ private fun dueParts(at: java.time.LocalDateTime): Pair<String, String> =
  * The clock is read on tap, not remembered: a dialog left open for a while
  * would otherwise hand out presets an hour stale.
  */
-private fun DueQuickRow(onPick: (String, String) -> Unit) {
+@Composable
+private fun DueQuickRow(estimateMinutes: Int, onPick: (String, String) -> Unit) {
     val tomorrow = remember { java.time.LocalDate.now(IST).plusDays(1).toString() }
     Row(
         modifier = Modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         for ((label, hours) in listOf(
-            "in 1 hour" to 1L,
-            "in 3 hours" to 3L,
-            "in 8 hours" to 8L,
+            "remind in 1h" to 1L,
+            "remind in 3h" to 3L,
+            "remind in 8h" to 8L,
         )) {
             AssistChip(
                 onClick = {
-                    val (d, t) = dueParts(java.time.LocalDateTime.now(IST).plusHours(hours))
+                    // Reminder-relative, not due-relative: the start nudge
+                    // fires at `due - estimated_minutes`, so the estimate
+                    // is added to the offset to land the alert on the hour
+                    // the user actually asked for. The due time then sits
+                    // that many minutes later, which is exactly the point.
+                    val at = java.time.LocalDateTime.now(IST)
+                        .plusHours(hours)
+                        .plusMinutes(estimateMinutes.coerceAtLeast(0).toLong())
+                    val (d, t) = dueParts(at)
                     onPick(d, t)
                 },
                 label = { Text(label) },
             )
         }
+        // Wall-clock, not an offset: "end of today" is 23:59 whatever the
+        // estimate, and its heads-up lands 5 minutes before that.
         AssistChip(
             onClick = {
-                val (d, t) = dueParts(java.time.LocalDate.now(IST).atTime(23, 59))
+                val (d, t) = dueParts(java.time.LocalDateTime.now(IST).atTime(23, 59))
                 onPick(d, t)
             },
-            label = { Text("End of day") },
+            label = { Text("end of today") },
         )
         AssistChip(onClick = { onPick(tomorrow, "") }, label = { Text("Tomorrow") })
     }
