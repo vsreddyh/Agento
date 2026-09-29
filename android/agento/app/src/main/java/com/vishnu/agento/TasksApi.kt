@@ -33,7 +33,18 @@ data class ServerTask(
     val parallelable: Boolean = false,
     val completedAt: String = "",
     val createdAt: String = "",
+    /**
+     * The next occurrence the server created by itself when a structured
+     * cadence was completed ("" when there is none, or when the repeat is a
+     * custom condition the caller has to schedule itself).
+     */
+    val nextDueDate: String = "",
 )
+
+/** True when the task repeats at all: a structured cadence or a custom
+ * condition. One-shot tasks must not open a recreate draft. */
+val ServerTask.hasRepeat: Boolean
+    get() = repeatCustom || repeatEvery > 0 || repeatRule.isNotEmpty()
 
 /** Human repeat line, matching the server's rendering: "Every 3 days",
  * the custom words verbatim, or "" for a one-shot task. */
@@ -226,14 +237,28 @@ class TasksApi(context: Context) {
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
     }
 
-    /** Marks a task done (server starts the 3-day retention clock). */
+    /** Marks a task done (server starts the 3-day retention clock). The
+     * response carries the rolled-over occurrence in `next` when a
+     * structured cadence produced one. */
     suspend fun complete(id: String): Result<ServerTask> =
         withContext(Dispatchers.IO) {
             val clean = encodeId(id)
             if (clean.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
-            call("POST", "/api/tasks/$clean/complete", JSONObject()).map { parseOne(it) }
+            call("POST", "/api/tasks/$clean/complete", JSONObject()).map { body ->
+                val root = JSONObject(body)
+                val task = parseTask(root.optJSONObject("task") ?: root)
+                    ?: throw RuntimeException("Unexpected response shape")
+                val next = root.optJSONObject("next")
+                if (next == null) {
+                    task
+                } else {
+                    task.copy(nextDueDate = next.optString("due_date").ifEmpty {
+                        next.optString("dueDate")
+                    })
+                }
+            }
         }
 
     /** Reopens a done task. */

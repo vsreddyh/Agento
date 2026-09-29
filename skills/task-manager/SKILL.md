@@ -38,16 +38,20 @@ rejects the mix:
    weekdays, "end of month"). Never flatten a rule that carries an
    exception into a plain cadence: "daily, skip Wednesdays" is a custom
    condition, not "every day". A count above 28 is a custom condition too.
-2. When you call `complete_task` and the response contains `follow_up`,
-   you MUST call `create_task` for the next occurrence, reusing the exact
-   repeat keys the response gave you (`repeat_every` + `repeat_unit`, or
-   `repeat_custom: true` + `repeat_rule`). Every field is copied verbatim —
-   name/description/`due_time`/estimated_minutes/repeat/parallelable — and
-   ONLY `due_date` advances, to the occurrence YOU compute from the rule
-   and today. A "daily at 9am" task keeps `due_time: "09:00"`; a time that
-   drifts between occurrences is a bug, not a recomputation. Change
-   `due_time` only when the rule itself names a different time ("mornings
-   at 6", "9am then 7pm").
+2. When you call `complete_task`, read what comes back:
+   - `rolled_over: true` (with the new task in `next`) — the repeat was
+     STRUCTURED, the server already created the next occurrence, and you
+     must NOT create another.
+   - `follow_up` — the repeat is a CUSTOM condition, so you MUST call
+     `create_task` for the next occurrence, reusing the exact repeat keys
+     the response gave you (`repeat_custom: true` + `repeat_rule`). Copy
+     every field verbatim — name/description/`due_time`/
+     estimated_minutes/repeat/parallelable — and advance ONLY `due_date`,
+     to the occurrence YOU compute from the words and today. A "daily at
+     9am" custom rule keeps `due_time: "09:00"`; a time that drifts
+     between occurrences is a bug, not a recomputation. Change `due_time`
+     only when the rule itself names a different time ("mornings at 6",
+     "9am then 7pm").
 3. If the rule is ambiguous ("regularly"), ask the user for the next due
    date instead of guessing. Same for an empty `due_time`: tasks created
    before times were required come back with `due_time: ""`, and

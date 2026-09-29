@@ -124,6 +124,80 @@ func (r Repeat) Validate() error {
 	return nil
 }
 
+// IsStructured reports the machine-usable mode: a cadence with a count
+// and a unit, and no custom text. Only a structured repeat can be rolled
+// over automatically — a custom condition is the caller's to interpret.
+func (r Repeat) IsStructured() bool {
+	return r.Normalize().Every > 0 && r.Unit != "" && !r.Custom
+}
+
+// MaxRollovers bounds the catch-up loop in NextDueDate.
+const MaxRollovers = 1500
+
+// NextDueDate advances a YYYY-MM-DD date by the cadence and returns
+// YYYY-MM-DD. ok is false for a custom/empty cadence or an unparseable
+// date.
+//
+// Two details that are easy to get wrong:
+//   - Month/year arithmetic clamps to the last day of the target month
+//     instead of overflowing: the 31st of a 30-day month becomes the 28th
+//     (29th in a leap year), and 31 Jan + 1 month is 28/29 Feb, not 3 Mar.
+//   - A task that has been left overdue for months would otherwise roll
+//     straight back into the past and nag immediately, so the date is
+//     advanced until it is on/after today.
+func (r Repeat) NextDueDate(dueDate string, today time.Time) (string, bool) {
+	if !r.IsStructured() {
+		return "", false
+	}
+	d, err := time.Parse("2006-01-02", strings.TrimSpace(dueDate))
+	if err != nil {
+		return "", false
+	}
+	step := r.Normalize()
+	cutoff := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)
+	next := d
+	for i := 0; i < MaxRollovers; i++ {
+		next = advanceDate(next, step.Every, step.Unit)
+		if !next.Before(cutoff) {
+			return next.Format("2006-01-02"), true
+		}
+	}
+	// Unreachable for any sane cadence (1500 days is over four years), but
+	// a bounded loop must not return a zero date by accident.
+	return next.Format("2006-01-02"), true
+}
+
+// advanceDate adds count units, clamping the day to the target month's
+// length. Go's AddDate normalizes overflow (31 Jan + 1 month = 3 Mar),
+// which is never what a repeating task means.
+func advanceDate(d time.Time, count int, unit string) time.Time {
+	switch unit {
+	case "days":
+		return d.AddDate(0, 0, count)
+	case "weeks":
+		return d.AddDate(0, 0, 7*count)
+	case "months":
+		month := int(d.Month()) - 1 + count
+		year := d.Year() + month/12
+		month = month%12 + 1
+		if month < 1 {
+			month += 12
+			year--
+		}
+		m := time.Month(month)
+		return time.Date(year, m, min(d.Day(), daysInMonth(year, m)), 0, 0, 0, 0, time.UTC)
+	case "years":
+		year := d.Year() + count
+		return time.Date(year, d.Month(), min(d.Day(), daysInMonth(year, d.Month())), 0, 0, 0, 0, time.UTC)
+	}
+	// Unknown unit can't reach here (Validate rejects it), but never spin.
+	return d
+}
+
+func daysInMonth(year int, month time.Month) int {
+	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
 // String renders the recurrence for humans: "Every 3 days", the custom
 // words verbatim, or "" for a one-shot task.
 func (r Repeat) String() string {
@@ -584,12 +658,20 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 }
 
 // Complete marks a task done: sets completedAt + expiresAt
-// (= completedAt + RetentionDays, TTL target). Returns the doc's
-// recurrence verbatim so the caller can roll the next occurrence.
-func (s *Store) Complete(ctx context.Context, id string) (map[string]any, error) {
+// (= completedAt + RetentionDays, TTL target).
+//
+// A task with a **structured** cadence ("every 3 days") rolls itself over
+// here: the next occurrence is created with the date advanced and every
+// other field carried over, so nobody is asked to pick a date the server
+// can already compute. A **custom** condition is left to the caller —
+// "every 3rd Friday" and "end of every month" need the user or the agent,
+// and the server will not guess. One-shot tasks roll over to nothing.
+//
+// Returns the completed doc and, when one was created, the new task.
+func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, fail("bad id '%s'", id)
+		return nil, nil, fail("bad id '%s'", id)
 	}
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
@@ -599,16 +681,51 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, error)
 			"expiresAt":   primitive.NewDateTimeFromTime(now.AddDate(0, 0, RetentionDays)),
 		}})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if res.MatchedCount == 0 {
 		var doc bson.M
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); ferr != nil {
-			return nil, fail("unknown task '%s'", id)
+			return nil, nil, fail("unknown task '%s'", id)
 		}
-		return nil, fail("task '%s' is already completed", id)
+		return nil, nil, fail("task '%s' is already completed", id)
 	}
-	return s.Get(ctx, id)
+	done, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	next, err := s.rollOver(ctx, done)
+	if err != nil {
+		// The task is already marked done, so a failed rollover must not
+		// make the completion look like it failed: report success with no
+		// next task and let the caller create one.
+		return done, nil, nil
+	}
+	return done, next, nil
+}
+
+// rollOver creates the next occurrence of a structured cadence, carrying
+// every other field over. (nil, nil) for a one-shot or custom task, which
+// leaves the next occurrence to the caller.
+func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]any, error) {
+	rep := repeatFromDoc(bson.M(done))
+	if !rep.IsStructured() {
+		return nil, nil
+	}
+	if err := rep.Validate(); err != nil {
+		return nil, err
+	}
+	dueDate, _ := done["due_date"].(string)
+	dueTime, _ := done["due_time"].(string)
+	nextDate, ok := rep.NextDueDate(dueDate, time.Now())
+	if !ok {
+		return nil, nil
+	}
+	name, _ := done["name"].(string)
+	description, _ := done["description"].(string)
+	mins, _ := toInt(done["estimated_minutes"])
+	parallel, _ := toBool(done["parallelable"])
+	return s.Create(ctx, name, description, nextDate, dueTime, &mins, rep, &parallel)
 }
 
 // Reopen clears completion (completedAt + expiresAt), making it open again.

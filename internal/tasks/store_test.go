@@ -158,7 +158,7 @@ func TestCompleteReopenDelete(t *testing.T) {
 	doc, _ := s.Create(ctx, "Water plants", "balcony pots", "2026-10-05", "08:00", intP(5), customRep("every Sunday"), boolP(false))
 	id := doc["id"].(string)
 
-	done, err := s.Complete(ctx, id)
+	done, next, err := s.Complete(ctx, id)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -168,7 +168,12 @@ func TestCompleteReopenDelete(t *testing.T) {
 	if done["completedAt"] == nil || done["expiresAt"] == nil {
 		t.Fatalf("complete must set completedAt+expiresAt: %v", done)
 	}
-	if _, err := s.Complete(ctx, id); err == nil {
+	// "every Sunday" is a custom condition: the server must not invent the
+	// next date, so nothing is created behind the caller's back.
+	if next != nil {
+		t.Fatalf("custom repeat must not roll over server-side: %v", next)
+	}
+	if _, _, err := s.Complete(ctx, id); err == nil {
 		t.Fatal("double complete must fail")
 	}
 	rows, _ := s.List(ctx, "open", false, "")
@@ -205,7 +210,7 @@ func TestReopenedExcludedFromDone(t *testing.T) {
 	ctx := context.Background()
 	doc, _ := s.Create(ctx, "reopen me", "test task", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false))
 	id := doc["id"].(string)
-	if _, err := s.Complete(ctx, id); err != nil {
+	if _, _, err := s.Complete(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Reopen(ctx, id); err != nil {
@@ -258,8 +263,68 @@ func TestParallelableRoundTrip(t *testing.T) {
 	}
 }
 
-// The repeat rules are pure, so they are tested without a database —
-// these run in CI, which the DB-backed tests never do.
+// The rollover date arithmetic, without a database. Month-end clamping and
+// the catch-up loop are where this would otherwise go quietly wrong.
+func TestNextDueDate(t *testing.T) {
+	today := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	// day() is the "as of" date. Month-end cases use a today just before
+	// the task is due, so exactly one step is taken; the catch-up rows use
+	// a real today and assert the loop.
+	day := func(y int, m time.Month, d int) time.Time {
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+	}
+	cases := []struct {
+		name string
+		rep  Repeat
+		from string
+		want string
+		asOf time.Time
+	}{
+		{"every day", Repeat{Every: 1, Unit: "days"}, "2026-09-29", "2026-09-30", today},
+		{"every 3 days", Repeat{Every: 3, Unit: "days"}, "2026-09-29", "2026-10-02", today},
+		{"every 2 weeks", Repeat{Every: 2, Unit: "weeks"}, "2026-09-29", "2026-10-13", today},
+		{"every week", Repeat{Every: 1, Unit: "weeks"}, "2026-09-29", "2026-10-06", today},
+		{"every month", Repeat{Every: 1, Unit: "months"}, "2026-09-29", "2026-10-29", today},
+		{"every 6 months", Repeat{Every: 6, Unit: "months"}, "2026-05-15", "2026-11-15", today},
+		{"every year", Repeat{Every: 1, Unit: "years"}, "2026-09-29", "2027-09-29", today},
+		// Month ends clamp instead of overflowing: Go's AddDate would turn
+		// 31 Jan + 1 month into 3 March, which is a different date.
+		{"31 Jan + 1 month", Repeat{Every: 1, Unit: "months"}, "2026-01-31", "2026-02-28", day(2026, 1, 15)},
+		{"31 Jan 2028 + 1 month (leap)", Repeat{Every: 1, Unit: "months"}, "2028-01-31", "2028-02-29", day(2028, 1, 15)},
+		{"31 Mar + 1 month", Repeat{Every: 1, Unit: "months"}, "2026-03-31", "2026-04-30", day(2026, 3, 15)},
+		{"30 Apr + 1 month", Repeat{Every: 1, Unit: "months"}, "2026-04-30", "2026-05-30", day(2026, 4, 15)},
+		{"29 Feb + 1 year", Repeat{Every: 1, Unit: "years"}, "2028-02-29", "2029-02-28", day(2028, 2, 15)},
+		{"31 Dec + 1 month rolls the year", Repeat{Every: 1, Unit: "months"}, "2026-12-31", "2027-01-31", day(2026, 12, 15)},
+		{"every 2 months across a year end", Repeat{Every: 2, Unit: "months"}, "2026-11-30", "2027-01-30", day(2026, 11, 15)},
+		// A long-overdue task must land in the future, not stay overdue.
+		{"catch up from 4 months ago", Repeat{Every: 1, Unit: "months"}, "2026-05-01", "2026-10-01", today},
+		{"catch up from last year", Repeat{Every: 1, Unit: "days"}, "2025-09-01", "2026-09-29", today},
+		{"catch up skips a past step", Repeat{Every: 6, Unit: "months"}, "2026-01-15", "2027-01-15", today},
+		{"catch up keeps month ends clamped", Repeat{Every: 1, Unit: "months"}, "2026-01-31", "2026-10-28", today},
+	}
+	for _, c := range cases {
+		got, ok := c.rep.NextDueDate(c.from, c.asOf)
+		if !ok || got != c.want {
+			t.Fatalf("%s: NextDueDate(%q) = %q/%v, want %q", c.name, c.from, got, ok, c.want)
+		}
+	}
+	// Custom and one-shot have no computable next date: those are the
+	// caller's to work out, and guessing is worse than asking.
+	for _, rep := range []Repeat{
+		{},
+		customRep("mon-fri only"),
+		{Every: 2, Unit: "days", Custom: true, Text: "sort of"},
+	} {
+		if got, ok := rep.NextDueDate("2026-09-29", today); ok {
+			t.Fatalf("%+v must not roll over, got %q", rep, got)
+		}
+	}
+	// A malformed date is skipped rather than guessed at.
+	if _, ok := (Repeat{Every: 1, Unit: "days"}).NextDueDate("tomorrow", today); ok {
+		t.Fatal("unparseable due_date must not roll over")
+	}
+}
+
 func TestRepeatValidate(t *testing.T) {
 	cases := []struct {
 		name string

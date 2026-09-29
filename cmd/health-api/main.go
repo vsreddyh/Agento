@@ -687,12 +687,18 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	doc, err := store.Complete(ctx, id)
+	doc, next, err := store.Complete(ctx, id)
 	if err != nil {
 		writeTaskErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, doc)
+	out := bson.M{"task": doc}
+	// Present only when a structured cadence rolled itself over, so the app
+	// can say which date landed instead of asking for one.
+	if next != nil {
+		out["next"] = next
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // reopenTask clears completion, making a done task open again.
