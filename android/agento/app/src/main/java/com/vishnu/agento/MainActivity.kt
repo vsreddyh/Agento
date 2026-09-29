@@ -2229,7 +2229,8 @@ private fun DueHorizonRow(estimateMinutes: Int, onPick: (String, String) -> Unit
                 // gone, so past the day's end this rolls to tomorrow.
                 val now = java.time.LocalDateTime.now(IST)
                 val end = java.time.LocalDate.now(IST).atTime(23, 59)
-                onPick(dueParts(if (now.isAfter(end)) end.plusDays(1) else end))
+                val (day, at) = dueParts(if (now.isAfter(end)) end.plusDays(1) else end)
+                onPick(day, at)
             },
             label = { Text("Later today") },
         )
