@@ -41,7 +41,9 @@ rejects the mix:
 2. When you call `complete_task`, read what comes back:
    - `rolled_over: true` (with the new task in `next`) — the repeat was
      STRUCTURED, the server already created the next occurrence, and you
-     must NOT create another.
+     must NOT create another. (Month ends clamp and then keep that day: a
+     task due on the 31st that rolls into February comes back on the 28th,
+     and stays there — that is intended, not drift to correct.)
    - `follow_up` — the repeat is a CUSTOM condition, so you MUST call
      `create_task` for the next occurrence, reusing the exact repeat keys
      the response gave you (`repeat_custom: true` + `repeat_rule`). Copy

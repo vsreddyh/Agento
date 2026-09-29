@@ -129,7 +129,8 @@ func (r Repeat) Validate() error {
 // and a unit, and no custom text. Only a structured repeat can be rolled
 // over automatically — a custom condition is the caller's to interpret.
 func (r Repeat) IsStructured() bool {
-	return r.Normalize().Every > 0 && r.Unit != "" && !r.Custom
+	n := r.Normalize()
+	return n.Every > 0 && n.Unit != "" && !n.Custom
 }
 
 // MaxRollovers bounds the catch-up loop in NextDueDate.
@@ -729,8 +730,16 @@ func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]a
 	}
 	name, _ := done["name"].(string)
 	description, _ := done["description"].(string)
-	mins, _ := toInt(done["estimated_minutes"])
-	parallel, _ := toBool(done["parallelable"])
+	// Typed reads, not defaults: a legacy row with an unparseable field must
+	// fail the rollover (logged) rather than roll over with reset values.
+	mins, ok := toInt(done["estimated_minutes"])
+	if !ok {
+		return nil, fail("cannot roll over: estimated_minutes is not a number")
+	}
+	parallel, ok := toBool(done["parallelable"])
+	if !ok {
+		return nil, fail("cannot roll over: parallelable is not a boolean")
+	}
 	return s.Create(ctx, name, description, nextDate, dueTime, &mins, rep, &parallel)
 }
 
