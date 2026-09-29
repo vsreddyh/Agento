@@ -68,28 +68,27 @@ fun ServerTask.startParts(): Pair<String, String>? {
 }
 
 /**
- * "Today, 07:00 → 09:00" — the start and the deadline on one line. Within
- * a day only the second time is repeated; when the start crosses midnight
- * (due 00:30, 1h estimate) both sides keep their own day, because a bare
- * "23:30 → 00:30" reads as nonsense.
+ * "Today, 07:00 → 09:00" — the start and the deadline on one line, **always
+ * anchored on the start's day**.
+ *
+ * A task that crosses midnight (due 00:30, one-hour estimate) is grouped
+ * under the day it *starts* on, so the line says the same thing the group
+ * does: "Today, 23:30 → 00:30". Restating the deadline's own day here
+ * ("Yesterday, 23:30 → Today, 00:30") would contradict the header the row
+ * is sitting under, and the deadline's day is still spelled out in the
+ * detail sheet, which labels it "Due" outright.
+ *
+ * The due time is formatted from the parsed instant rather than echoed from
+ * the stored string, so both sides of the arrow are padded the same way.
  */
 fun ServerTask.startToDueLine(today: java.time.LocalDate): String {
-    val due = friendlyDue(dueDate, dueTime, today)
-    val parts = startParts() ?: return due
+    val parts = startParts() ?: return friendlyDue(dueDate, dueTime, today)
     val start = friendlyDue(parts.first, parts.second, today)
-    if (start.isEmpty() || due.isEmpty()) return due.ifEmpty { start }
-    // Same day: the day is already stated by the start side, so only the
-    // due time is repeated. Compared on the date parts, not by stripping
-    // text off a formatted line.
-    if (parts.first == dueDate) {
-        // Formatted from the parsed instant, not the raw string, so a
-        // stored "9:00" cannot render unpadded next to a zero-padded start.
-        val at = dueMillisOrNull() ?: return start
-        val d = java.time.Instant.ofEpochMilli(at).atZone(IST).toLocalDateTime()
-        val time = String.format(Locale.ROOT, "%02d:%02d", d.hour, d.minute)
-        return "$start → $time"
-    }
-    return "$start → $due"
+    val at = dueMillisOrNull() ?: return start
+    val d = java.time.Instant.ofEpochMilli(at).atZone(IST).toLocalDateTime()
+    val time = String.format(Locale.ROOT, "%02d:%02d", d.hour, d.minute)
+    if (start.isEmpty()) return time
+    return "$start → $time"
 }
 
 /** True when the task repeats at all: a structured cadence or a custom

@@ -30,11 +30,13 @@ see GitHub Releases for older notes.
   breaks ties). Tasks with no usable due time sort last rather than first —
   an undated task is not the most urgent thing you have.
 - **Rows and the detail sheet now show the start and the due time** —
-  "Today, 07:00 → 09:00" — instead of the estimate. A task crossing
-  midnight (due 00:30, 1h estimate) shows both days, because a bare
-  "23:30 → 00:30" reads as nonsense. A zero estimate has no start of its
-  own, so the start is left out rather than printed twice. The estimate is
-  now purely an input:
+  "Today, 07:00 → 09:00" — instead of the estimate, always anchored on the
+  start's day, which is the day the row is grouped under. A task crossing
+  midnight (due 00:30, 1h estimate) therefore reads "Today, 23:30 → 00:30"
+  rather than restating the deadline's own day and contradicting the group
+  above it; the detail sheet still spells that day out under "Due". A zero
+  estimate has no start of its own, so the start is left out rather than
+  printed twice. The estimate is now purely an input:
   it still decides when the start moment and the "Start now" reminder fall,
   it is just no longer a number you have to read.
 - The home-screen widget row and reminder notifications carry the start and
