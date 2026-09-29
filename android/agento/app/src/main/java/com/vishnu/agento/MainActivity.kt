@@ -5309,7 +5309,7 @@ private fun SettingsScreen(
                             notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
                             // Re-read on resume, keyed above.
                             widgetStatus = remember(context, resumeTick) {
-                                taskWidgetIds(context).size
+                                val placed = taskWidgetIds(context).size
                                 when (placed) {
                                     0 -> "Not added"
                                     1 -> "1 on home screen"
