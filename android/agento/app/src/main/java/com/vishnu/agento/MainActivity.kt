@@ -1090,15 +1090,27 @@ private fun TaskManagerScreen(
         busy = true
         scope.launch {
             api.complete(t.id).fold(
-                onSuccess = {
-                    // Done tasks vanish server-side after 3 days: open a
-                    // prefilled new-task draft with the date cleared, so
-                    // recreating means picking a fresh date (save is
-                    // gated on one) — unless an editor is already open,
-                    // which must not be discarded. Dismiss to skip.
+                onSuccess = { done ->
                     refreshTick++
                     pokeWidget()
-                    if (editing == null) {
+                    // A structured cadence ("every 3 days") rolled itself
+                    // over server-side — the next occurrence already exists,
+                    // with the date advanced and every other field carried
+                    // over. Nothing to ask the user for.
+                    val next = done?.nextDueDate.orEmpty()
+                    if (next.isNotEmpty()) {
+                        // "Tomorrow" / "2 Oct" rather than a raw ISO date.
+                        val when2 = friendlyDue(
+                            next, "", java.time.LocalDate.now(IST)).ifEmpty { next }
+                        snackbar.showSnackbar("Task completed — next one set for $when2.")
+                        return@fold
+                    }
+                    // A custom condition ("every 3rd Friday", "end of every
+                    // month") is nobody's to compute but ours, so the
+                    // prefilled draft asks for the date — unless an editor
+                    // is already open, which must not be discarded. Dismiss
+                    // to skip. One-shot tasks land here too and are skipped.
+                    if (editing == null && t.hasRepeat) {
                         editing = ServerTaskDraft(
                             name = t.name,
                             description = t.description,
@@ -5300,10 +5312,7 @@ private fun SettingsScreen(
                             notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
                             // Re-read on resume, keyed above.
                             widgetStatus = remember(context, resumeTick) {
-                                val placed = AppWidgetManager.getInstance(context)
-                                    .getAppWidgetIds(
-                                        ComponentName(context, TaskWidget::class.java))
-                                    .size
+                                val placed = taskWidgetIds(context).size
                                 when (placed) {
                                     0 -> "Not added"
                                     1 -> "1 on home screen"
@@ -6116,10 +6125,10 @@ private fun WidgetSettingsSection() {
     // and a stale list here is worse than useless.
     var tick by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { tick++ }
+    // Filtered against each id's own provider info: the voice widget's
+    // placement must never be listed (or configured) as a task widget.
     val widgetIds = remember(context, tick) {
-        AppWidgetManager.getInstance(context)
-            .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
-            .toList()
+        taskWidgetIds(context).toList()
     }
     val canPin = remember(context) {
         AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported

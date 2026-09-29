@@ -35,6 +35,26 @@ enum class TaskWidgetDensity(val title: String) {
 }
 
 /**
+ * Ids of *this* provider's placements.
+ *
+ * [AppWidgetManager.getAppWidgetIds] is the documented way to ask, but on
+ * the affected launcher it handed back another provider's id too — which is
+ * why the voice widget showed up in the task widget's settings as a second
+ * "task" placement. Every id is therefore cross-checked against its own
+ * [android.appwidget.AppWidgetProviderInfo], the authority on who owns it;
+ * anything else is dropped rather than shown and configured as a task
+ * widget.
+ */
+fun taskWidgetIds(context: Context): IntArray {
+    val mgr = AppWidgetManager.getInstance(context)
+    val me = ComponentName(context, TaskWidget::class.java)
+    return mgr.getAppWidgetIds(me).filter { id ->
+        mgr.getAppWidgetInfo(id)?.provider == me
+    }.toIntArray()
+}
+
+
+/**
  * Home-screen task manager widget (#101): header (title + count +
  * refresh) above a scrollable task list. View switching and display
  * settings live in [TaskWidgetConfigActivity], reachable from the Task
@@ -82,8 +102,7 @@ class TaskWidget : AppWidgetProvider() {
         // still handled so a PendingIntent fired by an already-placed older
         // build still cycles instead of erroring.
         if (intent.action == ACTION_REFRESH) {
-            val mgr = AppWidgetManager.getInstance(context)
-            val ids = mgr.getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
+            val ids = taskWidgetIds(context)
             if (ids.isNotEmpty()) pull(context, ids)
         } else if (intent.action == ACTION_VIEW) {
             val id = intent.getIntExtra(
@@ -193,9 +212,8 @@ class TaskWidget : AppWidgetProvider() {
          * (a diagnostics call must not become a second crash). */
         fun diagnostics(appCtx: Context): String = runCatching {
             val ctx = appCtx.applicationContext
-            val mgr = AppWidgetManager.getInstance(ctx)
             val ids = runCatching {
-                mgr.getAppWidgetIds(ComponentName(ctx, TaskWidget::class.java))
+                taskWidgetIds(ctx)
             }.getOrDefault(intArrayOf())
             buildString {
                 appendLine("placements=${ids.size}")
@@ -462,10 +480,9 @@ class TaskWidget : AppWidgetProvider() {
         fun refresh(context: Context): Job {
             val appCtx = context.applicationContext
             return widgetScope.launch {
-                val mgr = AppWidgetManager.getInstance(appCtx)
                 fetchAndPush(
                     appCtx,
-                    mgr.getAppWidgetIds(ComponentName(appCtx, TaskWidget::class.java)),
+                    taskWidgetIds(appCtx),
                 )
             }
         }

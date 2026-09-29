@@ -8,6 +8,28 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.7.0]
+
+- Repeats that can be computed now roll themselves over. Completing a task
+  with a structured cadence (`every 3 days`, `every month`) creates the next
+  occurrence automatically — the date advances, the time and every other
+  field carry over, and nobody is asked to pick a date the server can
+  already work out. Completing it in the app just says which date landed.
+  Custom conditions ("every 3rd Friday", "end of every month") still ask,
+  because a rule with an exception in it is not something a server should
+  interpret on its own.
+  - Month ends clamp instead of rolling over: 31 Jan + 1 month is 28 Feb
+    (29th in a leap year), not 3 March.
+  - A task left overdue for months is advanced to the next *upcoming*
+    occurrence, not into a new past-due one.
+  - Completing a task answers exactly as before, with the new occurrence
+    added under `next` — an older app build can still complete tasks
+    against the new server.
+- FIX: the voice widget's placement was listed in **Settings → Home-screen
+  widget** as a second task widget, and could be configured as one. Widget
+  ids are now cross-checked against their own provider before being shown,
+  listed or configured, so only real task placements appear.
+
 ## [4.6.0]
 
 - Task widget settings moved out of the Task Manager into **Settings →

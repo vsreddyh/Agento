@@ -199,22 +199,29 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
-		Description: "Mark a task done (retained 3 days, then auto-deleted). If the task repeats, you MUST create the next occurrence via create_task with the same repeat keys and every field identical including due_time — only due_date advances, to the occurrence you compute — the server never does this."},
+		Description: "Mark a task done (retained 3 days, then auto-deleted). A STRUCTURED repeat (repeat_every + repeat_unit) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			ID string `json:"id"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			doc, err := store.Complete(ctx, in.ID)
+			doc, next, err := store.Complete(ctx, in.ID)
 			if err != nil {
 				return fail(err)
 			}
 			out := map[string]any{"ok": true, "task": doc}
 			rep := repeatOf(doc)
-			if !rep.IsZero() {
+			switch {
+			case next != nil:
+				// Rolled over server-side: the agent has nothing to do, and
+				// must not create a second occurrence.
+				out["rolled_over"] = true
+				out["next"] = next
+			case !rep.IsZero():
+				// Custom: only the caller can compute the next date.
 				out["repeat_every"] = rep.Every
 				out["repeat_unit"] = rep.Unit
 				out["repeat_custom"] = rep.Custom
 				out["repeat_rule"] = rep.Text
-				out["follow_up"] = "this task repeats (" + rep.String() + ") — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required."
+				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required."
 			}
 			return result(out)
 		})

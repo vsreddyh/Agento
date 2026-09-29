@@ -687,12 +687,23 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	doc, err := store.Complete(ctx, id)
+	doc, next, err := store.Complete(ctx, id)
 	if err != nil {
 		writeTaskErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, doc)
+	// The task stays at the top level: a 4.6.0 app parses the response as
+	// the bare doc, so nesting it under "task" would break completing a task
+	// for anyone who hasn't updated. "next" is the only addition, and it is
+	// present only when a structured cadence rolled itself over.
+	out := bson.M{}
+	for k, v := range doc {
+		out[k] = v
+	}
+	if next != nil {
+		out["next"] = next
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // reopenTask clears completion, making a done task open again.
