@@ -5969,7 +5969,8 @@ private fun WidgetSettingsSection() {
                     // must not take Settings down with it.
                     runCatching {
                         AppWidgetManager.getInstance(context)
-                            .requestPinAppWidget(TaskWidget::class.java, null, null)
+                            .requestPinAppWidget(
+                                ComponentName(context, TaskWidget::class.java), null, null)
                     }
                 },
             ) { Text("Add the widget") }
