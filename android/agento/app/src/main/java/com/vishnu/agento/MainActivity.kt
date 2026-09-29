@@ -921,9 +921,10 @@ private fun ServerTask.isOverdue(
  */
 private enum class DueBucket(val title: String) {
     Overdue("Overdue"),
+    Current("Current"),
     ThisHour("This hour"),
     NextHour("Next hour"),
-    In1To3Hours("Next 1-3 hours"),
+    In2To3Hours("Next 2-3 hours"),
     In3To6Hours("Next 3-6 hours"),
     In6To12Hours("Next 6-12 hours"),
     LaterToday("Later today"),
@@ -935,12 +936,22 @@ private enum class DueBucket(val title: String) {
 }
 
 /**
- * The group this task belongs to. A task due today is placed by the time
- * left; a task whose time has already passed today is Overdue, which is
- * also what the reminder engine calls it (it nags every 15 minutes), so
- * the list and the alerts never disagree. A today task with no time at all
- * lands in Later today: nothing is known about *when*, and "this hour"
- * would be a guess.
+ * The group this task belongs to.
+ *
+ * Everything ahead of the deadline is measured to the task's **start**
+ * time (`due - estimated_minutes`), not its due time, because the question
+ * a list answers is "when should I begin?", and that is the moment the
+ * "Start now" reminder fires. A task due in three hours with a one-hour
+ * estimate belongs in the next hour or two, not three: it is what you
+ * should be starting, not what you must finish by.
+ *
+ * Past the start time and short of the deadline is **Current** — the window
+ * in which the work is meant to happen. Past the deadline it is
+ * **Overdue**, which is also what the reminder engine calls it (it nags
+ * every 15 minutes), so the list and the alerts never disagree.
+ *
+ * A today task with no time at all lands in Later today: nothing is known
+ * about *when*, and "this hour" would be a guess.
  */
 private fun ServerTask.dueBucket(
     today: java.time.LocalDate,
@@ -970,16 +981,34 @@ private fun ServerTask.dueBucket(
                 // "This hour" for up to a minute while wearing the overdue
                 // colour.
                 at <= nowMillis -> DueBucket.Overdue
-                // The names are nested windows, as asked for: this hour
-                // (0-1h), the hour after it (1-2h), then the rest of the
-                // 1-3h window (2-3h), 3-6h, 6-12h, and everything still
-                // left today.
-                (at - nowMillis) < 60L * 60_000 -> DueBucket.ThisHour
-                (at - nowMillis) < 120L * 60_000 -> DueBucket.NextHour
-                (at - nowMillis) < 180L * 60_000 -> DueBucket.In1To3Hours
-                (at - nowMillis) < 360L * 60_000 -> DueBucket.In3To6Hours
-                (at - nowMillis) < 720L * 60_000 -> DueBucket.In6To12Hours
-                else -> DueBucket.LaterToday
+                else -> {
+                    // Start time: when the work is meant to begin. A zero
+                    // estimate has no start nudge, so it falls back to the
+                    // due time — the same rule the reminder engine uses, so
+                    // the two can't disagree about when a task "starts".
+                    val startAt = if (estimatedMinutes > 0) {
+                        at - estimatedMinutes * 60_000L
+                    } else {
+                        at
+                    }
+                    val left = startAt - nowMillis
+                    when {
+                        // The start moment has arrived and the deadline
+                        // hasn't: this is what should be under way now.
+                        left <= 0 -> DueBucket.Current
+                        // Every name is the range it actually covers: this
+                        // hour, the hour after, 2-3h, 3-6h, 6-12h, and
+                        // everything still left today. No two names overlap,
+                        // so a reader never has to guess which bucket a row
+                        // came from.
+                        left < 60L * 60_000 -> DueBucket.ThisHour
+                        left < 120L * 60_000 -> DueBucket.NextHour
+                        left < 180L * 60_000 -> DueBucket.In2To3Hours
+                        left < 360L * 60_000 -> DueBucket.In3To6Hours
+                        left < 720L * 60_000 -> DueBucket.In6To12Hours
+                        else -> DueBucket.LaterToday
+                    }
+                }
             }
         }
     }

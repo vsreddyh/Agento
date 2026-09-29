@@ -8,6 +8,22 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.8.1]
+
+- New **Current** section at the top of the task list: tasks whose start
+  time (`due time − estimate`) has arrived but whose due time has not — the
+  window in which the work is actually meant to happen, and the moment the
+  "Start now" reminder fires.
+- The horizon groups are now measured to the **start** time rather than the
+  due time, which is what a list like this is actually for: a task due in
+  three hours with a one-hour estimate is something to start in the next
+  hour or two, not in three. This matches the reminder engine's own rule
+  (no start nudge for a zero estimate, so a zero-estimate task is measured
+  to its due time).
+- Corrected the 2-3 hour group's label, which shipped as "Next 1-3 hours"
+  and so appeared to overlap "Next hour". Every group name now matches the
+  range it holds.
+
 ## [4.8.0]
 
 - The task list now groups by **how long is left** instead of showing one
