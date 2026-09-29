@@ -2070,6 +2070,11 @@ private fun ServerTaskDialog(
                 )
                 if (repeatCustom && repeatRule.isBlank()) {
                     HintLine("A custom condition needs the words.")
+                } else if (repeatCustom) {
+                    // The date above is the first occurrence; the words only
+                    // say what comes after it. Worth saying: the two sit far
+                    // apart in the form and read like they compete.
+                    HintLine("The due date you picked is the first one — this is the rule for the ones after it.")
                 } else if (!repeatCustom && repeatEvery.trim().toIntOrNull()
                     ?.let { it < REPEAT_EVERY_MIN || it > REPEAT_EVERY_MAX } == true
                 ) {
