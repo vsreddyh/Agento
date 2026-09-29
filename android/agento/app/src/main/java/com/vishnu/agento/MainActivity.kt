@@ -1913,12 +1913,11 @@ private fun ServerTaskDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 FormLabel("Due")
-                // A preset fills the time too, so the two always agree.
-                DueQuickRow(
+                DueHorizonRow(
                     estimateMinutes = minutes.trim().toIntOrNull() ?: 0,
                     onPick = { d, t ->
                         dueDate = d
-                        if (t.isNotEmpty()) dueTime = t
+                        dueTime = t
                     },
                 )
                 val dateInteraction = remember { MutableInteractionSource() }
@@ -2168,64 +2167,6 @@ private fun ServerTaskDialog(
     }
 }
 
-/** Today/Tomorrow shortcuts (IST) for task due dates. Scroll-safe for
- * narrow screens. */
-/** Resolves an instant to the (date, HH:mm) pair the form stores. */
-private fun dueParts(at: java.time.LocalDateTime): Pair<String, String> =
-    at.toLocalDate().toString() to
-        String.format(Locale.ROOT, "%02d:%02d", at.hour, at.minute)
-
-/**
- * Quick due presets. A bare "Today" only filled the date, which left the
- * mandatory time still to be picked by hand — so the same-day options
- * resolve to a whole moment instead: in an hour, in three, in eight, or
- * the end of today. "Tomorrow" stays date-only, since "tomorrow at what
- * time?" is a question worth asking.
- *
- * The clock is read on tap, not remembered: a dialog left open for a while
- * would otherwise hand out presets an hour stale.
- */
-@Composable
-private fun DueQuickRow(estimateMinutes: Int, onPick: (String, String) -> Unit) {
-    val tomorrow = remember { java.time.LocalDate.now(IST).plusDays(1).toString() }
-    Row(
-        modifier = Modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        for ((label, hours) in listOf(
-            "remind in 1h" to 1L,
-            "remind in 3h" to 3L,
-            "remind in 8h" to 8L,
-        )) {
-            AssistChip(
-                onClick = {
-                    // Reminder-relative, not due-relative: the start nudge
-                    // fires at `due - estimated_minutes`, so the estimate
-                    // is added to the offset to land the alert on the hour
-                    // the user actually asked for. The due time then sits
-                    // that many minutes later, which is exactly the point.
-                    val at = java.time.LocalDateTime.now(IST)
-                        .plusHours(hours)
-                        .plusMinutes(estimateMinutes.coerceAtLeast(0).toLong())
-                    val (d, t) = dueParts(at)
-                    onPick(d, t)
-                },
-                label = { Text(label) },
-            )
-        }
-        // Wall-clock, not an offset: "end of today" is 23:59 whatever the
-        // estimate, and its heads-up lands 5 minutes before that.
-        AssistChip(
-            onClick = {
-                val (d, t) = dueParts(java.time.LocalDate.now(IST).atTime(23, 59))
-                onPick(d, t)
-            },
-            label = { Text("end of today") },
-        )
-        AssistChip(onClick = { onPick(tomorrow, "") }, label = { Text("Tomorrow") })
-    }
-}
-
 /** Small section header inside the task dialog form. */
 @Composable
 private fun FormLabel(text: String) {
@@ -2235,6 +2176,65 @@ private fun FormLabel(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 4.dp),
     )
+}
+
+/** Resolves an instant to the (date, HH:mm) pair the form stores. */
+private fun dueParts(at: java.time.LocalDateTime): Pair<String, String> =
+    at.toLocalDate().toString() to
+        String.format(Locale.ROOT, "%02d:%02d", at.hour, at.minute)
+
+/**
+ * Due choices as *horizons* — next hour, 3 hours, 8 hours, later today —
+ * rather than calendar words. "Today" and "Tomorrow" were no use on their
+ * own: they filled a date and left the mandatory time to be picked by hand,
+ * so each one was a dead end that still looked like an answer. A horizon
+ * answers the question people actually have ("when should this be on my
+ * list?"), and every one of them sets the date *and* the time together, so
+ * the two can never disagree.
+ *
+ * The first three count back from the reminder, not the deadline: the start
+ * nudge fires at `due - estimated_minutes`, so the estimate is added to the
+ * offset to land the alert on the horizon that was picked. "Later today" is
+ * a wall clock, not a duration, so it is 23:59 whatever the estimate — its
+ * heads-up lands 5 minutes before that.
+ *
+ * The clock is read on tap, not remembered: a dialog left open would
+ * otherwise hand out horizons an hour stale.
+ */
+@Composable
+private fun DueHorizonRow(estimateMinutes: Int, onPick: (String, String) -> Unit) {
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        for ((label, hours) in listOf(
+            "Next hour" to 1L,
+            "3 hours" to 3L,
+            "8 hours" to 8L,
+        )) {
+            AssistChip(
+                onClick = {
+                    val at = java.time.LocalDateTime.now(IST)
+                        .plusHours(hours)
+                        .plusMinutes(estimateMinutes.coerceAtLeast(0).toLong())
+                    val (d, t) = dueParts(at)
+                    onPick(d, t)
+                },
+                label = { Text(label) },
+            )
+        }
+        AssistChip(
+            onClick = {
+                // 23:59 tapped at 23:59 would hand back a due time already
+                // gone, so past the day's end this rolls to tomorrow.
+                val now = java.time.LocalDateTime.now(IST)
+                val end = java.time.LocalDate.now(IST).atTime(23, 59)
+                val (day, at) = dueParts(if (now.isAfter(end)) end.plusDays(1) else end)
+                onPick(day, at)
+            },
+            label = { Text("Later today") },
+        )
+    }
 }
 
 /** Material3 date picker returning YYYY-MM-DD. The picker speaks
