@@ -11,7 +11,7 @@
     <string name="task_widget_complete">Complete task</string>
     <string name="task_widget_open_task">Open task</string>
     <string name="task_reminder_channel">Task reminders</string>
-    <string name="task_reminder_channel_desc">Alerts when your tasks are due</string>
+    <string name="task_reminder_channel_desc">A nudge to start, a heads-up 5 minutes before due, and a repeat every 15 minutes while a task is overdue</string>
     <string name="channel_name">Health Sync</string>
     <string name="channel_desc">Hourly health data sync to your bot</string>
     <string name="sync_notif_title">Syncing health data…</string>

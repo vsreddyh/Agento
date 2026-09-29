@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.ExpandLess
@@ -108,8 +109,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.health.connect.client.PermissionController
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.Dispatchers
@@ -169,6 +172,7 @@ private enum class SettingSection(val title: String) {
     Connection("Connection"),
     Health("Health sync"),
     Appearance("Appearance"),
+    Widget("Home-screen widget"),
     Notifications("Notifications"),
     Storage("Storage"),
     Usage("Usage"),
@@ -1378,49 +1382,9 @@ private fun TaskManagerScreen(
                         }
                     }
                 }
-                // Widget display settings live here: the widget's own header
-                // controls never rendered on some launchers (#137), so
-                // view/density/due are changed from the app instead.
-                // Re-queried on every task refresh, and again when the
-                // settings screen returns, so a changed view shows up in
-                // the button label right away.
-                val openWidgetConfig = rememberLauncherForActivityResult(
-                    ActivityResultContracts.StartActivityForResult(),
-                ) { refreshTick++ }
-                val widgetIds = remember(context, refreshTick) {
-                    AppWidgetManager.getInstance(context)
-                        .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
-                        .toList()
-                }
-                if (widgetIds.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        widgetIds.forEach { id ->
-                            OutlinedButton(
-                                onClick = {
-                                    // Guarded like the old direct launch:
-                                    // a missing activity must not crash the
-                                    // Task Manager.
-                                    runCatching {
-                                        openWidgetConfig.launch(
-                                            Intent(context, TaskWidgetConfigActivity::class.java)
-                                                .putExtra(
-                                                    AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(
-                                    "Home-screen widget settings " +
-                                        "(${TaskWidget.viewFor(context, id).title})"
-                                )
-                            }
-                        }
-                    }
-                }
+                // Widget display settings moved to Settings -> Home-screen
+                // widget: they configure the home screen, not this task
+                // list, and they were the only controls below the rows.
                 HintLine("Your tasks, shared with your assistant — changes here and in chat land in the same list.")
             }
         }
@@ -5156,6 +5120,20 @@ private fun SettingsScreen(
                                 else -> "System"
                             },
                             notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
+                            // Counted per hub visit: adding a widget means
+                            // leaving the app, so the composable is rebuilt
+                            // on the way back.
+                            widgetStatus = remember(context) {
+                                val placed = AppWidgetManager.getInstance(context)
+                                    .getAppWidgetIds(
+                                        ComponentName(context, TaskWidget::class.java))
+                                    .size
+                                when (placed) {
+                                    0 -> "Not added"
+                                    1 -> "1 on home screen"
+                                    else -> "$placed on home screen"
+                                }
+                            },
                             usageStatus = usageStatus,
                             appVersion = remember(context) {
                                 UpdateManager.currentVersion(context).first
@@ -5410,6 +5388,9 @@ private fun SettingsScreen(
                             }
                         }
                     }
+                    SettingSection.Widget -> {
+                        WidgetSettingsSection()
+                    }
                     SettingSection.Notifications -> {
                         NotificationsSection()
                     }
@@ -5552,15 +5533,17 @@ private fun SettingsHub(
     healthStatus: String,
     themeStatus: String,
     notificationsStatus: String,
+    widgetStatus: String,
     usageStatus: String,
     appVersion: String,
     onPick: (SettingSection) -> Unit,
 ) {
-    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, usageStatus, appVersion) {
+    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, widgetStatus, usageStatus, appVersion) {
         listOf(
             HubRow(SettingSection.Connection, serverStatus),
             HubRow(SettingSection.Health, healthStatus),
             HubRow(SettingSection.Appearance, themeStatus),
+            HubRow(SettingSection.Widget, widgetStatus),
             HubRow(SettingSection.Notifications, notificationsStatus),
             HubRow(SettingSection.Storage, "Backup"),
             HubRow(SettingSection.Usage, usageStatus),
@@ -5610,6 +5593,7 @@ private fun SettingSection.hubIcon() = when (this) {
     SettingSection.Connection -> Icons.Filled.Cloud
     SettingSection.Health -> Icons.Filled.Favorite
     SettingSection.Appearance -> Icons.Filled.DarkMode
+    SettingSection.Widget -> Icons.Filled.Dashboard
     SettingSection.Notifications -> Icons.Filled.Notifications
     SettingSection.Storage -> Icons.Filled.Folder
     SettingSection.Usage -> Icons.Filled.DataUsage
@@ -5937,6 +5921,105 @@ private fun AppUpdateSection() {
         if (status.isNotEmpty()) {
             if (failed) ErrorCard(raw = status) else HintLine(status)
         }
+    }
+}
+
+/** Task-widget placement settings (Settings → Home-screen widget).
+ *
+ * The widget's own header controls never rendered on some launchers
+ * (#137), so what it shows is changed from the app. This used to sit
+ * under the task rows in the Task Manager, which is a poor home for it:
+ * it configures the home screen, not the task list. Each placement is
+ * configured on its own, because the settings are stored per widget id.
+ */
+@Composable
+private fun WidgetSettingsSection() {
+    val context = LocalContext.current
+    // Re-read on resume: the user can add or drop a placement (or come
+    // back from the launcher) while this screen sits in the back stack,
+    // and a stale list here is worse than useless.
+    var tick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { tick++ }
+    val widgetIds = remember(context, tick) {
+        AppWidgetManager.getInstance(context)
+            .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
+            .toList()
+    }
+    val config = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { tick++ }
+
+    SectionCard(
+        title = "Home-screen widget",
+        subtitle = "What the task widget shows: which tasks, how dense the rows are, and whether due dates and scrolling are on. Every placement keeps its own settings.",
+    ) {
+        if (widgetIds.isEmpty()) {
+            Text(
+                "No task widget on your home screen yet.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "Long-press an empty spot on the home screen, then Widgets → Agento — or use the button below.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = {
+                    // Asks the launcher to add it; a launcher that refuses
+                    // must not take Settings down with it.
+                    runCatching {
+                        AppWidgetManager.getInstance(context)
+                            .requestPinAppWidget(TaskWidget::class.java, null, null)
+                    }
+                },
+            ) { Text("Add the widget") }
+        } else {
+            widgetIds.forEachIndexed { i, id ->
+                if (i > 0) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Widget ${i + 1}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            buildString {
+                                append(TaskWidget.viewFor(context, id).title)
+                                append(" tasks · ")
+                                append(TaskWidget.densityFor(context, id).title)
+                                append(" rows")
+                                if (!TaskWidget.showDueFor(context, id)) append(" · no due dates")
+                                if (!TaskWidget.scrollableFor(context, id)) {
+                                    append(" · up to ${TaskWidget.STATIC_ROW_LIMIT} rows")
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    OutlinedButton(
+                        onClick = {
+                            // Guarded like the old direct launch: a missing
+                            // activity must not crash Settings.
+                            runCatching {
+                                config.launch(
+                                    Intent(context, TaskWidgetConfigActivity::class.java)
+                                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                                )
+                            }
+                        },
+                    ) { Text("Configure") }
+                }
+            }
+        }
+        Text(
+            "On some launchers the widget's own buttons never appear — this screen is the reliable way to change these.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

@@ -8,6 +8,31 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.6.0]
+
+- Task widget settings moved out of the Task Manager into **Settings →
+  Home-screen widget**, its own subsection. It configures the home screen,
+  not the task list, so it no longer sits under your task rows. Each
+  placement is listed with what it currently shows plus a Configure
+  button; with no widget placed you get instructions and an "Add the
+  widget" button instead of a button that does nothing.
+- Reminders now fire at the times you actually need them, and only for
+  open tasks that have a due time:
+  - **Start now** at `due time − estimated minutes` — the last moment you
+    can begin and still finish on time.
+  - **Due in 5 min**, five minutes before the due time.
+  - **Overdue** — once the due time has passed, repeating every 15
+    minutes until you complete, delete or reschedule the task.
+  - A zero estimate gets no start nudge (there is nothing to start early
+    for); when a task's start nudge and heads-up land on the same minute
+    you get one alert, not two; and points already in the past are
+    dropped, so a late-created task never fires a burst of stale alerts.
+  - Each reminder is its own notification and is never bundled into a
+    group, so simultaneous alerts — and one task's own reminders — stay
+    readable instead of overwriting each other.
+- The reminder channel description now spells out the three reminders
+  and the 15-minute overdue repeat.
+
 ## [4.5.1]
 
 - FIX: recreating a completed task no longer throws away its due time
