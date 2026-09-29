@@ -441,9 +441,10 @@ class TaskWidget : AppWidgetProvider() {
             }
             return RemoteViews(packageName, layout).apply {
                 setTextViewText(R.id.task_widget_row_name, task.name)
-                // Same friendly due line as the Task Manager rows (#130),
-                // IST-pinned; blank collapses to gone below.
-                val due = friendlyDue(task.dueDate, task.dueTime, today)
+                // Same line as the Task Manager rows (#130): start → due,
+                // IST-pinned. The estimate is an input, not a label — every
+                // surface outside the editor shows the start moment.
+                val due = task.startToDueLine(today)
                 if (showDue && due.isNotEmpty()) {
                     setTextViewText(R.id.task_widget_row_due, due)
                     setViewVisibility(R.id.task_widget_row_due, View.VISIBLE)

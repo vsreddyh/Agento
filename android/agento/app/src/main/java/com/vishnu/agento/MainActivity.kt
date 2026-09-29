@@ -872,16 +872,20 @@ private enum class ServerTaskFilter(val state: String, val title: String) {
 /** Client-side sort for the task list (server returns one state at a time,
  * unsorted). Due puts undated tasks last; Created is newest first. */
 private enum class ServerTaskSort(val title: String) {
-    Due("Due date"),
+    Start("Start time"),
     Name("Name"),
     Created("Newest"),
     Estimate("Estimate"),
 }
 
-private fun ServerTask.dueKey(): String {
-    if (dueDate.isEmpty()) return "~~~~"
-    return dueDate + "T" + dueTime
-}
+/**
+ * Sort key for "when should this begin": the start moment, with the due
+ * time as a tie-break so two tasks starting together still order by their
+ * deadlines. Tasks with no usable due time sort last instead of first —
+ * an undated task is not the most urgent thing you have.
+ */
+private fun ServerTask.startSortKey(): Long =
+    startMillisOrNull() ?: Long.MAX_VALUE
 
 /**
  * Overdue means the moment has passed, not just the date: a task due at
@@ -921,9 +925,10 @@ private fun ServerTask.isOverdue(
  */
 private enum class DueBucket(val title: String) {
     Overdue("Overdue"),
+    Current("Current"),
     ThisHour("This hour"),
     NextHour("Next hour"),
-    In1To3Hours("Next 1-3 hours"),
+    In2To3Hours("Next 2-3 hours"),
     In3To6Hours("Next 3-6 hours"),
     In6To12Hours("Next 6-12 hours"),
     LaterToday("Later today"),
@@ -935,12 +940,22 @@ private enum class DueBucket(val title: String) {
 }
 
 /**
- * The group this task belongs to. A task due today is placed by the time
- * left; a task whose time has already passed today is Overdue, which is
- * also what the reminder engine calls it (it nags every 15 minutes), so
- * the list and the alerts never disagree. A today task with no time at all
- * lands in Later today: nothing is known about *when*, and "this hour"
- * would be a guess.
+ * The group this task belongs to.
+ *
+ * Everything ahead of the deadline is measured to the task's **start**
+ * time (`due - estimated_minutes`), not its due time, because the question
+ * a list answers is "when should I begin?", and that is the moment the
+ * "Start now" reminder fires. A task due in three hours with a one-hour
+ * estimate belongs in the next hour or two, not three: it is what you
+ * should be starting, not what you must finish by.
+ *
+ * Past the start time and short of the deadline is **Current** — the window
+ * in which the work is meant to happen. Past the deadline it is
+ * **Overdue**, which is also what the reminder engine calls it (it nags
+ * every 15 minutes), so the list and the alerts never disagree.
+ *
+ * A today task with no time at all lands in Later today: nothing is known
+ * about *when*, and "this hour" would be a guess.
  */
 private fun ServerTask.dueBucket(
     today: java.time.LocalDate,
@@ -949,45 +964,68 @@ private fun ServerTask.dueBucket(
     if (!isOpen()) return DueBucket.Completed
     if (!dueDate.isIsoDate()) return DueBucket.NoDate
     val s = dueDate
-    val t = today.toString()
     val nowMillis = now.atZone(IST).toInstant().toEpochMilli()
-    return when {
-        s < t -> DueBucket.Overdue
-        s > t -> when {
+    val dueAt = dueMillisOrNull()
+    if (dueAt == null) {
+        // A date with no time (rows predating mandatory due_time): the day
+        // is known, so it keeps its day group rather than being reported as
+        // undated. A today one has no idea *when*, so Later today is the
+        // honest answer — "This hour" would be a guess.
+        return when {
+            s < today.toString() -> DueBucket.Overdue
+            s == today.toString() -> DueBucket.LaterToday
             s == today.plusDays(1).toString() -> DueBucket.Tomorrow
             s <= today.plusDays(7).toString() -> DueBucket.ThisWeek
             else -> DueBucket.Later
         }
-        else -> {
-            // Parsed once: the overdue test and the bucket range both need
-            // it, and a second parse is a second chance to disagree.
-            val at = dueMillisOrNull(dueDate, dueTime)
+    }
+    // One shared start rule (TasksApi.startMillisOrNull), so the list and
+    // the reminder engine cannot drift apart on when a task "starts".
+    val startAt = startMillisOrNull() ?: dueAt
+    val startDay = java.time.Instant.ofEpochMilli(startAt)
+        .atZone(IST).toLocalDate().toString()
+    val t = today.toString()
+    return when {
+        // Past the deadline: overdue, which is also what the reminder
+        // engine calls it. Compared in millis, so a task 30 seconds past due
+        // is overdue now rather than up to a minute later.
+        dueAt <= nowMillis -> DueBucket.Overdue
+        // The start moment has arrived and the deadline has not: this is
+        // what should be under way now.
+        startAt <= nowMillis -> DueBucket.Current
+        // Which day a task belongs to is the day it *starts* on, not the
+        // day it is due: due tomorrow 00:30 with a one-hour estimate is
+        // something to start tonight, and tonight is today.
+        startDay == t -> {
+            val left = startAt - nowMillis
             when {
-                at == null -> DueBucket.LaterToday
-                // Compared in millis, not as truncated whole minutes: a task
-                // 30 seconds past due is overdue now, matching isOverdue()
-                // and the nag already going off. Otherwise it sat in
-                // "This hour" for up to a minute while wearing the overdue
-                // colour.
-                at <= nowMillis -> DueBucket.Overdue
-                // The names are nested windows, as asked for: this hour
-                // (0-1h), the hour after it (1-2h), then the rest of the
-                // 1-3h window (2-3h), 3-6h, 6-12h, and everything still
-                // left today.
-                (at - nowMillis) < 60L * 60_000 -> DueBucket.ThisHour
-                (at - nowMillis) < 120L * 60_000 -> DueBucket.NextHour
-                (at - nowMillis) < 180L * 60_000 -> DueBucket.In1To3Hours
-                (at - nowMillis) < 360L * 60_000 -> DueBucket.In3To6Hours
-                (at - nowMillis) < 720L * 60_000 -> DueBucket.In6To12Hours
+                // Every name is the range it actually covers: this hour, the
+                // hour after, 2-3h, 3-6h, 6-12h, and everything still left
+                // today. No two names overlap, so a reader never has to
+                // guess which bucket a row came from.
+                left < 60L * 60_000 -> DueBucket.ThisHour
+                left < 120L * 60_000 -> DueBucket.NextHour
+                left < 180L * 60_000 -> DueBucket.In2To3Hours
+                left < 360L * 60_000 -> DueBucket.In3To6Hours
+                left < 720L * 60_000 -> DueBucket.In6To12Hours
                 else -> DueBucket.LaterToday
             }
         }
+        // Days from tomorrow on keep plain day groups, where a
+        // time-of-day split adds nothing.
+        startDay == today.plusDays(1).toString() -> DueBucket.Tomorrow
+        startDay <= today.plusDays(7).toString() -> DueBucket.ThisWeek
+        else -> DueBucket.Later
     }
 }
 
 private fun List<ServerTask>.sortedByMode(mode: ServerTaskSort): List<ServerTask> =
     when (mode) {
-        ServerTaskSort.Due -> sortedWith(compareBy({ it.dueKey() }, { it.name.lowercase(Locale.ROOT) }))
+        ServerTaskSort.Start -> sortedWith(
+            compareBy<ServerTask> { it.startSortKey() }
+                .thenBy({ it.dueMillisOrNull() ?: Long.MAX_VALUE })
+                .thenBy({ it.name.lowercase(Locale.ROOT) }),
+        )
         ServerTaskSort.Name -> sortedBy { it.name.lowercase(Locale.ROOT) }
         ServerTaskSort.Created -> sortedByDescending { it.createdAt }
         ServerTaskSort.Estimate -> sortedWith(
@@ -1018,9 +1056,9 @@ private fun TaskManagerScreen(
     var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
     val filter = runCatching { ServerTaskFilter.valueOf(filterName) }
         .getOrDefault(ServerTaskFilter.Open)
-    var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Due.name) }
+    var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
     val sort = runCatching { ServerTaskSort.valueOf(sortName) }
-        .getOrDefault(ServerTaskSort.Due)
+        .getOrDefault(ServerTaskSort.Start)
     var query by rememberSaveable { mutableStateOf("") }
     var sortMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<ServerTask?>(null) }
@@ -1742,10 +1780,9 @@ private fun ServerTaskRow(
                     MaterialTheme.colorScheme.onSurface
                 },
             )
-            val dueLine = friendlyDue(task.dueDate, task.dueTime, today)
+            val dueLine = task.startToDueLine(today)
             val dueBits = buildList {
                 if (dueLine.isNotEmpty()) add(dueLine)
-                if (task.estimatedMinutes > 0) add("~${task.estimatedMinutes} min")
                 val repeat = task.repeatLabel()
                 if (repeat.isNotEmpty()) add(repeat)
                 if (task.parallelable) add("parallel")
@@ -1851,12 +1888,22 @@ private fun ServerTaskDetailSheet(
                 highlight = overdue,
             )
             DetailLine(
-                icon = Icons.Filled.Tune,
-                label = "Estimate",
-                value = if (task.estimatedMinutes > 0) {
-                    "~${task.estimatedMinutes} min"
-                } else {
-                    "No estimate"
+                icon = Icons.Filled.PlayArrow,
+                label = "Starts",
+                value = when {
+                    task.dueDate.isBlank() -> "No due time set"
+                    // A date with no time has no start instant at all, so
+                    // there is nothing to subtract an estimate from.
+                    task.dueMillisOrNull() == null -> "Needs a due time"
+                    // A zero estimate has no start of its own. Compared as
+                    // instants: the two sides are rendered from different
+                    // sources, so equal moments can differ as text.
+                    task.startMillisOrNull() == task.dueMillisOrNull() ->
+                        "Same as the due time"
+                    else -> task.startParts()
+                        ?.let { (d, t) -> friendlyDue(d, t, today) }
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: "Same as the due time"
                 },
             )
             DetailLine(

@@ -41,6 +41,56 @@ data class ServerTask(
     val nextDueDate: String = "",
 )
 
+/**
+ * The moment the work is meant to begin: `due - estimated_minutes`, which
+ * is exactly when the "Start now" reminder fires. A zero estimate has no
+ * start nudge, so the due time is used instead — the same rule the server's
+ * reminder engine applies, so the two can never disagree about when a task
+ * starts. Null when the task has no usable due time.
+ */
+fun ServerTask.dueMillisOrNull(): Long? = dueMillisOrNull(dueDate, dueTime)
+
+fun ServerTask.startMillisOrNull(): Long? {
+    val due = dueMillisOrNull() ?: return null
+    return if (estimatedMinutes > 0) {
+        due - estimatedMinutes * 60_000L
+    } else {
+        due
+    }
+}
+
+/** Start moment as the (date, HH:mm) pair the display helpers take. */
+fun ServerTask.startParts(): Pair<String, String>? {
+    val at = startMillisOrNull() ?: return null
+    val ldt = java.time.Instant.ofEpochMilli(at).atZone(IST).toLocalDateTime()
+    return ldt.toLocalDate().toString() to
+        String.format(Locale.ROOT, "%02d:%02d", ldt.hour, ldt.minute)
+}
+
+/**
+ * "Today, 07:00 → 09:00" — the start and the deadline on one line, **always
+ * anchored on the start's day**.
+ *
+ * A task that crosses midnight (due 00:30, one-hour estimate) is grouped
+ * under the day it *starts* on, so the line says the same thing the group
+ * does: "Today, 23:30 → 00:30". Restating the deadline's own day here
+ * ("Yesterday, 23:30 → Today, 00:30") would contradict the header the row
+ * is sitting under, and the deadline's day is still spelled out in the
+ * detail sheet, which labels it "Due" outright.
+ *
+ * The due time is formatted from the parsed instant rather than echoed from
+ * the stored string, so both sides of the arrow are padded the same way.
+ */
+fun ServerTask.startToDueLine(today: java.time.LocalDate): String {
+    val parts = startParts() ?: return friendlyDue(dueDate, dueTime, today)
+    val start = friendlyDue(parts.first, parts.second, today)
+    val at = dueMillisOrNull() ?: return start
+    val d = java.time.Instant.ofEpochMilli(at).atZone(IST).toLocalDateTime()
+    val time = String.format(Locale.ROOT, "%02d:%02d", d.hour, d.minute)
+    if (start.isEmpty()) return time
+    return "$start → $time"
+}
+
 /** True when the task repeats at all: a structured cadence or a custom
  * condition. One-shot tasks must not open a recreate draft. */
 val ServerTask.hasRepeat: Boolean

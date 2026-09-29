@@ -8,6 +8,45 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.9.0]
+
+- New **Current** section at the top of the task list: tasks whose start
+  time (`due time − estimate`) has arrived but whose due time has not — the
+  window in which the work is actually meant to happen, and the moment the
+  "Start now" reminder fires.
+- **The horizon groups are measured to the start time**, not the due time,
+  which is what a list like this is for: a task due in three hours with a
+  one-hour estimate is something to start in the next hour or two, not in
+  three. This matches the reminder engine's own rule, including the
+  zero-estimate fallback to the due time.
+- A task now belongs to the day it **starts** on, not the day it is due:
+  due tomorrow at 00:30 with a one-hour estimate starts tonight, so it
+  shows under tonight and becomes **Current** the moment it should begin.
+  Rows predating mandatory due times — 11 of 59 when this was written —
+  keep their day group (a today one lands in Later today, since nothing is
+  known about when), and their detail sheet says the start needs a due time
+  rather than echoing one.
+- **Everything sorts by start time** (the default order; the due time
+  breaks ties). Tasks with no usable due time sort last rather than first —
+  an undated task is not the most urgent thing you have.
+- **Rows and the detail sheet now show the start and the due time** —
+  "Today, 07:00 → 09:00" — instead of the estimate, always anchored on the
+  start's day, which is the day the row is grouped under. A task crossing
+  midnight (due 00:30, 1h estimate) therefore reads "Today, 23:30 → 00:30"
+  rather than restating the deadline's own day and contradicting the group
+  above it; the detail sheet still spells that day out under "Due". A zero
+  estimate has no start of its own, so the start is left out rather than
+  printed twice. The estimate is now purely an input:
+  it still decides when the start moment and the "Start now" reminder fall,
+  it is just no longer a number you have to read.
+- The home-screen widget row and reminder notifications carry the start and
+  due times in place of the estimate, like the task list. The estimate is
+  now shown in exactly one place: the editor, which is also where it is
+  stored.
+- Corrected the 2-3 hour group's label, which shipped as "Next 1-3 hours"
+  and so appeared to overlap "Next hour". Every group name now matches the
+  range it holds.
+
 ## [4.8.0]
 
 - The task list now groups by **how long is left** instead of showing one
