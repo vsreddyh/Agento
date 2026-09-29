@@ -8,6 +8,20 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.5.1]
+
+- FIX: recreating a completed task no longer throws away its due time
+  (issue #148). Completing a task opens a prefilled draft with only the
+  date blank — name, details, estimate, repeat rule, parallel flag and
+  the time you set are all carried over. The draft says so in-line, and
+  an explicit "clear due date" still drops the time with it.
+- Agent-side repeat rollover (MCP `follow_up` + skill contract) now keeps
+  `due_time` identical and advances only the date, instead of inviting a
+  recomputed time to drift between occurrences.
+- Tasks created before times were required keep reading back an empty
+  time rather than an invented one, and become valid again on first edit;
+  the skill tells the agent to ask for a time instead of guessing.
+
 ## [4.5.0]
 
 - FIX: task widget load error on Android 16 / OxygenOS (issue #137) —

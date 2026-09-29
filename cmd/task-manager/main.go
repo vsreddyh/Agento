@@ -130,7 +130,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
-		Description: "Mark a task done (retained 3 days, then auto-deleted). If the task has a repeat_rule, you MUST create the next occurrence via create_task (same rule, next due date you compute) — the server never does this."},
+		Description: "Mark a task done (retained 3 days, then auto-deleted). If the task has a repeat_rule, you MUST create the next occurrence via create_task (same rule, every field identical including due_time, only due_date advances to the next occurrence you compute) — the server never does this."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			ID string `json:"id"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
@@ -141,7 +141,7 @@ func main() {
 			out := map[string]any{"ok": true, "task": doc}
 			if rule, _ := doc["repeat_rule"].(string); rule != "" {
 				out["repeat_rule"] = rule
-				out["follow_up"] = "repeat_rule is '" + rule + "' — add task with '" + rule + "' repeat rule via create_task (same name/description/estimated_minutes/parallelable, next due date/time you compute; all create_task fields except repeat_rule are required)."
+				out["follow_up"] = "repeat_rule is '" + rule + "' — add task with '" + rule + "' repeat rule via create_task (keep name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the next occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except repeat_rule are required)."
 			}
 			return result(out)
 		})

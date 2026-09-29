@@ -123,6 +123,11 @@ func toDoc(doc bson.M) map[string]any {
 	}
 	// Backfill keys that pre-mandatory docs lack, so every response
 	// speaks the same contract (readers default the same way).
+	// due_time "" is the "created before times were required" sentinel:
+	// it is never invented here, and such a task becomes valid again the
+	// moment it is written with a real time (Update rejects an explicit
+	// ""), so legacy rows heal on first edit instead of needing a
+	// migration that would guess a user's schedule.
 	if _, ok := out["description"]; !ok {
 		out["description"] = ""
 	}
