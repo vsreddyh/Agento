@@ -48,8 +48,10 @@ data class ServerTask(
  * reminder engine applies, so the two can never disagree about when a task
  * starts. Null when the task has no usable due time.
  */
+fun ServerTask.dueMillisOrNull(): Long? = dueMillisOrNull(dueDate, dueTime)
+
 fun ServerTask.startMillisOrNull(): Long? {
-    val due = dueMillisOrNull(dueDate, dueTime) ?: return null
+    val due = dueMillisOrNull() ?: return null
     return if (estimatedMinutes > 0) {
         due - estimatedMinutes * 60_000L
     } else {
