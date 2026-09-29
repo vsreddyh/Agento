@@ -8,7 +8,7 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
-## [4.7.2]
+## [4.8.0]
 
 - The task list now groups by **how long is left** instead of showing one
   undifferentiated "Today" pile. Today is split into **This hour**, **Next
@@ -21,8 +21,9 @@ see GitHub Releases for older notes.
   group) instead of sitting in "Today" as if it were still ahead. The
   reminder engine has been nagging those every 15 minutes all along, so the
   list and the alerts now agree.
-- The grouping toggle reads **Group by time**, and the groups re-bucket
-  themselves as the clock moves rather than only on the next refresh.
+- The grouping toggle reads **Group by time**, and a minute ticker re-buckets
+  the list as the clock moves, so a task walks from "This hour" into "Next
+  hour" on its own instead of only on the next refresh.
 - The due quick-picks are out of the task editor: the date and time pickers
   are the only way to set a due moment.
 

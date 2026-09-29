@@ -118,6 +118,7 @@ import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -882,20 +883,28 @@ private fun ServerTask.dueKey(): String {
     return dueDate + "T" + dueTime
 }
 
-/** True when an open task's due date is before today (ISO YYYY-MM-DD
- * compares lexicographically). Blank or malformed dates never count. */
 /**
  * Overdue means the moment has passed, not just the date: a task due at
  * 09:00 today at 14:00 is overdue, and the reminder engine already nags it
  * every 15 minutes. Matching that here keeps the list's red rows and its
- * Overdue group telling the same story.
+ * Overdue group telling the same story. ISO YYYY-MM-DD compares
+ * lexicographically; blank or malformed dates never count.
+ *
+ * [now] is passed in rather than read here so a row's colour and the group
+ * it sits in are decided from the same instant — at a bucket boundary two
+ * rows must not land on opposite sides of it.
  */
-private fun ServerTask.isOverdue(today: String): Boolean {
+private fun ServerTask.isOverdue(
+    today: String,
+    now: java.time.LocalDateTime,
+): Boolean {
     if (!isOpen() || !dueDate.isIsoDate()) return false
     if (dueDate < today) return true
     if (dueDate != today) return false
-    val minutes = minutesUntil(java.time.LocalDateTime.now(IST)) ?: return false
-    return minutes < 0
+    // Compared in millis, not via whole minutes: a task 30 seconds past due
+    // is overdue now, and must match the nag that is already firing.
+    val at = dueMillisOrNull(dueDate, dueTime) ?: return false
+    return at <= now.atZone(IST).toInstant().toEpochMilli()
 }
 
 /**
@@ -941,7 +950,10 @@ private fun ServerTask.minutesUntil(now: java.time.LocalDateTime): Int? {
  * lands in Later today: nothing is known about *when*, and "this hour"
  * would be a guess.
  */
-private fun ServerTask.dueBucket(today: java.time.LocalDate): DueBucket {
+private fun ServerTask.dueBucket(
+    today: java.time.LocalDate,
+    now: java.time.LocalDateTime,
+): DueBucket {
     if (!isOpen()) return DueBucket.Completed
     if (!dueDate.isIsoDate()) return DueBucket.NoDate
     val s = dueDate
@@ -954,15 +966,18 @@ private fun ServerTask.dueBucket(today: java.time.LocalDate): DueBucket {
             else -> DueBucket.Later
         }
         else -> {
-            val minutes = minutesUntil(java.time.LocalDateTime.now(IST))
+            val minutes = minutesUntil(now)
             when {
                 minutes == null -> DueBucket.LaterToday
                 minutes < 0 -> DueBucket.Overdue
+                // Each name is the range it actually covers: this hour,
+                // then the hour after it, then the rest of 1-3h, 3-6h and
+                // 6-12h, and everything still left today.
                 minutes < 60 -> DueBucket.ThisHour
-                minutes < 180 -> DueBucket.NextHour
-                minutes < 360 -> DueBucket.In1To3Hours
-                minutes < 720 -> DueBucket.In3To6Hours
-                minutes < 1440 -> DueBucket.In6To12Hours
+                minutes < 120 -> DueBucket.NextHour
+                minutes < 180 -> DueBucket.In1To3Hours
+                minutes < 360 -> DueBucket.In3To6Hours
+                minutes < 720 -> DueBucket.In6To12Hours
                 else -> DueBucket.LaterToday
             }
         }
@@ -1404,20 +1419,27 @@ private fun TaskManagerScreen(
                     )
                     // Time sections (skipped on the Done filter, where due
                     // buckets carry no meaning); within a section the
-                    // current sort still applies. IST-pinned (#124). The
-                    // clock is part of the remember key because the today's
-                    // buckets are relative: a task must move from
-                    // "Next 1-3 hours" to "Next 3-6 hours" on its own once
-                    // that hour arrives, not only on the next refresh.
+                    // current sort still applies. IST-pinned (#124).
+                    //
+                    // The today's buckets are relative, so they have to move
+                    // with the wall clock: a minute ticker drives the
+                    // remember key, and one `now` is read per pass so every
+                    // row in the same frame is decided from the same instant.
+                    var clockTick by remember { mutableIntStateOf(0) }
+                    LaunchedEffect(Unit) {
+                        while (true) {
+                            delay(60_000)
+                            clockTick++
+                        }
+                    }
                     val day = java.time.LocalDate.now(IST)
-                    val clockKey = java.time.LocalDateTime.now(IST)
-                        .toString().take(13)
-                    val sections = remember(visible, groupByDay, filter, clockKey) {
+                    val now = java.time.LocalDateTime.now(IST)
+                    val sections = remember(visible, groupByDay, filter, day, now, clockTick) {
                         if (!groupByDay || filter == ServerTaskFilter.Done) {
                             listOf(null to visible)
                         } else {
                             DueBucket.entries.mapNotNull { b ->
-                                val rows = visible.filter { it.dueBucket(day) == b }
+                                val rows = visible.filter { it.dueBucket(day, now) == b }
                                 if (rows.isEmpty()) null else b to rows
                             }
                         }
@@ -1439,7 +1461,7 @@ private fun TaskManagerScreen(
                             rows.forEachIndexed { i, t ->
                                 ServerTaskRow(
                                     task = t,
-                                    overdue = t.isOverdue(today),
+                                    overdue = t.isOverdue(today, now),
                                     today = day,
                                     actionsEnabled = !busy,
                                     onOpen = { selected = t },
@@ -1554,11 +1576,13 @@ private fun TaskManagerScreen(
     val open = selected?.let { s -> tasks.firstOrNull { it.id == s.id } ?: s }
     if (open != null) {
         // IST-pinned (#124) to match the list's overdue rule.
-        val sheetToday = java.time.LocalDate.now(IST).toString()
         val sheetDay = java.time.LocalDate.now(IST)
         ServerTaskDetailSheet(
             task = open,
-            overdue = open.isOverdue(sheetToday),
+            overdue = open.isOverdue(
+                sheetDay.toString(),
+                java.time.LocalDateTime.now(IST),
+            ),
             today = sheetDay,
             actionsEnabled = !busy,
             onDismiss = { selected = null },
