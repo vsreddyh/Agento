@@ -1913,14 +1913,6 @@ private fun ServerTaskDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 FormLabel("Due")
-                // A preset fills the time too, so the two always agree.
-                DueQuickRow(
-                    estimateMinutes = minutes.trim().toIntOrNull() ?: 0,
-                    onPick = { d, t ->
-                        dueDate = d
-                        if (t.isNotEmpty()) dueTime = t
-                    },
-                )
                 val dateInteraction = remember { MutableInteractionSource() }
                 val timeInteraction = remember { MutableInteractionSource() }
                 OutlinedTextField(
@@ -2168,79 +2160,9 @@ private fun ServerTaskDialog(
     }
 }
 
-/** Today/Tomorrow shortcuts (IST) for task due dates. Scroll-safe for
- * narrow screens. */
-/** Resolves an instant to the (date, HH:mm) pair the form stores. */
-private fun dueParts(at: java.time.LocalDateTime): Pair<String, String> =
-    at.toLocalDate().toString() to
-        String.format(Locale.ROOT, "%02d:%02d", at.hour, at.minute)
-
-/**
- * Quick due presets. A bare "Today" only filled the date, which left the
- * mandatory time still to be picked by hand — so the same-day options
- * resolve to a whole moment instead: in an hour, in three, in eight, or
- * the end of today. "Tomorrow" stays date-only, since "tomorrow at what
- * time?" is a question worth asking.
- *
- * The clock is read on tap, not remembered: a dialog left open for a while
- * would otherwise hand out presets an hour stale.
- */
-@Composable
-private fun DueQuickRow(estimateMinutes: Int, onPick: (String, String) -> Unit) {
-    val tomorrow = remember { java.time.LocalDate.now(IST).plusDays(1).toString() }
-    Row(
-        modifier = Modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        for ((label, hours) in listOf(
-            "remind in 1h" to 1L,
-            "remind in 3h" to 3L,
-            "remind in 8h" to 8L,
-        )) {
-            AssistChip(
-                onClick = {
-                    // Reminder-relative, not due-relative: the start nudge
-                    // fires at `due - estimated_minutes`, so the estimate
-                    // is added to the offset to land the alert on the hour
-                    // the user actually asked for. The due time then sits
-                    // that many minutes later, which is exactly the point.
-                    val at = java.time.LocalDateTime.now(IST)
-                        .plusHours(hours)
-                        .plusMinutes(estimateMinutes.coerceAtLeast(0).toLong())
-                    val (d, t) = dueParts(at)
-                    onPick(d, t)
-                },
-                label = { Text(label) },
-            )
-        }
-        // Wall-clock, not an offset: "end of today" is 23:59 whatever the
-        // estimate, and its heads-up lands 5 minutes before that.
-        AssistChip(
-            onClick = {
-                val (d, t) = dueParts(java.time.LocalDate.now(IST).atTime(23, 59))
-                onPick(d, t)
-            },
-            label = { Text("end of today") },
-        )
-        AssistChip(onClick = { onPick(tomorrow, "") }, label = { Text("Tomorrow") })
-    }
-}
-
-/** Small section header inside the task dialog form. */
-@Composable
-private fun FormLabel(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 4.dp),
-    )
-}
-
-/** Material3 date picker returning YYYY-MM-DD. The picker speaks
- * UTC-midnight millis, so seed and read back in UTC — seeding IST
- * midnight shifts the highlight a day back on non-IST devices. */
-@Composable
+/** Task due dates are picked, not typed: the field opens the Material date
+ * picker, and the time field the 24h clock. Both are IST-pinned like the
+ * rest of the app (#124). */
 private fun DueDatePickerDialog(
     initial: String,
     onConfirm: (String) -> Unit,

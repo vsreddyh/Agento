@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.7.1]
+
+- Removed the due quick-picks ("remind in 1h / 3h / 8h", "end of today",
+  "Tomorrow"). The date and time pickers are the only way to set a due
+  moment now — one less row of controls competing for space in a dialog
+  that already has to fit a tall phone screen.
+
 ## [4.7.0]
 
 - Repeats that can be computed now roll themselves over. Completing a task
