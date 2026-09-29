@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -162,9 +163,11 @@ func (r Repeat) NextDueDate(dueDate string, today time.Time) (string, bool) {
 			return next.Format("2006-01-02"), true
 		}
 	}
-	// Unreachable for any sane cadence (1500 days is over four years), but
-	// a bounded loop must not return a zero date by accident.
-	return next.Format("2006-01-02"), true
+	// Only reachable for a cadence whose every step lands in the past
+	// (a daily task untouched for over four years). Refusing is the honest
+	// answer: the caller creates the next occurrence itself rather than
+	// receiving a date that is already overdue.
+	return "", false
 }
 
 // advanceDate adds count units, clamping the day to the target month's
@@ -698,7 +701,10 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 	if err != nil {
 		// The task is already marked done, so a failed rollover must not
 		// make the completion look like it failed: report success with no
-		// next task and let the caller create one.
+		// next task and let the caller create one. Logged, because a
+		// swallowed failure here means a repeating task quietly stops
+		// recurring (e.g. a legacy row with no due_time to carry over).
+		log.Printf("task %s completed but rollover failed: %v", id, err)
 		return done, nil, nil
 	}
 	return done, next, nil
@@ -717,7 +723,7 @@ func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]a
 	}
 	dueDate, _ := done["due_date"].(string)
 	dueTime, _ := done["due_time"].(string)
-	nextDate, ok := rep.NextDueDate(dueDate, time.Now())
+	nextDate, ok := rep.NextDueDate(dueDate, time.Now().UTC())
 	if !ok {
 		return nil, nil
 	}

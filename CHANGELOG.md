@@ -22,6 +22,9 @@ see GitHub Releases for older notes.
     (29th in a leap year), not 3 March.
   - A task left overdue for months is advanced to the next *upcoming*
     occurrence, not into a new past-due one.
+  - Completing a task answers exactly as before, with the new occurrence
+    added under `next` — an older app build can still complete tasks
+    against the new server.
 - FIX: the voice widget's placement was listed in **Settings → Home-screen
   widget** as a second task widget, and could be configured as one. Widget
   ids are now cross-checked against their own provider before being shown,

@@ -254,9 +254,9 @@ class TasksApi(context: Context) {
                 if (next == null) {
                     task
                 } else {
-                    task.copy(nextDueDate = next.optString("due_date").ifEmpty {
-                        next.optString("dueDate")
-                    })
+                    // optStr, not optString: a JSON null would arrive as the
+                    // literal string "null" and reach the snackbar.
+                    task.copy(nextDueDate = optStr(next, "due_date"))
                 }
             }
         }

@@ -1099,7 +1099,10 @@ private fun TaskManagerScreen(
                     // over. Nothing to ask the user for.
                     val next = done?.nextDueDate.orEmpty()
                     if (next.isNotEmpty()) {
-                        snackbar.showSnackbar("Task completed — next one set for $next.")
+                        // "Tomorrow" / "2 Oct" rather than a raw ISO date.
+                        val when2 = friendlyDue(
+                            next, "", java.time.LocalDate.now(IST)).ifEmpty { next }
+                        snackbar.showSnackbar("Task completed — next one set for $when2.")
                         return@fold
                     }
                     // A custom condition ("every 3rd Friday", "end of every

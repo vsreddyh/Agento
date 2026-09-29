@@ -692,9 +692,14 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 		writeTaskErr(w, err)
 		return
 	}
-	out := bson.M{"task": doc}
-	// Present only when a structured cadence rolled itself over, so the app
-	// can say which date landed instead of asking for one.
+	// The task stays at the top level: a 4.6.0 app parses the response as
+	// the bare doc, so nesting it under "task" would break completing a task
+	// for anyone who hasn't updated. "next" is the only addition, and it is
+	// present only when a structured cadence rolled itself over.
+	out := bson.M{}
+	for k, v := range doc {
+		out[k] = v
+	}
 	if next != nil {
 		out["next"] = next
 	}
