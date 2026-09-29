@@ -41,6 +41,48 @@ data class ServerTask(
     val nextDueDate: String = "",
 )
 
+/**
+ * The moment the work is meant to begin: `due - estimated_minutes`, which
+ * is exactly when the "Start now" reminder fires. A zero estimate has no
+ * start nudge, so the due time is used instead — the same rule the server's
+ * reminder engine applies, so the two can never disagree about when a task
+ * starts. Null when the task has no usable due time.
+ */
+fun ServerTask.startMillisOrNull(): Long? {
+    val due = dueMillisOrNull(dueDate, dueTime) ?: return null
+    return if (estimatedMinutes > 0) {
+        due - estimatedMinutes * 60_000L
+    } else {
+        due
+    }
+}
+
+/** Start moment as the (date, HH:mm) pair the display helpers take. */
+fun ServerTask.startParts(): Pair<String, String>? {
+    val at = startMillisOrNull() ?: return null
+    val ldt = java.time.Instant.ofEpochMilli(at).atZone(IST).toLocalDateTime()
+    return ldt.toLocalDate().toString() to
+        String.format(Locale.ROOT, "%02d:%02d", ldt.hour, ldt.minute)
+}
+
+/**
+ * "Today, 07:00 → 09:00" — the start and the deadline on one line. Within
+ * a day only the second time is repeated; when the start crosses midnight
+ * (due 00:30, 1h estimate) both sides keep their own day, because a bare
+ * "23:30 → 00:30" reads as nonsense.
+ */
+fun ServerTask.startToDueLine(today: java.time.LocalDate): String {
+    val due = friendlyDue(dueDate, dueTime, today)
+    val parts = startParts() ?: return due
+    val start = friendlyDue(parts.first, parts.second, today)
+    if (start.isEmpty() || due.isEmpty()) return due.ifEmpty { start }
+    return if (parts.first == dueDate) {
+        "$start → ${due.substringAfter(", ").ifEmpty { due }}"
+    } else {
+        "$start → $due"
+    }
+}
+
 /** True when the task repeats at all: a structured cadence or a custom
  * condition. One-shot tasks must not open a recreate draft. */
 val ServerTask.hasRepeat: Boolean

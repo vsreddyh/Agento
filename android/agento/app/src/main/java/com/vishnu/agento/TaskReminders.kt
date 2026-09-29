@@ -396,12 +396,14 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         } else {
             ""
         }
-        val mins = task?.estimatedMinutes ?: 0
-        val estimate = mins.takeIf { it > 0 }?.let { "~$it min" }
+        // The estimate is an input, not something to show: what the user
+        // needs is when to start and when it is due.
+        val startLine = task?.startParts()?.let { (d, t) -> friendlyDue(d, t, today) }
+            ?.takeIf { it.isNotEmpty() }
         val summary = listOf(
             kind.lead,
             dueLine.ifEmpty { null },
-            estimate,
+            startLine?.let { "start $it" },
         ).filterNotNull().joinToString(" · ")
         // Locals: task is nullable and conditions below don't smart-cast.
         val taskDesc = task?.description.orEmpty()
@@ -410,7 +412,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // heads-up never read as the same alert.
         val lead = when (kind) {
             ReminderKind.Start ->
-                "Start now — this is your $mins min window."
+                "Start now${dueLine.ifEmpty { "" }.let { if (it.isEmpty()) "" else ", due $it" }}."
             ReminderKind.Soon ->
                 "Due in ${TaskReminders.HEADS_UP_MINUTES} minutes."
             ReminderKind.Overdue ->
@@ -420,7 +422,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             add(lead)
             if (taskDesc.isNotEmpty()) add(taskDesc)
             if (dueLine.isNotEmpty()) add(dueLine)
-            if (mins > 0) add("Estimate ~$mins min")
+            if (startLine != null) add("Starts $startLine")
             if (repeat.isNotEmpty()) add("Repeats $repeat")
             if (task?.parallelable == true) add("Can run in parallel")
         }.joinToString("\n")

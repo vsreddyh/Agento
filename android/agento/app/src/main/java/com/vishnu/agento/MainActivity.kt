@@ -872,16 +872,20 @@ private enum class ServerTaskFilter(val state: String, val title: String) {
 /** Client-side sort for the task list (server returns one state at a time,
  * unsorted). Due puts undated tasks last; Created is newest first. */
 private enum class ServerTaskSort(val title: String) {
-    Due("Due date"),
+    Start("Start time"),
     Name("Name"),
     Created("Newest"),
     Estimate("Estimate"),
 }
 
-private fun ServerTask.dueKey(): String {
-    if (dueDate.isEmpty()) return "~~~~"
-    return dueDate + "T" + dueTime
-}
+/**
+ * Sort key for "when should this begin": the start moment, with the due
+ * time as a tie-break so two tasks starting together still order by their
+ * deadlines. Tasks with no usable due time sort last instead of first —
+ * an undated task is not the most urgent thing you have.
+ */
+private fun ServerTask.startSortKey(): Long =
+    startMillisOrNull() ?: Long.MAX_VALUE
 
 /**
  * Overdue means the moment has passed, not just the date: a task due at
@@ -1016,7 +1020,11 @@ private fun ServerTask.dueBucket(
 
 private fun List<ServerTask>.sortedByMode(mode: ServerTaskSort): List<ServerTask> =
     when (mode) {
-        ServerTaskSort.Due -> sortedWith(compareBy({ it.dueKey() }, { it.name.lowercase(Locale.ROOT) }))
+        ServerTaskSort.Start -> sortedWith(
+            compareBy<ServerTask> { it.startSortKey() }
+                .thenBy({ it.dueMillisOrNull() ?: Long.MAX_VALUE })
+                .thenBy({ it.name.lowercase(Locale.ROOT) }),
+        )
         ServerTaskSort.Name -> sortedBy { it.name.lowercase(Locale.ROOT) }
         ServerTaskSort.Created -> sortedByDescending { it.createdAt }
         ServerTaskSort.Estimate -> sortedWith(
@@ -1047,9 +1055,9 @@ private fun TaskManagerScreen(
     var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
     val filter = runCatching { ServerTaskFilter.valueOf(filterName) }
         .getOrDefault(ServerTaskFilter.Open)
-    var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Due.name) }
+    var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
     val sort = runCatching { ServerTaskSort.valueOf(sortName) }
-        .getOrDefault(ServerTaskSort.Due)
+        .getOrDefault(ServerTaskSort.Start)
     var query by rememberSaveable { mutableStateOf("") }
     var sortMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<ServerTask?>(null) }
@@ -1771,10 +1779,9 @@ private fun ServerTaskRow(
                     MaterialTheme.colorScheme.onSurface
                 },
             )
-            val dueLine = friendlyDue(task.dueDate, task.dueTime, today)
+            val dueLine = task.startToDueLine(today)
             val dueBits = buildList {
                 if (dueLine.isNotEmpty()) add(dueLine)
-                if (task.estimatedMinutes > 0) add("~${task.estimatedMinutes} min")
                 val repeat = task.repeatLabel()
                 if (repeat.isNotEmpty()) add(repeat)
                 if (task.parallelable) add("parallel")
@@ -1880,13 +1887,12 @@ private fun ServerTaskDetailSheet(
                 highlight = overdue,
             )
             DetailLine(
-                icon = Icons.Filled.Tune,
-                label = "Estimate",
-                value = if (task.estimatedMinutes > 0) {
-                    "~${task.estimatedMinutes} min"
-                } else {
-                    "No estimate"
-                },
+                icon = Icons.Filled.PlayArrow,
+                label = "Starts",
+                value = task.startParts()
+                    ?.let { (d, t) -> friendlyDue(d, t, today) }
+                    ?.ifEmpty { null }
+                    ?: "Same as the due time",
             )
             DetailLine(
                 icon = Icons.Filled.Repeat,
