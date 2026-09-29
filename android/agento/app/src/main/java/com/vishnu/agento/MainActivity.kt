@@ -963,6 +963,7 @@ private fun ServerTask.dueBucket(
 ): DueBucket {
     if (!isOpen()) return DueBucket.Completed
     if (!dueDate.isIsoDate()) return DueBucket.NoDate
+    val s = dueDate
     val nowMillis = now.atZone(IST).toInstant().toEpochMilli()
     val dueAt = dueMillisOrNull()
     if (dueAt == null) {
