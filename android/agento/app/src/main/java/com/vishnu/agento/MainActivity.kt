@@ -1439,7 +1439,14 @@ private fun TaskManagerScreen(
                     var clockTick by remember { mutableIntStateOf(0) }
                     LaunchedEffect(bucketing) {
                         while (bucketing) {
-                            delay(60_000)
+                            // Aligned to the top of the minute: a plain
+                            // 60s sleep drifts by however long the
+                            // composition took, so a task would sit in the
+                            // wrong bucket for up to a minute past its
+                            // boundary.
+                            val toNextMinute = 60_000L -
+                                (System.currentTimeMillis() % 60_000L)
+                            delay(toNextMinute)
                             clockTick++
                         }
                     }
@@ -1597,9 +1604,12 @@ private fun TaskManagerScreen(
     val open = selected?.let { s -> tasks.firstOrNull { it.id == s.id } ?: s }
     if (open != null) {
         // One clock for the date and the overdue test, so the sheet can
-        // never straddle midnight between the two. IST-pinned (#124) to
-        // match the list's overdue rule.
+        // never straddle midnight between the two, truncated to the minute
+        // for the same reason as the list — otherwise a task due at
+        // 14:00:30 could be red in this sheet and not in the list it was
+        // just tapped from. IST-pinned (#124).
         val sheetNow = java.time.LocalDateTime.now(IST)
+            .truncatedTo(java.time.temporal.ChronoUnit.MINUTES)
         val sheetDay = sheetNow.toLocalDate()
         ServerTaskDetailSheet(
             task = open,
