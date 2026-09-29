@@ -35,10 +35,13 @@ func testStore(t *testing.T) *Store {
 func intP(n int) *int    { return &n }
 func boolP(b bool) *bool { return &b }
 
+// customRep is the free-text repeat mode: the user's words, verbatim.
+func customRep(text string) Repeat { return Repeat{Custom: true, Text: text} }
+
 func TestCreateAndList(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, err := s.Create(ctx, "Pay rent", "bank transfer", "2026-10-01", "09:00", intP(15), "monthly on the 1st", boolP(false))
+	doc, err := s.Create(ctx, "Pay rent", "bank transfer", "2026-10-01", "09:00", intP(15), customRep("monthly on the 1st"), boolP(false))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -61,22 +64,22 @@ func TestCreateAndList(t *testing.T) {
 func TestValidation(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, "  ", "", "", "", intP(0), "", boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "  ", "", "", "", intP(0), Repeat{}, boolP(false)); err == nil {
 		t.Fatal("blank name must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "10-01", "", intP(0), "", boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "x", "", "10-01", "", intP(0), Repeat{}, boolP(false)); err == nil {
 		t.Fatal("bad due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "2026-13-99", "", intP(0), "", boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "x", "", "2026-13-99", "", intP(0), Repeat{}, boolP(false)); err == nil {
 		t.Fatal("non-calendar due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "9am", intP(0), "", boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "9am", intP(0), Repeat{}, boolP(false)); err == nil {
 		t.Fatal("bad due_time must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "09:00", intP(0), "", boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "09:00", intP(0), Repeat{}, boolP(false)); err == nil {
 		t.Fatal("due_time without due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "", intP(-5), "", boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "", intP(-5), Repeat{}, boolP(false)); err == nil {
 		t.Fatal("negative estimate must fail")
 	}
 }
@@ -84,23 +87,23 @@ func TestValidation(t *testing.T) {
 func TestCreateRequiresAllFields(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	full := func() (string, string, string, string, *int, string, *bool) {
-		return "job", "do the thing", "2026-10-05", "08:00", intP(30), "", boolP(false)
+	full := func() (string, string, string, string, *int, Repeat, *bool) {
+		return "job", "do the thing", "2026-10-05", "08:00", intP(30), Repeat{}, boolP(false)
 	}
-	cases := map[string]func(string, string, string, string, *int, string, *bool) (string, string, string, string, *int, string, *bool){
-		"empty description": func(n, d, dd, dt string, m *int, r string, p *bool) (string, string, string, string, *int, string, *bool) {
+	cases := map[string]func(string, string, string, string, *int, Repeat, *bool) (string, string, string, string, *int, Repeat, *bool){
+		"empty description": func(n, d, dd, dt string, m *int, r Repeat, p *bool) (string, string, string, string, *int, Repeat, *bool) {
 			return n, "  ", dd, dt, m, r, p
 		},
-		"empty due_date": func(n, d, dd, dt string, m *int, r string, p *bool) (string, string, string, string, *int, string, *bool) {
+		"empty due_date": func(n, d, dd, dt string, m *int, r Repeat, p *bool) (string, string, string, string, *int, Repeat, *bool) {
 			return n, d, "", dt, m, r, p
 		},
-		"empty due_time": func(n, d, dd, dt string, m *int, r string, p *bool) (string, string, string, string, *int, string, *bool) {
+		"empty due_time": func(n, d, dd, dt string, m *int, r Repeat, p *bool) (string, string, string, string, *int, Repeat, *bool) {
 			return n, d, dd, "", m, r, p
 		},
-		"nil estimated_minutes": func(n, d, dd, dt string, m *int, r string, p *bool) (string, string, string, string, *int, string, *bool) {
+		"nil estimated_minutes": func(n, d, dd, dt string, m *int, r Repeat, p *bool) (string, string, string, string, *int, Repeat, *bool) {
 			return n, d, dd, dt, nil, r, p
 		},
-		"nil parallelable": func(n, d, dd, dt string, m *int, r string, p *bool) (string, string, string, string, *int, string, *bool) {
+		"nil parallelable": func(n, d, dd, dt string, m *int, r Repeat, p *bool) (string, string, string, string, *int, Repeat, *bool) {
 			return n, d, dd, dt, m, r, nil
 		},
 	}
@@ -110,10 +113,10 @@ func TestCreateRequiresAllFields(t *testing.T) {
 			t.Fatalf("%s must fail", name)
 		}
 	}
-	// Empty repeat_rule stays valid (one-shot).
+	// The all-zero repeat stays valid (one-shot).
 	n, d, dd, dt, m, r, p := full()
-	if _, err := s.Create(ctx, n, d, dd, dt, m, "", p); err != nil {
-		t.Fatalf("empty repeat_rule (one-shot) must stay valid: %v", err)
+	if _, err := s.Create(ctx, n, d, dd, dt, m, Repeat{}, p); err != nil {
+		t.Fatalf("zero repeat (one-shot) must stay valid: %v", err)
 	}
 	// Clearing a required field via update must fail too.
 	doc, err := s.Create(ctx, n+"-upd", d, dd, dt, m, r, p)
@@ -152,7 +155,7 @@ func TestCreateRequiresAllFields(t *testing.T) {
 func TestCompleteReopenDelete(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, _ := s.Create(ctx, "Water plants", "balcony pots", "2026-10-05", "08:00", intP(5), "every Sunday", boolP(false))
+	doc, _ := s.Create(ctx, "Water plants", "balcony pots", "2026-10-05", "08:00", intP(5), customRep("every Sunday"), boolP(false))
 	id := doc["id"].(string)
 
 	done, err := s.Complete(ctx, id)
@@ -200,7 +203,7 @@ func TestCompleteReopenDelete(t *testing.T) {
 func TestReopenedExcludedFromDone(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, _ := s.Create(ctx, "reopen me", "test task", "2026-10-05", "08:00", intP(0), "", boolP(false))
+	doc, _ := s.Create(ctx, "reopen me", "test task", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false))
 	id := doc["id"].(string)
 	if _, err := s.Complete(ctx, id); err != nil {
 		t.Fatal(err)
@@ -223,7 +226,7 @@ func TestReopenedExcludedFromDone(t *testing.T) {
 func TestSearchRegexCharsLiteral(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, "fix (auth) [urgent]", "login flow", "2026-10-05", "08:00", intP(0), "", boolP(false)); err != nil {
+	if _, err := s.Create(ctx, "fix (auth) [urgent]", "login flow", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false)); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.List(ctx, "open", false, "(auth) [urgent]")
@@ -235,7 +238,7 @@ func TestSearchRegexCharsLiteral(t *testing.T) {
 func TestParallelableRoundTrip(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, err := s.Create(ctx, "parallel job", "runs alongside others", "2026-10-05", "08:00", intP(0), "", boolP(true))
+	doc, err := s.Create(ctx, "parallel job", "runs alongside others", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(true))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -252,6 +255,161 @@ func TestParallelableRoundTrip(t *testing.T) {
 	}
 	if _, err := s.Update(ctx, id, map[string]any{"parallelable": "yes"}); err == nil {
 		t.Fatal("non-boolean parallelable must fail")
+	}
+}
+
+// The repeat rules are pure, so they are tested without a database —
+// these run in CI, which the DB-backed tests never do.
+func TestRepeatValidate(t *testing.T) {
+	cases := []struct {
+		name string
+		rep  Repeat
+		ok   bool
+	}{
+		{"one-shot", Repeat{}, true},
+		{"structured", Repeat{Every: 3, Unit: "days"}, true},
+		{"every 28 days is the top of the range", Repeat{Every: 28, Unit: "days"}, true},
+		{"every 1 day", Repeat{Every: 1, Unit: "days"}, true},
+		{"every unit accepted", Repeat{Every: 2, Unit: "years"}, true},
+		{"custom", customRep("mon-fri only"), true},
+		// Pre-4.6 clients send text with no flag: inferred as custom.
+		{"text alone becomes custom", Repeat{Text: "end of month"}, true},
+		{"29 is out of range", Repeat{Every: 29, Unit: "days"}, false},
+		{"0 with a unit", Repeat{Every: 0, Unit: "days"}, false},
+		{"negative count", Repeat{Every: -1, Unit: "days"}, false},
+		{"unknown unit", Repeat{Every: 2, Unit: "fortnights"}, false},
+		{"missing unit", Repeat{Every: 2}, false},
+		{"custom with no words", Repeat{Custom: true}, false},
+		{"both modes at once", Repeat{Every: 2, Unit: "days", Custom: true, Text: "mostly"}, false},
+		{"cadence with stray text", Repeat{Every: 2, Unit: "days", Text: "sometimes"}, false},
+	}
+	for _, c := range cases {
+		err := c.rep.Validate()
+		if c.ok && err != nil {
+			t.Fatalf("%s must be valid: %v", c.name, err)
+		}
+		if !c.ok && err == nil {
+			t.Fatalf("%s must be rejected", c.name)
+		}
+	}
+}
+
+func TestRepeatString(t *testing.T) {
+	cases := map[string]Repeat{
+		"":                   {},
+		"Every day":          {Every: 1, Unit: "days"},
+		"Every 3 days":       {Every: 3, Unit: "days"},
+		"Every 2 weeks":      {Every: 2, Unit: "weeks"},
+		"Every 6 months":     {Every: 6, Unit: "months"},
+		"Every year":         {Every: 1, Unit: "years"},
+		"mon-fri only":       {Custom: true, Text: "mon-fri only"},
+		"end of every month": {Text: "end of every month"},
+	}
+	for want, rep := range cases {
+		if got := rep.String(); got != want {
+			t.Fatalf("String() = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestMergeRepeat(t *testing.T) {
+	// A stand-in for the store's own string reader, so the merge rules
+	// can be exercised without touching Mongo.
+	str := func(fields map[string]any) func(string) (string, bool) {
+		return func(key string) (string, bool) {
+			s, ok := fields[key].(string)
+			return s, ok
+		}
+	}
+	cases := []struct {
+		name    string
+		cur     bson.M
+		fields  map[string]any
+		touched bool
+		want    Repeat
+		wantErr bool
+	}{
+		{
+			name:   "unrelated edit leaves the rule alone",
+			cur:    bson.M{"repeat_every": 3, "repeat_unit": "days"},
+			fields: map[string]any{"name": "x"},
+		},
+		{
+			name:    "legacy text-only write is a custom condition",
+			cur:     bson.M{},
+			fields:  map[string]any{"repeat_rule": "mon-fri only"},
+			touched: true,
+			want:    customRep("mon-fri only"),
+		},
+		{
+			// A pre-4.6 client can only say "clear the rule" by sending
+			// empty text; honouring that must not strand a cadence it
+			// cannot see.
+			name:    "empty text from an old client clears the whole rule",
+			cur:     bson.M{"repeat_every": 3, "repeat_unit": "days", "repeat_custom": false},
+			fields:  map[string]any{"repeat_rule": ""},
+			touched: true,
+			want:    Repeat{},
+		},
+		{
+			name: "explicitly blanking every key clears it",
+			cur:  bson.M{"repeat_every": 3, "repeat_unit": "days"},
+			fields: map[string]any{
+				"repeat_every": 0, "repeat_unit": "",
+				"repeat_custom": false, "repeat_rule": "",
+			},
+			touched: true,
+			want:    Repeat{},
+		},
+		{
+			name:    "switching to a cadence drops the custom words",
+			cur:     bson.M{"repeat_rule": "mon-fri only", "repeat_custom": true},
+			fields:  map[string]any{"repeat_every": 2, "repeat_unit": "weeks", "repeat_custom": false, "repeat_rule": ""},
+			touched: true,
+			want:    Repeat{Every: 2, Unit: "weeks"},
+		},
+		{
+			name:    "counting the cadence up keeps the unit",
+			cur:     bson.M{"repeat_every": 2, "repeat_unit": "weeks"},
+			fields:  map[string]any{"repeat_every": 4},
+			touched: true,
+			want:    Repeat{Every: 4, Unit: "weeks"},
+		},
+		{
+			name:    "out-of-range count is rejected",
+			cur:     bson.M{},
+			fields:  map[string]any{"repeat_every": 30, "repeat_unit": "days"},
+			touched: true,
+			wantErr: true,
+		},
+		{
+			name:    "wrongly typed count is rejected",
+			cur:     bson.M{},
+			fields:  map[string]any{"repeat_every": "three"},
+			touched: true,
+			wantErr: true,
+		},
+	}
+	for _, c := range cases {
+		got, touched, err := mergeRepeat(c.cur, c.fields, str(c.fields))
+		if c.wantErr {
+			if err == nil {
+				t.Fatalf("%s: must fail", c.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if touched != c.touched {
+			t.Fatalf("%s: touched = %v, want %v", c.name, touched, c.touched)
+		}
+		if !c.touched {
+			continue
+		}
+		if got != c.want {
+			t.Fatalf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
 	}
 }
 
@@ -286,10 +444,10 @@ func TestOverdueAndTTLIndex(t *testing.T) {
 	ctx := context.Background()
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
-	if _, err := s.Create(ctx, "late", "overdue task", yesterday, "08:00", intP(0), "", boolP(false)); err != nil {
+	if _, err := s.Create(ctx, "late", "overdue task", yesterday, "08:00", intP(0), Repeat{}, boolP(false)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Create(ctx, "future", "upcoming task", tomorrow, "08:00", intP(0), "", boolP(false)); err != nil {
+	if _, err := s.Create(ctx, "future", "upcoming task", tomorrow, "08:00", intP(0), Repeat{}, boolP(false)); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.List(ctx, "open", true, "")

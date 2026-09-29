@@ -24,11 +24,28 @@ data class ServerTask(
     val dueDate: String = "",
     val dueTime: String = "",
     val estimatedMinutes: Int = 0,
+    // Recurrence: either structured (every N unit) or custom (the user's
+    // own words in repeatRule). 0/""/false everywhere = one-shot.
+    val repeatEvery: Int = 0,
+    val repeatUnit: String = "",
+    val repeatCustom: Boolean = false,
     val repeatRule: String = "",
     val parallelable: Boolean = false,
     val completedAt: String = "",
     val createdAt: String = "",
 )
+
+/** Human repeat line, matching the server's rendering: "Every 3 days",
+ * the custom words verbatim, or "" for a one-shot task. */
+fun ServerTask.repeatLabel(): String =
+    repeatLabel(repeatEvery, repeatUnit, repeatCustom, repeatRule)
+
+/** The same rendering for any source of the four fields. */
+fun repeatLabel(every: Int, unit: String, custom: Boolean, text: String): String {
+    if (custom || (every == 0 && unit.isEmpty())) return text
+    val singular = if (unit.endsWith("s")) unit.dropLast(1) else unit
+    return if (every <= 1) "Every $singular" else "Every $every $unit"
+}
 
 /** True while the task is still open (never completed). */
 fun ServerTask.isOpen(): Boolean = completedAt.isBlank()
@@ -93,6 +110,9 @@ class TasksApi(context: Context) {
             dueDate = optStr(o, "due_date"),
             dueTime = optStr(o, "due_time"),
             estimatedMinutes = mins.coerceAtLeast(0),
+            repeatEvery = (o.opt("repeat_every") as? Number)?.toInt() ?: 0,
+            repeatUnit = optStr(o, "repeat_unit"),
+            repeatCustom = o.optBoolean("repeat_custom", false),
             repeatRule = optStr(o, "repeat_rule"),
             parallelable = o.optBoolean("parallelable", false),
             completedAt = optStr(o, "completedAt"),
@@ -126,14 +146,18 @@ class TasksApi(context: Context) {
             }
         }
 
-    /** Creates a task. Everything except repeat_rule is required —
-     * the server rejects missing keys (empty repeat_rule = one-shot). */
+    /** Creates a task. Everything except the repeat is required — the
+     * server rejects missing keys (all-zero repeat = one-shot). The
+     * repeat is either structured or custom, never both. */
     suspend fun create(
         name: String,
         description: String,
         dueDate: String,
         dueTime: String,
         estimatedMinutes: Int,
+        repeatEvery: Int = 0,
+        repeatUnit: String = "",
+        repeatCustom: Boolean = false,
         repeatRule: String = "",
         parallelable: Boolean = false,
     ): Result<ServerTask> = withContext(Dispatchers.IO) {
@@ -159,12 +183,16 @@ class TasksApi(context: Context) {
             .put("due_time", dueTime.trim())
             .put("estimated_minutes", estimatedMinutes)
             .put("parallelable", parallelable)
-        if (repeatRule.isNotEmpty()) body.put("repeat_rule", repeatRule)
+            .put("repeat_every", repeatEvery)
+            .put("repeat_unit", repeatUnit)
+            .put("repeat_custom", repeatCustom)
+            .put("repeat_rule", repeatRule.trim())
         call("POST", "/api/tasks", body).map { parseOne(it) }
     }
 
-    /** Partial edit: only non-null keys are sent (empty string clears
-     * due/repeat fields server-side). */
+    /** Partial edit: only non-null keys are sent. The repeat keys are sent
+     * together or not at all, so the server can validate the recurrence as
+     * a whole instead of merging half of it. */
     suspend fun update(
         id: String,
         name: String? = null,
@@ -172,6 +200,9 @@ class TasksApi(context: Context) {
         dueDate: String? = null,
         dueTime: String? = null,
         estimatedMinutes: Int? = null,
+        repeatEvery: Int? = null,
+        repeatUnit: String? = null,
+        repeatCustom: Boolean? = null,
         repeatRule: String? = null,
         parallelable: Boolean? = null,
     ): Result<ServerTask> = withContext(Dispatchers.IO) {
@@ -185,6 +216,9 @@ class TasksApi(context: Context) {
         if (dueDate != null) body.put("due_date", dueDate)
         if (dueTime != null) body.put("due_time", dueTime)
         if (estimatedMinutes != null) body.put("estimated_minutes", estimatedMinutes)
+        if (repeatEvery != null) body.put("repeat_every", repeatEvery)
+        if (repeatUnit != null) body.put("repeat_unit", repeatUnit)
+        if (repeatCustom != null) body.put("repeat_custom", repeatCustom)
         if (repeatRule != null) body.put("repeat_rule", repeatRule)
         if (parallelable != null) body.put("parallelable", parallelable)
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }

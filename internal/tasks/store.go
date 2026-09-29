@@ -1,16 +1,15 @@
 // Package tasks: MongoDB-backed personal task manager for the agent.
 //
 // Collection: tasks. One doc per task with name, description, due date/time,
-// estimated minutes, a free-form repeat_rule string, and a parallelable flag
+// estimated minutes, a recurrence (see Repeat) and a parallelable flag
 // (true = can run alongside other tasks). There is NO status
 // field: a task is open while completedAt is null and done once it is set.
 //
 // Completed tasks are retained 3 days via expiresAt TTL
 // (= completedAt + RetentionDays); open tasks carry no expiresAt and never
-// expire. repeat_rule is stored verbatim and never interpreted here —
-// interpretation + next-occurrence creation is purely the agent's job
-// (see skills/task-manager/SKILL.md); complete_task only echoes the rule
-// back so the caller can't miss it.
+// expire. A Repeat is never interpreted here — advancing to the next
+// occurrence is purely the agent's job (see skills/task-manager/SKILL.md);
+// complete_task only echoes the rule back so the caller can't miss it.
 package tasks
 
 import (
@@ -19,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +36,143 @@ const (
 	// RetentionDays drives the TTL target for completed tasks.
 	RetentionDays = 3
 )
+
+// Repeat is a task's recurrence, in one of two mutually exclusive modes:
+//
+//	structured — Every N Unit ("every 3 days"), the machine-usable case;
+//	custom     — the user's own words in Text, verbatim.
+//
+// An all-zero Repeat is a one-shot task. The server stores the recurrence
+// but never advances it: creating the next occurrence is the caller's job
+// (see skills/task-manager/SKILL.md).
+type Repeat struct {
+	// Every is the count, RepeatEveryMin..RepeatEveryMax; 0 = unset.
+	Every int
+	// Unit is one of RepeatUnits; "" = unset.
+	Unit string
+	// Custom selects the Text mode.
+	Custom bool
+	// Text is the custom condition, stored verbatim.
+	Text string
+}
+
+const (
+	// RepeatEveryMin/Max bound the structured count. The upper bound is
+	// the largest interval a person tracks by eye (a 4-weekly cycle);
+	// anything longer wants a custom condition instead.
+	RepeatEveryMin = 1
+	RepeatEveryMax = 28
+)
+
+// RepeatUnits lists the accepted Unit values, shortest first.
+func RepeatUnits() []string { return []string{"days", "weeks", "months", "years"} }
+
+func isRepeatUnit(u string) bool {
+	for _, v := range RepeatUnits() {
+		if u == v {
+			return true
+		}
+	}
+	return false
+}
+
+// IsZero reports the one-shot case: no cadence and no custom text.
+func (r Repeat) IsZero() bool {
+	return r.Every == 0 && r.Unit == "" && !r.Custom && r.Text == ""
+}
+
+// Normalize infers the mode flag from what the caller actually sent, so
+// clients that predate Repeat.Custom (and the 4.6 migration, which only
+// knew the free-text rule) keep working unchanged: text with no
+// structured cadence means a custom condition.
+func (r Repeat) Normalize() Repeat {
+	if r.Text != "" && !r.Custom && r.Every == 0 && r.Unit == "" {
+		r.Custom = true
+	}
+	return r
+}
+
+// Validate rejects the shapes that would leave the recurrence ambiguous.
+// The one leniency is Normalize's: text alone is a custom condition.
+func (r Repeat) Validate() error {
+	r = r.Normalize()
+	if r.Custom {
+		if strings.TrimSpace(r.Text) == "" {
+			return fail("repeat_custom is set but repeat_rule is empty — a custom condition needs the words")
+		}
+		if r.Every != 0 || r.Unit != "" {
+			return fail("set either repeat_every/repeat_unit or a custom condition, not both")
+		}
+		return nil
+	}
+	if r.Every == 0 && r.Unit == "" {
+		if strings.TrimSpace(r.Text) != "" {
+			return fail("repeat_rule text needs repeat_custom = true")
+		}
+		return nil
+	}
+	if r.Every < RepeatEveryMin || r.Every > RepeatEveryMax {
+		return fail("repeat_every must be %d-%d, got %d", RepeatEveryMin, RepeatEveryMax, r.Every)
+	}
+	if !isRepeatUnit(r.Unit) {
+		return fail("repeat_unit must be one of %s, got '%s'",
+			strings.Join(RepeatUnits(), "/"), r.Unit)
+	}
+	if strings.TrimSpace(r.Text) != "" {
+		return fail("repeat_rule text needs repeat_custom = true")
+	}
+	return nil
+}
+
+// String renders the recurrence for humans: "Every 3 days", the custom
+// words verbatim, or "" for a one-shot task.
+func (r Repeat) String() string {
+	r = r.Normalize()
+	if r.Custom || (r.Every == 0 && r.Unit == "") {
+		return r.Text
+	}
+	singular := strings.TrimSuffix(r.Unit, "s")
+	if r.Every == 1 {
+		return "Every " + singular
+	}
+	return "Every " + strconv.Itoa(r.Every) + " " + r.Unit
+}
+
+// docs renders the stored shape. Kept in one place so Create, Update and
+// the migration can never disagree on the key names.
+func (r Repeat) docs() bson.M {
+	r = r.Normalize()
+	return bson.M{
+		"repeat_every":  r.Every,
+		"repeat_unit":   r.Unit,
+		"repeat_custom": r.Custom,
+		"repeat_rule":   r.Text,
+	}
+}
+
+// repeatFromDoc reads a doc's recurrence, tolerating pre-4.6 docs that
+// only ever had the free-text repeat_rule string.
+func repeatFromDoc(doc bson.M) Repeat {
+	r := Repeat{
+		Every:  0,
+		Unit:   "",
+		Custom: false,
+		Text:   "",
+	}
+	if v, ok := doc["repeat_rule"].(string); ok {
+		r.Text = v
+	}
+	if n, ok := toInt(doc["repeat_every"]); ok {
+		r.Every = n
+	}
+	if u, ok := doc["repeat_unit"].(string); ok {
+		r.Unit = u
+	}
+	if b, ok := toBool(doc["repeat_custom"]); ok {
+		r.Custom = b
+	}
+	return r.Normalize()
+}
 
 var timeRE = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
@@ -143,16 +280,30 @@ func toDoc(doc bson.M) map[string]any {
 	if _, ok := out["repeat_rule"]; !ok {
 		out["repeat_rule"] = ""
 	}
+	// Recurrence backfill: pre-4.6 docs carry only the free-text
+	// repeat_rule, so the mode is inferred (text = custom) and the
+	// structured keys come back neutral. Every response speaks the same
+	// contract whether or not the 4.6 migration has run.
+	if _, ok := out["repeat_every"]; !ok {
+		out["repeat_every"] = 0
+	}
+	if _, ok := out["repeat_unit"]; !ok {
+		out["repeat_unit"] = ""
+	}
+	if _, ok := out["repeat_custom"]; !ok {
+		rule, _ := out["repeat_rule"].(string)
+		out["repeat_custom"] = strings.TrimSpace(rule) != ""
+	}
 	if _, ok := out["parallelable"]; !ok {
 		out["parallelable"] = false
 	}
 	return out
 }
 
-// Create inserts an open task. Every field except repeat_rule is required
-// (empty repeat_rule = one-shot task); parallelable marks tasks that can
+// Create inserts an open task. Every field except the repeat is required
+// (an all-zero Repeat = one-shot task); parallelable marks tasks that can
 // run alongside other tasks.
-func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, repeatRule string, parallelable *bool) (map[string]any, error) {
+func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool) (map[string]any, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fail("name is required")
@@ -181,14 +332,20 @@ func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime 
 	if parallelable == nil {
 		return nil, fail("parallelable is required")
 	}
+	rep = rep.Normalize()
+	if err := rep.Validate(); err != nil {
+		return nil, err
+	}
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{
 		"name": name, "description": description,
 		"due_date": dueDate, "due_time": dueTime,
 		"estimated_minutes": *estimatedMinutes,
-		"repeat_rule":       strings.TrimSpace(repeatRule),
 		"parallelable":      *parallelable,
 		"completedAt":       nil, "createdAt": now,
+	}
+	for k, v := range rep.docs() {
+		doc[k] = v
 	}
 	res, err := s.tasks.InsertOne(ctx, doc)
 	if err != nil {
@@ -265,8 +422,9 @@ func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 
 // Update edits mutable fields of any task (open or done). Supplied values
 // must satisfy the same mandatory rules as Create (empty description /
-// due fields are rejected, not cleared); repeat_rule stays clearable with
-// "" (one-shot). Absent keys are untouched; due fields validated together.
+// due fields are rejected, not cleared); the recurrence stays clearable
+// ("" / 0 = one-shot). Absent keys are untouched; due fields and the
+// recurrence's four keys are validated together.
 func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
@@ -342,8 +500,18 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		}
 		set["estimated_minutes"] = n
 	}
-	if str, ok := strField("repeat_rule"); ok {
-		set["repeat_rule"] = strings.TrimSpace(str)
+	// Recurrence: merge whatever was supplied onto the stored one and
+	// validate the result, so the four keys can never end up describing
+	// two different rules. Any of the four present means "edit the
+	// recurrence"; none of them means leave it alone.
+	rep, repTouched, err := mergeRepeat(cur, fields, strField)
+	if err != nil {
+		return nil, err
+	}
+	if repTouched {
+		for k, v := range rep.docs() {
+			set[k] = v
+		}
 	}
 	if v, ok := fields["parallelable"]; ok && v != nil {
 		b, ok := toBool(v)
@@ -361,9 +529,63 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	return s.Get(ctx, id)
 }
 
+// mergeRepeat folds the supplied recurrence fields onto the task's stored
+// recurrence and validates the result. touched is false when the caller
+// sent none of the four keys, so an unrelated edit leaves the rule alone.
+//
+// One compatibility rule lives here: a client that sends repeat_rule ""
+// with no structured keys is asking to clear the rule (the only way a
+// pre-4.6 client can express that), so the whole recurrence goes — not
+// just the text, which would leave a cadence the client cannot see.
+func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (string, bool)) (Repeat, bool, error) {
+	present := func(keys ...string) bool {
+		for _, k := range keys {
+			if v, ok := fields[k]; ok && v != nil {
+				return true
+			}
+		}
+		return false
+	}
+	structuredSent := present("repeat_every", "repeat_unit", "repeat_custom")
+	if !present("repeat_rule", "repeat_every", "repeat_unit", "repeat_custom") {
+		return Repeat{}, false, nil
+	}
+	rep := repeatFromDoc(cur)
+	// Wrong types fail loudly rather than reading as absent.
+	if v, ok := fields["repeat_every"]; ok && v != nil {
+		n, ok := toInt(v)
+		if !ok {
+			return rep, true, fail("repeat_every must be an integer %d-%d", RepeatEveryMin, RepeatEveryMax)
+		}
+		rep.Every = n
+	}
+	if str, ok := strField("repeat_unit"); ok {
+		rep.Unit = strings.TrimSpace(str)
+	}
+	if v, ok := fields["repeat_custom"]; ok && v != nil {
+		b, ok := toBool(v)
+		if !ok {
+			return rep, true, fail("repeat_custom must be a boolean")
+		}
+		rep.Custom = b
+	}
+	if str, ok := strField("repeat_rule"); ok {
+		rep.Text = strings.TrimSpace(str)
+	}
+	// "No text, no structured keys" from an older client = clear it all.
+	if rep.Text == "" && !structuredSent && (rep.Every != 0 || rep.Unit != "" || rep.Custom) {
+		rep = Repeat{}
+	}
+	rep = rep.Normalize()
+	if err := rep.Validate(); err != nil {
+		return rep, true, err
+	}
+	return rep, true, nil
+}
+
 // Complete marks a task done: sets completedAt + expiresAt
 // (= completedAt + RetentionDays, TTL target). Returns the doc's
-// repeat_rule verbatim so the caller can roll the next occurrence.
+// recurrence verbatim so the caller can roll the next occurrence.
 func (s *Store) Complete(ctx context.Context, id string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {

@@ -452,7 +452,7 @@ func taskStrField(fields map[string]any, key string) string {
 // turn client bugs into mystery no-ops — the HTTP layer validates first so
 // mistakes come back as 422. JSON null counts as absent (no change).
 func checkTaskFields(fields map[string]any) error {
-	for _, k := range []string{"name", "description", "due_date", "due_time", "repeat_rule"} {
+	for _, k := range []string{"name", "description", "due_date", "due_time", "repeat_rule", "repeat_unit"} {
 		if v, ok := fields[k]; ok && v != nil {
 			if _, ok := v.(string); !ok {
 				return &tasks.StoreError{Msg: k + " must be a string"}
@@ -464,9 +464,17 @@ func checkTaskFields(fields map[string]any) error {
 			return &tasks.StoreError{Msg: "estimated_minutes must be an integer >= 0"}
 		}
 	}
-	if v, ok := fields["parallelable"]; ok && v != nil {
-		if _, ok := v.(bool); !ok {
-			return &tasks.StoreError{Msg: "parallelable must be a boolean"}
+	if v, ok := fields["repeat_every"]; ok && v != nil {
+		if _, ok := taskInt(v); !ok {
+			return &tasks.StoreError{Msg: "repeat_every must be an integer " +
+				strconv.Itoa(tasks.RepeatEveryMin) + "-" + strconv.Itoa(tasks.RepeatEveryMax)}
+		}
+	}
+	for _, k := range []string{"parallelable", "repeat_custom"} {
+		if v, ok := fields[k]; ok && v != nil {
+			if _, ok := v.(bool); !ok {
+				return &tasks.StoreError{Msg: k + " must be a boolean"}
+			}
 		}
 	}
 	return nil
@@ -474,7 +482,11 @@ func checkTaskFields(fields map[string]any) error {
 
 // taskMinutes converts a JSON number to whole minutes, rejecting
 // fractionals, negatives, and non-numbers (store.toInt truncates).
-func taskMinutes(v any) (int, bool) {
+func taskMinutes(v any) (int, bool) { return taskInt(v) }
+
+// taskInt converts a JSON number to a whole non-negative int, rejecting
+// fractionals, negatives, and non-numbers.
+func taskInt(v any) (int, bool) {
 	switch n := v.(type) {
 	case float64:
 		if n != math.Trunc(n) || n < 0 {
@@ -497,6 +509,21 @@ func taskMinutes(v any) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// taskRepeat reads the recurrence out of a request body. Out-of-range
+// counts and unknown units are left for the store to reject, so the
+// wording lives in one place.
+func taskRepeat(fields map[string]any) tasks.Repeat {
+	rep := tasks.Repeat{Text: taskStrField(fields, "repeat_rule")}
+	if n, ok := taskInt(fields["repeat_every"]); ok {
+		rep.Every = n
+	}
+	rep.Unit = strings.TrimSpace(taskStrField(fields, "repeat_unit"))
+	if b, ok := fields["repeat_custom"].(bool); ok {
+		rep.Custom = b
+	}
+	return rep.Normalize()
 }
 
 // createTask inserts one open task. Every field except repeat_rule is
@@ -541,7 +568,7 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		taskStrField(fields, "due_date"),
 		taskStrField(fields, "due_time"),
 		&minutes,
-		taskStrField(fields, "repeat_rule"),
+		taskRepeat(fields),
 		&parallelable,
 	)
 	if err != nil {

@@ -393,7 +393,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         ).filterNotNull().joinToString(" · ")
         // Locals: task is nullable and conditions below don't smart-cast.
         val taskDesc = task?.description.orEmpty()
-        val repeat = task?.repeatRule.orEmpty()
+        val repeat = task?.repeatLabel().orEmpty()
         // Lead line says which reminder this is, so a start nudge and a
         // heads-up never read as the same alert.
         val lead = when (kind) {

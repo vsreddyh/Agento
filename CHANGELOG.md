@@ -32,6 +32,14 @@ see GitHub Releases for older notes.
     readable instead of overwriting each other.
 - The reminder channel description now spells out the three reminders
   and the 15-minute overdue repeat.
+- Repeats are now real values instead of a sentence: **every N
+  days/weeks/months/years** (N = 1-28), or a **custom condition** for the
+  rules that genuinely need words ("mon-fri only", "daily, skip
+  Wednesdays", "end of every month"). The task editor replaces the
+  free-text box and its four chips with a count, a unit, a custom tickbox
+  and the custom text; a blank count means the task doesn't repeat. Every
+  existing task was migrated: 43 became a structured cadence, 6 kept their
+  exact words as a custom condition.
 
 ## [4.5.1]
 

@@ -1113,6 +1113,9 @@ private fun TaskManagerScreen(
                             dueDate = "",
                             dueTime = t.dueTime,
                             estimatedMinutes = t.estimatedMinutes.toString(),
+                            repeatEvery = if (t.repeatEvery > 0) t.repeatEvery.toString() else "",
+                            repeatUnit = t.repeatUnit.ifEmpty { "days" },
+                            repeatCustom = t.repeatCustom,
                             repeatRule = t.repeatRule,
                             parallelable = t.parallelable,
                         )
@@ -1417,7 +1420,10 @@ private fun TaskManagerScreen(
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
-                            repeatRule = next.repeatRule,
+                            repeatEvery = next.repeatOrNull()?.first ?: 0,
+                            repeatUnit = next.repeatOrNull()?.second.orEmpty(),
+                            repeatCustom = next.repeatOrNull()?.third?.isNotEmpty() == true,
+                            repeatRule = next.repeatOrNull()?.third.orEmpty(),
                             parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },
@@ -1431,7 +1437,10 @@ private fun TaskManagerScreen(
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
-                            repeatRule = next.repeatRule,
+                            repeatEvery = next.repeatOrNull()?.first ?: 0,
+                            repeatUnit = next.repeatOrNull()?.second.orEmpty(),
+                            repeatCustom = next.repeatOrNull()?.third?.isNotEmpty() == true,
+                            repeatRule = next.repeatOrNull()?.third.orEmpty(),
                             parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },
@@ -1487,7 +1496,8 @@ private fun TaskManagerScreen(
 }
 
 /** Editor draft for a server task (id empty = new). Text fields stay strings
- * so half-typed input (e.g. minutes) survives; parsed on save. */
+ * so half-typed input (e.g. minutes, the repeat count) survives; parsed on
+ * save. The repeat count is a string for the same reason. */
 private data class ServerTaskDraft(
     val id: String = "",
     val name: String = "",
@@ -1495,6 +1505,9 @@ private data class ServerTaskDraft(
     val dueDate: String = "",
     val dueTime: String = "",
     val estimatedMinutes: String = "",
+    val repeatEvery: String = "",
+    val repeatUnit: String = "days",
+    val repeatCustom: Boolean = false,
     val repeatRule: String = "",
     val parallelable: Boolean = false,
 )
@@ -1506,9 +1519,38 @@ private fun ServerTask.toDraft() = ServerTaskDraft(
     dueDate = dueDate,
     dueTime = dueTime,
     estimatedMinutes = estimatedMinutes.toString(),
+    repeatEvery = if (repeatEvery > 0) repeatEvery.toString() else "",
+    repeatUnit = repeatUnit.ifEmpty { "days" },
+    repeatCustom = repeatCustom,
     repeatRule = repeatRule,
     parallelable = parallelable,
 )
+
+/** Repeat units offered by the editor, matching the server's vocabulary. */
+private val REPEAT_UNITS = listOf("days", "weeks", "months", "years")
+
+/** Bounds of the structured count, kept in step with the server. */
+private const val REPEAT_EVERY_MIN = 1
+private const val REPEAT_EVERY_MAX = 28
+
+/** The draft's recurrence as (every, unit, customText), or null when it is
+ * inconsistent — a custom condition with no words, or a count outside
+ * 1-28, or a half-typed number. Save stays disabled until it parses. */
+private fun ServerTaskDraft.repeatOrNull(): Triple<Int, String, String>? {
+    if (repeatCustom) {
+        val text = repeatRule.trim()
+        return if (text.isEmpty()) null else Triple(0, "", text)
+    }
+    val typed = repeatEvery.trim()
+    if (typed.isEmpty()) {
+        // No cadence: one-shot.
+        return Triple(0, "", "")
+    }
+    val every = typed.toIntOrNull() ?: return null
+    if (every < REPEAT_EVERY_MIN || every > REPEAT_EVERY_MAX) return null
+    if (repeatUnit !in REPEAT_UNITS) return null
+    return Triple(every, repeatUnit, "")
+}
 
 /** Flat task row: checkbox toggles complete/reopen, tap opens the
  * detail sheet. Name + one friendly due line; description, estimate,
@@ -1566,7 +1608,8 @@ private fun ServerTaskRow(
             val dueBits = buildList {
                 if (dueLine.isNotEmpty()) add(dueLine)
                 if (task.estimatedMinutes > 0) add("~${task.estimatedMinutes} min")
-                if (task.repeatRule.isNotEmpty()) add(task.repeatRule)
+                val repeat = task.repeatLabel()
+                if (repeat.isNotEmpty()) add(repeat)
                 if (task.parallelable) add("parallel")
             }
             if (dueBits.isNotEmpty()) {
@@ -1681,7 +1724,7 @@ private fun ServerTaskDetailSheet(
             DetailLine(
                 icon = Icons.Filled.Repeat,
                 label = "Repeats",
-                value = task.repeatRule.ifEmpty { "Does not repeat" },
+                value = task.repeatLabel().ifEmpty { "Does not repeat" },
             )
             DetailLine(
                 icon = Icons.Filled.Groups,
@@ -1801,15 +1844,28 @@ private fun ServerTaskDialog(
     var dueDate by remember(initial) { mutableStateOf(initial.dueDate) }
     var dueTime by remember(initial) { mutableStateOf(initial.dueTime) }
     var minutes by remember(initial) { mutableStateOf(initial.estimatedMinutes) }
+    var repeatEvery by remember(initial) { mutableStateOf(initial.repeatEvery) }
+    var repeatUnit by remember(initial) { mutableStateOf(initial.repeatUnit) }
+    var repeatCustom by remember(initial) { mutableStateOf(initial.repeatCustom) }
     var repeatRule by remember(initial) { mutableStateOf(initial.repeatRule) }
     var parallelable by remember(initial) { mutableStateOf(initial.parallelable) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
+    // The recurrence has to parse too: a custom condition with no words,
+    // or a count outside 1-28, leaves Save disabled with the reason shown
+    // under the fields.
+    val repeat = ServerTaskDraft(
+        repeatEvery = repeatEvery,
+        repeatUnit = repeatUnit,
+        repeatCustom = repeatCustom,
+        repeatRule = repeatRule,
+    ).repeatOrNull()
     val formValid = name.trim().isNotEmpty() &&
         description.trim().isNotEmpty() &&
         dueDate.trim().isNotEmpty() &&
         dueTime.trim().isNotEmpty() &&
-        (minutes.trim().toIntOrNull()?.let { it >= 0 } == true)
+        (minutes.trim().toIntOrNull()?.let { it >= 0 } == true) &&
+        repeat != null
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1922,36 +1978,84 @@ private fun ServerTaskDialog(
                         )
                     }
                 }
+                // Recurrence: a real cadence (count + unit) or the user's
+                // own words, never both — the server rejects the mix. A
+                // blank count is the one-shot case, so the unit chips only
+                // light up once there is a count to apply them to.
                 FormLabel("Repeats")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = repeatEvery,
+                        onValueChange = { input ->
+                            repeatEvery = input.filter { c -> c.isDigit() }.take(2)
+                        },
+                        label = { Text("Every") },
+                        placeholder = { Text("Never") },
+                        singleLine = true,
+                        enabled = !repeatCustom,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(112.dp),
+                    )
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        val on = !repeatCustom && repeatEvery.isNotEmpty()
+                        for (unit in REPEAT_UNITS) {
+                            FilterChip(
+                                selected = on && repeatUnit == unit,
+                                enabled = !repeatCustom,
+                                onClick = {
+                                    repeatUnit = unit
+                                    // Picking a unit with no count means
+                                    // every single one of them.
+                                    if (repeatEvery.isEmpty()) repeatEvery = "1"
+                                },
+                                label = { Text(unit.removeSuffix("s").replaceFirstChar { it.uppercase() }) },
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = repeatCustom,
+                            role = Role.Checkbox,
+                            onValueChange = { repeatCustom = it },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = repeatCustom,
+                        onCheckedChange = null,
+                    )
+                    Text(
+                        "Custom condition",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
                 OutlinedTextField(
                     value = repeatRule,
                     onValueChange = { repeatRule = it },
-                    label = { Text("Repeats") },
-                    placeholder = { Text("weekly, or custom like “every 3rd Friday”") },
+                    label = { Text("Custom condition *") },
+                    placeholder = { Text("mon-fri only, every 3rd Friday…") },
                     singleLine = true,
+                    enabled = repeatCustom,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                if (repeatCustom && repeatRule.isBlank()) {
+                    HintLine("A custom condition needs the words.")
+                } else if (!repeatCustom && repeatEvery.isNotEmpty() &&
+                    (repeatEvery.toIntOrNull()?.let { it > REPEAT_EVERY_MAX } == true)
                 ) {
-                    val rule = repeatRule.trim().lowercase(Locale.ROOT)
-                    FilterChip(
-                        selected = rule.isEmpty(),
-                        onClick = { repeatRule = "" },
-                        label = { Text("None") },
-                    )
-                    for ((label, value) in listOf(
-                        "Daily" to "daily",
-                        "Weekly" to "weekly",
-                        "Monthly" to "monthly",
-                    )) {
-                        FilterChip(
-                            selected = rule == value,
-                            onClick = { repeatRule = value },
-                            label = { Text(label) },
-                        )
-                    }
+                    HintLine("Every $REPEAT_EVERY_MIN-$REPEAT_EVERY_MAX only.")
                 }
                 if (!formValid) {
                     HintLine("Fill all * fields to enable Save.")
@@ -1993,7 +2097,10 @@ private fun ServerTaskDialog(
                             dueDate = dueDate.trim(),
                             dueTime = dueTime.trim(),
                             estimatedMinutes = minutes.trim(),
-                            repeatRule = repeatRule.trim(),
+                            repeatEvery = repeat!!.first.toString(),
+                            repeatUnit = repeat!!.second,
+                            repeatCustom = repeat!!.third.isNotEmpty(),
+                            repeatRule = repeat!!.third,
                             parallelable = parallelable,
                         )
                     )
