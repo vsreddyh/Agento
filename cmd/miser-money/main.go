@@ -291,7 +291,7 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "prune_old",
 		Description: "Immediate 90-day purge (TTL handles this natively in the background). dry_run=true (default) only reports."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			Days   int  `json:"days"`
+			Days   int   `json:"days"`
 			DryRun *bool `json:"dry_run"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
 			days := in.Days

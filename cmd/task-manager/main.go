@@ -2,8 +2,8 @@
 //
 // Storage: MongoDB (tasks collection). No status field — a task is open
 // while completedAt is null, done once set. Completed tasks expire via
-// TTL 3 days after completion; repeat_rule is stored verbatim and never
-// interpreted here (agent-side per skills/task-manager/SKILL.md).
+// TTL 3 days after completion; a repeat is stored but never interpreted
+// here (agent-side per skills/task-manager/SKILL.md).
 // Runs over stdio for MCP clients.
 package main
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"agento/internal/tasks"
 
@@ -20,6 +21,50 @@ import (
 )
 
 var store *tasks.Store
+
+// repeatOf reads a task doc's recurrence back out of a response map.
+func repeatOf(doc map[string]any) tasks.Repeat {
+	rep := tasks.Repeat{}
+	if s, ok := doc["repeat_rule"].(string); ok {
+		rep.Text = s
+	}
+	if n, ok := toInt(doc["repeat_every"]); ok {
+		rep.Every = n
+	}
+	if u, ok := doc["repeat_unit"].(string); ok {
+		rep.Unit = u
+	}
+	if b, ok := doc["repeat_custom"].(bool); ok {
+		rep.Custom = b
+	}
+	return rep.Normalize()
+}
+
+// toInt mirrors the store's number handling for response maps.
+func toInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
+}
+
+// repeatHint spells out the exact create_task keys that reproduce a
+// recurrence, so the agent copies a cadence instead of re-deriving it.
+func repeatHint(rep tasks.Repeat) string {
+	if rep.Custom {
+		// %q, not quotes: a custom condition may itself contain an
+		// apostrophe, and this string is copied by the agent.
+		return fmt.Sprintf("repeat_custom: true, repeat_rule: %q", rep.Text)
+	}
+	return fmt.Sprintf("repeat_every: %d, repeat_unit: %q", rep.Every, rep.Unit)
+}
 
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
 	return nil, map[string]any{"ok": false, "error": err.Error()}, nil
@@ -42,17 +87,29 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "task-manager", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_task",
-		Description: "Create an open task. ALL fields except repeat_rule are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). repeat_rule is free-form, empty = one-shot (never interpreted server-side)."},
+		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). The repeat is EITHER structured (repeat_every 1-28 with repeat_unit days|weeks|months|years) OR a custom condition (repeat_custom true with repeat_rule = the user's words verbatim) — never both, and all of them empty/0 = one-shot (never interpreted server-side)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			Name             string `json:"name"`
 			Description      string `json:"description"`
 			DueDate          string `json:"due_date"`
 			DueTime          string `json:"due_time"`
 			EstimatedMinutes *int   `json:"estimated_minutes"`
+			RepeatEvery      *int   `json:"repeat_every"`
+			RepeatUnit       string `json:"repeat_unit"`
+			RepeatCustom     *bool  `json:"repeat_custom"`
 			RepeatRule       string `json:"repeat_rule"`
 			Parallelable     *bool  `json:"parallelable"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			doc, err := store.Create(ctx, in.Name, in.Description, in.DueDate, in.DueTime, in.EstimatedMinutes, in.RepeatRule, in.Parallelable)
+			rep := tasks.Repeat{
+				Every:  0,
+				Unit:   strings.TrimSpace(in.RepeatUnit),
+				Custom: in.RepeatCustom != nil && *in.RepeatCustom,
+				Text:   strings.TrimSpace(in.RepeatRule),
+			}
+			if in.RepeatEvery != nil {
+				rep.Every = *in.RepeatEvery
+			}
+			doc, err := store.Create(ctx, in.Name, in.Description, in.DueDate, in.DueTime, in.EstimatedMinutes, rep.Normalize(), in.Parallelable)
 			if err != nil {
 				return fail(err)
 			}
@@ -86,7 +143,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_task",
-		Description: "Edit name/description/due_date/due_time/estimated_minutes/repeat_rule/parallelable. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected); empty repeat_rule clears the rule (one-shot). Works on open or done tasks."},
+		Description: "Edit name/description/due_date/due_time/estimated_minutes/repeat/parallelable. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected). The repeat accepts the same four keys (repeat_every/repeat_unit/repeat_custom/repeat_rule) and is validated as a whole; sending repeat_rule \"\" with no structured key clears the whole rule (one-shot). Works on open or done tasks."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			ID               string  `json:"id"`
 			Name             string  `json:"name"`
@@ -94,6 +151,9 @@ func main() {
 			DueDate          *string `json:"due_date"`
 			DueTime          *string `json:"due_time"`
 			EstimatedMinutes *int    `json:"estimated_minutes"`
+			RepeatEvery      *int    `json:"repeat_every"`
+			RepeatUnit       *string `json:"repeat_unit"`
+			RepeatCustom     *bool   `json:"repeat_custom"`
 			RepeatRule       *string `json:"repeat_rule"`
 			Parallelable     *bool   `json:"parallelable"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
@@ -116,8 +176,17 @@ func main() {
 			if in.EstimatedMinutes != nil {
 				fields["estimated_minutes"] = *in.EstimatedMinutes
 			}
+			if in.RepeatEvery != nil {
+				fields["repeat_every"] = *in.RepeatEvery
+			}
+			if in.RepeatUnit != nil {
+				fields["repeat_unit"] = strings.TrimSpace(*in.RepeatUnit)
+			}
+			if in.RepeatCustom != nil {
+				fields["repeat_custom"] = *in.RepeatCustom
+			}
 			if in.RepeatRule != nil {
-				fields["repeat_rule"] = *in.RepeatRule
+				fields["repeat_rule"] = strings.TrimSpace(*in.RepeatRule)
 			}
 			if in.Parallelable != nil {
 				fields["parallelable"] = *in.Parallelable
@@ -130,7 +199,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
-		Description: "Mark a task done (retained 3 days, then auto-deleted). If the task has a repeat_rule, you MUST create the next occurrence via create_task (same rule, every field identical including due_time, only due_date advances to the next occurrence you compute) — the server never does this."},
+		Description: "Mark a task done (retained 3 days, then auto-deleted). If the task repeats, you MUST create the next occurrence via create_task with the same repeat keys and every field identical including due_time — only due_date advances, to the occurrence you compute — the server never does this."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			ID string `json:"id"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
@@ -139,9 +208,13 @@ func main() {
 				return fail(err)
 			}
 			out := map[string]any{"ok": true, "task": doc}
-			if rule, _ := doc["repeat_rule"].(string); rule != "" {
-				out["repeat_rule"] = rule
-				out["follow_up"] = "repeat_rule is '" + rule + "' — add task with '" + rule + "' repeat rule via create_task (keep name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the next occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except repeat_rule are required)."
+			rep := repeatOf(doc)
+			if !rep.IsZero() {
+				out["repeat_every"] = rep.Every
+				out["repeat_unit"] = rep.Unit
+				out["repeat_custom"] = rep.Custom
+				out["repeat_rule"] = rep.Text
+				out["follow_up"] = "this task repeats (" + rep.String() + ") — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required."
 			}
 			return result(out)
 		})

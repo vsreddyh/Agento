@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.ExpandLess
@@ -108,8 +109,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.health.connect.client.PermissionController
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.Dispatchers
@@ -169,6 +172,7 @@ private enum class SettingSection(val title: String) {
     Connection("Connection"),
     Health("Health sync"),
     Appearance("Appearance"),
+    Widget("Home-screen widget"),
     Notifications("Notifications"),
     Storage("Storage"),
     Usage("Usage"),
@@ -1109,6 +1113,9 @@ private fun TaskManagerScreen(
                             dueDate = "",
                             dueTime = t.dueTime,
                             estimatedMinutes = t.estimatedMinutes.toString(),
+                            repeatEvery = if (t.repeatEvery > 0) t.repeatEvery.toString() else "",
+                            repeatUnit = t.repeatUnit.ifEmpty { "days" },
+                            repeatCustom = t.repeatCustom,
                             repeatRule = t.repeatRule,
                             parallelable = t.parallelable,
                         )
@@ -1378,49 +1385,9 @@ private fun TaskManagerScreen(
                         }
                     }
                 }
-                // Widget display settings live here: the widget's own header
-                // controls never rendered on some launchers (#137), so
-                // view/density/due are changed from the app instead.
-                // Re-queried on every task refresh, and again when the
-                // settings screen returns, so a changed view shows up in
-                // the button label right away.
-                val openWidgetConfig = rememberLauncherForActivityResult(
-                    ActivityResultContracts.StartActivityForResult(),
-                ) { refreshTick++ }
-                val widgetIds = remember(context, refreshTick) {
-                    AppWidgetManager.getInstance(context)
-                        .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
-                        .toList()
-                }
-                if (widgetIds.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        widgetIds.forEach { id ->
-                            OutlinedButton(
-                                onClick = {
-                                    // Guarded like the old direct launch:
-                                    // a missing activity must not crash the
-                                    // Task Manager.
-                                    runCatching {
-                                        openWidgetConfig.launch(
-                                            Intent(context, TaskWidgetConfigActivity::class.java)
-                                                .putExtra(
-                                                    AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(
-                                    "Home-screen widget settings " +
-                                        "(${TaskWidget.viewFor(context, id).title})"
-                                )
-                            }
-                        }
-                    }
-                }
+                // Widget display settings moved to Settings -> Home-screen
+                // widget: they configure the home screen, not this task
+                // list, and they were the only controls below the rows.
                 HintLine("Your tasks, shared with your assistant — changes here and in chat land in the same list.")
             }
         }
@@ -1453,13 +1420,23 @@ private fun TaskManagerScreen(
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
-                            repeatRule = next.repeatRule,
+                            repeatEvery = next.repeatOrNull()?.first ?: 0,
+                            repeatUnit = next.repeatOrNull()?.second.orEmpty(),
+                            repeatCustom = next.repeatOrNull()?.third?.isNotEmpty() == true,
+                            repeatRule = next.repeatOrNull()?.third.orEmpty(),
                             parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },
                             onFailure = ::fail,
                         )
                     } else {
+                        // Only resend the recurrence when it actually
+                        // changed: an unrelated edit (a name tweak) must
+                        // not read as a repeat rewrite, and a task edited
+                        // by an older build keeps whatever cadence it has.
+                        val was = editing?.repeatOrNull()
+                        val now = next.repeatOrNull()
+                        val repChanged = was != now
                         api.update(
                             id = next.id,
                             name = next.name,
@@ -1467,7 +1444,14 @@ private fun TaskManagerScreen(
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
-                            repeatRule = next.repeatRule,
+                            repeatEvery = if (repChanged) now?.first else null,
+                            repeatUnit = if (repChanged) now?.second else null,
+                            repeatCustom = if (repChanged) {
+                                now?.third?.isNotEmpty() == true
+                            } else {
+                                null
+                            },
+                            repeatRule = if (repChanged) now?.third else null,
                             parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },
@@ -1523,7 +1507,8 @@ private fun TaskManagerScreen(
 }
 
 /** Editor draft for a server task (id empty = new). Text fields stay strings
- * so half-typed input (e.g. minutes) survives; parsed on save. */
+ * so half-typed input (e.g. minutes, the repeat count) survives; parsed on
+ * save. The repeat count is a string for the same reason. */
 private data class ServerTaskDraft(
     val id: String = "",
     val name: String = "",
@@ -1531,6 +1516,9 @@ private data class ServerTaskDraft(
     val dueDate: String = "",
     val dueTime: String = "",
     val estimatedMinutes: String = "",
+    val repeatEvery: String = "",
+    val repeatUnit: String = "days",
+    val repeatCustom: Boolean = false,
     val repeatRule: String = "",
     val parallelable: Boolean = false,
 )
@@ -1542,9 +1530,38 @@ private fun ServerTask.toDraft() = ServerTaskDraft(
     dueDate = dueDate,
     dueTime = dueTime,
     estimatedMinutes = estimatedMinutes.toString(),
+    repeatEvery = if (repeatEvery > 0) repeatEvery.toString() else "",
+    repeatUnit = repeatUnit.ifEmpty { "days" },
+    repeatCustom = repeatCustom,
     repeatRule = repeatRule,
     parallelable = parallelable,
 )
+
+/** Repeat units offered by the editor, matching the server's vocabulary. */
+private val REPEAT_UNITS = listOf("days", "weeks", "months", "years")
+
+/** Bounds of the structured count, kept in step with the server. */
+private const val REPEAT_EVERY_MIN = 1
+private const val REPEAT_EVERY_MAX = 28
+
+/** The draft's recurrence as (every, unit, customText), or null when it is
+ * inconsistent — a custom condition with no words, or a count outside
+ * 1-28, or a half-typed number. Save stays disabled until it parses. */
+private fun ServerTaskDraft.repeatOrNull(): Triple<Int, String, String>? {
+    if (repeatCustom) {
+        val text = repeatRule.trim()
+        return if (text.isEmpty()) null else Triple(0, "", text)
+    }
+    val typed = repeatEvery.trim()
+    if (typed.isEmpty()) {
+        // No cadence: one-shot.
+        return Triple(0, "", "")
+    }
+    val every = typed.toIntOrNull() ?: return null
+    if (every < REPEAT_EVERY_MIN || every > REPEAT_EVERY_MAX) return null
+    if (repeatUnit !in REPEAT_UNITS) return null
+    return Triple(every, repeatUnit, "")
+}
 
 /** Flat task row: checkbox toggles complete/reopen, tap opens the
  * detail sheet. Name + one friendly due line; description, estimate,
@@ -1602,7 +1619,8 @@ private fun ServerTaskRow(
             val dueBits = buildList {
                 if (dueLine.isNotEmpty()) add(dueLine)
                 if (task.estimatedMinutes > 0) add("~${task.estimatedMinutes} min")
-                if (task.repeatRule.isNotEmpty()) add(task.repeatRule)
+                val repeat = task.repeatLabel()
+                if (repeat.isNotEmpty()) add(repeat)
                 if (task.parallelable) add("parallel")
             }
             if (dueBits.isNotEmpty()) {
@@ -1717,7 +1735,7 @@ private fun ServerTaskDetailSheet(
             DetailLine(
                 icon = Icons.Filled.Repeat,
                 label = "Repeats",
-                value = task.repeatRule.ifEmpty { "Does not repeat" },
+                value = task.repeatLabel().ifEmpty { "Does not repeat" },
             )
             DetailLine(
                 icon = Icons.Filled.Groups,
@@ -1837,15 +1855,28 @@ private fun ServerTaskDialog(
     var dueDate by remember(initial) { mutableStateOf(initial.dueDate) }
     var dueTime by remember(initial) { mutableStateOf(initial.dueTime) }
     var minutes by remember(initial) { mutableStateOf(initial.estimatedMinutes) }
+    var repeatEvery by remember(initial) { mutableStateOf(initial.repeatEvery) }
+    var repeatUnit by remember(initial) { mutableStateOf(initial.repeatUnit) }
+    var repeatCustom by remember(initial) { mutableStateOf(initial.repeatCustom) }
     var repeatRule by remember(initial) { mutableStateOf(initial.repeatRule) }
     var parallelable by remember(initial) { mutableStateOf(initial.parallelable) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
+    // The recurrence has to parse too: a custom condition with no words,
+    // or a count outside 1-28, leaves Save disabled with the reason shown
+    // under the fields.
+    val repeat = ServerTaskDraft(
+        repeatEvery = repeatEvery,
+        repeatUnit = repeatUnit,
+        repeatCustom = repeatCustom,
+        repeatRule = repeatRule,
+    ).repeatOrNull()
     val formValid = name.trim().isNotEmpty() &&
         description.trim().isNotEmpty() &&
         dueDate.trim().isNotEmpty() &&
         dueTime.trim().isNotEmpty() &&
-        (minutes.trim().toIntOrNull()?.let { it >= 0 } == true)
+        (minutes.trim().toIntOrNull()?.let { it >= 0 } == true) &&
+        repeat != null
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1870,7 +1901,14 @@ private fun ServerTaskDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 FormLabel("Due")
-                DueQuickRow(onPick = { dueDate = it })
+                // A preset fills the time too, so the two always agree.
+                DueQuickRow(
+                    estimateMinutes = minutes.trim().toIntOrNull() ?: 0,
+                    onPick = { d, t ->
+                        dueDate = d
+                        if (t.isNotEmpty()) dueTime = t
+                    },
+                )
                 val dateInteraction = remember { MutableInteractionSource() }
                 val timeInteraction = remember { MutableInteractionSource() }
                 OutlinedTextField(
@@ -1958,36 +1996,89 @@ private fun ServerTaskDialog(
                         )
                     }
                 }
+                // Recurrence: a real cadence (count + unit) or the user's
+                // own words, never both — the server rejects the mix. A
+                // blank count is the one-shot case, so the unit chips only
+                // light up once there is a count to apply them to.
                 FormLabel("Repeats")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = repeatEvery,
+                        onValueChange = { input ->
+                            repeatEvery = input.filter { c -> c.isDigit() }.take(2)
+                        },
+                        label = { Text("Every") },
+                        placeholder = { Text("Never") },
+                        singleLine = true,
+                        enabled = !repeatCustom,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(112.dp),
+                    )
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        val on = !repeatCustom && repeatEvery.isNotEmpty()
+                        for (unit in REPEAT_UNITS) {
+                            FilterChip(
+                                selected = on && repeatUnit == unit,
+                                enabled = !repeatCustom,
+                                onClick = {
+                                    repeatUnit = unit
+                                    // Picking a unit with no count means
+                                    // every single one of them.
+                                    if (repeatEvery.isEmpty()) repeatEvery = "1"
+                                },
+                                label = { Text(unit.removeSuffix("s").replaceFirstChar { it.uppercase() }) },
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = repeatCustom,
+                            role = Role.Checkbox,
+                            onValueChange = { repeatCustom = it },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = repeatCustom,
+                        onCheckedChange = null,
+                    )
+                    Text(
+                        "Custom condition",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
                 OutlinedTextField(
                     value = repeatRule,
                     onValueChange = { repeatRule = it },
-                    label = { Text("Repeats") },
-                    placeholder = { Text("weekly, or custom like “every 3rd Friday”") },
+                    label = { Text("Custom condition *") },
+                    placeholder = { Text("mon-fri only, every 3rd Friday…") },
                     singleLine = true,
+                    enabled = repeatCustom,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                if (repeatCustom && repeatRule.isBlank()) {
+                    HintLine("A custom condition needs the words.")
+                } else if (repeatCustom) {
+                    // The date above is the first occurrence; the words only
+                    // say what comes after it. Worth saying: the two sit far
+                    // apart in the form and read like they compete.
+                    HintLine("The due date you picked is the first one — this is the rule for the ones after it.")
+                } else if (!repeatCustom && repeatEvery.trim().toIntOrNull()
+                    ?.let { it < REPEAT_EVERY_MIN || it > REPEAT_EVERY_MAX } == true
                 ) {
-                    val rule = repeatRule.trim().lowercase(Locale.ROOT)
-                    FilterChip(
-                        selected = rule.isEmpty(),
-                        onClick = { repeatRule = "" },
-                        label = { Text("None") },
-                    )
-                    for ((label, value) in listOf(
-                        "Daily" to "daily",
-                        "Weekly" to "weekly",
-                        "Monthly" to "monthly",
-                    )) {
-                        FilterChip(
-                            selected = rule == value,
-                            onClick = { repeatRule = value },
-                            label = { Text(label) },
-                        )
-                    }
+                    HintLine("Every $REPEAT_EVERY_MIN-$REPEAT_EVERY_MAX only.")
                 }
                 if (!formValid) {
                     HintLine("Fill all * fields to enable Save.")
@@ -2029,7 +2120,10 @@ private fun ServerTaskDialog(
                             dueDate = dueDate.trim(),
                             dueTime = dueTime.trim(),
                             estimatedMinutes = minutes.trim(),
-                            repeatRule = repeatRule.trim(),
+                            repeatEvery = repeat!!.first.toString(),
+                            repeatUnit = repeat!!.second,
+                            repeatCustom = repeat!!.third.isNotEmpty(),
+                            repeatRule = repeat!!.third,
                             parallelable = parallelable,
                         )
                     )
@@ -2064,16 +2158,59 @@ private fun ServerTaskDialog(
 
 /** Today/Tomorrow shortcuts (IST) for task due dates. Scroll-safe for
  * narrow screens. */
+/** Resolves an instant to the (date, HH:mm) pair the form stores. */
+private fun dueParts(at: java.time.LocalDateTime): Pair<String, String> =
+    at.toLocalDate().toString() to
+        String.format(Locale.ROOT, "%02d:%02d", at.hour, at.minute)
+
+/**
+ * Quick due presets. A bare "Today" only filled the date, which left the
+ * mandatory time still to be picked by hand — so the same-day options
+ * resolve to a whole moment instead: in an hour, in three, in eight, or
+ * the end of today. "Tomorrow" stays date-only, since "tomorrow at what
+ * time?" is a question worth asking.
+ *
+ * The clock is read on tap, not remembered: a dialog left open for a while
+ * would otherwise hand out presets an hour stale.
+ */
 @Composable
-private fun DueQuickRow(onPick: (String) -> Unit) {
-    val today = remember { java.time.LocalDate.now(IST).toString() }
+private fun DueQuickRow(estimateMinutes: Int, onPick: (String, String) -> Unit) {
     val tomorrow = remember { java.time.LocalDate.now(IST).plusDays(1).toString() }
     Row(
         modifier = Modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        AssistChip(onClick = { onPick(today) }, label = { Text("Today") })
-        AssistChip(onClick = { onPick(tomorrow) }, label = { Text("Tomorrow") })
+        for ((label, hours) in listOf(
+            "remind in 1h" to 1L,
+            "remind in 3h" to 3L,
+            "remind in 8h" to 8L,
+        )) {
+            AssistChip(
+                onClick = {
+                    // Reminder-relative, not due-relative: the start nudge
+                    // fires at `due - estimated_minutes`, so the estimate
+                    // is added to the offset to land the alert on the hour
+                    // the user actually asked for. The due time then sits
+                    // that many minutes later, which is exactly the point.
+                    val at = java.time.LocalDateTime.now(IST)
+                        .plusHours(hours)
+                        .plusMinutes(estimateMinutes.coerceAtLeast(0).toLong())
+                    val (d, t) = dueParts(at)
+                    onPick(d, t)
+                },
+                label = { Text(label) },
+            )
+        }
+        // Wall-clock, not an offset: "end of today" is 23:59 whatever the
+        // estimate, and its heads-up lands 5 minutes before that.
+        AssistChip(
+            onClick = {
+                val (d, t) = dueParts(java.time.LocalDate.now(IST).atTime(23, 59))
+                onPick(d, t)
+            },
+            label = { Text("end of today") },
+        )
+        AssistChip(onClick = { onPick(tomorrow, "") }, label = { Text("Tomorrow") })
     }
 }
 
@@ -5072,6 +5209,11 @@ private fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var error by remember { mutableStateOf("") }
+    // Bumped on every resume so the hub's widget count reflects a
+    // placement added (or removed) while the app was in the background —
+    // same reason the widget section re-reads.
+    var resumeTick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     // Bumped after a settings import so the fields below reload from prefs.
@@ -5156,6 +5298,18 @@ private fun SettingsScreen(
                                 else -> "System"
                             },
                             notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
+                            // Re-read on resume, keyed above.
+                            widgetStatus = remember(context, resumeTick) {
+                                val placed = AppWidgetManager.getInstance(context)
+                                    .getAppWidgetIds(
+                                        ComponentName(context, TaskWidget::class.java))
+                                    .size
+                                when (placed) {
+                                    0 -> "Not added"
+                                    1 -> "1 on home screen"
+                                    else -> "$placed on home screen"
+                                }
+                            },
                             usageStatus = usageStatus,
                             appVersion = remember(context) {
                                 UpdateManager.currentVersion(context).first
@@ -5410,6 +5564,9 @@ private fun SettingsScreen(
                             }
                         }
                     }
+                    SettingSection.Widget -> {
+                        WidgetSettingsSection()
+                    }
                     SettingSection.Notifications -> {
                         NotificationsSection()
                     }
@@ -5552,15 +5709,17 @@ private fun SettingsHub(
     healthStatus: String,
     themeStatus: String,
     notificationsStatus: String,
+    widgetStatus: String,
     usageStatus: String,
     appVersion: String,
     onPick: (SettingSection) -> Unit,
 ) {
-    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, usageStatus, appVersion) {
+    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, widgetStatus, usageStatus, appVersion) {
         listOf(
             HubRow(SettingSection.Connection, serverStatus),
             HubRow(SettingSection.Health, healthStatus),
             HubRow(SettingSection.Appearance, themeStatus),
+            HubRow(SettingSection.Widget, widgetStatus),
             HubRow(SettingSection.Notifications, notificationsStatus),
             HubRow(SettingSection.Storage, "Backup"),
             HubRow(SettingSection.Usage, usageStatus),
@@ -5610,6 +5769,7 @@ private fun SettingSection.hubIcon() = when (this) {
     SettingSection.Connection -> Icons.Filled.Cloud
     SettingSection.Health -> Icons.Filled.Favorite
     SettingSection.Appearance -> Icons.Filled.DarkMode
+    SettingSection.Widget -> Icons.Filled.Dashboard
     SettingSection.Notifications -> Icons.Filled.Notifications
     SettingSection.Storage -> Icons.Filled.Folder
     SettingSection.Usage -> Icons.Filled.DataUsage
@@ -5937,6 +6097,107 @@ private fun AppUpdateSection() {
         if (status.isNotEmpty()) {
             if (failed) ErrorCard(raw = status) else HintLine(status)
         }
+    }
+}
+
+/** Task-widget placement settings (Settings → Home-screen widget).
+ *
+ * The widget's own header controls never rendered on some launchers
+ * (#137), so what it shows is changed from the app. This used to sit
+ * under the task rows in the Task Manager, which is a poor home for it:
+ * it configures the home screen, not the task list. Each placement is
+ * configured on its own, because the settings are stored per widget id.
+ */
+@Composable
+private fun WidgetSettingsSection() {
+    val context = LocalContext.current
+    // Re-read on resume: the user can add or drop a placement (or come
+    // back from the launcher) while this screen sits in the back stack,
+    // and a stale list here is worse than useless.
+    var tick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { tick++ }
+    val widgetIds = remember(context, tick) {
+        AppWidgetManager.getInstance(context)
+            .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
+            .toList()
+    }
+    val canPin = remember(context) {
+        AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported
+    }
+    val config = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { tick++ }
+
+    SectionCard(
+        title = "Home-screen widget",
+        subtitle = "What the task widget shows: which tasks, how dense the rows are, and whether due dates and scrolling are on. Every placement keeps its own settings.",
+    ) {
+        if (widgetIds.isEmpty()) {
+            Text(
+                "No task widget on your home screen yet.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "Long-press an empty spot on the home screen, then Widgets → Agento — or use the button below.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // Only where the launcher supports pinning: on the ones that
+            // don't, requestPinAppWidget is a silent no-op, so a button
+            // that does nothing would be worse than no button. The
+            // instructions above still apply there.
+            if (canPin) {
+                OutlinedButton(
+                    onClick = {
+                        AppWidgetManager.getInstance(context)
+                            .requestPinAppWidget(
+                                ComponentName(context, TaskWidget::class.java), null, null)
+                    },
+                ) { Text("Add the widget") }
+            }
+        } else {
+            widgetIds.forEachIndexed { i, id ->
+                if (i > 0) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Widget ${i + 1}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            buildString {
+                                append(TaskWidget.viewFor(context, id).title)
+                                append(" tasks · ")
+                                append(TaskWidget.densityFor(context, id).title)
+                                append(" rows")
+                                if (!TaskWidget.showDueFor(context, id)) append(" · no due dates")
+                                if (!TaskWidget.scrollableFor(context, id)) {
+                                    append(" · up to ${TaskWidget.STATIC_ROW_LIMIT} rows")
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    OutlinedButton(
+                        onClick = {
+                            config.launch(
+                                Intent(context, TaskWidgetConfigActivity::class.java)
+                                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                            )
+                        },
+                    ) { Text("Configure") }
+                }
+            }
+        }
+        Text(
+            "On some launchers the widget's own buttons never appear — this screen is the reliable way to change these.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
