@@ -19,13 +19,20 @@ see GitHub Releases for older notes.
   one-hour estimate is something to start in the next hour or two, not in
   three. This matches the reminder engine's own rule, including the
   zero-estimate fallback to the due time.
+- A task now belongs to the day it **starts** on, not the day it is due:
+  due tomorrow at 00:30 with a one-hour estimate starts tonight, so it
+  shows under tonight and becomes **Current** the moment it should begin.
+  Rows predating mandatory due times keep their day group (a today one
+  lands in Later today, since nothing is known about when).
 - **Everything sorts by start time** (the default order; the due time
   breaks ties). Tasks with no usable due time sort last rather than first —
   an undated task is not the most urgent thing you have.
 - **Rows and the detail sheet now show the start and the due time** —
   "Today, 07:00 → 09:00" — instead of the estimate. A task crossing
   midnight (due 00:30, 1h estimate) shows both days, because a bare
-  "23:30 → 00:30" reads as nonsense. The estimate is now purely an input:
+  "23:30 → 00:30" reads as nonsense. A zero estimate has no start of its
+  own, so the start is left out rather than printed twice. The estimate is
+  now purely an input:
   it still decides when the start moment and the "Start now" reminder fall,
   it is just no longer a number you have to read.
 - Reminder notifications carry the start time in place of the estimate.

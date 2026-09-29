@@ -78,11 +78,14 @@ fun ServerTask.startToDueLine(today: java.time.LocalDate): String {
     val parts = startParts() ?: return due
     val start = friendlyDue(parts.first, parts.second, today)
     if (start.isEmpty() || due.isEmpty()) return due.ifEmpty { start }
-    return if (parts.first == dueDate) {
-        "$start → ${due.substringAfter(", ").ifEmpty { due }}"
-    } else {
-        "$start → $due"
+    // Same day: the day is already stated by the start side, so only the
+    // due time is repeated. Compared on the date parts, not by stripping
+    // text off a formatted line.
+    if (parts.first == dueDate) {
+        val time = dueTime.trim()
+        return if (time.isEmpty()) start else "$start → $time"
     }
+    return "$start → $due"
 }
 
 /** True when the task repeats at all: a structured cadence or a custom

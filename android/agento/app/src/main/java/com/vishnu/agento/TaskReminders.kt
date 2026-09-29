@@ -399,7 +399,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // The estimate is an input, not something to show: what the user
         // needs is when to start and when it is due.
         val startLine = task?.startParts()?.let { (d, t) -> friendlyDue(d, t, today) }
-            ?.takeIf { it.isNotEmpty() }
+            ?.takeIf { it.isNotEmpty() && it != dueLine }
         val summary = listOf(
             kind.lead,
             dueLine.ifEmpty { null },
