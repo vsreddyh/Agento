@@ -29,10 +29,17 @@ agent manages through the `project-manager` MCP server (see
    normalize to an enum.
 2. When you call `complete_task` and the response contains `follow_up`
    with a `repeat_rule`, you MUST call `create_task` for the next
-   occurrence: same name/description/estimated_minutes/repeat_rule/parallelable, with
-   the next due date/time that YOU compute from the rule and today.
+   occurrence. Every field is copied verbatim —
+   name/description/`due_time`/estimated_minutes/repeat_rule/parallelable —
+   and ONLY `due_date` advances, to the occurrence YOU compute from the
+   rule and today. A "daily at 9am" task keeps `due_time: "09:00"`; a time
+   that drifts between occurrences is a bug, not a recomputation. Change
+   `due_time` only when the rule itself names a different time ("mornings
+   at 6", "9am then 7pm").
 3. If the rule is ambiguous ("regularly"), ask the user for the next due
-   date instead of guessing.
+   date instead of guessing. Same for an empty `due_time`: tasks created
+   before times were required come back with `due_time: ""`, and
+   `create_task` rejects that — ask the user for a time, never invent one.
 4. One-shot tasks (empty rule) need nothing after completion.
 
 ## Everyday use

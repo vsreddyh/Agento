@@ -1098,13 +1098,30 @@ private fun TaskManagerScreen(
                         editing = ServerTaskDraft(
                             name = t.name,
                             description = t.description,
+                            // Only the date is cleared: recreating means
+                            // picking a new one (save stays gated on it),
+                            // but every other field is the user's own and
+                            // is carried over verbatim. Clearing the time
+                            // too made the user re-pick a value they had
+                            // already set (#148). The time field is
+                            // disabled until a date exists, so the kept
+                            // time is revealed, not stranded.
                             dueDate = "",
-                            dueTime = "",
+                            dueTime = t.dueTime,
                             estimatedMinutes = t.estimatedMinutes.toString(),
                             repeatRule = t.repeatRule,
                             parallelable = t.parallelable,
                         )
-                        snackbar.showSnackbar("Task completed — pick a new date and save to recreate it.")
+                        // Legacy tasks (created before due_time was
+                        // required) have no time to keep — don't claim
+                        // there is one.
+                        snackbar.showSnackbar(
+                            if (t.dueTime.isBlank()) {
+                                "Task completed — pick a new date and time to recreate it."
+                            } else {
+                                "Task completed — pick a new date to recreate it (time kept)."
+                            },
+                        )
                     } else {
                         snackbar.showSnackbar("Task completed.")
                     }
@@ -1866,8 +1883,14 @@ private fun ServerTaskDialog(
                     interactionSource = dateInteraction,
                     trailingIcon = {
                         if (dueDate.isNotEmpty()) {
+                            // An explicit "no due date" also drops the
+                            // time: a time silently reappearing when the
+                            // next date is picked is more surprising than
+                            // losing it. The recreate flow above is the
+                            // opposite case on purpose — there the date
+                            // is what the user must choose.
                             IconButton(onClick = { dueDate = ""; dueTime = "" }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Clear due date")
+                                Icon(Icons.Filled.Close, contentDescription = "Clear due date and time")
                             }
                         } else {
                             Icon(Icons.Filled.DateRange, contentDescription = null)
@@ -1895,6 +1918,12 @@ private fun ServerTaskDialog(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                // Recreate draft: a kept time with no date yet is the one
+                // state the labels don't explain on their own, so say it
+                // here rather than only in a snackbar that can be missed.
+                if (dueDate.isEmpty() && dueTime.isNotEmpty()) {
+                    HintLine("Time kept from the completed task — pick a date to keep it.")
+                }
                 // Tapping a read-only field opens its picker (the trailing
                 // icon only clears); Release avoids firing while scrolling.
                 LaunchedEffect(dateInteraction) {

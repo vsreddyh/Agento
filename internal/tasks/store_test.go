@@ -255,6 +255,32 @@ func TestParallelableRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLegacyDocBackfill(t *testing.T) {
+	// No DB: toDoc is pure, and the legacy shape (no due_time, no
+	// parallelable) is exactly what pre-mandatory rows look like. The
+	// contract that matters: reads never invent a time, and a doc with
+	// no date+time pair still passes checkDue so it can be edited.
+	doc := toDoc(bson.M{
+		"name":        "Read mails",
+		"due_date":    "2026-10-05",
+		"completedAt": nil,
+	})
+	if doc["due_time"] != "" {
+		t.Fatalf("legacy doc must read back an empty time, not an invented one: %v", doc)
+	}
+	if doc["parallelable"] != false {
+		t.Fatalf("legacy doc must read back parallelable=false: %v", doc)
+	}
+	if doc["repeat_rule"] != "" || doc["description"] != "" {
+		t.Fatalf("legacy doc must backfill every mandatory key: %v", doc)
+	}
+	// A time-less legacy row must stay updatable: the user supplies the
+	// time on first edit rather than being locked out of the task.
+	if err := checkDue("2026-10-05", ""); err != nil {
+		t.Fatalf("legacy date+empty time must stay valid to edit: %v", err)
+	}
+}
+
 func TestOverdueAndTTLIndex(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
