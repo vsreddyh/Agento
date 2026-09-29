@@ -39,6 +39,11 @@ func TestClassify(t *testing.T) {
 		{"every 1 day", tasks.Repeat{Every: 1, Unit: "days"}},
 		{"every 1 year", tasks.Repeat{Every: 1, Unit: "years"}},
 		{"every 3 week", tasks.Repeat{Every: 3, Unit: "weeks"}},
+		// A bare unit word means every one of them, so "every day" and
+		// "daily" can't end up stored as two different shapes.
+		{"every day", tasks.Repeat{Every: 1, Unit: "days"}},
+		{"day", tasks.Repeat{Every: 1, Unit: "days"}},
+		{"every month", tasks.Repeat{Every: 1, Unit: "months"}},
 
 		// A cadence with a tail is NOT a cadence: the tail is the rule.
 		{"daily, skip Wednesdays", tasks.Repeat{Custom: true, Text: "daily, skip Wednesdays"}},
@@ -51,6 +56,7 @@ func TestClassify(t *testing.T) {
 		{"ask user when to repeat", tasks.Repeat{Custom: true, Text: "ask user when to repeat"}},
 		{"every 2 fortnights", tasks.Repeat{Custom: true, Text: "every 2 fortnights"}},
 		{"every other tuesday", tasks.Repeat{Custom: true, Text: "every other tuesday"}},
+		{"every day and a half", tasks.Repeat{Custom: true, Text: "every day and a half"}},
 
 		// Out of range keeps the words: "every 30 days" clamped to 28 would
 		// be a different schedule, silently.

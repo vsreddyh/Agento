@@ -127,13 +127,13 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "update_recipe",
 		Description: "Patch a recipe (the ONLY way a recipe changes after a cook — call only when the user approves). Empty/zero args are left unchanged."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			NameOrID      string         `json:"name_or_id"`
-			Name          string         `json:"name"`
-			Servings      float64        `json:"servings"`
-			PerServing    map[string]any `json:"per_serving"`
+			NameOrID       string         `json:"name_or_id"`
+			Name           string         `json:"name"`
+			Servings       float64        `json:"servings"`
+			PerServing     map[string]any `json:"per_serving"`
 			IngredientQtys map[string]any `json:"ingredient_qtys"`
-			Note          string         `json:"note"`
-			Tags          []string       `json:"tags"`
+			Note           string         `json:"note"`
+			Tags           []string       `json:"tags"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {

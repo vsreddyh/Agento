@@ -59,9 +59,11 @@ func toInt(v any) (int, bool) {
 // recurrence, so the agent copies a cadence instead of re-deriving it.
 func repeatHint(rep tasks.Repeat) string {
 	if rep.Custom {
-		return "repeat_custom: true, repeat_rule: '" + rep.Text + "'"
+		// %q, not quotes: a custom condition may itself contain an
+		// apostrophe, and this string is copied by the agent.
+		return fmt.Sprintf("repeat_custom: true, repeat_rule: %q", rep.Text)
 	}
-	return "repeat_every: " + fmt.Sprint(rep.Every) + ", repeat_unit: '" + rep.Unit + "'"
+	return fmt.Sprintf("repeat_every: %d, repeat_unit: %q", rep.Every, rep.Unit)
 }
 
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {

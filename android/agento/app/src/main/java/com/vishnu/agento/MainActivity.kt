@@ -1430,6 +1430,13 @@ private fun TaskManagerScreen(
                             onFailure = ::fail,
                         )
                     } else {
+                        // Only resend the recurrence when it actually
+                        // changed: an unrelated edit (a name tweak) must
+                        // not read as a repeat rewrite, and a task edited
+                        // by an older build keeps whatever cadence it has.
+                        val was = editing?.repeatOrNull()
+                        val now = next.repeatOrNull()
+                        val repChanged = was != now
                         api.update(
                             id = next.id,
                             name = next.name,
@@ -1437,10 +1444,14 @@ private fun TaskManagerScreen(
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
-                            repeatEvery = next.repeatOrNull()?.first ?: 0,
-                            repeatUnit = next.repeatOrNull()?.second.orEmpty(),
-                            repeatCustom = next.repeatOrNull()?.third?.isNotEmpty() == true,
-                            repeatRule = next.repeatOrNull()?.third.orEmpty(),
+                            repeatEvery = if (repChanged) now?.first else null,
+                            repeatUnit = if (repChanged) now?.second else null,
+                            repeatCustom = if (repChanged) {
+                                now?.third?.isNotEmpty() == true
+                            } else {
+                                null
+                            },
+                            repeatRule = if (repChanged) now?.third else null,
                             parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },

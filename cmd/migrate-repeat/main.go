@@ -208,10 +208,12 @@ var (
 		"daily": "days", "weekly": "weeks", "monthly": "months",
 		"yearly": "years", "annually": "years",
 	}
-	// "<count> <unit>", with an optional "every ". Anchored, so a rule
-	// that continues past the cadence ("every 2 weeks unless it rains")
-	// fails to match and stays custom instead of losing its tail.
-	countedUnit = regexp.MustCompile(`^(?:every\s+)?(\d{1,3})\s+([a-z]+)$`)
+	// An optional count and an optional "every " in front of a single unit
+	// word: "days", "every day", "3 days", "every 3 days". Anchored, so a
+	// rule that continues past the cadence ("every 2 weeks unless it
+	// rains", "every other tuesday") fails to match and stays custom
+	// instead of losing its tail.
+	countedUnit = regexp.MustCompile(`^(?:every\s+)?(?:(\d{1,3})\s+)?([a-z]+)$`)
 )
 
 // classify maps a legacy free-text rule onto the recurrence to store.
@@ -228,11 +230,18 @@ func classify(rule string) tasks.Repeat {
 		return tasks.Repeat{Every: 1, Unit: unit}
 	}
 	if m := countedUnit.FindStringSubmatch(lowered); m != nil {
-		if unit, ok := unitWords[m[2]]; ok {
-			if n, err := strconv.Atoi(m[1]); err == nil &&
-				n >= tasks.RepeatEveryMin && n <= tasks.RepeatEveryMax {
-				return tasks.Repeat{Every: n, Unit: unit}
+		// A bare unit word means every one of them.
+		n := 1
+		if m[1] != "" {
+			parsed, err := strconv.Atoi(m[1])
+			if err != nil {
+				return tasks.Repeat{Custom: true, Text: trimmed}
 			}
+			n = parsed
+		}
+		if unit, ok := unitWords[m[2]]; ok &&
+			n >= tasks.RepeatEveryMin && n <= tasks.RepeatEveryMax {
+			return tasks.Repeat{Every: n, Unit: unit}
 		}
 	}
 	return tasks.Repeat{Custom: true, Text: trimmed}

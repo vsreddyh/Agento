@@ -377,9 +377,15 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 // was rescheduled, so stop the nag and say nothing.
                 TaskReminders.cancelOne(appCtx, taskId)
                 return
+            } else {
+                // Fetch failed: unknowable, so keep the cadence rather than
+                // guessing. This alarm is already consumed, and refresh
+                // carries an armed key instead of re-creating it — so
+                // staying quiet here would end the nag until some unrelated
+                // edit happened to re-derive it. The next successful fetch
+                // drops it the moment the task is gone or rescheduled.
+                TaskReminders.rearmOverdue(appCtx, taskId)
             }
-            // Fetch failed: unknowable, and unknowable must never mean
-            // "cancel" — the alarm set is left exactly as it is.
         }
         val name = task?.name.orEmpty().ifEmpty { "Task due" }
         // The fetch already carries the whole task — surface it instead
@@ -457,13 +463,6 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(tap)
-            // One notification per reminder. The group key is unique to
-            // this single notification, so no group summary can be built
-            // from it (that needs two members sharing a key) — the app
-            // never folds alerts together. The platform's own optional
-            // auto-grouping is a user setting, not something an app can
-            // override.
-            .setGroup("agento.reminder.$taskId.${kind.key}")
             // No icon (0): framework checkables render badly as action
             // icons on some OEMs.
             .addAction(0, "Done", done)
