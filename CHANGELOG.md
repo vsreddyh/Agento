@@ -37,7 +37,10 @@ see GitHub Releases for older notes.
   now purely an input:
   it still decides when the start moment and the "Start now" reminder fall,
   it is just no longer a number you have to read.
-- Reminder notifications carry the start time in place of the estimate.
+- The home-screen widget row and reminder notifications carry the start and
+  due times in place of the estimate, like the task list. The estimate is
+  now shown in exactly one place: the editor, which is also where it is
+  stored.
 - Corrected the 2-3 hour group's label, which shipped as "Next 1-3 hours"
   and so appeared to overlap "Next hour". Every group name now matches the
   range it holds.
