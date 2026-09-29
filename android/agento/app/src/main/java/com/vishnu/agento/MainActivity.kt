@@ -1371,7 +1371,12 @@ private fun TaskManagerScreen(
                 // `today` is a remember key below so buckets recompute
                 // past midnight while the app stays open.
                 // IST-pinned (#124) like every other displayed date.
-                val today = java.time.LocalDate.now(IST).toString()
+                // One clock per composition, reused by the overdue tests
+                // and the buckets below: separate now() reads can straddle
+                // midnight and disagree about what day it is.
+                val now = java.time.LocalDateTime.now(IST)
+                val day = now.toLocalDate()
+                val today = day.toString()
                 val visible = remember(tasks, query, sort, today) {
                     val q = query.trim().lowercase(Locale.ROOT)
                     tasks
@@ -1443,14 +1448,15 @@ private fun TaskManagerScreen(
                             clockTick++
                         }
                     }
-                    val day = java.time.LocalDate.now(IST)
-                    // Truncated to the minute, because LocalDateTime.now()
-                    // carries nanos: a raw value in the remember key would
-                    // miss every time and rebuild the sections on every
-                    // recomposition.
-                    val now = java.time.LocalDateTime.now(IST)
-                        .truncatedTo(java.time.temporal.ChronoUnit.MINUTES)
-                    val sections = remember(visible, bucketing, filter, day, now, clockTick) {
+                    // Only the *key* is truncated. LocalDateTime.now()
+                    // carries nanos, so a raw value in the key would miss
+                    // every time and rebuild the sections on every
+                    // recomposition — but the decisions themselves must use
+                    // the full instant, or a task due at 14:00:30 would sit
+                    // in "This hour" while the sheet already calls it
+                    // overdue.
+                    val clockKey = now.truncatedTo(java.time.temporal.ChronoUnit.MINUTES)
+                    val sections = remember(visible, bucketing, filter, day, clockKey, clockTick) {
                         if (!groupByDay || filter == ServerTaskFilter.Done) {
                             listOf(null to visible)
                         } else {
@@ -1591,14 +1597,14 @@ private fun TaskManagerScreen(
 
     val open = selected?.let { s -> tasks.firstOrNull { it.id == s.id } ?: s }
     if (open != null) {
-        // IST-pinned (#124) to match the list's overdue rule.
-        val sheetDay = java.time.LocalDate.now(IST)
+        // One clock for the date and the overdue test, so the sheet can
+        // never straddle midnight between the two. IST-pinned (#124) to
+        // match the list's overdue rule.
+        val sheetNow = java.time.LocalDateTime.now(IST)
+        val sheetDay = sheetNow.toLocalDate()
         ServerTaskDetailSheet(
             task = open,
-            overdue = open.isOverdue(
-                sheetDay.toString(),
-                java.time.LocalDateTime.now(IST),
-            ),
+            overdue = open.isOverdue(sheetDay.toString(), sheetNow),
             today = sheetDay,
             actionsEnabled = !busy,
             onDismiss = { selected = null },
