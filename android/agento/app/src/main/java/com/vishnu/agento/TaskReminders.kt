@@ -136,10 +136,13 @@ internal fun reminderPoints(
         val prevAt = lastAt
         if (lastKind != null && prevAt != null && at - prevAt < gap) {
             out.remove(lastKind)
-        } else {
-            lastKind = kind
-            lastAt = at
         }
+        // Always advance, including after a collapse: `last` has to be the
+        // point that won, or the next comparison is against a time that is
+        // no longer in the map. With today's constants only one collapse
+        // can fire, so this is latent rather than live.
+        lastKind = kind
+        lastAt = at
     }
     return out
 }
@@ -170,6 +173,9 @@ private fun reminderMessage(
             suffix(startLine, "starts")
     ReminderKind.Start ->
         "Start now" + suffix(dueLine, "due")
+    // No suffix on purpose: at the due moment the time *is* now, and "Due
+    // now · due 09:00" says the same thing twice. The expanded view below
+    // it still carries the window.
     ReminderKind.Due ->
         "Due now"
     ReminderKind.Overdue ->
@@ -408,14 +414,20 @@ object TaskReminders {
     }
 
     private fun operation(appCtx: Context, key: String): PendingIntent {
-        val (taskId, kind) = key.split('#', limit = 2)
-            .let { it[0] to (it.getOrNull(1) ?: ReminderKind.Due.key) }
+        // Split on the LAST '#': the kind is a fixed suffix, so an id that
+        // itself contained one would otherwise truncate the task id. Ids are
+        // hex ObjectIds today, so this is belt-and-braces.
+        val cut = key.lastIndexOf('#')
+        val taskId = if (cut < 0) key else key.substring(0, cut)
+        val kind = if (cut < 0) ReminderKind.Due.key else key.substring(cut + 1)
         // Distinct data URI per key: the PendingIntent stays unique even
         // if two keys ever share a hashCode.
         val fire = Intent(appCtx, TaskAlarmReceiver::class.java)
             .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
             .putExtra(EXTRA_REMINDER_KIND, kind)
-            .setData(Uri.parse("agento://reminder/$taskId/$kind"))
+            // The path segment is encoded: a '/' in an id would otherwise
+            // change the URI's structure and break PendingIntent identity.
+            .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}/$kind"))
         return PendingIntent.getBroadcast(
             appCtx, key.hashCode(), fire,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -512,11 +524,11 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         val message = reminderMessage(kind, dueLine, startLine)
         // Locals: task is nullable and conditions below don't smart-cast.
         val taskDesc = task?.description.orEmpty()
-        // Expanded view: the message, what the task actually is, and the
-        // window it has to happen in. Deliberately not a dump of every
-        // field — the repeat rule, the parallel flag and the estimate are
-        // things to look up in the app, not to read on a lock screen
-        // (issue #160). Two lines at most, plus the description.
+        // Expanded view, at most three lines: the message, the task's own
+        // description, and the window it has to happen in. Deliberately not
+        // a dump of every field — the repeat rule, the parallel flag and
+        // the estimate are things to look up in the app, not to read on a
+        // lock screen (issue #160).
         val big = buildList {
             add(message)
             if (taskDesc.isNotEmpty()) add(taskDesc)
