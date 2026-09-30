@@ -8,6 +8,17 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.11.0]
+
+- **Duplicate** on a task's detail sheet: one tap copies it 1:1 into a new
+  open task — name, details, due date and time, estimate, the entire repeat
+  and the parallel flag, all carried over verbatim. Nothing is adjusted on
+  the way through: a copy is a starting point to edit, not a rescheduled
+  twin, so a past due date stays past and a cadence comes across as the
+  same cadence. It sits beside Delete rather than crowding the primary row,
+  and a task with no due date or time says so instead of failing against
+  the server's mandatory rules.
+
 ## [4.10.0]
 
 - **Four reminder types, as specified** (issue #160), each with its own

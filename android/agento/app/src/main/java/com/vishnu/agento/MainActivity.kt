@@ -1196,6 +1196,51 @@ private fun TaskManagerScreen(
         }
     }
 
+    /**
+     * Copy a task 1:1 (issue #161): every field carried over verbatim —
+     * name, description, due date/time, estimate, the whole repeat block
+     * and the parallel flag — as a new **open** task. Nothing is "smarter"
+     * than the original: a past due date stays a past due date, and a
+     * cadence comes across as the same cadence. A copy is a starting point
+     * to edit, not a rescheduled twin.
+     */
+    fun doDuplicate(t: ServerTask) {
+        // Due date and time are mandatory, so a copy of a legacy row that
+        // has neither could only be rejected by the server. Say so here
+        // instead of firing a request that cannot succeed.
+        if (!t.dueDate.isIsoDate() || t.dueTime.isBlank()) {
+            scope.launch {
+                snackbar.showSnackbar(
+                    "This task has no due date or time yet — add one before copying it.")
+            }
+            return
+        }
+        busy = true
+        scope.launch {
+            api.create(
+                name = t.name,
+                description = t.description,
+                dueDate = t.dueDate,
+                dueTime = t.dueTime,
+                estimatedMinutes = t.estimatedMinutes,
+                repeatEvery = t.repeatEvery,
+                repeatUnit = t.repeatUnit,
+                repeatCustom = t.repeatCustom,
+                repeatRule = t.repeatRule,
+                parallelable = t.parallelable,
+            ).fold(
+                onSuccess = { copy ->
+                    editing = null
+                    refreshTick++
+                    pokeWidget()
+                    snackbar.showSnackbar("Copied \u201c${copy.name}\u201d.")
+                },
+                onFailure = ::fail,
+            )
+            busy = false
+        }
+    }
+
     fun doComplete(t: ServerTask) {
         busy = true
         scope.launch {
@@ -1663,6 +1708,10 @@ private fun TaskManagerScreen(
                 selected = null
                 if (open.isOpen()) doComplete(open) else doReopen(open)
             },
+            onDuplicate = {
+                selected = null
+                doDuplicate(open)
+            },
             onDelete = {
                 selected = null
                 deleting = open
@@ -1832,6 +1881,7 @@ private fun ServerTaskDetailSheet(
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onToggle: () -> Unit,
+    onDuplicate: () -> Unit,
     onDelete: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1953,17 +2003,34 @@ private fun ServerTaskDetailSheet(
                     Text("Edit")
                 }
             }
-            OutlinedButton(
-                onClick = onDelete,
-                enabled = actionsEnabled,
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error,
-                ),
+            // Duplicate sits beside Delete rather than joining the primary
+            // row: three buttons on one line is the cramped case, and both
+            // of these are secondary.
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Icon(Icons.Filled.Delete, contentDescription = null)
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Delete")
+                OutlinedButton(
+                    onClick = onDuplicate,
+                    enabled = actionsEnabled,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Duplicate")
+                }
+                OutlinedButton(
+                    onClick = onDelete,
+                    enabled = actionsEnabled,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Filled.Delete, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Delete")
+                }
             }
         }
     }
