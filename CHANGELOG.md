@@ -16,8 +16,9 @@ see GitHub Releases for older notes.
   the way through: a copy is a starting point to edit, not a rescheduled
   twin, so a past due date stays past and a cadence comes across as the
   same cadence. It sits beside Delete rather than crowding the primary row,
-  and a task with no due date or time says so instead of failing against
-  the server's mandatory rules.
+  and a task missing anything the app itself requires says exactly which
+  field — without closing the task, so the thing that needed fixing is
+  still on screen.
 
 ## [4.10.0]
 
