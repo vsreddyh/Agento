@@ -80,9 +80,9 @@ internal enum class ReminderKind(val key: String) {
  * Pure and [nowMillis]-injected so the rules are readable in one place:
  * - points already in the past are dropped, so a task created late gets no
  *   burst of stale notifications;
- * - two points landing in the same minute arm once, not twice — the usual
- *   case being a zero or tiny estimate, where "start now" and "due now"
- *   are the same moment and two notifications for it is just noise;
+ * - points closer together than [TaskReminders.MIN_GAP_MINUTES] collapse
+ *   into the later one, so a tiny estimate cannot produce "Start now" and
+ *   "Due now" a minute apart;
  * - once the due time itself has passed the overdue nag is due
  *   immediately, and the receiver repeats it every
  *   [TaskReminders.OVERDUE_EVERY_MINUTES].
@@ -115,21 +115,31 @@ internal fun reminderPoints(
         addIfFuture(out, ReminderKind.Start, start, nowMillis)
     }
     addIfFuture(out, ReminderKind.Due, due, nowMillis)
-    // Collapse reminders that would land on top of each other. The kinds
-    // are already chronological, so anything within MIN_GAP of the last
-    // one kept is dropped — a one-minute estimate would otherwise fire
-    // "Start now" and "Due now" a minute apart, which is one alert too
-    // many for one moment. Exact-equality was not enough here: the points
-    // are a minute-quantum apart, never identical.
+    // Collapse reminders that would land on top of each other: a one-minute
+    // estimate would otherwise fire "Start now" and "Due now" a minute
+    // apart, which is one alert too many for one moment. Exact-equality was
+    // not enough here — the points are a minute quantum apart, never
+    // identical.
+    //
+    // The *later* reminder wins, because the deadline is the alert that must
+    // not be missed: dropping "Start now" and keeping "Due now" loses
+    // nothing, where the reverse leaves a task that has just come due
+    // silent.
     val gap = TaskReminders.MIN_GAP_MINUTES * 60_000L
     // Nullable, not a Long sentinel: `at - Long.MIN_VALUE` overflows and
     // comes back negative, which would drop the first reminder of every
     // task — and for a task whose only point is Due, all of it.
-    var last: Long? = null
+    var lastKind: ReminderKind? = null
+    var lastAt: Long? = null
     for (kind in ReminderKind.entries) {
         val at = out[kind] ?: continue
-        val prev = last
-        if (prev != null && at - prev < gap) out.remove(kind) else last = at
+        val prevAt = lastAt
+        if (lastKind != null && prevAt != null && at - prevAt < gap) {
+            out.remove(lastKind)
+        } else {
+            lastKind = kind
+            lastAt = at
+        }
     }
     return out
 }
@@ -557,9 +567,11 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             // No icon (0): framework checkables render badly as action
             // icons on some OEMs.
             .addAction(0, "Done", done)
-        // Expanded view only when there's a description —
-        // otherwise it repeats the message in a second page.
-        if (taskDesc.isNotEmpty()) {
+        // Expanded view whenever it would add something: a task with no
+        // description still carries its window, and "Due now" alone leaves
+        // the time unsaid. When the body *is* just the message there is
+        // no second page worth opening.
+        if (big.lineSequence().count() > 1) {
             notif.setStyle(
                 NotificationCompat.BigTextStyle().bigText(big),
             )
