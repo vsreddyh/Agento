@@ -25,11 +25,12 @@ see GitHub Releases for older notes.
   matters.
 - The "5 minutes before due" heads-up is replaced by "at the due time", per
   the four types above, and the 5-minute lead now sits before the *start*.
-- A task with no estimate no longer fires a "Start now" alert at its due
-  moment — with nothing to start early for, it gets the heads-up and the
-  due alert only.
-- Two alerts landing in the same minute collapse into one, so a one-minute
-  estimate does not produce "Start now" and "Due now" back to back.
+- A task with no estimate gets the due alert only: there is no start time
+  for the 5-minute warning to lead into, and a "Start now" alert arriving
+  at the due moment would say the wrong thing.
+- Reminders that would land within two minutes of each other collapse into
+  one, so a one-minute estimate no longer fires "Start now" and "Due now"
+  back to back.
 - The alarm budget rose from 60 to 90, because a task now arms up to three
   points rather than two. See issue #165 for why that cap matters more than
   its size suggests.
