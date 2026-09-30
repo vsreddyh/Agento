@@ -1205,13 +1205,21 @@ private fun TaskManagerScreen(
      * to edit, not a rescheduled twin.
      */
     fun doDuplicate(t: ServerTask) {
-        // Due date and time are mandatory, so a copy of a legacy row that
-        // has neither could only be rejected by the server. Say so here
-        // instead of firing a request that cannot succeed.
-        if (!t.dueDate.isIsoDate() || t.dueTime.isBlank()) {
+        // Everything the client itself enforces is checked here, before the
+        // sheet is dismissed: a refusal that closes the task leaves the user
+        // with a snackbar and nothing to fix, because the thing they needed
+        // to change is behind a tap they just made.
+        val missing = listOf(
+            "a name" to t.name.isBlank(),
+            "some details" to t.description.isBlank(),
+            "a due date" to !t.dueDate.isIsoDate(),
+            "a due time" to t.dueTime.isBlank(),
+        ).filter { it.second }.map { it.first }
+        if (missing.isNotEmpty()) {
             scope.launch {
                 snackbar.showSnackbar(
-                    "This task has no due date or time yet — add one before copying it.")
+                    "This task has no ${missing.joinToString(" or ")} yet — add " +
+                        "${if (missing.size == 1) "it" else "them"} before copying it.")
             }
             return
         }
@@ -1231,6 +1239,9 @@ private fun TaskManagerScreen(
             ).fold(
                 onSuccess = { copy ->
                     editing = null
+                    // Closed here rather than by the caller, so a task
+                    // that cannot be copied stays open to be fixed.
+                    selected = null
                     refreshTick++
                     pokeWidget()
                     snackbar.showSnackbar("Copied \u201c${copy.name}\u201d.")
@@ -1708,10 +1719,7 @@ private fun TaskManagerScreen(
                 selected = null
                 if (open.isOpen()) doComplete(open) else doReopen(open)
             },
-            onDuplicate = {
-                selected = null
-                doDuplicate(open)
-            },
+            onDuplicate = { doDuplicate(open) },
             onDelete = {
                 selected = null
                 deleting = open
