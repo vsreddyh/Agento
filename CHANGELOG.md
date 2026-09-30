@@ -8,6 +8,32 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.10.0]
+
+- **Four reminder types, as specified** (issue #160), each with its own
+  message instead of one generic alert:
+  - **5 minutes before the start time** — "Starting in 5 minutes · due
+    Today, 07:30"
+  - **At the start time** — "Start now · due Today, 09:00"
+  - **At the due time** — "Due now · due Today, 09:00"
+  - **Every 15 minutes past due** — "Overdue since Today, 09:00"
+- **Notifications stopped echoing the whole task.** The expanded view was
+  repeating the due line, the start line, the estimate, the repeat rule and
+  the parallel flag — six lines of a record already visible in the app. It
+  is now the message, the task's own description, and the window it has to
+  happen in. The locked-screen line names the moment and the one time that
+  matters.
+- The "5 minutes before due" heads-up is replaced by "at the due time", per
+  the four types above, and the 5-minute lead now sits before the *start*.
+- A task with no estimate no longer fires a "Start now" alert at its due
+  moment — with nothing to start early for, it gets the heads-up and the
+  due alert only.
+- Two alerts landing in the same minute collapse into one, so a one-minute
+  estimate does not produce "Start now" and "Due now" back to back.
+- The alarm budget rose from 60 to 90, because a task now arms up to three
+  points rather than two. See issue #165 for why that cap matters more than
+  its size suggests.
+
 ## [4.9.0]
 
 - New **Current** section at the top of the task list: tasks whose start
