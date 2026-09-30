@@ -122,10 +122,14 @@ internal fun reminderPoints(
     // many for one moment. Exact-equality was not enough here: the points
     // are a minute-quantum apart, never identical.
     val gap = TaskReminders.MIN_GAP_MINUTES * 60_000L
-    var last = Long.MIN_VALUE
+    // Nullable, not a Long sentinel: `at - Long.MIN_VALUE` overflows and
+    // comes back negative, which would drop the first reminder of every
+    // task — and for a task whose only point is Due, all of it.
+    var last: Long? = null
     for (kind in ReminderKind.entries) {
         val at = out[kind] ?: continue
-        if (at - last < gap) out.remove(kind) else last = at
+        val prev = last
+        if (prev != null && at - prev < gap) out.remove(kind) else last = at
     }
     return out
 }
@@ -163,8 +167,8 @@ private fun reminderMessage(
 }
 
 /** " · due Today, 09:00", or nothing when there is no time to show. */
-private fun suffix(line: String, label: String): String =
-    if (line.isEmpty()) "" else " \u00b7 $label $line"
+private fun suffix(line: String?, label: String): String =
+    if (line.isNullOrEmpty()) "" else " \u00b7 $label $line"
 
 private fun addIfFuture(
     out: MutableMap<ReminderKind, Long>,
