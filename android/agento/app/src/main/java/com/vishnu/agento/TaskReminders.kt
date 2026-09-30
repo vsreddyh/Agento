@@ -52,13 +52,11 @@ fun dueMillisOrNull(dueDate: String, dueTime: String): Long? {
 }
 
 /** One of the reminder points a task can fire at. */
-/**
- * The four reminders a task gets (issue #160), in the order they happen.
+/** The four reminders a task gets (issue #160), in the order they happen.
  *
  * A reminder is a *moment*, not a field: the copy for each is written
  * against what has just happened, so the lock screen says one useful thing
- * rather than echoing the task back. [reminderMessage] holds the wording.
- */
+ * rather than echoing the task back. [reminderMessage] holds the wording. */
 internal enum class ReminderKind(val key: String) {
     /** [TaskReminders.BEFORE_START_MINUTES] before the start time. */
     BeforeStart("before"),
@@ -155,9 +153,9 @@ internal fun reminderPoints(
  * glance in a notification stack, because a "Start now" and a "Due now"
  * that read the same are worse than no reminder at all.
  *
- * [dueLine] and [startLine] are already formatted ("Today, 09:00"); both
- * are empty when the task could not be fetched, and the wording degrades
- * to the bare fact rather than inventing a time.
+ * [dueLine] and [startLine] are already formatted ("Today, 09:00"). When
+ * the task could not be fetched, [dueLine] is "" and [startLine] is null,
+ * and the wording degrades to the bare fact rather than inventing a time.
  */
 private fun reminderMessage(
     kind: ReminderKind,
