@@ -363,7 +363,7 @@ object TaskReminders {
         val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val fire = Intent(appCtx, TaskAlarmReceiver::class.java)
             .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
-            .setData(Uri.parse("agento://reminder/$taskId"))
+            .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}"))
         mgr.cancel(
             PendingIntent.getBroadcast(
                 appCtx, taskId.hashCode(), fire,
@@ -545,7 +545,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             appCtx, ("done:$taskId").hashCode(),
             Intent(appCtx, TaskCompleteActivity::class.java)
                 .putExtra(TaskWidget.EXTRA_COMPLETE_ID, taskId)
-                .setData(Uri.parse("agento://reminder/$taskId/complete")),
+                .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}/complete")),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE)
