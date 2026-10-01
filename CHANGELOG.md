@@ -8,6 +8,19 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.14.1]
+
+- **Shared Mongo plumbing, split HTTP routes** (#171). `internal/mongostore`
+  holds the one shape three stores repeated: connect-with-convention,
+  the env pair, tolerant int/bool readers (including the driver's int32),
+  and the list cap policy — with pure unit tests that run in CI. The
+  1,033-line `health-api/main.go` is now five files (`main`, `health`,
+  `files`, `tasks`, `projects`) with one `register(mux)` each, and the
+  task store's repeat rules and rollover live in `repeat.go`/`rollover.go`.
+  No behaviour changes. Two honest corrections to the issue: only two
+  `toInt` copies existed (not three), and cookbook/healthcheck keep their
+  env-internal constructors (a different shape, not a duplication).
+
 ## [4.14.0]
 
 - **One validation authority for repeats.** The HTTP layer stated the

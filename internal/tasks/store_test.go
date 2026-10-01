@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"agento/internal/mongo"
+	"agento/internal/mongostore"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"os"
@@ -537,7 +538,7 @@ func TestUpdateRepeatRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cadence body: %v", err)
 	}
-	if n, _ := toInt(doc["repeat_every"]); n != 3 || doc["repeat_unit"] != "days" {
+	if n, _ := mongostore.ToInt(doc["repeat_every"]); n != 3 || doc["repeat_unit"] != "days" {
 		t.Fatalf("cadence body drifted: %v", doc)
 	}
 	// Zero-values back onto the cadence: cleared by overwrite.
@@ -547,7 +548,7 @@ func TestUpdateRepeatRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clear body: %v", err)
 	}
-	if n, _ := toInt(doc["repeat_every"]); n != 0 || doc["repeat_unit"] != "" {
+	if n, _ := mongostore.ToInt(doc["repeat_every"]); n != 0 || doc["repeat_unit"] != "" {
 		t.Fatalf("clear body drifted: %v", doc)
 	}
 	// Custom words: set whole, structured keys neutral.
@@ -591,7 +592,7 @@ func TestUpdateRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := doc["id"].(string)
-	if n, _ := toInt(doc["revision"]); n != 0 {
+	if n, _ := mongostore.ToInt(doc["revision"]); n != 0 {
 		t.Fatalf("create must start the chain at 0: %v", doc["revision"])
 	}
 	rev := func() int {
@@ -599,7 +600,7 @@ func TestUpdateRevision(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		n, _ := toInt(d["revision"])
+		n, _ := mongostore.ToInt(d["revision"])
 		return n
 	}
 	// Fresh write with the matching revision: ok, and the chain moves.
@@ -713,10 +714,10 @@ func TestListLimitAndTruncated(t *testing.T) {
 		t.Fatalf("capped list: %d rows truncated=%v err=%v", len(rows), truncated, err)
 	}
 	// The ceiling holds: no caller can ask past MaxLimit.
-	if got := clampLimit(1 << 30); got != MaxLimit {
+	if got := mongostore.ClampLimit(1<<30, DefaultLimit, MaxLimit); got != MaxLimit {
 		t.Fatalf("clampLimit(huge) = %d, want %d", got, MaxLimit)
 	}
-	if got := clampLimit(0); got != DefaultLimit {
+	if got := mongostore.ClampLimit(0, DefaultLimit, MaxLimit); got != DefaultLimit {
 		t.Fatalf("clampLimit(0) = %d, want %d", got, DefaultLimit)
 	}
 }

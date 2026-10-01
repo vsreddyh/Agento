@@ -14,17 +14,14 @@ package tasks
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"math"
-	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
-	"agento/internal/mongo"
+	"agento/internal/mongostore"
 	"agento/internal/validate"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -38,220 +35,6 @@ const (
 	// RetentionDays drives the TTL target for completed tasks.
 	RetentionDays = 3
 )
-
-// Repeat is a task's recurrence, in one of two mutually exclusive modes:
-//
-//	structured — Every N Unit ("every 3 days"), the machine-usable case;
-//	custom     — the user's own words in Text, verbatim.
-//
-// An all-zero Repeat is a one-shot task. The server stores the recurrence
-// but never advances it: creating the next occurrence is the caller's job
-// (see skills/task-manager/SKILL.md).
-type Repeat struct {
-	// Every is the count, RepeatEveryMin..RepeatEveryMax; 0 = unset.
-	Every int
-	// Unit is one of RepeatUnits; "" = unset.
-	Unit string
-	// Custom selects the Text mode.
-	Custom bool
-	// Text is the custom condition, stored verbatim.
-	Text string
-}
-
-const (
-	// RepeatEveryMin/Max bound the structured count. The upper bound is
-	// the largest interval a person tracks by eye (a 4-weekly cycle);
-	// anything longer wants a custom condition instead.
-	RepeatEveryMin = 1
-	RepeatEveryMax = 28
-)
-
-// RepeatUnits lists the accepted Unit values, shortest first.
-func RepeatUnits() []string { return []string{"days", "weeks", "months", "years"} }
-
-func isRepeatUnit(u string) bool {
-	for _, v := range RepeatUnits() {
-		if u == v {
-			return true
-		}
-	}
-	return false
-}
-
-// IsZero reports the one-shot case: no cadence and no custom text.
-func (r Repeat) IsZero() bool {
-	return r.Every == 0 && r.Unit == "" && !r.Custom && r.Text == ""
-}
-
-// Normalize infers the mode flag from what the caller actually sent, so
-// clients that predate Repeat.Custom (and the 4.6 migration, which only
-// knew the free-text rule) keep working unchanged: text with no
-// structured cadence means a custom condition.
-func (r Repeat) Normalize() Repeat {
-	if r.Text != "" && !r.Custom && r.Every == 0 && r.Unit == "" {
-		r.Custom = true
-	}
-	return r
-}
-
-// Validate rejects the shapes that would leave the recurrence ambiguous.
-// The one leniency is Normalize's: text alone is a custom condition.
-func (r Repeat) Validate() error {
-	r = r.Normalize()
-	if r.Custom {
-		if strings.TrimSpace(r.Text) == "" {
-			return fail("repeat_custom is set but repeat_rule is empty — a custom condition needs the words")
-		}
-		if r.Every != 0 || r.Unit != "" {
-			return fail("set either repeat_every/repeat_unit or a custom condition, not both")
-		}
-		return nil
-	}
-	if r.Every == 0 && r.Unit == "" {
-		if strings.TrimSpace(r.Text) != "" {
-			return fail("repeat_rule text needs repeat_custom = true")
-		}
-		return nil
-	}
-	if r.Every < RepeatEveryMin || r.Every > RepeatEveryMax {
-		return fail("repeat_every must be %d-%d, got %d", RepeatEveryMin, RepeatEveryMax, r.Every)
-	}
-	if !isRepeatUnit(r.Unit) {
-		return fail("repeat_unit must be one of %s, got '%s'",
-			strings.Join(RepeatUnits(), "/"), r.Unit)
-	}
-	if strings.TrimSpace(r.Text) != "" {
-		return fail("repeat_rule text needs repeat_custom = true")
-	}
-	return nil
-}
-
-// IsStructured reports the machine-usable mode: a cadence with a count
-// and a unit, and no custom text. Only a structured repeat can be rolled
-// over automatically — a custom condition is the caller's to interpret.
-func (r Repeat) IsStructured() bool {
-	n := r.Normalize()
-	return n.Every > 0 && n.Unit != "" && !n.Custom
-}
-
-// MaxRollovers bounds the catch-up loop in NextDueDate.
-const MaxRollovers = 1500
-
-// NextDueDate advances a YYYY-MM-DD date by the cadence and returns
-// YYYY-MM-DD. ok is false for a custom/empty cadence or an unparseable
-// date.
-//
-// Two details that are easy to get wrong:
-//   - Month/year arithmetic clamps to the last day of the target month
-//     instead of overflowing: the 31st of a 30-day month becomes the 28th
-//     (29th in a leap year), and 31 Jan + 1 month is 28/29 Feb, not 3 Mar.
-//   - A task that has been left overdue for months would otherwise roll
-//     straight back into the past and nag immediately, so the date is
-//     advanced until it is on/after today.
-func (r Repeat) NextDueDate(dueDate string, today time.Time) (string, bool) {
-	if !r.IsStructured() {
-		return "", false
-	}
-	d, err := time.Parse("2006-01-02", strings.TrimSpace(dueDate))
-	if err != nil {
-		return "", false
-	}
-	step := r.Normalize()
-	cutoff := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)
-	next := d
-	for i := 0; i < MaxRollovers; i++ {
-		next = advanceDate(next, step.Every, step.Unit)
-		if !next.Before(cutoff) {
-			return next.Format("2006-01-02"), true
-		}
-	}
-	// Only reachable for a cadence whose every step lands in the past
-	// (a daily task untouched for over four years). Refusing is the honest
-	// answer: the caller creates the next occurrence itself rather than
-	// receiving a date that is already overdue.
-	return "", false
-}
-
-// advanceDate adds count units, clamping the day to the target month's
-// length. Go's AddDate normalizes overflow (31 Jan + 1 month = 3 Mar),
-// which is never what a repeating task means.
-func advanceDate(d time.Time, count int, unit string) time.Time {
-	switch unit {
-	case "days":
-		return d.AddDate(0, 0, count)
-	case "weeks":
-		return d.AddDate(0, 0, 7*count)
-	case "months":
-		month := int(d.Month()) - 1 + count
-		year := d.Year() + month/12
-		month = month%12 + 1
-		if month < 1 {
-			month += 12
-			year--
-		}
-		m := time.Month(month)
-		return time.Date(year, m, min(d.Day(), daysInMonth(year, m)), 0, 0, 0, 0, time.UTC)
-	case "years":
-		year := d.Year() + count
-		return time.Date(year, d.Month(), min(d.Day(), daysInMonth(year, d.Month())), 0, 0, 0, 0, time.UTC)
-	}
-	// Unknown unit can't reach here (Validate rejects it), but never spin.
-	return d
-}
-
-func daysInMonth(year int, month time.Month) int {
-	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
-}
-
-// String renders the recurrence for humans: "Every 3 days", the custom
-// words verbatim, or "" for a one-shot task.
-func (r Repeat) String() string {
-	r = r.Normalize()
-	if r.Custom || (r.Every == 0 && r.Unit == "") {
-		return r.Text
-	}
-	singular := strings.TrimSuffix(r.Unit, "s")
-	if r.Every == 1 {
-		return "Every " + singular
-	}
-	return "Every " + strconv.Itoa(r.Every) + " " + r.Unit
-}
-
-// docs renders the stored shape. Kept in one place so Create, Update and
-// the migration can never disagree on the key names.
-func (r Repeat) docs() bson.M {
-	r = r.Normalize()
-	return bson.M{
-		"repeat_every":  r.Every,
-		"repeat_unit":   r.Unit,
-		"repeat_custom": r.Custom,
-		"repeat_rule":   r.Text,
-	}
-}
-
-// repeatFromDoc reads a doc's recurrence, tolerating pre-4.6 docs that
-// only ever had the free-text repeat_rule string.
-func repeatFromDoc(doc bson.M) Repeat {
-	r := Repeat{
-		Every:  0,
-		Unit:   "",
-		Custom: false,
-		Text:   "",
-	}
-	if v, ok := doc["repeat_rule"].(string); ok {
-		r.Text = v
-	}
-	if n, ok := toInt(doc["repeat_every"]); ok {
-		r.Every = n
-	}
-	if u, ok := doc["repeat_unit"].(string); ok {
-		r.Unit = u
-	}
-	if b, ok := toBool(doc["repeat_custom"]); ok {
-		r.Custom = b
-	}
-	return r.Normalize()
-}
 
 var timeRE = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
@@ -283,18 +66,10 @@ type Store struct {
 
 // New connects to uri/dbName and ensures indexes.
 func New(uri, dbName string) (*Store, error) {
-	uri = strings.TrimSpace(uri)
-	if uri == "" {
-		return nil, errors.New("MONGODB_URI is not set — MongoDB is the only backend")
-	}
-	if strings.TrimSpace(dbName) == "" {
-		dbName = "hermes"
-	}
-	c, err := mongo.ConnectURI(uri)
+	c, db, err := mongostore.Open(uri, dbName)
 	if err != nil {
 		return nil, err
 	}
-	db := c.Database(dbName)
 	s := &Store{client: c, db: db, tasks: db.Collection(coll)}
 	if err := s.EnsureSchema(context.Background()); err != nil {
 		return nil, err
@@ -304,7 +79,8 @@ func New(uri, dbName string) (*Store, error) {
 
 // FromEnv builds a Store from MONGODB_URI/MONGODB_DB (single root .env).
 func FromEnv() (*Store, error) {
-	return New(os.Getenv("MONGODB_URI"), os.Getenv("MONGODB_DB"))
+	uri, db := mongostore.Env()
+	return New(uri, db)
 }
 
 // EnsureSchema creates the TTL + query indexes (idempotent).
@@ -457,17 +233,6 @@ const (
 	MaxLimit     = 500
 )
 
-// clampLimit applies the List cap policy (default + ceiling).
-func clampLimit(limit int) int64 {
-	if limit <= 0 {
-		return DefaultLimit
-	}
-	if limit > MaxLimit {
-		return MaxLimit
-	}
-	return int64(limit)
-}
-
 // List returns tasks filtered by state. state: "open" (default), "done", "all".
 // overdue=true keeps only open tasks with due_date before today.
 // The second return value reports truncation: a +1 probe row is fetched and
@@ -504,7 +269,7 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 			{"description": bson.M{"$regex": rx, "$options": "i"}},
 		}
 	}
-	lim := clampLimit(limit)
+	lim := mongostore.ClampLimit(limit, DefaultLimit, MaxLimit)
 	cur, err := s.tasks.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "due_date", Value: 1}, {Key: "createdAt", Value: 1}}).SetLimit(lim+1))
 	if err != nil {
 		return nil, false, err
@@ -570,13 +335,13 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	// the precise message (which revision was wanted, which is stored);
 	// the filter below makes it atomic, so two holders of the same number
 	// cannot both win and a concurrent $inc cannot slip between.
-	stored, _ := toInt(cur["revision"])
+	stored, _ := mongostore.ToInt(cur["revision"])
 	guarded, want := false, 0
 	if v, ok := fields["expected_revision"]; ok && v != nil {
 		if f, isFloat := v.(float64); isFloat && f != math.Trunc(f) {
 			return nil, fail("expected_revision must be an integer >= 0")
 		}
-		want, ok = toInt(v)
+		want, ok = mongostore.ToInt(v)
 		if !ok || want < 0 {
 			return nil, fail("expected_revision must be an integer >= 0")
 		}
@@ -642,7 +407,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		return nil, err
 	}
 	if v, ok := fields["estimated_minutes"]; ok && v != nil {
-		n, ok := toInt(v)
+		n, ok := mongostore.ToInt(v)
 		if !ok || n < 0 {
 			return nil, fail("estimated_minutes must be >= 0")
 		}
@@ -662,7 +427,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		}
 	}
 	if v, ok := fields["parallelable"]; ok && v != nil {
-		b, ok := toBool(v)
+		b, ok := mongostore.ToBool(v)
 		if !ok {
 			return nil, fail("parallelable must be a boolean")
 		}
@@ -680,7 +445,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&latest); ferr != nil {
 			return nil, fail("unknown task '%s'", id)
 		}
-		if now, _ := toInt(latest["revision"]); now != want {
+		if now, _ := mongostore.ToInt(latest["revision"]); now != want {
 			return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, now)
 		}
 		return toDoc(latest), nil
@@ -709,7 +474,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&latest); ferr != nil {
 			return nil, fail("unknown task '%s'", id)
 		}
-		now, _ := toInt(latest["revision"])
+		now, _ := mongostore.ToInt(latest["revision"])
 		return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, now)
 	}
 	return s.Get(ctx, id)
@@ -744,7 +509,7 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 		if f, isFloat := v.(float64); isFloat && f != math.Trunc(f) {
 			return rep, true, fail("repeat_every must be an integer %d-%d", RepeatEveryMin, RepeatEveryMax)
 		}
-		n, ok := toInt(v)
+		n, ok := mongostore.ToInt(v)
 		if !ok {
 			return rep, true, fail("repeat_every must be an integer %d-%d", RepeatEveryMin, RepeatEveryMax)
 		}
@@ -754,7 +519,7 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 		rep.Unit = strings.TrimSpace(str)
 	}
 	if v, ok := fields["repeat_custom"]; ok && v != nil {
-		b, ok := toBool(v)
+		b, ok := mongostore.ToBool(v)
 		if !ok {
 			return rep, true, fail("repeat_custom must be a boolean")
 		}
@@ -830,35 +595,6 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 // rollOver creates the next occurrence of a structured cadence, carrying
 // every other field over. (nil, nil) for a one-shot or custom task, which
 // leaves the next occurrence to the caller.
-func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]any, error) {
-	rep := repeatFromDoc(bson.M(done))
-	if !rep.IsStructured() {
-		return nil, nil
-	}
-	if err := rep.Validate(); err != nil {
-		return nil, err
-	}
-	dueDate, _ := done["due_date"].(string)
-	dueTime, _ := done["due_time"].(string)
-	nextDate, ok := rep.NextDueDate(dueDate, time.Now().UTC())
-	if !ok {
-		return nil, nil
-	}
-	name, _ := done["name"].(string)
-	description, _ := done["description"].(string)
-	// Typed reads, not defaults: a legacy row with an unparseable field must
-	// fail the rollover (logged) rather than roll over with reset values.
-	mins, ok := toInt(done["estimated_minutes"])
-	if !ok {
-		return nil, fail("cannot roll over: estimated_minutes is not a number")
-	}
-	parallel, ok := toBool(done["parallelable"])
-	if !ok {
-		return nil, fail("cannot roll over: parallelable is not a boolean")
-	}
-	return s.Create(ctx, name, description, nextDate, dueTime, &mins, rep, &parallel)
-}
-
 // Reopen clears completion (completedAt + expiresAt), making it open again.
 // Errors on unknown ids and on tasks that are already open.
 func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
@@ -896,25 +632,4 @@ func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 		return false, err
 	}
 	return res.DeletedCount > 0, nil
-}
-
-func toInt(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int32:
-		return int(n), true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	}
-	return 0, false
-}
-
-// toBool accepts real booleans only — strings like "true" are caller bugs,
-// not values (same strictness as checkTaskFields on the HTTP layer).
-func toBool(v any) (bool, bool) {
-	b, ok := v.(bool)
-	return b, ok
 }

@@ -6,16 +6,14 @@
 package money
 
 import (
+	"agento/internal/mongostore"
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-
-	"agento/internal/mongo"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -70,7 +68,7 @@ func signedDeltas(doc bson.M) map[string]float64 {
 		out[aid] = -amt
 	case "transfer":
 		out[aid] = -amt
-	dst := idHex(doc["sending_to"])
+		dst := idHex(doc["sending_to"])
 		out[dst] += amt
 	}
 	return out
@@ -87,18 +85,10 @@ type Store struct {
 
 // New connects with an explicit URI/db (use FromEnv for single-root-.env).
 func New(uri, dbName string) (*Store, error) {
-	uri = strings.TrimSpace(uri)
-	if uri == "" {
-		return nil, errors.New("MONGODB_URI is not set — MongoDB is the only backend")
-	}
-	if strings.TrimSpace(dbName) == "" {
-		dbName = "hermes"
-	}
-	c, err := mongo.ConnectURI(uri)
+	c, db, err := mongostore.Open(uri, dbName)
 	if err != nil {
 		return nil, err
 	}
-	db := c.Database(dbName)
 	s := &Store{client: c, db: db, accts: db.Collection(accounts), txns: db.Collection(transactions)}
 	if err := s.EnsureSchema(context.Background()); err != nil {
 		return nil, err
@@ -108,7 +98,8 @@ func New(uri, dbName string) (*Store, error) {
 
 // FromEnv builds a Store from MONGODB_URI/MONGODB_DB (single root .env).
 func FromEnv() (*Store, error) {
-	return New(os.Getenv("MONGODB_URI"), os.Getenv("MONGODB_DB"))
+	uri, db := mongostore.Env()
+	return New(uri, db)
 }
 
 // useTransactions probes for replica-set support; only positive cached.
@@ -631,4 +622,3 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	}
 	return nil
 }
-

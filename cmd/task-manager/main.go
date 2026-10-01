@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 
+	"agento/internal/mongostore"
 	"agento/internal/tasks"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -29,7 +30,7 @@ func repeatOf(doc map[string]any) tasks.Repeat {
 	if s, ok := doc["repeat_rule"].(string); ok {
 		rep.Text = s
 	}
-	if n, ok := toInt(doc["repeat_every"]); ok {
+	if n, ok := mongostore.ToInt(doc["repeat_every"]); ok {
 		rep.Every = n
 	}
 	if u, ok := doc["repeat_unit"].(string); ok {
@@ -42,20 +43,6 @@ func repeatOf(doc map[string]any) tasks.Repeat {
 }
 
 // toInt mirrors the store's number handling for response maps.
-func toInt(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int32:
-		return int(n), true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	}
-	return 0, false
-}
-
 // repeatHint spells out the exact create_task keys that reproduce a
 // recurrence, so the agent copies a cadence instead of re-deriving it.
 func repeatHint(rep tasks.Repeat) string {
