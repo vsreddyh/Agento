@@ -208,22 +208,30 @@ private fun addIfFuture(
  * [OVERDUE_EVERY_MINUTES] minutes until the task is dealt with.
  *
  * Scope guardrails: only open tasks with a due date + time inside
- * [HORIZON_DAYS] are armed, capped at [MAX_ALARMS] nearest-first (three
- * per task, so the cap has to be generous to keep coverage); stale alarms
- * for completed/deleted/edited tasks are cancelled via the persisted key
- * set. Exact alarms are used when the OS grants them, inexact otherwise.
+ * [HORIZON_DAYS] are armed, capped at [MAX_ALARMS] with one-shot alerts
+ * ranked ahead of repeating nags so the budget never silently eats the
+ * alert that is about to fire; stale alarms for completed/deleted/edited
+ * tasks are cancelled via the persisted key set. Exact alarms are used when
+ * the OS grants them, inexact otherwise.
+ *
+ * What the cap had to leave out is recorded in [Budget] and reported by
+ * the diagnostics card — over the cap is a condition the user can see,
+ * not one they infer from a reminder that never came (#165).
  */
 object TaskReminders {
 
     private const val PREF_ARMED = "task_reminder_armed"
+    private const val PREF_BUDGET = "task_reminder_budget"
     private const val PREF_ENABLED = "task_reminders_enabled"
     const val CHANNEL_ID = "task_reminders"
     private const val HORIZON_DAYS = 7L
-    // Three armed points per task (before start, start, due) plus the
-    // overdue loop, so the budget has to cover 3x the task count to be
-    // meaningful. See issue #165: over the cap, alarms are dropped
-    // silently, so this is a floor rather than a ceiling.
-    private const val MAX_ALARMS = 90
+    // A self-imposed guard, not a platform limit: Android allows far more,
+    // and Samsung's documented ceiling is 500 pending alarms per app. At
+    // three armed points per task, 200 covers roughly 65 timed tasks — past
+    // the point where the list itself needs paging (#168). What the cap
+    // protects is the OS's ability to hold them, so it is a floor for
+    // correctness, not a ceiling for capacity (#165).
+    private const val MAX_ALARMS = 200
 
     /** Lead time before the start time, for [ReminderKind.BeforeStart]. */
     internal const val BEFORE_START_MINUTES = 5L
@@ -265,23 +273,26 @@ object TaskReminders {
             val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
             val horizon = LocalDate.now(IST).plusDays(HORIZON_DAYS).toString()
             val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
-            // Nags the receiver already owns, carried through untouched.
-            // Nearest fire time first so the cap keeps the urgent ones.
-            val carried = HashSet<String>()
+            // Nags the receiver already owns. They are not re-armed here —
+            // that would fire an extra alert on every refresh, which happens
+            // after each task mutation — but they do compete for budget, or
+            // the nag set would grow without bound and the cap would only
+            // ever apply to new work. The task's due date rides along as the
+            // tiebreak: a nag's own fire time is always "in a few seconds",
+            // so there is nothing else left to rank them by.
+            val carried = LinkedHashMap<String, String>()
             val wanted = LinkedHashMap<String, Long>()
+            var timed = 0
             for (t in tasks) {
                 if (!t.dueDate.isIsoDate() || t.dueTime.isBlank()) continue
                 if (t.dueDate > horizon) continue
+                timed++
                 for ((kind, at) in reminderPoints(
                     t.dueDate, t.dueTime, t.estimatedMinutes, nowMillis,
                 )) {
                     val key = alarmKey(t.id, kind)
-                    // An armed nag owns its own cadence: re-arming it here
-                    // would fire an extra alert on every refresh (which
-                    // happens after each task mutation), and *dropping* it
-                    // would cancel the nag before it ever repeated.
                     if (kind == ReminderKind.Overdue && key in armed) {
-                        carried += key
+                        carried[key] = t.dueDate
                         continue
                     }
                     // The overdue point's own time is in the past by
@@ -295,16 +306,22 @@ object TaskReminders {
                     wanted[key] = fire
                 }
             }
-            val capped = wanted.entries
-                .sortedBy { (_, at) -> at }
+            // The budget (#165). One-shots rank ahead of nags, each group
+            // nearest-first: when the budget runs out, the right thing to
+            // lose is a repeating nag, not an alert the user has no other
+            // way of learning is coming. Ranking purely by fire time — as
+            // this did — meant a long-dated task could take every kind of
+            // alert away from a task that was due tomorrow.
+            val candidates = buildList {
+                for ((key, fire) in wanted) add(Bid(key, key.isNagKey(), fire, ""))
+                for ((key, due) in carried) add(Bid(key, true, nowMillis, due))
+            }
+            val capped = candidates
+                .sortedWith(compareBy({ it.nag }, { it.fire }, { it.tie }))
                 .take(MAX_ALARMS)
                 .map { it.key }
                 .toSet()
-            // Carried nags sit outside the cap on purpose: they are already
-            // committed, and cancelling a live nag to honour a cap is worse
-            // than briefly exceeding it.
             val keep = LinkedHashSet(capped)
-            keep.addAll(carried)
             for (key in armed) {
                 if (key in keep) continue
                 // Keys from 4.4 and earlier were a bare task id, armed with
@@ -316,6 +333,20 @@ object TaskReminders {
             for ((key, fire) in wanted) {
                 if (key in capped) armAlarm(appCtx, key, fire)
             }
+            val wantedOneShots = candidates.count { !it.nag }
+            saveBudget(
+                appCtx,
+                Budget(
+                    tasks = timed,
+                    wanted = candidates.size,
+                    cap = MAX_ALARMS,
+                    armed = capped.size,
+                    droppedOneShots = wantedOneShots -
+                        capped.count { !it.isNagKey() },
+                    droppedNags = candidates.size - wantedOneShots -
+                        capped.count { it.isNagKey() },
+                ),
+            )
             prefs(appCtx).edit()
                 .putStringSet(PREF_ARMED, keep)
                 .apply()
@@ -399,6 +430,69 @@ object TaskReminders {
 
     /** Alarm identity is one per task *and* kind: "<taskId>#<kind>". */
     private fun alarmKey(taskId: String, kind: ReminderKind) = "$taskId#${kind.key}"
+
+    /** True for an overdue nag key, by its suffix. */
+    private fun String.isNagKey(): Boolean =
+        endsWith("#${ReminderKind.Overdue.key}")
+
+    /**
+     * What the last [refresh] had to choose between (#165).
+     *
+     * [droppedOneShots] is the number that matters: a missed start or due
+     * alert is invisible, because nothing anywhere says "no alarm was set
+     * for this". A dropped nag costs the user nothing they can see, since
+     * the task is still listed, still in the widget and still marked
+     * overdue. Both counts are surfaced rather than swallowed, because a
+     * silently truncated budget is indistinguishable from a bug.
+     */
+    internal data class Budget(
+        val tasks: Int,
+        val wanted: Int,
+        val cap: Int,
+        val armed: Int,
+        val droppedOneShots: Int,
+        val droppedNags: Int,
+    ) {
+        val dropped: Int get() = droppedOneShots + droppedNags
+
+        /** One line, for the diagnostics card and the exported report. */
+        fun line(): String {
+            val head = "reminders $armed/$cap wanted=$wanted tasks=$tasks"
+            val dropped = if (dropped == 0) {
+                ""
+            } else {
+                " — OVER BUDGET, dropped $droppedOneShots alert(s)" +
+                    (if (droppedNags > 0) " and $droppedNags nag(s)" else "")
+            }
+            return head + dropped
+        }
+    }
+
+    /** One alarm's claim on the budget, and the order it claims in. */
+    private data class Bid(
+        val key: String,
+        val nag: Boolean,
+        val fire: Long,
+        val tie: String,
+    )
+
+    /** What the last refresh decided, or null before the first one. */
+    internal fun budget(appCtx: Context): Budget? {
+        val raw = prefs(appCtx).getIntArray(PREF_BUDGET, null) ?: return null
+        return if (raw.size == 6) {
+            Budget(raw[0], raw[1], raw[2], raw[3], raw[4], raw[5])
+        } else {
+            null
+        }
+    }
+
+    private fun saveBudget(appCtx: Context, b: Budget) {
+        prefs(appCtx).edit()
+            .putIntArray(PREF_BUDGET, intArrayOf(
+                b.tasks, b.wanted, b.cap, b.armed, b.droppedOneShots, b.droppedNags,
+            ))
+            .apply()
+    }
 
     /** Drop every armed alarm (reminders disabled). Legacy bare-id keys
      * need the old identity, exactly as in refresh — otherwise a

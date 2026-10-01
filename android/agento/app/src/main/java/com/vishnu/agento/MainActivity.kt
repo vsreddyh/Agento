@@ -6390,6 +6390,8 @@ private fun WidgetDiagnosticsCard() {
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     var summary by remember { mutableStateOf("") }
+    // Read once per entry: prefs only, so it is cheap and safe on Main.
+    var budget by remember { mutableStateOf<TaskReminders.Budget?>(null) }
     var copying by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
@@ -6399,11 +6401,26 @@ private fun WidgetDiagnosticsCard() {
     // Prefs/AppWidgetManager reads stay off Main (same as the log dump).
     LaunchedEffect(Unit) {
         summary = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
+        budget = TaskReminders.budget(context)
     }
     SectionCard(
         title = "Widget diagnostics",
-        subtitle = "Task-widget state and recent log. If the home-screen widget errors, save the report and upload it — it includes system log, where a host-side widget failure shows up.",
+        subtitle = "Task-widget state, the reminder budget, and recent log. If the home-screen widget errors, save the report and upload it — it includes system log, where a host-side widget failure shows up.",
     ) {
+        // The one thing in here that changes what the user should do: an
+        // exhausted budget means some tasks have no alert armed at all, and
+        // nothing else in the app would tell them (#165).
+        budget?.let { b ->
+            if (b.dropped > 0) {
+                Text(
+                    "Reminder budget exceeded — ${b.dropped} reminder(s) are not " +
+                        "armed, so those tasks will not alert. ${b.armed} of " +
+                        "${b.cap} slots used by ${b.tasks} timed task(s).",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
         if (summary.isNotEmpty()) {
             SelectionContainer {
                 Text(summary, style = MaterialTheme.typography.bodySmall)

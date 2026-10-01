@@ -225,6 +225,12 @@ class TaskWidget : AppWidgetProvider() {
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
                 appendLine("factoryError=${lastFactoryError ?: "none"}")
+                // What the reminder budget had to drop, if anything (#165).
+                // Without this a task whose alarm was never armed looks
+                // exactly like a task whose alarm never worked.
+                appendLine(
+                    "reminders=" + (
+                        TaskReminders.budget(ctx)?.line() ?: "no refresh yet"))
             }.trim()
         }.getOrDefault("(diagnostics unavailable)")
 
