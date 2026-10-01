@@ -278,6 +278,12 @@ object TaskReminders {
             // so "now" and the arming horizon must read the same zone.
             val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
             val horizon = LocalDate.now(IST).plusDays(HORIZON_DAYS).toString()
+            // One critical section from here to the final write. Everything
+            // below is CPU-only plus the arm/cancel calls, and the point is
+            // that an alarm firing on another thread cannot edit PREF_ARMED
+            // between this read and that write. The network fetch above is
+            // deliberately outside it — nothing else may be held up for it.
+            synchronized(this@TaskReminders) {
             val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
             // Nags the receiver already owns. They are not re-armed here —
             // that would fire an extra alert on every refresh, which happens
@@ -373,10 +379,17 @@ object TaskReminders {
                     ).encode(),
                 )
                 .apply()
+            }
         }
     }
 
-    /** Drop every reminder for one task (all kinds). */
+    /**
+     * Drop every reminder for one task (all kinds). Like [rearmOverdue] this
+     * leaves PREF_BUDGET alone: the budget is a snapshot of the last
+     * [refresh], and one task's alarms coming or going does not make that
+     * snapshot less true.
+     */
+    @Synchronized
     fun cancelOne(context: Context, taskId: String) {
         val appCtx = context.applicationContext
         for (kind in ReminderKind.entries) cancelKind(appCtx, alarmKey(taskId, kind))
@@ -389,11 +402,17 @@ object TaskReminders {
      * still open and still past due — completing, deleting or rescheduling
      * it stops the nagging.
      */
+    @Synchronized
     internal fun rearmOverdue(context: Context, taskId: String) {
         // Arms outside the cap and does not touch PREF_BUDGET: killing a
         // live nag mid-cycle to honour a budget is worse than briefly
         // exceeding one. The reported budget is therefore exact only after
         // the next [refresh], which re-derives both from the same pass.
+        //
+        // Synchronised on the object, like every other writer of PREF_ARMED:
+        // this is a read-modify-write against a set [refresh] replaces
+        // wholesale, so a nag firing mid-refresh must not have its key
+        // overwritten by that refresh finishing a moment later.
         val appCtx = context.applicationContext
         val key = alarmKey(taskId, ReminderKind.Overdue)
         val at = System.currentTimeMillis() + OVERDUE_EVERY_MINUTES * 60_000L
@@ -405,6 +424,7 @@ object TaskReminders {
     }
 
     /** Drop one armed alarm. The key is "<taskId>#<kind>". */
+    @Synchronized
     private fun cancelKind(appCtx: Context, key: String) {
         val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         mgr.cancel(operation(appCtx, key))
@@ -415,6 +435,7 @@ object TaskReminders {
     }
 
     /** Cancel a pre-4.5 alarm, whose identity had no kind segment. */
+    @Synchronized
     private fun cancelLegacy(appCtx: Context, taskId: String) {
         val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val fire = Intent(appCtx, TaskAlarmReceiver::class.java)
@@ -536,6 +557,7 @@ object TaskReminders {
     /** Drop every armed alarm (reminders disabled). Legacy bare-id keys
      * need the old identity, exactly as in refresh — otherwise a
      * pre-4.5 alarm survives the switch-off and fires afterwards. */
+    @Synchronized
     fun cancelAll(context: Context) {
         val appCtx = context.applicationContext
         for (key in prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()) {
