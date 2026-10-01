@@ -6,7 +6,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 
 /**
@@ -42,7 +42,7 @@ class TaskCompleteActivity : ComponentActivity() {
                 // Join before finishing: the scopes are static and would
                 // survive, but a process death right after the tap must
                 // not lose the widget/alarm write.
-                awaitAll(
+                joinAll(
                     TaskReminders.refresh(this@TaskCompleteActivity),
                     TaskWidget.refresh(this@TaskCompleteActivity),
                 )
