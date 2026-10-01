@@ -88,6 +88,9 @@ internal fun TaskManagerScreen(
     // One client for the screen (its OkHttpClient is shared process-wide).
     val api = remember(context) { TasksApi(context) }
     var tasks by remember { mutableStateOf<List<ServerTask>>(emptyList()) }
+    // Whether the server held back rows beyond its cap: the list below
+    // must say so rather than silently ending mid-collection (#168).
+    var listTruncated by remember { mutableStateOf(false) }
     // Persisted by enum name (enums have no default Saveable saver);
     // rotation used to reset these while the search query survived.
     var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
@@ -158,8 +161,9 @@ internal fun TaskManagerScreen(
         loading = true
         error = ""
         api.list(filter.state).fold(
-            onSuccess = {
-                tasks = it
+            onSuccess = { page ->
+                tasks = page.tasks
+                listTruncated = page.truncated
                 if (!scheduledOnce) {
                     scheduledOnce = true
                     TaskReminders.refresh(context)
@@ -550,7 +554,8 @@ internal fun TaskManagerScreen(
                     )
                 } else {
                     Text(
-                        "${visible.size} of ${tasks.size}",
+                        "${visible.size} of ${tasks.size}" +
+                            if (listTruncated) " — showing the first ${tasks.size}; search to narrow" else "",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

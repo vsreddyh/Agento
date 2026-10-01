@@ -375,7 +375,15 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	rows, err := store.List(ctx, state, false, "")
+	limit := 0
+	// Non-numeric ?limit= falls back to the store default (200) on
+	// purpose: a stray query param should never nuke the task list.
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			limit = n
+		}
+	}
+	rows, truncated, err := store.List(ctx, state, false, "", limit)
 	if err != nil {
 		writeTaskErr(w, err)
 		return
@@ -383,7 +391,7 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []map[string]any{}
 	}
-	writeJSON(w, http.StatusOK, bson.M{"tasks": rows})
+	writeJSON(w, http.StatusOK, bson.M{"tasks": rows, "truncated": truncated})
 }
 
 // taskStore opens the shared tasks collection (same rows the agent manages).

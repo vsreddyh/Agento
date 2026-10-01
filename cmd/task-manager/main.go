@@ -117,17 +117,18 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_tasks",
-		Description: "List tasks. state open (default) | done | all; overdue=true keeps open tasks due before today (requires state=open); search matches name/description."},
+		Description: "List tasks. state open (default) | done | all; overdue=true keeps open tasks due before today (requires state=open); search matches name/description; limit caps rows (default 200, max 500) and truncated says whether more exist."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			State   string `json:"state"`
 			Overdue bool   `json:"overdue"`
 			Search  string `json:"search"`
+			Limit   int    `json:"limit"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.List(ctx, in.State, in.Overdue, in.Search)
+			rows, truncated, err := store.List(ctx, in.State, in.Overdue, in.Search, in.Limit)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "tasks": rows})
+			return result(map[string]any{"ok": true, "count": len(rows), "truncated": truncated, "tasks": rows})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_task",

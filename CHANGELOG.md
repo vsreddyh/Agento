@@ -8,6 +8,23 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.13.0]
+
+- **Task lists are bounded.** Every task fetch now carries a limit (server
+  default 200, ceiling 500 — the same policy the projects endpoint already
+  had), and the server reports whether rows were held back. The Task Manager
+  says so in its count line instead of silently ending mid-collection; the
+  widget fetches 50 rows per state rather than the whole collection; the
+  reminder engine asks for the ceiling so its budget sees every task it
+  could arm.
+- **The alarm receiver asks for one task, not all of them.** It already knew
+  the id — now `GET /api/tasks/{id}` answers in one indexed lookup where the
+  full open list made every 15-minute nag quadratic. Gone (done/deleted)
+  still cancels silently; an unknowable fetch still alerts generic.
+- No cursor paging yet, on purpose: nothing in the UI pages, so an `after`
+  cursor would be dead API surface. The bound removes the cost; paging can
+  arrive with the UI that needs it.
+
 ## [4.12.4]
 
 - **Remaining screens moved out of MainActivity** (#163, last of four

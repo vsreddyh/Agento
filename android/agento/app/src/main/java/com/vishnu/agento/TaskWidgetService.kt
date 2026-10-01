@@ -77,7 +77,7 @@ private class TaskFactory(
                 ?: runCatching {
                     runBlocking {
                         withTimeoutOrNull(10_000) {
-                            TasksApi(appCtx).list(state).getOrNull()
+                            TasksApi(appCtx).list(state, limit = 50).getOrNull()?.tasks
                         }.orEmpty()
                     }
                 }.getOrDefault(emptyList())
