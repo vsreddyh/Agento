@@ -20,6 +20,18 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
+/** How a widget refresh ended, for whoever scheduled it (#170). */
+enum class RefreshOutcome {
+    /** No placement is installed: nothing to fetch for, and not a failure. */
+    NoPlacements,
+
+    /** At least one state was fetched and pushed. */
+    Ok,
+
+    /** Every state failed: the widget is showing whatever it had cached. */
+    Failed,
+}
+
 /** Which server state one widget placement shows. Stored per widget id
  * so two placements can watch different slices (Open, Done, All). */
 enum class TaskWidgetView(val state: String, val title: String) {
@@ -196,6 +208,13 @@ class TaskWidget : AppWidgetProvider() {
         // tap-to-retry) instead of a dead generic error.
         @Volatile private var lastErrors: Map<String, String> = emptyMap()
 
+        /** How the most recent [refresh] ended. Read by [TaskSyncWorker],
+         * which cannot otherwise tell a delivered push from a swallowed
+         * one — both `refresh` calls return a Job, and a Job that completes
+         * is a Job that threw nothing. */
+        @Volatile private var lastRefreshOutcome: RefreshOutcome =
+            RefreshOutcome.NoPlacements
+
         // Last RemoteViewsFactory failure (same process — the service has
         // no android:process). Surfaced in diagnostics so an on-device
         // widget crash names itself without adb.
@@ -210,6 +229,9 @@ class TaskWidget : AppWidgetProvider() {
         /** One-screen widget health summary for Settings → About, so
          * widget failures can be diagnosed without adb. Never throws
          * (a diagnostics call must not become a second crash). */
+        /** What the last [refresh] delivered. */
+        internal fun lastRefreshOutcome(): RefreshOutcome = lastRefreshOutcome
+
         fun diagnostics(appCtx: Context): String = runCatching {
             val ctx = appCtx.applicationContext
             val ids = runCatching {
@@ -498,7 +520,10 @@ class TaskWidget : AppWidgetProvider() {
          * All three states are fetched (in parallel) so every placement's
          * view has data regardless of which views are installed. */
         private suspend fun fetchAndPush(appCtx: Context, ids: IntArray) {
-            if (ids.isEmpty()) return
+            if (ids.isEmpty()) {
+                lastRefreshOutcome = RefreshOutcome.NoPlacements
+                return
+            }
             val api = TasksApi(appCtx)
             val views = mutableMapOf<String, List<ServerTask>>()
             val errors = mutableMapOf<String, String>()
@@ -517,6 +542,12 @@ class TaskWidget : AppWidgetProvider() {
             // Drop errors for states that just succeeded so a stale
             // message can never outlive its failure (#130 review).
             lastErrors = (lastErrors + errors) - views.keys
+            // Every state failed means nothing was delivered and the widget
+            // is now showing whatever it had cached. A partial failure is
+            // Ok: the states that worked are pushed, and the ones that did
+            // not render their own error, which is the existing behaviour.
+            lastRefreshOutcome =
+                if (views.isEmpty()) RefreshOutcome.Failed else RefreshOutcome.Ok
             val mgr = AppWidgetManager.getInstance(appCtx)
             // Only the service-backed collection listens for a data change;
             // direct items and static rows are re-rendered whole.

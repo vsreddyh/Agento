@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.joinAll
 
 /**
@@ -46,11 +47,25 @@ class TaskSyncWorker(
             TaskWidget.refresh(applicationContext),
             TaskReminders.refresh(applicationContext),
         )
-        Result.success()
+        // Both refreshes report failure by swallowing it — a Job that
+        // completes threw nothing, so a bare try/catch here would be a
+        // promise this class cannot keep. The widget does record how its
+        // last push ended, and that is the honest signal: when the server
+        // is unreachable every state fails, which also covers the reminder
+        // arming that failed silently for the same reason.
+        when (TaskWidget.lastRefreshOutcome()) {
+            RefreshOutcome.Failed -> {
+                Log.w(TAG, "every widget state failed to fetch")
+                Result.retry()
+            }
+            RefreshOutcome.Ok, RefreshOutcome.NoPlacements -> Result.success()
+        }
     } catch (e: Exception) {
-        // A transient failure (no network, server restarting) is worth
-        // another run; the next periodic execution would fix it anyway,
-        // but backoff spreads the retry out instead of hammering.
+        // A cancelled worker must not be retried: cancellation is how
+        // WorkManager and the system stop a run, and it is an
+        // IllegalStateException by inheritance, so a bare catch would turn
+        // "stop" into "try again".
+        if (e is CancellationException) throw e
         Log.w(TAG, "task surface refresh failed", e)
         Result.retry()
     }
