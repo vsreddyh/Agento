@@ -14,7 +14,6 @@ import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -495,13 +494,14 @@ class TaskWidget : AppWidgetProvider() {
 
         /** Re-pull server tasks and push to every installed widget. Call
          * after task mutations so the home screen never goes stale.
-         * Returns the worker Job so callers that must outlive a broadcast
-         * (BootReceiver) can join it. */
+         * Returns a Deferred so callers that must outlive a broadcast
+         * (BootReceiver) can wait on it — and so [TaskSyncWorker] can read
+         * how the run ended, one run at a time rather than out of a shared
+         * field. */
         fun refresh(context: Context): Deferred<RefreshOutcome> {
             val appCtx = context.applicationContext
             // async rather than launch: the outcome travels back as a value
-            // the caller can await, which a Job has nowhere to put. Still a
-            // Job, so every existing joinAll(...) caller is unaffected.
+            // the caller can await, which a Job has nowhere to put.
             return widgetScope.async {
                 fetchAndPush(
                     appCtx,

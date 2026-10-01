@@ -6,7 +6,7 @@ import android.content.Intent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -32,7 +32,7 @@ class BootReceiver : BroadcastReceiver() {
                 scope.launch {
                     try {
                         withTimeoutOrNull(60_000) {
-                            joinAll(
+                            awaitAll(
                                 TaskWidget.refresh(context),
                                 TaskReminders.refresh(context),
                             )
