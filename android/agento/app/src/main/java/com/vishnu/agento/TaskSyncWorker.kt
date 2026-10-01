@@ -5,7 +5,7 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.awaitAll
 
 /**
  * Periodic refresh of the task surfaces: the home-screen widget and the
@@ -38,27 +38,26 @@ class TaskSyncWorker(
     }
 
     override suspend fun doWork(): Result = try {
-        // Joined rather than fired and forgotten. A worker that returns
+        // Awaited rather than fired and forgotten. A worker that returns
         // while its fetch is still in flight gets its process reaped, and
         // the refresh that was halfway through is the one that gets lost —
         // which would leave the widget stale and look like the job is not
         // working at all.
-        joinAll(
+        val outcomes = awaitAll(
             TaskWidget.refresh(applicationContext),
             TaskReminders.refresh(applicationContext),
         )
-        // Both refreshes report failure by swallowing it — a Job that
-        // completes threw nothing, so a bare try/catch here would be a
-        // promise this class cannot keep. The widget does record how its
-        // last push ended, and that is the honest signal: when the server
-        // is unreachable every state fails, which also covers the reminder
-        // arming that failed silently for the same reason.
-        when (TaskWidget.lastRefreshOutcome()) {
-            RefreshOutcome.Failed -> {
-                Log.w(TAG, "every widget state failed to fetch")
-                Result.retry()
-            }
-            RefreshOutcome.Ok, RefreshOutcome.NoPlacements -> Result.success()
+        // Both refreshes report failure by swallowing it, so neither throws
+        // and a bare try/catch here would be a promise this class cannot
+        // keep. Each returns its own outcome for this run instead — a
+        // per-run value, not a shared field, because an in-app mutation
+        // can start a refresh while this one is in flight.
+        val failed = outcomes.filterIsInstance<RefreshOutcome.Failed>()
+        if (failed.isNotEmpty()) {
+            Log.w(TAG, "task surface refresh failed: $outcomes")
+            Result.retry()
+        } else {
+            Result.success()
         }
     } catch (e: Exception) {
         // A cancelled worker must not be retried: cancellation is how

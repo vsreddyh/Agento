@@ -3,7 +3,9 @@ package com.vishnu.agento
 import android.app.Application
 import android.content.Context
 import android.os.Bundle
+import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
@@ -64,6 +66,15 @@ class AgentoApp : Application() {
         fun scheduleTaskSync(context: Context) {
             val request = PeriodicWorkRequestBuilder<TaskSyncWorker>(
                 TASK_SYNC_INTERVAL_MINUTES, TimeUnit.MINUTES
+            ).setConstraints(
+                // Offline, there is nothing to fetch and nothing to report:
+                // without this every tick wakes the process, fails all the
+                // requests and schedules a backoff retry. Constrained, an
+                // offline window simply passes and the run happens when the
+                // network is back.
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
             ).build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 TASK_SYNC_WORK_NAME,

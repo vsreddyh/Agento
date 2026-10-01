@@ -12,6 +12,7 @@ import android.util.Log
 import android.view.View
 import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -208,13 +209,6 @@ class TaskWidget : AppWidgetProvider() {
         // tap-to-retry) instead of a dead generic error.
         @Volatile private var lastErrors: Map<String, String> = emptyMap()
 
-        /** How the most recent [refresh] ended. Read by [TaskSyncWorker],
-         * which cannot otherwise tell a delivered push from a swallowed
-         * one — both `refresh` calls return a Job, and a Job that completes
-         * is a Job that threw nothing. */
-        @Volatile private var lastRefreshOutcome: RefreshOutcome =
-            RefreshOutcome.NoPlacements
-
         // Last RemoteViewsFactory failure (same process — the service has
         // no android:process). Surfaced in diagnostics so an on-device
         // widget crash names itself without adb.
@@ -229,9 +223,6 @@ class TaskWidget : AppWidgetProvider() {
         /** One-screen widget health summary for Settings → About, so
          * widget failures can be diagnosed without adb. Never throws
          * (a diagnostics call must not become a second crash). */
-        /** What the last [refresh] delivered. */
-        internal fun lastRefreshOutcome(): RefreshOutcome = lastRefreshOutcome
-
         fun diagnostics(appCtx: Context): String = runCatching {
             val ctx = appCtx.applicationContext
             val ids = runCatching {
@@ -506,9 +497,12 @@ class TaskWidget : AppWidgetProvider() {
          * after task mutations so the home screen never goes stale.
          * Returns the worker Job so callers that must outlive a broadcast
          * (BootReceiver) can join it. */
-        fun refresh(context: Context): Job {
+        fun refresh(context: Context): Deferred<RefreshOutcome> {
             val appCtx = context.applicationContext
-            return widgetScope.launch {
+            // async rather than launch: the outcome travels back as a value
+            // the caller can await, which a Job has nowhere to put. Still a
+            // Job, so every existing joinAll(...) caller is unaffected.
+            return widgetScope.async {
                 fetchAndPush(
                     appCtx,
                     taskWidgetIds(appCtx),
@@ -516,14 +510,22 @@ class TaskWidget : AppWidgetProvider() {
             }
         }
 
-        /** Single fetch-and-push path shared by pull() and refresh().
+        /**
+         * Single fetch-and-push path shared by pull() and refresh().
+         *
+         * Returns how it ended rather than leaving that in a field: the
+         * scope is shared, so a refresh started by an in-app mutation and
+         * one started by [TaskSyncWorker] can be in flight together, and a
+         * shared value hands each caller the other one's result.
+         *
          * All three states are fetched (in parallel) so every placement's
-         * view has data regardless of which views are installed. */
-        private suspend fun fetchAndPush(appCtx: Context, ids: IntArray) {
-            if (ids.isEmpty()) {
-                lastRefreshOutcome = RefreshOutcome.NoPlacements
-                return
-            }
+         * view has data regardless of which views are installed.
+         */
+        private suspend fun fetchAndPush(
+            appCtx: Context,
+            ids: IntArray,
+        ): RefreshOutcome {
+            if (ids.isEmpty()) return RefreshOutcome.NoPlacements
             val api = TasksApi(appCtx)
             val views = mutableMapOf<String, List<ServerTask>>()
             val errors = mutableMapOf<String, String>()
@@ -546,8 +548,6 @@ class TaskWidget : AppWidgetProvider() {
             // is now showing whatever it had cached. A partial failure is
             // Ok: the states that worked are pushed, and the ones that did
             // not render their own error, which is the existing behaviour.
-            lastRefreshOutcome =
-                if (views.isEmpty()) RefreshOutcome.Failed else RefreshOutcome.Ok
             val mgr = AppWidgetManager.getInstance(appCtx)
             // Only the service-backed collection listens for a data change;
             // direct items and static rows are re-rendered whole.
@@ -594,6 +594,7 @@ class TaskWidget : AppWidgetProvider() {
                     Log.w("TaskWidget", "notifyDataChanged failed", it)
                 }
             }
+            return if (views.isEmpty()) RefreshOutcome.Failed else RefreshOutcome.Ok
         }
 
         /** Full widget view: header reflects this placement's view and the
