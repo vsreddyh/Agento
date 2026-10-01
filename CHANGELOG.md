@@ -8,6 +8,24 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.12.0]
+
+- **The task widget now refreshes on its own, every 30 minutes.** It used to
+  show whatever was true when it was last pushed, and the only pushes came
+  from a task being changed *in the app*. So a task created or completed by
+  the assistant — the entire reason the list is shared — reached the home
+  screen only when the app was next opened and something else was touched.
+  The widget now goes stale within half an hour rather than indefinitely,
+  which is when it matters: when you are not looking at the app.
+- The same periodic run re-derives the reminder alarms, so reminders for
+  tasks created elsewhere are armed without waiting for you to open the app.
+- It is its own scheduled job rather than something the hourly health sync
+  also does. Health sync runs behind a foreground notification and retries
+  with backoff when it fails; coupling the task list to it would let a
+  failed health sync quietly starve the widget.
+- Costs nothing when unused: both refreshes return immediately if reminders
+  are off and no widget is placed.
+
 ## [4.11.2]
 
 - **The start-time rule is defined once.** "A task starts `estimated_minutes`
