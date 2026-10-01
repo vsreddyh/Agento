@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.12.1]
+
+- **Task domain moved out of MainActivity** (#163, first of four moves).
+  The filter/sort/bucket rules, the editor draft and its repeat validation —
+  everything with no Compose in it — now live in `TaskDomain.kt`, moved
+  verbatim with only `private` widened to `internal`. No behaviour changes;
+  the next moves are the task UI, then the settings UI.
+
 ## [4.12.0]
 
 - **The task widget now refreshes on its own, every 30 minutes.** It used to
