@@ -52,8 +52,7 @@ class TaskSyncWorker(
         // keep. Each returns its own outcome for this run instead — a
         // per-run value, not a shared field, because an in-app mutation
         // can start a refresh while this one is in flight.
-        val failed = outcomes.filterIsInstance<RefreshOutcome.Failed>()
-        if (failed.isNotEmpty()) {
+        if (outcomes.any { it == RefreshOutcome.Failed }) {
             Log.w(TAG, "task surface refresh failed: $outcomes")
             Result.retry()
         } else {
