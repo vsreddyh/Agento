@@ -6,11 +6,14 @@ import android.content.Intent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Re-arms hourly sync right after reboot or update (PeriodicWork persists, this avoids waiting for the next window). */
+/**
+ * Re-arms both periodic jobs right after reboot or update (WorkManager
+ * persists them, this avoids waiting for the next window).
+ */
 class BootReceiver : BroadcastReceiver() {
     /** Holds the broadcast until work finishes; returning early would let
      * the process die mid-fetch after a reboot, silently skipping the
@@ -32,7 +35,10 @@ class BootReceiver : BroadcastReceiver() {
                 scope.launch {
                     try {
                         withTimeoutOrNull(60_000) {
-                            joinAll(
+                            // Outcomes ignored: boot has no retry, and the
+                            // Deferreds never fail — but await, never join,
+                            // so an unexpected throw is observed, not lost.
+                            awaitAll(
                                 TaskWidget.refresh(context),
                                 TaskReminders.refresh(context),
                             )
