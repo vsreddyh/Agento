@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.12.4]
+
+- **Remaining screens moved out of MainActivity** (#163, last of four
+  moves). Chat (`ChatScreen.kt`), the legacy projects board
+  (`TasksScreen.kt`), storage, scheduler, skills and tools each live in
+  their own file now — moved verbatim apart from `private` → `internal`
+  and per-file imports. What stays in `MainActivity.kt` (556 lines) is the
+  navigation shell, the drawer/rail, the theme store and three small
+  helpers shared across screens. No behaviour changes. Closes #163.
+
 ## [4.12.3]
 
 - **Settings UI moved out of MainActivity** (#163, third of four moves).
