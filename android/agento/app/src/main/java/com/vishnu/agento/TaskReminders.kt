@@ -9,11 +9,13 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -281,118 +283,131 @@ object TaskReminders {
      */
     fun refresh(context: Context): Deferred<RefreshOutcome> {
         val appCtx = context.applicationContext
+        // The Deferred itself never fails, for the same reason as the
+        // widget's: fire-and-forget callers must be able to drop it.
         return scope.async {
-            if (!isEnabled(appCtx)) return@async RefreshOutcome.Ok
-            val tasks = TasksApi(appCtx).list("open").getOrNull()
-                ?: return@async RefreshOutcome.Failed
-            // IST-pinned (#124): due times are entered as wall-clock IST,
-            // so "now" and the arming horizon must read the same zone.
-            val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
-            val horizon = LocalDate.now(IST).plusDays(HORIZON_DAYS).toString()
-            // One critical section from here to the final write. Everything
-            // below is CPU-only plus the arm/cancel calls, and the point is
-            // that an alarm firing on another thread cannot edit PREF_ARMED
-            // between this read and that write. The network fetch above is
-            // deliberately outside it — nothing else may be held up for it.
-            synchronized(this@TaskReminders) {
-            val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
-            // Nags the receiver already owns. They are not re-armed here —
-            // that would fire an extra alert on every refresh, which happens
-            // after each task mutation — but they do compete for budget, or
-            // the nag set would grow without bound and the cap would only
-            // ever apply to new work. What it went overdue rides along as
-            // the tiebreak: a nag's own fire time is always "in a few
-            // seconds", so the due instant is the only thing left to rank
-            // one against another.
-            val carried = LinkedHashMap<String, Bid>()
-            val wanted = LinkedHashMap<String, Bid>()
-            var timed = 0
-            for (t in tasks) {
-                if (!t.dueDate.isIsoDate() || t.dueTime.isBlank()) continue
-                if (t.dueDate > horizon) continue
-                // One clock for every comparison below: the ranking, the
-                // reminder points and the budget's own tie-break. Parsed
-                // rather than read off the strings, because ClockTime takes
-                // "9:00" as readily as "09:00" and a concatenated date and
-                // time would sort those two the wrong way round.
-                val dueAt = dueMillisOrNull(t.dueDate, t.dueTime) ?: continue
-                val points = reminderPoints(
-                    t.dueDate, t.dueTime, t.estimatedMinutes, nowMillis,
-                )
-                // Counted once the task has actually produced a point, so
-                // the reported total is a denominator the numbers divide into
-                // rather than one inflated by rows the parser rejected.
-                if (points.isEmpty()) continue
-                timed++
-                for ((kind, at) in points) {
-                    val key = alarmKey(t.id, kind)
-                    val nag = kind == ReminderKind.Overdue
-                    val bid = Bid(
-                        key = key,
-                        nag = nag,
-                        fire = if (nag) nowMillis + NAG_FIRE_OFFSET else at,
-                        // The moment it went overdue, for the nag ordering
-                        // below. Zero for one-shots, which order by fire time
-                        // alone and never tie.
-                        tie = if (nag) dueAt else 0L,
-                    )
-                    // An armed nag owns its own cadence: re-arming one here
-                    // would fire an extra alert on every refresh, so it is
-                    // carried — but it still competes for budget.
-                    if (nag && key in armed) carried[key] = bid else wanted[key] = bid
-                }
+            try {
+                refreshInner(appCtx)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("TaskReminders", "refresh failed", e)
+                RefreshOutcome.Failed
             }
-            // The budget (#165). One-shots rank ahead of nags, each group
-            // nearest-first: when the budget runs out, the right thing to
-            // lose is a repeating nag, not an alert the user has no other
-            // way of learning is coming. Ranking purely by fire time — as
-            // this did — meant a long-dated task could take every kind of
-            // alert away from a task that was due tomorrow. Nags tie on fire
-            // time, so they are ordered by how long each has been overdue.
-            val candidates = ArrayList<Bid>(wanted.size + carried.size)
-            candidates.addAll(wanted.values)
-            candidates.addAll(carried.values)
-            val capped = candidates
-                .sortedWith(compareBy({ it.nag }, { it.fire }, { it.tie }))
-                .take(MAX_ALARMS)
-                .map { it.key }
-                .toSet()
-            val keep = LinkedHashSet(capped)
-            for (key in armed) {
-                if (key in keep) continue
-                // Keys from 4.4 and earlier were a bare task id, armed with
-                // a different PendingIntent identity (no "/<kind>" in the
-                // data URI) — cancel it that way or it would fire once,
-                // after the upgrade, for the old "due now" moment.
-                if (key.contains('#')) cancelKind(appCtx, key) else cancelLegacy(appCtx, key)
-            }
-            for (bid in wanted.values) {
-                if (bid.key in capped) armAlarm(appCtx, bid.key, bid.fire)
-            }
-            val byKey = candidates.associateBy { it.key }
-            val kept = capped.mapNotNull(byKey::get)
-            val wantedOneShots = candidates.count { !it.nag }
-            // Armed set and the budget that describes it go in together: a
-            // crash between two applies would leave the reported numbers
-            // describing an alarm set that is no longer the live one.
-            prefs(appCtx).edit()
-                .putStringSet(PREF_ARMED, keep)
-                .putString(
-                    PREF_BUDGET,
-                    Budget(
-                        tasks = timed,
-                        wanted = candidates.size,
-                        cap = MAX_ALARMS,
-                        armed = capped.size,
-                        droppedOneShots = wantedOneShots - kept.count { !it.nag },
-                        droppedNags = (candidates.size - wantedOneShots) -
-                            kept.count { it.nag },
-                    ).encode(),
-                )
-                .apply()
-            }
-            RefreshOutcome.Ok
         }
+    }
+
+    private suspend fun refreshInner(appCtx: Context): RefreshOutcome {
+        if (!isEnabled(appCtx)) return RefreshOutcome.Ok
+        val tasks = TasksApi(appCtx).list("open").getOrNull()
+            ?: return RefreshOutcome.Failed
+        // IST-pinned (#124): due times are entered as wall-clock IST,
+        // so "now" and the arming horizon must read the same zone.
+        val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
+        val horizon = LocalDate.now(IST).plusDays(HORIZON_DAYS).toString()
+        // One critical section from here to the final write. Everything
+        // below is CPU-only plus the arm/cancel calls, and the point is
+        // that an alarm firing on another thread cannot edit PREF_ARMED
+        // between this read and that write. The network fetch above is
+        // deliberately outside it — nothing else may be held up for it.
+        synchronized(this@TaskReminders) {
+        val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
+        // Nags the receiver already owns. They are not re-armed here —
+        // that would fire an extra alert on every refresh, which happens
+        // after each task mutation — but they do compete for budget, or
+        // the nag set would grow without bound and the cap would only
+        // ever apply to new work. What it went overdue rides along as
+        // the tiebreak: a nag's own fire time is always "in a few
+        // seconds", so the due instant is the only thing left to rank
+        // one against another.
+        val carried = LinkedHashMap<String, Bid>()
+        val wanted = LinkedHashMap<String, Bid>()
+        var timed = 0
+        for (t in tasks) {
+            if (!t.dueDate.isIsoDate() || t.dueTime.isBlank()) continue
+            if (t.dueDate > horizon) continue
+            // One clock for every comparison below: the ranking, the
+            // reminder points and the budget's own tie-break. Parsed
+            // rather than read off the strings, because ClockTime takes
+            // "9:00" as readily as "09:00" and a concatenated date and
+            // time would sort those two the wrong way round.
+            val dueAt = dueMillisOrNull(t.dueDate, t.dueTime) ?: continue
+            val points = reminderPoints(
+                t.dueDate, t.dueTime, t.estimatedMinutes, nowMillis,
+            )
+            // Counted once the task has actually produced a point, so
+            // the reported total is a denominator the numbers divide into
+            // rather than one inflated by rows the parser rejected.
+            if (points.isEmpty()) continue
+            timed++
+            for ((kind, at) in points) {
+                val key = alarmKey(t.id, kind)
+                val nag = kind == ReminderKind.Overdue
+                val bid = Bid(
+                    key = key,
+                    nag = nag,
+                    fire = if (nag) nowMillis + NAG_FIRE_OFFSET else at,
+                    // The moment it went overdue, for the nag ordering
+                    // below. Zero for one-shots, which order by fire time
+                    // alone and never tie.
+                    tie = if (nag) dueAt else 0L,
+                )
+                // An armed nag owns its own cadence: re-arming one here
+                // would fire an extra alert on every refresh, so it is
+                // carried — but it still competes for budget.
+                if (nag && key in armed) carried[key] = bid else wanted[key] = bid
+            }
+        }
+        // The budget (#165). One-shots rank ahead of nags, each group
+        // nearest-first: when the budget runs out, the right thing to
+        // lose is a repeating nag, not an alert the user has no other
+        // way of learning is coming. Ranking purely by fire time — as
+        // this did — meant a long-dated task could take every kind of
+        // alert away from a task that was due tomorrow. Nags tie on fire
+        // time, so they are ordered by how long each has been overdue.
+        val candidates = ArrayList<Bid>(wanted.size + carried.size)
+        candidates.addAll(wanted.values)
+        candidates.addAll(carried.values)
+        val capped = candidates
+            .sortedWith(compareBy({ it.nag }, { it.fire }, { it.tie }))
+            .take(MAX_ALARMS)
+            .map { it.key }
+            .toSet()
+        val keep = LinkedHashSet(capped)
+        for (key in armed) {
+            if (key in keep) continue
+            // Keys from 4.4 and earlier were a bare task id, armed with
+            // a different PendingIntent identity (no "/<kind>" in the
+            // data URI) — cancel it that way or it would fire once,
+            // after the upgrade, for the old "due now" moment.
+            if (key.contains('#')) cancelKind(appCtx, key) else cancelLegacy(appCtx, key)
+        }
+        for (bid in wanted.values) {
+            if (bid.key in capped) armAlarm(appCtx, bid.key, bid.fire)
+        }
+        val byKey = candidates.associateBy { it.key }
+        val kept = capped.mapNotNull(byKey::get)
+        val wantedOneShots = candidates.count { !it.nag }
+        // Armed set and the budget that describes it go in together: a
+        // crash between two applies would leave the reported numbers
+        // describing an alarm set that is no longer the live one.
+        prefs(appCtx).edit()
+            .putStringSet(PREF_ARMED, keep)
+            .putString(
+                PREF_BUDGET,
+                Budget(
+                    tasks = timed,
+                    wanted = candidates.size,
+                    cap = MAX_ALARMS,
+                    armed = capped.size,
+                    droppedOneShots = wantedOneShots - kept.count { !it.nag },
+                    droppedNags = (candidates.size - wantedOneShots) -
+                        kept.count { it.nag },
+                ).encode(),
+            )
+            .apply()
+        }
+        RefreshOutcome.Ok
     }
 
     /**

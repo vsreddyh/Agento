@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
  */
 class AgentoApp : Application() {
 
-    /** Re-enqueues hourly sync on every cold start; safe to call repeatedly. */
+    /** Re-enqueues both periodic jobs on every cold start; safe to call repeatedly. */
     override fun onCreate() {
         super.onCreate()
         ForegroundTracker.install(this)

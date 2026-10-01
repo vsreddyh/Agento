@@ -15,22 +15,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-
-/** How a widget refresh ended, for whoever scheduled it (#170). */
-enum class RefreshOutcome {
-    /** No placement is installed: nothing to fetch for, and not a failure. */
-    NoPlacements,
-
-    /** At least one state was fetched and pushed. */
-    Ok,
-
-    /** Every state failed: the widget is showing whatever it had cached. */
-    Failed,
-}
 
 /** Which server state one widget placement shows. Stored per widget id
  * so two placements can watch different slices (Open, Done, All). */
@@ -502,11 +491,23 @@ class TaskWidget : AppWidgetProvider() {
             val appCtx = context.applicationContext
             // async rather than launch: the outcome travels back as a value
             // the caller can await, which a Job has nowhere to put.
+            // The Deferred itself never fails: an unexpected throw becomes
+            // Failed, so the fire-and-forget callers (pokeWidget, the config
+            // activity, the timezone path) can keep dropping the result
+            // without leaving an unobserved exception behind. Cancellation
+            // still propagates — a cancelled run is not a failed fetch.
             return widgetScope.async {
-                fetchAndPush(
-                    appCtx,
-                    taskWidgetIds(appCtx),
-                )
+                try {
+                    fetchAndPush(
+                        appCtx,
+                        taskWidgetIds(appCtx),
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("TaskWidget", "refresh failed", e)
+                    RefreshOutcome.Failed
+                }
             }
         }
 
