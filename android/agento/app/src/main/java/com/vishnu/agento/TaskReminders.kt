@@ -407,7 +407,7 @@ object TaskReminders {
             )
             .apply()
         }
-        RefreshOutcome.Ok
+        return RefreshOutcome.Ok
     }
 
     /**
