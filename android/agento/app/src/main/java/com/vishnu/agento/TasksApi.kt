@@ -41,22 +41,34 @@ data class ServerTask(
     val nextDueDate: String = "",
 )
 
-/**
- * The moment the work is meant to begin: `due - estimated_minutes`, which
- * is exactly when the "Start now" reminder fires. A zero estimate has no
- * start nudge, so the due time is used instead — the same rule the server's
- * reminder engine applies, so the two can never disagree about when a task
- * starts. Null when the task has no usable due time.
- */
+/** The deadline as an instant, or null when it cannot be parsed. */
 fun ServerTask.dueMillisOrNull(): Long? = dueMillisOrNull(dueDate, dueTime)
 
+/**
+ * The one definition of when a task starts: [estimatedMinutes] before it is
+ * due, or **null** when the task has no start of its own.
+ *
+ * A zero estimate means there is nothing to start early for, and that null
+ * is why the two callers want different things out of this function — which
+ * is exactly why neither of them should be deciding it for itself. The list
+ * needs a moment to sort on and a day to group under, so
+ * [startMillisOrNull] falls back to the deadline; the reminder engine must
+ * not arm a "Start now" alert at all. One rule, one place, two answers,
+ * rather than the same arithmetic written twice and held in step by a
+ * comment in each file (#164).
+ */
+internal fun startMomentMillis(dueMillis: Long, estimatedMinutes: Int): Long? =
+    if (estimatedMinutes > 0) dueMillis - estimatedMinutes * 60_000L else null
+
+/**
+ * The moment the work is meant to begin — which is exactly when the
+ * "Start now" reminder fires, because both come from [startMomentMillis].
+ * A task with no estimate of its own starts when it is due. Null only when
+ * the task has no usable due time.
+ */
 fun ServerTask.startMillisOrNull(): Long? {
     val due = dueMillisOrNull() ?: return null
-    return if (estimatedMinutes > 0) {
-        due - estimatedMinutes * 60_000L
-    } else {
-        due
-    }
+    return startMomentMillis(due, estimatedMinutes) ?: due
 }
 
 /** Start moment as the (date, HH:mm) pair the display helpers take. */

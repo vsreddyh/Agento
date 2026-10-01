@@ -97,13 +97,16 @@ internal fun reminderPoints(
         out[ReminderKind.Overdue] = due
         return out
     }
-    if (estimatedMinutes > 0) {
-        // A zero estimate has no start of its own — the same rule the list
-        // and the app's startMillisOrNull() use, so all three agree. With no
-        // estimate there is no start time for the 5-minute warning to lead
-        // into, and "Start now" would fire *at* the due moment saying the
-        // wrong thing, so such a task gets the due alert alone.
-        val start = due - estimatedMinutes * 60_000L
+    // The start rule itself is not re-derived here: [startMomentMillis] is
+    // the same definition the list buckets and sorts with, so "starts now"
+    // cannot mean one thing in the reminder engine and another in the row
+    // the user is looking at (#164).
+    val start = startMomentMillis(due, estimatedMinutes)
+    if (start != null) {
+        // A zero estimate has no start of its own, so there is no start time
+        // for the 5-minute warning to lead into and "Start now" would fire
+        // *at* the due moment saying the wrong thing: such a task gets the
+        // due alert alone.
         addIfFuture(
             out,
             ReminderKind.BeforeStart,

@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.11.2]
+
+- **The start-time rule is defined once.** "A task starts `estimated_minutes`
+  before it is due, and a zero estimate has no start of its own" lived twice —
+  once in the task model and once re-derived in the reminder engine, with a
+  comment in each file pointing at the other as the only thing keeping them
+  in step. Both now call one function. No behaviour changes: the list still
+  sorts and groups with the deadline as a zero-estimate task's start, and a
+  zero-estimate task still gets no "Start now" alert.
+
 ## [4.11.1]
 
 - **The reminder budget is no longer silent.** Past the cap, reminders were
