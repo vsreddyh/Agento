@@ -433,9 +433,32 @@ func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime 
 	return toDoc(doc), nil
 }
 
+// List cap policy, mirroring the projects store: an unbounded Find grows
+// with the collection, and every caller of List is a phone, a widget or a
+// nag loop. limit <= 0 means the default; anything above the ceiling is
+// clamped, never rejected. (#171: this pair of clamps wants one home.)
+const (
+	DefaultLimit = 200
+	MaxLimit     = 500
+)
+
+// clampLimit applies the List cap policy (default + ceiling).
+func clampLimit(limit int) int64 {
+	if limit <= 0 {
+		return DefaultLimit
+	}
+	if limit > MaxLimit {
+		return MaxLimit
+	}
+	return int64(limit)
+}
+
 // List returns tasks filtered by state. state: "open" (default), "done", "all".
 // overdue=true keeps only open tasks with due_date before today.
-func (s *Store) List(ctx context.Context, state string, overdue bool, search string) ([]map[string]any, error) {
+// The second return value reports truncation: a +1 probe row is fetched and
+// dropped, so callers can tell "exactly N" from "N of many" without a
+// second query (#168).
+func (s *Store) List(ctx context.Context, state string, overdue bool, search string, limit int) ([]map[string]any, bool, error) {
 	if state == "" {
 		state = "open"
 	}
@@ -449,10 +472,10 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 		filt["completedAt"] = bson.M{"$ne": nil, "$exists": true}
 	case "all":
 	default:
-		return nil, fail("state must be open|done|all, got '%s'", state)
+		return nil, false, fail("state must be open|done|all, got '%s'", state)
 	}
 	if overdue && state != "open" {
-		return nil, fail("overdue only applies to state=open, got state='%s'", state)
+		return nil, false, fail("overdue only applies to state=open, got state='%s'", state)
 	}
 	if overdue {
 		filt["completedAt"] = nil
@@ -466,20 +489,27 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 			{"description": bson.M{"$regex": rx, "$options": "i"}},
 		}
 	}
-	cur, err := s.tasks.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "due_date", Value: 1}, {Key: "createdAt", Value: 1}}))
+	lim := clampLimit(limit)
+	cur, err := s.tasks.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "due_date", Value: 1}, {Key: "createdAt", Value: 1}}).SetLimit(lim+1))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer cur.Close(ctx)
 	out := []map[string]any{}
 	for cur.Next(ctx) {
 		var doc bson.M
 		if err := cur.Decode(&doc); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = append(out, toDoc(doc))
 	}
-	return out, cur.Err()
+	if err := cur.Err(); err != nil {
+		return nil, false, err
+	}
+	if int64(len(out)) > lim {
+		return out[:int(lim)], true, nil
+	}
+	return out, false, nil
 }
 
 // Get fetches one task by hex id.

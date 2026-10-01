@@ -8,6 +8,59 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.13.0]
+
+- **Task lists are bounded.** Every task fetch now carries a limit (server
+  default 200, ceiling 500 — the same policy the projects endpoint already
+  had), and the server reports whether rows were held back. The Task Manager
+  says so in its count line instead of silently ending mid-collection; the
+  widget fetches 50 rows per state rather than the whole collection; the
+  reminder engine asks for the ceiling so its budget sees every task it
+  could arm.
+- **The alarm receiver asks for one task, not all of them.** It already knew
+  the id — now `GET /api/tasks/{id}` answers in one indexed lookup where the
+  full open list made every 15-minute nag quadratic. Gone (done/deleted)
+  still cancels silently; an unknowable fetch still alerts generic.
+- No cursor paging yet, on purpose: nothing in the UI pages, so an `after`
+  cursor would be dead API surface. The bound removes the cost; paging can
+  arrive with the UI that needs it.
+
+## [4.12.4]
+
+- **Remaining screens moved out of MainActivity** (#163, last of four
+  moves). Chat (`ChatScreen.kt`), the legacy projects board
+  (`TasksScreen.kt`), storage, scheduler, skills and tools each live in
+  their own file now — moved verbatim apart from `private` → `internal`
+  and per-file imports. What stays in `MainActivity.kt` (556 lines) is the
+  navigation shell, the drawer/rail, the theme store and three small
+  helpers shared across screens. No behaviour changes. Closes #163.
+
+## [4.12.3]
+
+- **Settings UI moved out of MainActivity** (#163, third of four moves).
+  The hub, every section and the widget diagnostics now live in
+  `SettingsScreen.kt`, moved verbatim apart from `private` → `internal`
+  and the import list. The two helpers settings still take from the old
+  file (`catalogPath`, `formatSyncTime`) were widened there. No behaviour
+  changes.
+
+## [4.12.2]
+
+- **Task Manager UI moved out of MainActivity** (#163, second of four
+  moves). The list screen, rows, detail sheet, editor dialog and the
+  date/time pickers now live in `TaskManagerScreen.kt`, with the two small
+  helpers only they use (`DetailLine`, `FormLabel`). Moved verbatim apart
+  from `private` → `internal` and the import list, which carries exactly
+  what the moved code references. No behaviour changes.
+
+## [4.12.1]
+
+- **Task domain moved out of MainActivity** (#163, first of four moves).
+  The filter/sort/bucket rules, the editor draft and its repeat validation —
+  everything with no Compose in it — now live in `TaskDomain.kt`, moved
+  verbatim with only `private` widened to `internal`. No behaviour changes;
+  the next moves are the task UI, then the settings UI.
+
 ## [4.12.0]
 
 - **The task widget now refreshes on its own, every 30 minutes.** It used to

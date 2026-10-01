@@ -51,11 +51,11 @@ func TestCreateAndList(t *testing.T) {
 	if _, ok := doc["completedAt"]; ok && doc["completedAt"] != nil {
 		t.Fatalf("new task must be open: %v", doc)
 	}
-	rows, err := s.List(ctx, "open", false, "")
+	rows, _, err := s.List(ctx, "open", false, "", 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("List open: %v %v", rows, err)
 	}
-	rows, err = s.List(ctx, "done", false, "")
+	rows, _, err = s.List(ctx, "done", false, "", 0)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("List done should be empty: %v %v", rows, err)
 	}
@@ -176,7 +176,7 @@ func TestCompleteReopenDelete(t *testing.T) {
 	if _, _, err := s.Complete(ctx, id); err == nil {
 		t.Fatal("double complete must fail")
 	}
-	rows, _ := s.List(ctx, "open", false, "")
+	rows, _, _ := s.List(ctx, "open", false, "", 0)
 	if len(rows) != 0 {
 		t.Fatalf("completed task must leave open list: %v", rows)
 	}
@@ -191,7 +191,7 @@ func TestCompleteReopenDelete(t *testing.T) {
 	if _, hasExpiry := open["expiresAt"]; hasExpiry {
 		t.Fatalf("reopen must clear expiresAt: %v", open)
 	}
-	rows, _ = s.List(ctx, "open", false, "")
+	rows, _, _ = s.List(ctx, "open", false, "", 0)
 	if len(rows) != 1 {
 		t.Fatalf("reopened task must be open again: %v", rows)
 	}
@@ -218,11 +218,11 @@ func TestReopenedExcludedFromDone(t *testing.T) {
 	}
 	// Reopen $unsets completedAt (field missing); bare $ne:null would
 	// still match it — the done filter must exclude it.
-	rows, err := s.List(ctx, "done", false, "")
+	rows, _, err := s.List(ctx, "done", false, "", 0)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("reopened task must not be in done list: %v %v", rows, err)
 	}
-	rows, err = s.List(ctx, "open", false, "")
+	rows, _, err = s.List(ctx, "open", false, "", 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("reopened task must be in open list: %v %v", rows, err)
 	}
@@ -234,7 +234,7 @@ func TestSearchRegexCharsLiteral(t *testing.T) {
 	if _, err := s.Create(ctx, "fix (auth) [urgent]", "login flow", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false)); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.List(ctx, "open", false, "(auth) [urgent]")
+	rows, _, err := s.List(ctx, "open", false, "(auth) [urgent]", 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("regex metachars must match literally: %v %v", rows, err)
 	}
@@ -515,13 +515,14 @@ func TestOverdueAndTTLIndex(t *testing.T) {
 	if _, err := s.Create(ctx, "future", "upcoming task", tomorrow, "08:00", intP(0), Repeat{}, boolP(false)); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.List(ctx, "open", true, "")
+	rows, _, err := s.List(ctx, "open", true, "", 0)
 	if err != nil || len(rows) != 1 || rows[0]["name"] != "late" {
 		t.Fatalf("overdue filter: %v %v", rows, err)
 	}
-	if _, err := s.List(ctx, "done", true, ""); err == nil {
+	if _, _, err := s.List(ctx, "done", true, "", 0); err == nil {
 		t.Fatal("overdue with state=done must fail")
 	}
+
 	cur, err := s.tasks.Indexes().List(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -543,5 +544,39 @@ func TestOverdueAndTTLIndex(t *testing.T) {
 		if !found {
 			t.Fatalf("missing index %s (have %v)", want, names)
 		}
+	}
+}
+
+func TestListLimitAndTruncated(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	for i := 0; i < 5; i++ {
+		name := "capped task"
+		if _, err := s.Create(ctx, name, "limit probe", tomorrow, "08:00", intP(0), Repeat{}, boolP(false)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Under the cap: everything, and no truncation flag.
+	rows, truncated, err := s.List(ctx, "open", false, "", 0)
+	if err != nil || len(rows) != 5 || truncated {
+		t.Fatalf("default list: %d rows truncated=%v err=%v", len(rows), truncated, err)
+	}
+	// At and over the edge: the +1 probe reports truncation, and the
+	// rows stop at the cap rather than spilling one extra.
+	rows, truncated, err = s.List(ctx, "open", false, "", 5)
+	if err != nil || len(rows) != 5 || truncated {
+		t.Fatalf("exact-cap list: %d rows truncated=%v err=%v", len(rows), truncated, err)
+	}
+	rows, truncated, err = s.List(ctx, "open", false, "", 3)
+	if err != nil || len(rows) != 3 || !truncated {
+		t.Fatalf("capped list: %d rows truncated=%v err=%v", len(rows), truncated, err)
+	}
+	// The ceiling holds: no caller can ask past MaxLimit.
+	if got := clampLimit(1 << 30); got != MaxLimit {
+		t.Fatalf("clampLimit(huge) = %d, want %d", got, MaxLimit)
+	}
+	if got := clampLimit(0); got != DefaultLimit {
+		t.Fatalf("clampLimit(0) = %d, want %d", got, DefaultLimit)
 	}
 }

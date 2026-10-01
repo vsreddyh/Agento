@@ -41,6 +41,12 @@ data class ServerTask(
     val nextDueDate: String = "",
 )
 
+/** A bounded list response: the rows, and whether more exist. */
+data class TaskList(
+    val tasks: List<ServerTask>,
+    val truncated: Boolean = false,
+)
+
 /** The deadline as an instant, or null when it cannot be parsed. */
 fun ServerTask.dueMillisOrNull(): Long? = dueMillisOrNull(dueDate, dueTime)
 
@@ -195,8 +201,14 @@ class TasksApi(context: Context) {
         )
     }
 
-    /** Lists tasks by state (`open`, `done`, `all`); unknown states fail fast. */
-    suspend fun list(state: String = "open"): Result<List<ServerTask>> =
+    /**
+     * Lists tasks by state (`open`, `done`, `all`); unknown states fail fast.
+     *
+     * One bounded page: [limit] <= 0 takes the server default (200, max
+     * 500), and [TaskList.truncated] says whether more rows exist, so the
+     * list never silently ends mid-collection (#168).
+     */
+    suspend fun list(state: String = "open", limit: Int = 0): Result<TaskList> =
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
@@ -206,19 +218,56 @@ class TasksApi(context: Context) {
             if (s != "open" && s != "done" && s != "all") {
                 return@withContext Result.failure(IllegalArgumentException("Unknown state: $state"))
             }
-            call("GET", "/api/tasks?state=$s").map { body ->
+            val query = if (limit > 0) "/api/tasks?state=$s&limit=$limit" else "/api/tasks?state=$s"
+            call("GET", query).map { body ->
                 val out = mutableListOf<ServerTask>()
                 val root = JSONObject(body)
                 val arr = root.optJSONArray("tasks")
                     ?: root.optJSONArray("data")
                     ?: root.optJSONArray("items")
-                    ?: return@map out
+                    ?: return@map TaskList(out)
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
                     parseTask(o)?.let { out.add(it) }
                 }
-                out
+                TaskList(out, root.optBoolean("truncated", false))
             }
+        }
+
+    /**
+     * One task by id, or null when it is gone (#168).
+     *
+     * A 404 whose body names the unknown task means done/deleted after
+     * arming; anything else (transport, wrong server) stays a failure, so
+     * the caller can tell "finished" from "unknowable". The match lives
+     * here, next to the 404 handling, rather than in every caller.
+     */
+    suspend fun get(id: String): Result<ServerTask?> =
+        withContext(Dispatchers.IO) {
+            val clean = encodeId(id)
+            if (clean.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Missing task id"))
+            }
+            // mapCatching, not map: a malformed doc must come back as a
+            // failure (generic alert + rearm), never as a throw escaping
+            // the receiver's coroutine.
+            call("GET", "/api/tasks/$clean").mapCatching { body ->
+                parseOne(body)
+            }.fold(
+                onSuccess = { task ->
+                    Result.success(task)
+                },
+                onFailure = { e ->
+                    // Code and body: a gateway 404 (wrong server) must never
+                    // read as a finished task.
+                    val msg = e.message ?: ""
+                    if ("HTTP 404:" in msg && "unknown task" in msg) {
+                        Result.success(null)
+                    } else {
+                        Result.failure(e)
+                    }
+                },
+            )
         }
 
     /** Creates a task. Everything except the repeat is required — the

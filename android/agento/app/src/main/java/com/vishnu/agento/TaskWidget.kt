@@ -532,9 +532,14 @@ class TaskWidget : AppWidgetProvider() {
             val errors = mutableMapOf<String, String>()
             coroutineScope {
                 TaskWidgetView.entries.map { v ->
-                    async { v.state to api.list(v.state) }
+                    // Limit 50 per state, and the truncation flag is
+                    // deliberately unread: a placement shows a screenful, so
+                    // 50 rows is the whole visible universe. Do not "fix"
+                    // this into an unbounded fetch — the collection behind
+                    // it is (#168).
+                    async { v.state to api.list(v.state, limit = 50) }
                 }.awaitAll().forEach { (state, res) ->
-                    res.getOrNull()?.let { views[state] = it }
+                    res.getOrNull()?.tasks?.let { views[state] = it }
                         ?: run {
                             errors[state] = res.exceptionOrNull()?.message
                                 ?: "unknown error"

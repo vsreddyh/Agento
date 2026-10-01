@@ -299,7 +299,9 @@ object TaskReminders {
 
     private suspend fun refreshInner(appCtx: Context): RefreshOutcome {
         if (!isEnabled(appCtx)) return RefreshOutcome.Ok
-        val tasks = TasksApi(appCtx).list("open").getOrNull()
+        // Limit 500 (server max): the budget below can only arm what it
+        // sees, and the default 200 would silently drop tasks past it.
+        val tasks = TasksApi(appCtx).list("open", limit = 500).getOrNull()?.tasks
             ?: return RefreshOutcome.Failed
         // IST-pinned (#124): due times are entered as wall-clock IST,
         // so "now" and the arming horizon must read the same zone.
@@ -649,15 +651,19 @@ class TaskAlarmReceiver : BroadcastReceiver() {
     }
 
     private suspend fun post(appCtx: Context, taskId: String, kind: ReminderKind) {
-        val open = withTimeoutOrNull(10_000) {
-            TasksApi(appCtx).list("open").getOrNull()
+        // One indexed lookup, not the whole open list: the receiver knows
+        // the id, and `GET /api/tasks/{id}` answers in one query where the
+        // list made every nag quadratic (#168). Null means gone
+        // (done/deleted after arming — drop the alarm, stay silent); a
+        // failed fetch is unknowable, so the alert still goes out generic.
+        val outcome = withTimeoutOrNull(10_000) {
+            TasksApi(appCtx).get(taskId)
         }
-        // Absent from a successful fetch means done/deleted after arming
-        // (e.g. agent-side while the app was closed): drop the alarm and
-        // stay silent instead of pinging for a finished task. A failed
-        // fetch (null) is unknowable — the alert still goes out generic.
-        val task = open?.firstOrNull { it.id == taskId }
-        if (open != null && task == null) {
+        // Success-gated: a failed fetch still yields a non-null outcome
+        // (only a timeout is null), and cancelling on failure would
+        // silently drop the alarm for a task that is still open.
+        val task = outcome?.getOrNull()
+        if (outcome?.isSuccess == true && (task == null || !task.isOpen())) {
             TaskReminders.cancelOne(appCtx, taskId)
             return
         }
@@ -670,7 +676,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             val due = task?.let { dueMillisOrNull(it.dueDate, it.dueTime) }
             if (task != null && due != null && due <= System.currentTimeMillis()) {
                 TaskReminders.rearmOverdue(appCtx, taskId)
-            } else if (open != null) {
+            } else if (outcome?.isSuccess == true) {
                 // The fetch worked and the task is no longer past due: it
                 // was rescheduled, so stop the nag and say nothing.
                 TaskReminders.cancelOne(appCtx, taskId)
