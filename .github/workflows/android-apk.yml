@@ -123,6 +123,10 @@ jobs:
       - name: Run Android lint
         run: ./gradlew lintDebug --stacktrace
 
+      - name: Locate lint reports
+        if: always()
+        run: find app/build -name '*lint*' 2>/dev/null | head -n 20
+
       - name: Upload lint report
         if: always()
         uses: actions/upload-artifact@v4
