@@ -525,9 +525,6 @@ private fun RailContent(
     }
 }
 
-/** Short HH:mm (plus date when not today); empty for unknown timestamps.
- * Month abbreviations pin to English so output never varies by device
- * locale. */
 /** Human file size ("1.5 MB"); the storage screen's only formatter. */
 internal fun humanSize(bytes: Long): String {
     if (bytes <= 0) return "0 B"
@@ -541,6 +538,9 @@ internal fun humanSize(bytes: Long): String {
     return if (u == 0) "$bytes B" else "%.1f %s".format(v, units[u])
 }
 
+/** Short HH:mm (plus date when not today); empty for unknown timestamps.
+ * Month abbreviations pin to English so output never varies by device
+ * locale. */
 internal fun shortTime(ts: Long): String {
     if (ts <= 0) return ""
     return try {
