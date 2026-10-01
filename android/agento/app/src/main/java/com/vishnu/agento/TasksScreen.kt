@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.edit
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -134,7 +135,9 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 withContext(Dispatchers.IO) {
                     java.io.File(context.filesDir, "tasks.json").delete()
                 }
-                prefs.edit().putBoolean("projects_migrated", true).apply()
+                prefs.edit {
+                    putBoolean("projects_migrated", true)
+                }
             } else {
                 val norm = { s: String -> s.trim().lowercase(Locale.ROOT) }
                 // Limit 500 (server max): the default 200 would see an
@@ -153,7 +156,9 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     withContext(Dispatchers.IO) {
                         java.io.File(context.filesDir, "tasks.json").delete()
                     }
-                    prefs.edit().putBoolean("projects_migrated", true).apply()
+                    prefs.edit {
+                        putBoolean("projects_migrated", true)
+                    }
                     refreshTick++
                 }
             }

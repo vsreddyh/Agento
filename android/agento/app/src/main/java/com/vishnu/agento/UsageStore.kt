@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import androidx.core.content.edit
 
 /** Cumulative real token counts for one assistant tab. */
 data class UsageTotals(
@@ -59,31 +60,32 @@ object UsageStore {
     fun add(context: Context, tab: String, usage: TokenUsage) {
         if (usage.prompt <= 0 && usage.completion <= 0 && usage.total <= 0) return
         val p = prefs(context)
-        val edit = p.edit()
-            .putLong(promptKey(tab), p.getLong(promptKey(tab), 0L) + usage.prompt)
-            .putLong(completionKey(tab), p.getLong(completionKey(tab), 0L) + usage.completion)
-            .putLong(totalKey(tab), p.getLong(totalKey(tab), 0L) + usage.total)
-            .putLong(turnsKey(tab), p.getLong(turnsKey(tab), 0L) + 1)
-        // Cached is a subset row: accumulate only when reported (0 = absent).
-        if (usage.cached > 0) {
-            edit.putLong(cachedKey(tab), p.getLong(cachedKey(tab), 0L) + usage.cached)
+        p.edit {
+            putLong(promptKey(tab), p.getLong(promptKey(tab), 0L) + usage.prompt)
+            putLong(completionKey(tab), p.getLong(completionKey(tab), 0L) + usage.completion)
+            putLong(totalKey(tab), p.getLong(totalKey(tab), 0L) + usage.total)
+            putLong(turnsKey(tab), p.getLong(turnsKey(tab), 0L) + 1)
+            // Cached is a subset row: accumulate only when reported (0 = absent).
+            if (usage.cached > 0) {
+                putLong(cachedKey(tab), p.getLong(cachedKey(tab), 0L) + usage.cached)
+            }
         }
-        edit.apply()
     }
 
     /** Drops the retired character-estimate keys so only real counts remain. */
     fun clearLegacy(context: Context) {
         val p = prefs(context)
-        val edit = p.edit()
-        var dirty = false
-        for (t in TABS) {
-            for (k in listOf("usage_sent_$t", "usage_recv_$t")) {
-                if (p.contains(k)) {
-                    edit.remove(k)
-                    dirty = true
+        // No dirty flag: edit{} commits unconditionally, and an empty
+        // commit is a no-op write, so the conditional apply buys nothing.
+        p.edit {
+            for (t in TABS) {
+                for (k in listOf("usage_sent_$t", "usage_recv_$t")) {
+                    if (p.contains(k)) {
+                        remove(k)
+                    }
                 }
             }
         }
-        if (dirty) edit.apply()
+
     }
 }

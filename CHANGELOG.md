@@ -8,6 +8,21 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.14.1]
+
+- **Android lint runs on every build** (#177). Errors fail the job; the
+  report uploads always. Fixed the full inventory instead of baselining:
+  an internal Health Connect API replaced with an explicit stage mapping,
+  33 `edit()`/`Uri.parse` call sites on the KTX extensions, dead SDK
+  guards, modifier-first composables, RTL padding, two dead strings (the
+  manifest now uses `@string/app_name`), `tools:targetApi` on the
+  31-only widget attributes, an SDK-guarded foreground-service type,
+  primitive state holders, and a monochrome launcher icon. Left standing
+  with reasons: dependency bumps and the targetSdk raise are release
+  decisions, not lint cleanup; cleartext stays because the server URL is
+  user-configured; one `stopService` warning is a lint false positive
+  (identical component intents match).
+
 ## [4.14.0]
 
 - **Shared Mongo plumbing, split HTTP routes** (#171, backend only — no

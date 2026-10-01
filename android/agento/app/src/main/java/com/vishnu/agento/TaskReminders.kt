@@ -11,16 +11,18 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.edit
+import androidx.core.net.toUri
+import java.time.LocalDate
+import java.time.LocalDateTime
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import java.time.LocalDate
-import java.time.LocalDateTime
 
 private val IsoDate = Regex("\\d{4}-\\d{2}-\\d{2}")
 private val ClockTime = Regex("(\\d{1,2}):(\\d{2})(?::(\\d{2}))?")
@@ -264,7 +266,9 @@ object TaskReminders {
         prefs(context).getBoolean(PREF_ENABLED, false)
 
     fun setEnabled(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(PREF_ENABLED, enabled).apply()
+        prefs(context).edit {
+            putBoolean(PREF_ENABLED, enabled)
+        }
         if (enabled) refresh(context) else cancelAll(context)
     }
 
@@ -393,9 +397,9 @@ object TaskReminders {
         // Armed set and the budget that describes it go in together: a
         // crash between two applies would leave the reported numbers
         // describing an alarm set that is no longer the live one.
-        prefs(appCtx).edit()
-            .putStringSet(PREF_ARMED, keep)
-            .putString(
+        prefs(appCtx).edit {
+            putStringSet(PREF_ARMED, keep)
+            putString(
                 PREF_BUDGET,
                 Budget(
                     tasks = timed,
@@ -407,8 +411,7 @@ object TaskReminders {
                         kept.count { it.nag },
                 ).encode(),
             )
-            .apply()
-        }
+            }
         return RefreshOutcome.Ok
     }
 
@@ -448,7 +451,9 @@ object TaskReminders {
         armAlarm(appCtx, key, at)
         val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
         if (key !in armed) {
-            prefs(appCtx).edit().putStringSet(PREF_ARMED, armed + key).apply()
+            prefs(appCtx).edit {
+                putStringSet(PREF_ARMED, armed + key)
+            }
         }
     }
 
@@ -459,7 +464,9 @@ object TaskReminders {
         mgr.cancel(operation(appCtx, key))
         val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
         if (key in armed) {
-            prefs(appCtx).edit().putStringSet(PREF_ARMED, armed - key).apply()
+            prefs(appCtx).edit {
+                putStringSet(PREF_ARMED, armed - key)
+            }
         }
     }
 
@@ -469,7 +476,7 @@ object TaskReminders {
         val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val fire = Intent(appCtx, TaskAlarmReceiver::class.java)
             .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
-            .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}"))
+            .setData("agento://reminder/${Uri.encode(taskId)}".toUri())
         mgr.cancel(
             PendingIntent.getBroadcast(
                 appCtx, taskId.hashCode(), fire,
@@ -478,7 +485,9 @@ object TaskReminders {
         )
         val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
         if (taskId in armed) {
-            prefs(appCtx).edit().putStringSet(PREF_ARMED, armed - taskId).apply()
+            prefs(appCtx).edit {
+                putStringSet(PREF_ARMED, armed - taskId)
+            }
         }
     }
 
@@ -594,7 +603,9 @@ object TaskReminders {
         }
         // The budget goes with them: leaving it behind would have Settings
         // reporting slots "used" against an alarm set nothing is holding.
-        prefs(appCtx).edit().remove(PREF_ARMED).remove(PREF_BUDGET).apply()
+        prefs(appCtx).edit {
+            remove(PREF_ARMED)remove(PREF_BUDGET)
+        }
     }
 
     private fun operation(appCtx: Context, key: String): PendingIntent {
@@ -611,7 +622,7 @@ object TaskReminders {
             .putExtra(EXTRA_REMINDER_KIND, kind)
             // The path segment is encoded: a '/' in an id would otherwise
             // change the URI's structure and break PendingIntent identity.
-            .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}/$kind"))
+            .setData("agento://reminder/${Uri.encode(taskId)}/$kind".toUri())
         return PendingIntent.getBroadcast(
             appCtx, key.hashCode(), fire,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -733,13 +744,14 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             appCtx, ("done:$taskId").hashCode(),
             Intent(appCtx, TaskCompleteActivity::class.java)
                 .putExtra(TaskWidget.EXTRA_COMPLETE_ID, taskId)
-                .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}/complete")),
+                .setData("agento://reminder/${Uri.encode(taskId)}/complete".toUri()),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE)
             as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            mgr.createNotificationChannel(
+        // No SDK guard: notification channels exist since 26 and minSdk
+        // is 28, so this always runs.
+        mgr.createNotificationChannel(
                 NotificationChannel(
                     TaskReminders.CHANNEL_ID,
                     appCtx.getString(R.string.task_reminder_channel),
@@ -748,11 +760,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                     this.description = appCtx.getString(R.string.task_reminder_channel_desc)
                 },
             )
-        }
         val launch = Intent(appCtx, MainActivity::class.java)
             .setAction(TaskWidget.ACTION_TASKS)
             .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
-            .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}"))
+            .setData("agento://reminder/${Uri.encode(taskId)}".toUri())
         val tap = PendingIntent.getActivity(
             appCtx, taskId.hashCode(), launch,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,

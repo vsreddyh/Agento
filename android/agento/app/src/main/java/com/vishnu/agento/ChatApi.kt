@@ -1,12 +1,14 @@
 package com.vishnu.agento
 
 import android.content.Context
+import androidx.core.content.edit
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -15,7 +17,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 data class ChatMessage(
     val role: String, // "user" | "assistant"
@@ -244,14 +245,15 @@ class ChatApi(context: Context) {
         model: String,
         effort: String = "",
     ) {
-        val edit = prefs.edit()
-            .putString("server_base_url", baseUrl.trim().trimEnd('/'))
-            .putString("app_password", password.trim())
-            .remove("api_base_url") // legacy: unified key is written above
-            .remove("server_url") // legacy: unified key is written above
-            .remove("path_$tab") // legacy: path field removed, defaults apply
-            .putString("provider_$tab", provider.trim())
-            .putString("model_$tab", model.trim())
+        prefs.edit {
+            putString("server_base_url", baseUrl.trim().trimEnd('/'))
+            putString("app_password", password.trim())
+            remove("api_base_url") // legacy: unified key is written above
+            remove("server_url") // legacy: unified key is written above
+            remove("path_$tab") // legacy: path field removed, defaults apply
+            putString("provider_$tab", provider.trim())
+            putString("model_$tab", model.trim())
+        }
         val e = effort.trim().lowercase()
         if (e.isNotEmpty()) {
             // Clamp to the model's vocabulary so a stale tab pick can never

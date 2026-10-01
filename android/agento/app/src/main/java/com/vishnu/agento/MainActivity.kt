@@ -37,6 +37,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.edit
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -86,7 +87,9 @@ object ThemeStore {
 
     fun save(context: android.content.Context, mode: String) {
         context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-            .edit().putString(KEY, mode).apply()
+            .edit {
+               putString(KEY, mode)
+           }
     }
 }
 
@@ -251,7 +254,9 @@ class MainActivity : ComponentActivity() {
                                     autoLiveGen = if (liveTab.value == "god") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
-                                        prefs.edit().putBoolean("tts_auto", it).apply()
+                                        prefs.edit {
+                                            putBoolean("tts_auto", it)
+                                        }
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
                                     onConfigChanged = { drawerTick++ },
@@ -262,7 +267,9 @@ class MainActivity : ComponentActivity() {
                                     autoLiveGen = if (liveTab.value == "story") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
-                                        prefs.edit().putBoolean("tts_auto", it).apply()
+                                        prefs.edit {
+                                            putBoolean("tts_auto", it)
+                                        }
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
                                     onConfigChanged = { drawerTick++ },
@@ -273,7 +280,9 @@ class MainActivity : ComponentActivity() {
                                     autoLiveGen = if (liveTab.value == "resumes") liveGen.intValue else 0,
                                     onAutoSpeak = {
                                         autoSpeak = it
-                                        prefs.edit().putBoolean("tts_auto", it).apply()
+                                        prefs.edit {
+                                            putBoolean("tts_auto", it)
+                                        }
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
                                     onConfigChanged = { drawerTick++ },

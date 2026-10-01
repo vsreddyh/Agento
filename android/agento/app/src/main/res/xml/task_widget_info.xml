@@ -2,10 +2,13 @@
 <!-- 3x2 minimum (180dp x 110dp), resizable both ways; the content is a
      scrollable list that fills whatever height the placement offers. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:minWidth="180dp"
     android:minHeight="110dp"
     android:targetCellWidth="3"
+        tools:targetApi="31"
     android:targetCellHeight="2"
+        tools:targetApi="31"
     android:minResizeWidth="180dp"
     android:minResizeHeight="110dp"
     android:resizeMode="horizontal|vertical"
@@ -14,5 +17,6 @@
     android:configure="com.vishnu.agento.TaskWidgetConfigActivity"
     android:initialLayout="@layout/task_widget_full"
     android:previewLayout="@layout/task_widget_full"
+        tools:targetApi="31"
     android:description="@string/task_widget_desc"
     android:previewImage="@android:drawable/ic_menu_agenda" />

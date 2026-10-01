@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import androidx.core.content.edit
 import org.json.JSONObject
 
 /**
@@ -119,40 +120,40 @@ object SettingsBackup {
             val values = json.optJSONObject("values")
                 ?: return Result.failure(IllegalArgumentException("Not an Agento settings file (missing values)"))
             val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
-            val edit = prefs.edit()
             var applied = 0
-            for (k in STRING_KEYS) {
-                if (values.has(k) && values.opt(k) is String) {
-                    edit.putString(k, values.optString(k, ""))
-                    applied++
+            prefs.edit {
+                for (k in STRING_KEYS) {
+                    if (values.has(k) && values.opt(k) is String) {
+                        putString(k, values.optString(k, ""))
+                        applied++
+                    }
+                }
+                for (k in BOOLEAN_KEYS) {
+                    if (values.has(k) && values.opt(k) is Boolean) {
+                        putBoolean(k, values.optBoolean(k))
+                        applied++
+                    }
+                }
+                // Real token totals: JSON numbers only (optLong coerces, so the
+                // raw type is checked first like the other allowlists).
+                // Negatives (hand-edited files) clamp to 0 — totals never go below.
+                for (k in LONG_KEYS) {
+                    if (values.has(k) && values.opt(k) is Number) {
+                        putLong(k, maxOf(0L, values.optLong(k, 0L)))
+                        applied++
+                    }
+                }
+                // Per-model effort memory: same allowlist shape as export
+                // (isEffortMemoryKey, string values only). Unknown keys and
+                // mistyped values are still skipped.
+                val names = values.keys().asSequence().toList()
+                for (k in names) {
+                    if (isEffortMemoryKey(k) && values.opt(k) is String) {
+                        putString(k, values.optString(k, ""))
+                        applied++
+                    }
                 }
             }
-            for (k in BOOLEAN_KEYS) {
-                if (values.has(k) && values.opt(k) is Boolean) {
-                    edit.putBoolean(k, values.optBoolean(k))
-                    applied++
-                }
-            }
-            // Real token totals: JSON numbers only (optLong coerces, so the
-            // raw type is checked first like the other allowlists).
-            // Negatives (hand-edited files) clamp to 0 — totals never go below.
-            for (k in LONG_KEYS) {
-                if (values.has(k) && values.opt(k) is Number) {
-                    edit.putLong(k, maxOf(0L, values.optLong(k, 0L)))
-                    applied++
-                }
-            }
-            // Per-model effort memory: same allowlist shape as export
-            // (isEffortMemoryKey, string values only). Unknown keys and
-            // mistyped values are still skipped.
-            val names = values.keys().asSequence().toList()
-            for (k in names) {
-                if (isEffortMemoryKey(k) && values.opt(k) is String) {
-                    edit.putString(k, values.optString(k, ""))
-                    applied++
-                }
-            }
-            edit.apply()
             val files = json.optJSONObject("files")
             if (files != null) {
                 for (name in backupFiles()) {

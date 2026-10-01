@@ -53,6 +53,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.edit
 
 /**
  * Display settings for one task-widget placement: which slice it shows,
@@ -91,15 +92,15 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                         finish()
                     },
                     onSave = { v, d, due, scroll ->
-                        prefs().edit()
-                            .putString("task_widget_view_$appWidgetId", v.name)
-                            .putString("task_widget_density_$appWidgetId", d.name)
-                            .putBoolean("task_widget_due_$appWidgetId", due)
-                            .putBoolean("task_widget_scroll_$appWidgetId", scroll)
+                        prefs().edit {
+                            putString("task_widget_view_$appWidgetId", v.name)
+                            putString("task_widget_density_$appWidgetId", d.name)
+                            putBoolean("task_widget_due_$appWidgetId", due)
+                            putBoolean("task_widget_scroll_$appWidgetId", scroll)
                             // Retired diagnostic ladder: drop the key here
                             // too, not just on widget delete.
-                            .remove("task_widget_style_$appWidgetId")
-                            .apply()
+                            remove("task_widget_style_$appWidgetId")
+                        }
                         TaskWidget.refresh(this@TaskWidgetConfigActivity)
                         setResult(RESULT_OK, done)
                         finish()

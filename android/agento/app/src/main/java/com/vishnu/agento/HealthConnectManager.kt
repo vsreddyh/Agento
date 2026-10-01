@@ -205,9 +205,7 @@ class HealthConnectManager(context: Context) {
         return records.records.map { record ->
             val stageCounts = record.stages.groupingBy { it.stage }
                 .eachCount()
-                .mapKeys { (stageInt, _) ->
-                    SleepSessionRecord.STAGE_TYPE_INT_TO_STRING_MAP[stageInt] ?: "UNKNOWN"
-                }
+                .mapKeys { (stageInt, _) -> sleepStageName(stageInt) }
                 .mapValues { (_, count) -> count.toLong() }
             SleepEntry(
                 startIso = record.startTime.toString(),
@@ -272,3 +270,19 @@ enum class HealthConnectAvailability {
     UPDATE_REQUIRED,
     UNAVAILABLE,
 }
+
+/**
+ * Sleep stage number to its display name, off the public
+ * `SleepSessionRecord.STAGE_TYPE_*` constants. Replaces the library's
+ * internal map one-to-one (unknown for anything unrecognized, as before).
+ */
+internal fun sleepStageName(stage: Int): String = when (stage) {
+    SleepSessionRecord.STAGE_TYPE_AWAKE -> "awake"
+    SleepSessionRecord.STAGE_TYPE_SLEEPING -> "sleeping"
+    SleepSessionRecord.STAGE_TYPE_OUT_OF_BED -> "out_of_bed"
+    SleepSessionRecord.STAGE_TYPE_LIGHT -> "light"
+    SleepSessionRecord.STAGE_TYPE_DEEP -> "deep"
+    SleepSessionRecord.STAGE_TYPE_REM -> "rem"
+    else -> "unknown"
+}
+

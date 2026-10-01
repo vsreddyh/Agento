@@ -1,6 +1,8 @@
 package com.vishnu.agento
 
 import android.content.Context
+import androidx.core.content.edit
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -10,7 +12,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import java.util.concurrent.TimeUnit
 
 /** Thin HTTP client for the health-api sync endpoint; server URL/token come from SharedPreferences. */
 class SyncClient(context: Context) {
@@ -47,17 +48,19 @@ class SyncClient(context: Context) {
     }
     /** Marks the one-time historical backfill done so later runs send today-only payloads. */
     fun markFirstSyncDone() {
-        prefs.edit().putBoolean("first_sync_done", true).apply()
+        prefs.edit {
+            putBoolean("first_sync_done", true)
+        }
     }
 
     /** Persists the unified server URL + password; normalizes trailing slash/whitespace so post() can build the endpoint directly. */
     fun setConfig(serverUrl: String, password: String) {
-        prefs.edit()
-            .putString("server_base_url", serverUrl.trim().trimEnd('/'))
-            .putString("app_password", password.trim())
-            .remove("server_url") // legacy: unified key is written above
-            .remove("auth_token") // legacy: unified key is written above
-            .apply()
+        prefs.edit {
+            putString("server_base_url", serverUrl.trim().trimEnd('/'))
+            putString("app_password", password.trim())
+            remove("server_url") // legacy: unified key is written above
+            remove("auth_token") // legacy: unified key is written above
+        }
     }
 
     /** POSTs the payload to /api/health/sync with Bearer auth; never throws — failures become SyncResult. */
