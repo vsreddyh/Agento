@@ -42,7 +42,6 @@ func repeatOf(doc map[string]any) tasks.Repeat {
 	return rep.Normalize()
 }
 
-// toInt mirrors the store's number handling for response maps.
 // repeatHint spells out the exact create_task keys that reproduce a
 // recurrence, so the agent copies a cadence instead of re-deriving it.
 func repeatHint(rep tasks.Repeat) string {

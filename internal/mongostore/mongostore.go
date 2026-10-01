@@ -29,7 +29,8 @@ func Open(uri, dbName string) (*mongoDrv.Client, *mongoDrv.Database, error) {
 	if uri == "" {
 		return nil, nil, errors.New("MONGODB_URI is not set — MongoDB is the only backend")
 	}
-	if strings.TrimSpace(dbName) == "" {
+	dbName = strings.TrimSpace(dbName)
+	if dbName == "" {
 		dbName = DefaultDB
 	}
 	c, err := mongo.ConnectURI(uri)
