@@ -1196,6 +1196,62 @@ private fun TaskManagerScreen(
         }
     }
 
+    /**
+     * Copy a task 1:1 (issue #161): every field carried over verbatim —
+     * name, description, due date/time, estimate, the whole repeat block
+     * and the parallel flag — as a new **open** task. Nothing is "smarter"
+     * than the original: a past due date stays a past due date, and a
+     * cadence comes across as the same cadence. A copy is a starting point
+     * to edit, not a rescheduled twin.
+     */
+    fun doDuplicate(t: ServerTask) {
+        // Everything the client itself enforces is checked here, before the
+        // sheet is dismissed: a refusal that closes the task leaves the user
+        // with a snackbar and nothing to fix, because the thing they needed
+        // to change is behind a tap they just made.
+        val missing = listOf(
+            "a name" to t.name.isBlank(),
+            "some details" to t.description.isBlank(),
+            "a due date" to !t.dueDate.isIsoDate(),
+            "a due time" to t.dueTime.isBlank(),
+        ).filter { it.second }.map { it.first }
+        if (missing.isNotEmpty()) {
+            scope.launch {
+                snackbar.showSnackbar(
+                    "This task has no ${missing.joinToString(" or ")} yet — add " +
+                        "${if (missing.size == 1) "it" else "them"} before copying it.")
+            }
+            return
+        }
+        busy = true
+        scope.launch {
+            api.create(
+                name = t.name,
+                description = t.description,
+                dueDate = t.dueDate,
+                dueTime = t.dueTime,
+                estimatedMinutes = t.estimatedMinutes,
+                repeatEvery = t.repeatEvery,
+                repeatUnit = t.repeatUnit,
+                repeatCustom = t.repeatCustom,
+                repeatRule = t.repeatRule,
+                parallelable = t.parallelable,
+            ).fold(
+                onSuccess = { copy ->
+                    editing = null
+                    // Closed here rather than by the caller, so a task
+                    // that cannot be copied stays open to be fixed.
+                    selected = null
+                    refreshTick++
+                    pokeWidget()
+                    snackbar.showSnackbar("Copied \u201c${copy.name}\u201d.")
+                },
+                onFailure = ::fail,
+            )
+            busy = false
+        }
+    }
+
     fun doComplete(t: ServerTask) {
         busy = true
         scope.launch {
@@ -1663,6 +1719,7 @@ private fun TaskManagerScreen(
                 selected = null
                 if (open.isOpen()) doComplete(open) else doReopen(open)
             },
+            onDuplicate = { doDuplicate(open) },
             onDelete = {
                 selected = null
                 deleting = open
@@ -1832,6 +1889,7 @@ private fun ServerTaskDetailSheet(
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onToggle: () -> Unit,
+    onDuplicate: () -> Unit,
     onDelete: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1953,17 +2011,34 @@ private fun ServerTaskDetailSheet(
                     Text("Edit")
                 }
             }
-            OutlinedButton(
-                onClick = onDelete,
-                enabled = actionsEnabled,
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error,
-                ),
+            // Duplicate sits beside Delete rather than joining the primary
+            // row: three buttons on one line is the cramped case, and both
+            // of these are secondary.
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Icon(Icons.Filled.Delete, contentDescription = null)
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Delete")
+                OutlinedButton(
+                    onClick = onDuplicate,
+                    enabled = actionsEnabled,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Duplicate")
+                }
+                OutlinedButton(
+                    onClick = onDelete,
+                    enabled = actionsEnabled,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Filled.Delete, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Delete")
+                }
             }
         }
     }
