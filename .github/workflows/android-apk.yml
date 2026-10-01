@@ -128,9 +128,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lint-report
-          path: |
-            app/build/reports/lint-results-debug.html
-            app/build/reports/lint-results-debug.xml
+          path: app/build/reports/
 
       # Fails the job if Gradle's output filename doesn't match the release
       # version — a drift here must never publish a mislabeled Release.
