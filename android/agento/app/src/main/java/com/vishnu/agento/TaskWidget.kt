@@ -12,9 +12,10 @@ import android.util.Log
 import android.view.View
 import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -225,6 +226,12 @@ class TaskWidget : AppWidgetProvider() {
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
                 appendLine("factoryError=${lastFactoryError ?: "none"}")
+                // What the reminder budget had to drop, if anything (#165).
+                // Without this a task whose alarm was never armed looks
+                // exactly like a task whose alarm never worked.
+                appendLine(
+                    "reminders=" + (
+                        TaskReminders.budget(ctx)?.line() ?: "no refresh yet"))
             }.trim()
         }.getOrDefault("(diagnostics unavailable)")
 
@@ -476,23 +483,50 @@ class TaskWidget : AppWidgetProvider() {
 
         /** Re-pull server tasks and push to every installed widget. Call
          * after task mutations so the home screen never goes stale.
-         * Returns the worker Job so callers that must outlive a broadcast
-         * (BootReceiver) can join it. */
-        fun refresh(context: Context): Job {
+         * Returns a Deferred so callers that must outlive a broadcast
+         * (BootReceiver) can wait on it — and so [TaskSyncWorker] can read
+         * how the run ended, one run at a time rather than out of a shared
+         * field. */
+        fun refresh(context: Context): Deferred<RefreshOutcome> {
             val appCtx = context.applicationContext
-            return widgetScope.launch {
-                fetchAndPush(
-                    appCtx,
-                    taskWidgetIds(appCtx),
-                )
+            // async rather than launch: the outcome travels back as a value
+            // the caller can await, which a Job has nowhere to put.
+            // The Deferred itself never fails: an unexpected throw becomes
+            // Failed, so the fire-and-forget callers (pokeWidget, the config
+            // activity, the timezone path) can keep dropping the result
+            // without leaving an unobserved exception behind. Cancellation
+            // still propagates — a cancelled run is not a failed fetch.
+            return widgetScope.async {
+                try {
+                    fetchAndPush(
+                        appCtx,
+                        taskWidgetIds(appCtx),
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("TaskWidget", "refresh failed", e)
+                    RefreshOutcome.Failed
+                }
             }
         }
 
-        /** Single fetch-and-push path shared by pull() and refresh().
+        /**
+         * Single fetch-and-push path shared by pull() and refresh().
+         *
+         * Returns how it ended rather than leaving that in a field: the
+         * scope is shared, so a refresh started by an in-app mutation and
+         * one started by [TaskSyncWorker] can be in flight together, and a
+         * shared value hands each caller the other one's result.
+         *
          * All three states are fetched (in parallel) so every placement's
-         * view has data regardless of which views are installed. */
-        private suspend fun fetchAndPush(appCtx: Context, ids: IntArray) {
-            if (ids.isEmpty()) return
+         * view has data regardless of which views are installed.
+         */
+        private suspend fun fetchAndPush(
+            appCtx: Context,
+            ids: IntArray,
+        ): RefreshOutcome {
+            if (ids.isEmpty()) return RefreshOutcome.NoPlacements
             val api = TasksApi(appCtx)
             val views = mutableMapOf<String, List<ServerTask>>()
             val errors = mutableMapOf<String, String>()
@@ -511,6 +545,10 @@ class TaskWidget : AppWidgetProvider() {
             // Drop errors for states that just succeeded so a stale
             // message can never outlive its failure (#130 review).
             lastErrors = (lastErrors + errors) - views.keys
+            // Every state failed means nothing was delivered and the widget
+            // is now showing whatever it had cached. A partial failure is
+            // Ok: the states that worked are pushed, and the ones that did
+            // not render their own error, which is the existing behaviour.
             val mgr = AppWidgetManager.getInstance(appCtx)
             // Only the service-backed collection listens for a data change;
             // direct items and static rows are re-rendered whole.
@@ -557,6 +595,7 @@ class TaskWidget : AppWidgetProvider() {
                     Log.w("TaskWidget", "notifyDataChanged failed", it)
                 }
             }
+            return if (views.isEmpty()) RefreshOutcome.Failed else RefreshOutcome.Ok
         }
 
         /** Full widget view: header reflects this placement's view and the

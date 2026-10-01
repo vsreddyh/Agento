@@ -8,6 +8,56 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.12.0]
+
+- **The task widget now refreshes on its own, every 30 minutes.** It used to
+  show whatever was true when it was last pushed, and the only pushes came
+  from a task being changed *in the app*. So a task created or completed by
+  the assistant — the entire reason the list is shared — reached the home
+  screen only when the app was next opened and something else was touched.
+  The widget now goes stale within half an hour rather than indefinitely,
+  which is when it matters: when you are not looking at the app.
+- The same periodic run re-derives the reminder alarms, so reminders for
+  tasks created elsewhere are armed without waiting for you to open the app.
+- It is its own scheduled job rather than something the hourly health sync
+  also does. Health sync runs behind a foreground notification and retries
+  with backoff when it fails; coupling the task list to it would let a
+  failed health sync quietly starve the widget.
+- Costs nothing when unused: both refreshes return immediately if reminders
+  are off and no widget is placed.
+
+## [4.11.2]
+
+- **The start-time rule is defined once.** "A task starts `estimated_minutes`
+  before it is due, and a zero estimate has no start of its own" lived twice —
+  once in the task model and once re-derived in the reminder engine, with a
+  comment in each file pointing at the other as the only thing keeping them
+  in step. Both now call one function. No behaviour changes: the list still
+  sorts and groups with the deadline as a zero-estimate task's start, and a
+  zero-estimate task still gets no "Start now" alert.
+
+## [4.11.1]
+
+- **The reminder budget is no longer silent.** Past the cap, reminders were
+  dropped and the alarms that were already set were cancelled, with nothing
+  anywhere saying so — a task in your list that simply never alerts. What the
+  last refresh had to leave out is now reported in Settings -> Widget
+  diagnostics, in the exported report, and in the clipboard copy.
+- **Alerts outrank nags when the budget runs out.** The cap used to keep the
+  nearest fire times, which let a task due in a week take away every kind of
+  alert from a task due tomorrow. A start or due alert now ranks ahead of a
+  repeating overdue nag, each group nearest-first: the right thing to lose is
+  the nag, because its task is still listed and still shown as overdue.
+- **Live nags now count against the budget.** They used to sit outside the cap
+  on the grounds that cancelling a running nag is worse than exceeding the
+  cap, so the nag set grew without bound and the cap only ever applied to new
+  work. They compete now, ordered by how long each task has been overdue.
+- **The cap rose from 90 to 200.** It is a self-imposed guard, not a platform
+  limit — Samsung's documented ceiling is 500 alarms per app — so 200 is a
+  floor for correctness rather than a limit on capacity. At three points per
+  task that is about 65 timed tasks, past the point where the list itself
+  wants paging.
+
 ## [4.11.0]
 
 - **Duplicate** on a task's detail sheet: one tap copies it 1:1 into a new

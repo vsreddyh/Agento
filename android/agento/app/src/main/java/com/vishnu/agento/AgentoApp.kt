@@ -3,19 +3,25 @@ package com.vishnu.agento
 import android.app.Application
 import android.content.Context
 import android.os.Bundle
+import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
-/** Application entry point; ensures hourly sync survives process death. */
+/**
+ * Application entry point; ensures the hourly health sync and the
+ * half-hourly task refresh both survive process death.
+ */
 class AgentoApp : Application() {
 
-    /** Re-enqueues hourly sync on every cold start; safe to call repeatedly. */
+    /** Re-enqueues both periodic jobs on every cold start; safe to call repeatedly. */
     override fun onCreate() {
         super.onCreate()
         ForegroundTracker.install(this)
         scheduleSync(this)
+        scheduleTaskSync(this)
     }
 
     companion object {
@@ -28,6 +34,17 @@ class AgentoApp : Application() {
         const val PREFS_NAME = "agento"
         const val SYNC_WORK_NAME = "agento_sync"
         const val SYNC_INTERVAL_HOURS = 1L
+        const val TASK_SYNC_WORK_NAME = "agento_task_sync"
+
+        /**
+         * How often the task widget and reminder alarms re-derive
+         * themselves. Half an hour sits between "often enough that a task
+         * the agent just made shows up while you are still looking at the
+         * home screen" and "often enough to notice": it is the smallest
+         * interval that keeps a glanceable surface honest, and it is well
+         * inside the battery case for a single small fetch.
+         */
+        const val TASK_SYNC_INTERVAL_MINUTES = 30L
 
         /** Unique periodic work with UPDATE policy so reinstalls never duplicate. */
         fun scheduleSync(context: Context) {
@@ -36,6 +53,31 @@ class AgentoApp : Application() {
             ).build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 SYNC_WORK_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request,
+            )
+        }
+
+        /**
+         * Unique periodic work with UPDATE policy, as above. Safe to call
+         * repeatedly: WorkManager keeps one job and replaces its definition,
+         * so a cold start, a reboot and a reinstall all land on the same one.
+         */
+        fun scheduleTaskSync(context: Context) {
+            val request = PeriodicWorkRequestBuilder<TaskSyncWorker>(
+                TASK_SYNC_INTERVAL_MINUTES, TimeUnit.MINUTES
+            ).setConstraints(
+                // Offline, there is nothing to fetch and nothing to report:
+                // without this every tick wakes the process, fails all the
+                // requests and schedules a backoff retry. Constrained, an
+                // offline window simply passes and the run happens when the
+                // network is back.
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            ).build()
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                TASK_SYNC_WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
                 request,
             )
