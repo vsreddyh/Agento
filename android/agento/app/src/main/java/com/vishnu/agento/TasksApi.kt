@@ -248,9 +248,14 @@ class TasksApi(context: Context) {
             if (clean.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
-            call("GET", "/api/tasks/$clean").fold(
-                onSuccess = { body ->
-                    Result.success(parseOne(body))
+            // mapCatching, not map: a malformed doc must come back as a
+            // failure (generic alert + rearm), never as a throw escaping
+            // the receiver's coroutine.
+            call("GET", "/api/tasks/$clean").mapCatching { body ->
+                parseOne(body)
+            }.fold(
+                onSuccess = { task ->
+                    Result.success(task)
                 },
                 onFailure = { e ->
                     // Code and body: a gateway 404 (wrong server) must never

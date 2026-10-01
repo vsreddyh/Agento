@@ -507,7 +507,7 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 		return nil, false, err
 	}
 	if int64(len(out)) > lim {
-		return out[:lim], true, nil
+		return out[:int(lim)], true, nil
 	}
 	return out, false, nil
 }
