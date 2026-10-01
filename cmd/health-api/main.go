@@ -55,8 +55,6 @@ func authorize(r *http.Request) (int, string) {
 	return 0, ""
 }
 
-// localDate buckets an ISO timestamp into the user's (IST) calendar date.
-
 func main() {
 	mux := http.NewServeMux()
 	registerHealth(mux)

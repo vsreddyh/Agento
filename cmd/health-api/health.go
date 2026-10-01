@@ -39,6 +39,7 @@ type HealthSyncPayload struct {
 	Workouts           []WorkoutEntry `json:"workouts"`
 }
 
+// localDate buckets an ISO timestamp into the user's (IST) calendar date.
 func localDate(iso string) string {
 	s := strings.TrimSpace(iso)
 	if t, err := time.Parse(time.RFC3339, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
