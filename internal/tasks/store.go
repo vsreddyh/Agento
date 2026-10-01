@@ -255,9 +255,19 @@ func repeatFromDoc(doc bson.M) Repeat {
 var timeRE = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
 // StoreError is the domain error: servers catch it and return {ok: false, error}.
-type StoreError struct{ Msg string }
+type StoreError struct {
+	Msg      string
+	Conflict bool
+}
 
 func (e *StoreError) Error() string { return e.Msg }
+
+// conflict reports a lost optimistic-concurrency race. It is a distinct
+// shape (not a validation failure) so the HTTP layer can answer 409 and
+// the MCP layer can tell the agent to re-read rather than re-send.
+func conflict(format string, args ...any) *StoreError {
+	return &StoreError{Msg: "conflict: " + fmt.Sprintf(format, args...), Conflict: true}
+}
 
 func fail(format string, args ...any) *StoreError {
 	return &StoreError{Msg: fmt.Sprintf(format, args...)}
@@ -358,6 +368,9 @@ func toDoc(doc bson.M) map[string]any {
 	if _, ok := out["repeat_rule"]; !ok {
 		out["repeat_rule"] = ""
 	}
+	if _, ok := out["revision"]; !ok {
+		out["revision"] = 0
+	}
 	// Recurrence backfill: pre-4.6 docs carry only the free-text
 	// repeat_rule, so the mode is inferred (text = custom) and the
 	// structured keys come back neutral. Every response speaks the same
@@ -420,6 +433,7 @@ func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime 
 		"due_date": dueDate, "due_time": dueTime,
 		"estimated_minutes": *estimatedMinutes,
 		"parallelable":      *parallelable,
+		"revision":          0,
 		"completedAt":       nil, "createdAt": now,
 	}
 	for k, v := range rep.docs() {
@@ -533,6 +547,12 @@ func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 // due fields are rejected, not cleared); the recurrence stays clearable
 // ("" / 0 = one-shot). Absent keys are untouched; due fields and the
 // recurrence's four keys are validated together.
+//
+// expected_revision is the optimistic-concurrency guard (#184): when the
+// caller sends the revision it read, a mismatch means someone else wrote
+// first and the update is rejected instead of silently overwriting. Absent
+// means unchecked, so old callers keep working. Every successful mutation
+// bumps the revision, so the number the next reader sees is always fresh.
 func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
@@ -545,7 +565,18 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		}
 		return nil, err
 	}
-	set := bson.M{}
+	stored, _ := toInt(cur["revision"])
+	if v, ok := fields["expected_revision"]; ok && v != nil {
+		want, ok := toInt(v)
+		if !ok || want < 0 {
+			return nil, fail("expected_revision must be an integer >= 0")
+		}
+		if want != stored {
+			return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, stored)
+		}
+		delete(fields, "expected_revision")
+	}
+	set := bson.M{"revision": stored + 1}
 	strField := func(key string) (string, bool) {
 		v, ok := fields[key]
 		if !ok {
@@ -628,7 +659,10 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		}
 		set["parallelable"] = b
 	}
-	if len(set) == 0 {
+	// The revision bump alone is not a change worth writing: without it
+	// this path is the "nothing sent, nothing to do" no-op, and writing
+	// would mint a new revision for a read.
+	if len(set) == 1 {
 		return toDoc(cur), nil
 	}
 	if _, err := s.tasks.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": set}); err != nil {
@@ -710,10 +744,13 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
 		bson.M{"_id": oid, "completedAt": nil},
-		bson.M{"$set": bson.M{
-			"completedAt": primitive.NewDateTimeFromTime(now),
-			"expiresAt":   primitive.NewDateTimeFromTime(now.AddDate(0, 0, RetentionDays)),
-		}})
+		bson.M{
+			"$set": bson.M{
+				"completedAt": primitive.NewDateTimeFromTime(now),
+				"expiresAt":   primitive.NewDateTimeFromTime(now.AddDate(0, 0, RetentionDays)),
+			},
+			"$inc": bson.M{"revision": 1},
+		})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -782,7 +819,10 @@ func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 	}
 	res, err := s.tasks.UpdateOne(ctx,
 		bson.M{"_id": oid, "completedAt": bson.M{"$ne": nil, "$exists": true}},
-		bson.M{"$unset": bson.M{"completedAt": "", "expiresAt": ""}})
+		bson.M{
+			"$unset": bson.M{"completedAt": "", "expiresAt": ""},
+			"$inc":   bson.M{"revision": 1},
+		})
 	if err != nil {
 		return nil, err
 	}

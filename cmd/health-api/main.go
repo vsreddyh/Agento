@@ -428,6 +428,13 @@ func writeTaskErr(w http.ResponseWriter, err error) {
 			writeJSON(w, http.StatusNotFound, bson.M{"detail": se.Msg})
 			return
 		}
+		// A lost revision race is neither missing nor invalid: 409, with
+		// the message the store wrote (it names both revisions and says
+		// to reload), so the app can show it as-is.
+		if se.Conflict {
+			writeJSON(w, http.StatusConflict, bson.M{"detail": se.Msg})
+			return
+		}
 		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": se.Msg})
 		return
 	}
@@ -473,9 +480,17 @@ func checkTaskFields(fields map[string]any) error {
 		}
 	}
 	if v, ok := fields["repeat_every"]; ok && v != nil {
+		// Integer-ness only: the range is the store's call
+		// (Repeat.Validate), so the bounds are stated once. This must stay
+		// looser than the store, never tighter, or a body the store would
+		// accept dies here with the vaguer message.
 		if _, ok := taskInt(v); !ok {
-			return &tasks.StoreError{Msg: "repeat_every must be an integer " +
-				strconv.Itoa(tasks.RepeatEveryMin) + "-" + strconv.Itoa(tasks.RepeatEveryMax)}
+			return &tasks.StoreError{Msg: "repeat_every must be an integer"}
+		}
+	}
+	if v, ok := fields["expected_revision"]; ok && v != nil {
+		if _, ok := taskInt(v); !ok {
+			return &tasks.StoreError{Msg: "expected_revision must be an integer >= 0"}
 		}
 	}
 	for _, k := range []string{"parallelable", "repeat_custom"} {
@@ -645,6 +660,10 @@ func getTask(w http.ResponseWriter, r *http.Request, id string) {
 
 // updateTask applies a partial edit (only sent keys change; empty
 // repeat_rule clears the rule — same semantics as the agent's update_task).
+// Omit all four repeat keys to leave the recurrence alone; the rule is
+// never inferred from an empty value. expected_revision is the
+// optimistic-concurrency guard: when present it must match the stored
+// revision or the edit is rejected with 409 instead of overwriting.
 func updateTask(w http.ResponseWriter, r *http.Request, id string) {
 	fields, ok := decodeTaskBody(w, r)
 	if !ok {

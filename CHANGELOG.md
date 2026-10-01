@@ -8,6 +8,26 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.14.0]
+
+- **One validation authority for repeats.** The HTTP layer stated the
+  repeat bounds a second time, as a string inside an error message, while
+  the store enforced them for real. The HTTP layer now checks types only
+  and the store decides shape — the bounds live in exactly one place, so
+  the next range change cannot update one message and miss the other.
+- **The absence convention is written down.** Omit all four repeat keys and
+  the recurrence is left alone; send keys and they are validated whole.
+  The old "empty rule text clears everything" behaviour stays for older
+  clients, but it is a documented compatibility rule now, not a comment.
+  The app's literal request bodies (one-shot zeros, cadence, custom words,
+  absent entirely) are asserted to round-trip unchanged.
+- **Edits carry a revision.** Every task has a `revision`, bumped on each
+  mutation. Pass the one you read as `expected_revision` and a task someone
+  else touched rejects with 409 ("reload and retry") instead of silently
+  overwriting — the agent editing in chat while the app editor is open is
+  the case this exists for. Absent means unchecked, so old callers keep
+  working; the app sends what it read.
+
 ## [4.13.0]
 
 - **Task lists are bounded.** Every task fetch now carries a limit (server

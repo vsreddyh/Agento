@@ -31,6 +31,9 @@ data class ServerTask(
     val repeatCustom: Boolean = false,
     val repeatRule: String = "",
     val parallelable: Boolean = false,
+    // Optimistic-concurrency guard: bumped by every server-side mutation.
+    // Sent back on update so a stale editor is rejected, not overwritten.
+    val revision: Int = 0,
     val completedAt: String = "",
     val createdAt: String = "",
     /**
@@ -196,6 +199,9 @@ class TasksApi(context: Context) {
             repeatCustom = o.optBoolean("repeat_custom", false),
             repeatRule = optStr(o, "repeat_rule"),
             parallelable = o.optBoolean("parallelable", false),
+            // Missing on pre-revision servers: 0 matches the backfill, so
+            // an old server and a new app still agree (#184).
+            revision = (o.opt("revision") as? Number)?.toInt() ?: 0,
             completedAt = optStr(o, "completedAt"),
             createdAt = optStr(o, "createdAt"),
         )
@@ -329,6 +335,9 @@ class TasksApi(context: Context) {
         repeatCustom: Boolean? = null,
         repeatRule: String? = null,
         parallelable: Boolean? = null,
+        // The revision the editor read: when someone else wrote first the
+        // server answers 409 instead of overwriting (#184).
+        expectedRevision: Int? = null,
     ): Result<ServerTask> = withContext(Dispatchers.IO) {
         val clean = encodeId(id)
         if (clean.isEmpty()) {
@@ -345,6 +354,7 @@ class TasksApi(context: Context) {
         if (repeatCustom != null) body.put("repeat_custom", repeatCustom)
         if (repeatRule != null) body.put("repeat_rule", repeatRule)
         if (parallelable != null) body.put("parallelable", parallelable)
+        if (expectedRevision != null) body.put("expected_revision", expectedRevision)
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
     }
 

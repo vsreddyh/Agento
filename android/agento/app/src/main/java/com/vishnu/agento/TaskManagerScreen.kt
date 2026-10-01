@@ -705,6 +705,10 @@ internal fun TaskManagerScreen(
                         val was = editing?.repeatOrNull()
                         val now = next.repeatOrNull()
                         val repChanged = was != now
+                        // The revision this editor read: an agent edit that
+                        // landed while the dialog was open rejects here with
+                        // 409 instead of being silently overwritten (#184).
+                        val readRevision = tasks.firstOrNull { it.id == next.id }?.revision
                         api.update(
                             id = next.id,
                             name = next.name,
@@ -721,6 +725,7 @@ internal fun TaskManagerScreen(
                             },
                             repeatRule = if (repChanged) now?.third else null,
                             parallelable = next.parallelable,
+                            expectedRevision = readRevision,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },
                             onFailure = ::fail,
