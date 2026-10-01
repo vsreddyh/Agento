@@ -444,14 +444,3 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     }
 }
 
-internal fun humanSize(bytes: Long): String {
-    if (bytes <= 0) return "0 B"
-    val units = listOf("B", "KB", "MB", "GB")
-    var v = bytes.toDouble()
-    var u = 0
-    while (v >= 1024 && u < units.size - 1) {
-        v /= 1024
-        u++
-    }
-    return if (u == 0) "$bytes B" else "%.1f %s".format(v, units[u])
-}
