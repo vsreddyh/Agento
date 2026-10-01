@@ -6434,6 +6434,9 @@ private fun WidgetDiagnosticsCard() {
                     try {
                         val fresh = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
                         summary = fresh
+                        // Re-read with it: the banner above is derived from
+                        // the same prefs, and a copy is a refresh.
+                        budget = TaskReminders.budget(context)
                         // Same content as the file export (minus the long
                         // log tail): copying must not silently miss the
                         // host-side lines the subtitle promises.
