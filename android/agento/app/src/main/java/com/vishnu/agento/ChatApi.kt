@@ -262,11 +262,14 @@ class ChatApi(context: Context) {
             val valid = if (model.trim().isEmpty()) e
                 else e.takeIf { it in EffortCatalog.optionsFor(model.trim()) }
             if (valid != null) {
-                edit.putString("effort_$tab", valid)
-                if (model.trim().isNotEmpty()) edit.putString("effort_${tab}_${model.trim()}", valid)
+                prefs.edit {
+                    putString("effort_$tab", valid)
+                    if (model.trim().isNotEmpty()) {
+                        putString("effort_${tab}_${model.trim()}", valid)
+                    }
+                }
             }
         }
-        edit.apply()
     }
 
     /** Fetches the Hermes provider-aware picker inventory that backs the

@@ -87,7 +87,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val prefs = app.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
             if (result.success) {
                 prefs.edit {
-                    putString("last_sync_at", java.time.Instantnow()toString())
+                    putString("last_sync_at", java.time.Instant.now().toString())
                 }
             }
             _state.value = _state.value.copy(

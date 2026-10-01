@@ -604,7 +604,8 @@ object TaskReminders {
         // The budget goes with them: leaving it behind would have Settings
         // reporting slots "used" against an alarm set nothing is holding.
         prefs(appCtx).edit {
-            remove(PREF_ARMED)remove(PREF_BUDGET)
+            remove(PREF_ARMED)
+            remove(PREF_BUDGET)
         }
     }
 
