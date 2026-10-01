@@ -565,18 +565,23 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		}
 		return nil, err
 	}
+	// The guard is checked twice, on purpose. The comparison here gives
+	// the precise message (which revision was wanted, which is stored);
+	// the filter below makes it atomic, so two holders of the same number
+	// cannot both win and a concurrent $inc cannot slip between.
 	stored, _ := toInt(cur["revision"])
+	guarded, want := false, 0
 	if v, ok := fields["expected_revision"]; ok && v != nil {
-		want, ok := toInt(v)
+		want, ok = toInt(v)
 		if !ok || want < 0 {
 			return nil, fail("expected_revision must be an integer >= 0")
 		}
 		if want != stored {
 			return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, stored)
 		}
-		delete(fields, "expected_revision")
+		guarded = true
 	}
-	set := bson.M{"revision": stored + 1}
+	set := bson.M{}
 	strField := func(key string) (string, bool) {
 		v, ok := fields[key]
 		if !ok {
@@ -659,14 +664,30 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		}
 		set["parallelable"] = b
 	}
-	// The revision bump alone is not a change worth writing: without it
-	// this path is the "nothing sent, nothing to do" no-op, and writing
-	// would mint a new revision for a read.
-	if len(set) == 1 {
+	// Nothing to change means nothing to write: without this the bump
+	// below would mint a new revision for a read.
+	if len(set) == 0 {
 		return toDoc(cur), nil
 	}
-	if _, err := s.tasks.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": set}); err != nil {
+	update := bson.M{"$set": set, "$inc": bson.M{"revision": 1}}
+	filt := bson.M{"_id": oid}
+	if guarded {
+		filt["revision"] = want
+	}
+	res, err := s.tasks.UpdateOne(ctx, filt, update)
+	if err != nil {
 		return nil, err
+	}
+	if res.MatchedCount == 0 {
+		// Guarded and unmatched: someone won the race after our read.
+		// Re-read to name the current revision rather than guessing.
+		// (Unguarded cannot miss: the id was just read above.)
+		var latest bson.M
+		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&latest); ferr != nil {
+			return nil, fail("unknown task '%s'", id)
+		}
+		now, _ := toInt(latest["revision"])
+		return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, now)
 	}
 	return s.Get(ctx, id)
 }

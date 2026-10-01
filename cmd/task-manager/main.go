@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -67,7 +68,15 @@ func repeatHint(rep tasks.Repeat) string {
 }
 
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
-	return nil, map[string]any{"ok": false, "error": err.Error()}, nil
+	out := map[string]any{"ok": false, "error": err.Error()}
+	// A lost revision race is actionable, not just reportable: the agent
+	// re-reads the task and retries, rather than re-sending the same edit.
+	// Structured (not parsed out of the message) so the branch is exact.
+	var se *tasks.StoreError
+	if errors.As(err, &se) && se.Conflict {
+		out["conflict"] = true
+	}
+	return nil, out, nil
 }
 
 func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {

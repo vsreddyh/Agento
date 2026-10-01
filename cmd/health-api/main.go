@@ -480,10 +480,12 @@ func checkTaskFields(fields map[string]any) error {
 		}
 	}
 	if v, ok := fields["repeat_every"]; ok && v != nil {
-		// Integer-ness only: the range is the store's call
-		// (Repeat.Validate), so the bounds are stated once. This must stay
-		// looser than the store, never tighter, or a body the store would
-		// accept dies here with the vaguer message.
+		// Type-shape only: whether the value is an integer at all is
+		// decided here, whether it is in range is the store's call
+		// (Repeat.Validate), so the bounds are stated once. Fractionals
+		// are deliberately tighter here than the store (which truncates):
+		// 3.5 is a caller bug, not a count, and it should fail at the
+		// door with this message rather than store as 3.
 		if _, ok := taskInt(v); !ok {
 			return &tasks.StoreError{Msg: "repeat_every must be an integer"}
 		}
