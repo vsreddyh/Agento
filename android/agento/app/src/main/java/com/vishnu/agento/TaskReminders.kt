@@ -355,20 +355,23 @@ object TaskReminders {
             val byKey = candidates.associateBy { it.key }
             val kept = capped.mapNotNull(byKey::get)
             val wantedOneShots = candidates.count { !it.nag }
-            saveBudget(
-                appCtx,
-                Budget(
-                    tasks = timed,
-                    wanted = candidates.size,
-                    cap = MAX_ALARMS,
-                    armed = capped.size,
-                    droppedOneShots = wantedOneShots - kept.count { !it.nag },
-                    droppedNags = (candidates.size - wantedOneShots) -
-                        kept.count { it.nag },
-                ),
-            )
+            // Armed set and the budget that describes it go in together: a
+            // crash between two applies would leave the reported numbers
+            // describing an alarm set that is no longer the live one.
             prefs(appCtx).edit()
                 .putStringSet(PREF_ARMED, keep)
+                .putString(
+                    PREF_BUDGET,
+                    Budget(
+                        tasks = timed,
+                        wanted = candidates.size,
+                        cap = MAX_ALARMS,
+                        armed = capped.size,
+                        droppedOneShots = wantedOneShots - kept.count { !it.nag },
+                        droppedNags = (candidates.size - wantedOneShots) -
+                            kept.count { it.nag },
+                    ).encode(),
+                )
                 .apply()
         }
     }
@@ -387,6 +390,10 @@ object TaskReminders {
      * it stops the nagging.
      */
     internal fun rearmOverdue(context: Context, taskId: String) {
+        // Arms outside the cap and does not touch PREF_BUDGET: killing a
+        // live nag mid-cycle to honour a budget is worse than briefly
+        // exceeding one. The reported budget is therefore exact only after
+        // the next [refresh], which re-derives both from the same pass.
         val appCtx = context.applicationContext
         val key = alarmKey(taskId, ReminderKind.Overdue)
         val at = System.currentTimeMillis() + OVERDUE_EVERY_MINUTES * 60_000L
@@ -512,22 +519,19 @@ object TaskReminders {
     internal fun budget(appCtx: Context): Budget? {
         val raw = prefs(appCtx).getString(PREF_BUDGET, null) ?: return null
         val parts = raw.split(',').map { it.toIntOrNull() ?: return null }
-        return if (parts.size == 6) {
+        // Counts are never negative: anything else is a corrupt or
+        // hand-edited value, and reporting "dropped -1 alert(s)" would be
+        // worse than reporting nothing.
+        return if (parts.size == 6 && parts.all { it >= 0 }) {
             Budget(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5])
         } else {
             null
         }
     }
 
-    private fun saveBudget(appCtx: Context, b: Budget) {
-        prefs(appCtx).edit()
-            .putString(
-                PREF_BUDGET,
-                "${b.tasks},${b.wanted},${b.cap},${b.armed}," +
-                    "${b.droppedOneShots},${b.droppedNags}",
-            )
-            .apply()
-    }
+    /** The six counts, as one pref value. */
+    private fun Budget.encode(): String =
+        "$tasks,$wanted,$cap,$armed,$droppedOneShots,$droppedNags"
 
     /** Drop every armed alarm (reminders disabled). Legacy bare-id keys
      * need the old identity, exactly as in refresh — otherwise a
