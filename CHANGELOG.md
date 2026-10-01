@@ -8,6 +8,52 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.11.0]
+
+- **Duplicate** on a task's detail sheet: one tap copies it 1:1 into a new
+  open task — name, details, due date and time, estimate, the entire repeat
+  and the parallel flag, all carried over verbatim. Nothing is adjusted on
+  the way through: a copy is a starting point to edit, not a rescheduled
+  twin, so a past due date stays past and a cadence comes across as the
+  same cadence. It sits beside Delete rather than crowding the primary row,
+  and a task missing anything the app itself requires says exactly which
+  field — without closing the task, so the thing that needed fixing is
+  still on screen.
+
+## [4.10.0]
+
+- **Four reminder types, as specified** (issue #160), each with its own
+  message instead of one generic alert:
+  - **5 minutes before the start time** — "Starting in 5 minutes · starts
+    Today, 07:30"
+  - **At the start time** — "Start now · due Today, 09:00"
+  - **At the due time** — "Due now"
+  - **Every 15 minutes past due** — "Overdue since Today, 09:00"
+
+  Each line names the time that is actionable at that moment, which is why
+  they are written separately rather than composed from one suffix.
+- A reminder's expanded view now opens whenever it would add something, not
+  only when the task has a description — so a task with no description still
+  shows when it starts and when it is due.
+- **Notifications stopped echoing the whole task.** The expanded view was
+  repeating the due line, the start line, the estimate, the repeat rule and
+  the parallel flag — six lines of a record already visible in the app. It
+  is now the message, the task's own description, and the window it has to
+  happen in. The locked-screen line names the moment and the one time that
+  matters.
+- The "5 minutes before due" heads-up is replaced by "at the due time", per
+  the four types above, and the 5-minute lead now sits before the *start*.
+- A task with no estimate gets the due alert only: there is no start time
+  for the 5-minute warning to lead into, and a "Start now" alert arriving
+  at the due moment would say the wrong thing.
+- Reminders that would land within two minutes of each other collapse, and
+  the **later** one wins: a one-minute estimate no longer fires "Start now"
+  and "Due now" a minute apart, and it is "Start now" that goes, so a task
+  that has just come due is never the alert that gets dropped.
+- The alarm budget rose from 60 to 90, because a task now arms up to three
+  points rather than two. See issue #165 for why that cap matters more than
+  its size suggests.
+
 ## [4.9.0]
 
 - New **Current** section at the top of the task list: tasks whose start

@@ -52,15 +52,23 @@ fun dueMillisOrNull(dueDate: String, dueTime: String): Long? {
 }
 
 /** One of the reminder points a task can fire at. */
-internal enum class ReminderKind(val key: String, val lead: String) {
-    /** `due - estimated_minutes`: the last moment you can start and still finish. */
-    Start("start", "Start now"),
+/** The four reminders a task gets (issue #160), in the order they happen.
+ *
+ * A reminder is a *moment*, not a field: the copy for each is written
+ * against what has just happened, so the lock screen says one useful thing
+ * rather than echoing the task back. [reminderMessage] holds the wording. */
+internal enum class ReminderKind(val key: String) {
+    /** [TaskReminders.BEFORE_START_MINUTES] before the start time. */
+    BeforeStart("before"),
 
-    /** [TaskReminders.HEADS_UP_MINUTES] before the due time. */
-    Soon("soon", "Due in ${TaskReminders.HEADS_UP_MINUTES} min"),
+    /** `due - estimated_minutes`: the last moment you can start and still finish. */
+    Start("start"),
+
+    /** The due time itself. */
+    Due("due"),
 
     /** Due time has passed: repeats until the task is dealt with. */
-    Overdue("overdue", "Overdue"),
+    Overdue("overdue"),
 }
 
 /**
@@ -68,12 +76,11 @@ internal enum class ReminderKind(val key: String, val lead: String) {
  * an empty map when nothing is left to remind about.
  *
  * Pure and [nowMillis]-injected so the rules are readable in one place:
- * - a zero estimate gets no start nudge (there is nothing to start early
- *   for — the heads-up's job is to warn, not to schedule work);
- * - a start nudge and a heads-up landing on the same minute (estimate 5)
- *   arm once, not twice;
- * - points already in the past are dropped, so a task created late gets
- *   no burst of stale notifications;
+ * - points already in the past are dropped, so a task created late gets no
+ *   burst of stale notifications;
+ * - points closer together than [TaskReminders.MIN_GAP_MINUTES] collapse
+ *   into the later one, so a tiny estimate cannot produce "Start now" and
+ *   "Due now" a minute apart;
  * - once the due time itself has passed the overdue nag is due
  *   immediately, and the receiver repeats it every
  *   [TaskReminders.OVERDUE_EVERY_MINUTES].
@@ -86,15 +93,104 @@ internal fun reminderPoints(
 ): Map<ReminderKind, Long> {
     val due = dueMillisOrNull(dueDate, dueTime) ?: return emptyMap()
     val out = LinkedHashMap<ReminderKind, Long>()
-    if (estimatedMinutes > 0) {
-        val start = due - estimatedMinutes * 60_000L
-        if (start > nowMillis) out[ReminderKind.Start] = start
+    if (due <= nowMillis) {
+        out[ReminderKind.Overdue] = due
+        return out
     }
-    val soon = due - TaskReminders.HEADS_UP_MINUTES * 60_000L
-    if (soon > nowMillis) out[ReminderKind.Soon] = soon
-    if (due <= nowMillis) out[ReminderKind.Overdue] = due
-    if (out[ReminderKind.Start] == out[ReminderKind.Soon]) out.remove(ReminderKind.Start)
+    if (estimatedMinutes > 0) {
+        // A zero estimate has no start of its own — the same rule the list
+        // and the app's startMillisOrNull() use, so all three agree. With no
+        // estimate there is no start time for the 5-minute warning to lead
+        // into, and "Start now" would fire *at* the due moment saying the
+        // wrong thing, so such a task gets the due alert alone.
+        val start = due - estimatedMinutes * 60_000L
+        addIfFuture(
+            out,
+            ReminderKind.BeforeStart,
+            start - TaskReminders.BEFORE_START_MINUTES * 60_000L,
+            nowMillis,
+        )
+        addIfFuture(out, ReminderKind.Start, start, nowMillis)
+    }
+    addIfFuture(out, ReminderKind.Due, due, nowMillis)
+    // Collapse reminders that would land on top of each other: a one-minute
+    // estimate would otherwise fire "Start now" and "Due now" a minute
+    // apart, which is one alert too many for one moment. Exact-equality was
+    // not enough here — the points are a minute quantum apart, never
+    // identical.
+    //
+    // The *later* reminder wins, because the deadline is the alert that must
+    // not be missed: dropping "Start now" and keeping "Due now" loses
+    // nothing, where the reverse leaves a task that has just come due
+    // silent.
+    val gap = TaskReminders.MIN_GAP_MINUTES * 60_000L
+    // Nullable, not a Long sentinel: `at - Long.MIN_VALUE` overflows and
+    // comes back negative, which would drop the first reminder of every
+    // task — and for a task whose only point is Due, all of it.
+    var lastKind: ReminderKind? = null
+    var lastAt: Long? = null
+    for (kind in ReminderKind.entries) {
+        val at = out[kind] ?: continue
+        val prevAt = lastAt
+        if (lastKind != null && prevAt != null && at - prevAt < gap) {
+            out.remove(lastKind)
+        }
+        // Always advance, including after a collapse: `last` has to be the
+        // point that won, or the next comparison is against a time that is
+        // no longer in the map. With today's constants only one collapse
+        // can fire, so this is latent rather than live.
+        lastKind = kind
+        lastAt = at
+    }
     return out
+}
+
+/**
+ * The one line each reminder says (issue #160).
+ *
+ * A lock-screen line has one job: say what just happened, and the one time
+ * that matters. The four types are written to be distinguishable at a
+ * glance in a notification stack, because a "Start now" and a "Due now"
+ * that read the same are worse than no reminder at all.
+ *
+ * [dueLine] and [startLine] are already formatted ("Today, 09:00"). When
+ * the task could not be fetched, [dueLine] is "" and [startLine] is null,
+ * and the wording degrades to the bare fact rather than inventing a time.
+ */
+private fun reminderMessage(
+    kind: ReminderKind,
+    dueLine: String,
+    startLine: String?,
+): String = when (kind) {
+    // The actionable time differs per reminder, which is why each line is
+    // written separately rather than composed from one suffix: before the
+    // start, the start time is what you act on; once started, the deadline
+    // is what you are racing; at the deadline, there is nothing left to add.
+    ReminderKind.BeforeStart ->
+        "Starting in ${TaskReminders.BEFORE_START_MINUTES} minutes" +
+            suffix(startLine, "starts")
+    ReminderKind.Start ->
+        "Start now" + suffix(dueLine, "due")
+    // No suffix on purpose: at the due moment the time *is* now, and "Due
+    // now · due 09:00" says the same thing twice. The expanded view below
+    // it still carries the window.
+    ReminderKind.Due ->
+        "Due now"
+    ReminderKind.Overdue ->
+        if (dueLine.isEmpty()) "Overdue" else "Overdue since $dueLine"
+}
+
+/** " · due Today, 09:00", or nothing when there is no time to show. */
+private fun suffix(line: String?, label: String): String =
+    if (line.isNullOrEmpty()) "" else " \u00b7 $label $line"
+
+private fun addIfFuture(
+    out: MutableMap<ReminderKind, Long>,
+    kind: ReminderKind,
+    at: Long,
+    nowMillis: Long,
+) {
+    if (at > nowMillis) out[kind] = at
 }
 
 /**
@@ -106,9 +202,9 @@ internal fun reminderPoints(
  * mutation, on boot, and when the Task Manager loads — never
  * periodically, so a quiet list costs nothing.
  *
- * A task gets up to three reminder points (see [reminderPoints]): a start
- * nudge at `due - estimated_minutes`, a heads-up 5 minutes before due, and
- * — once the due time has passed — a nag that repeats every
+ * A task gets up to three armed reminder points (see [reminderPoints]) —
+ * five minutes before the start, at the start, and at the due time — plus,
+ * once the due time has passed, a nag that repeats every
  * [OVERDUE_EVERY_MINUTES] minutes until the task is dealt with.
  *
  * Scope guardrails: only open tasks with a due date + time inside
@@ -123,10 +219,21 @@ object TaskReminders {
     private const val PREF_ENABLED = "task_reminders_enabled"
     const val CHANNEL_ID = "task_reminders"
     private const val HORIZON_DAYS = 7L
-    private const val MAX_ALARMS = 60
+    // Three armed points per task (before start, start, due) plus the
+    // overdue loop, so the budget has to cover 3x the task count to be
+    // meaningful. See issue #165: over the cap, alarms are dropped
+    // silently, so this is a floor rather than a ceiling.
+    private const val MAX_ALARMS = 90
 
-    /** Heads-up lead time before the due time. */
-    internal const val HEADS_UP_MINUTES = 5L
+    /** Lead time before the start time, for [ReminderKind.BeforeStart]. */
+    internal const val BEFORE_START_MINUTES = 5L
+
+    /**
+     * Two reminders closer together than this are one reminder: a shorter
+     * gap than the user can act on produces a burst, not a warning. A
+     * one-minute estimate is the case this exists for.
+     */
+    internal const val MIN_GAP_MINUTES = 2L
 
     /** How often an overdue task nags again while it stays unfinished. */
     internal const val OVERDUE_EVERY_MINUTES = 15L
@@ -254,7 +361,7 @@ object TaskReminders {
         val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val fire = Intent(appCtx, TaskAlarmReceiver::class.java)
             .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
-            .setData(Uri.parse("agento://reminder/$taskId"))
+            .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}"))
         mgr.cancel(
             PendingIntent.getBroadcast(
                 appCtx, taskId.hashCode(), fire,
@@ -305,14 +412,20 @@ object TaskReminders {
     }
 
     private fun operation(appCtx: Context, key: String): PendingIntent {
-        val (taskId, kind) = key.split('#', limit = 2)
-            .let { it[0] to (it.getOrNull(1) ?: ReminderKind.Soon.key) }
+        // Split on the LAST '#': the kind is a fixed suffix, so an id that
+        // itself contained one would otherwise truncate the task id. Ids are
+        // hex ObjectIds today, so this is belt-and-braces.
+        val cut = key.lastIndexOf('#')
+        val taskId = if (cut < 0) key else key.substring(0, cut)
+        val kind = if (cut < 0) ReminderKind.Due.key else key.substring(cut + 1)
         // Distinct data URI per key: the PendingIntent stays unique even
         // if two keys ever share a hashCode.
         val fire = Intent(appCtx, TaskAlarmReceiver::class.java)
             .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
             .putExtra(EXTRA_REMINDER_KIND, kind)
-            .setData(Uri.parse("agento://reminder/$taskId/$kind"))
+            // The path segment is encoded: a '/' in an id would otherwise
+            // change the URI's structure and break PendingIntent identity.
+            .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}/$kind"))
         return PendingIntent.getBroadcast(
             appCtx, key.hashCode(), fire,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -336,10 +449,11 @@ class TaskAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val taskId = intent.getStringExtra(TaskWidget.EXTRA_TASK_ID).orEmpty()
         if (taskId.isEmpty()) return
-        // Pre-4.x alarms (and any that lost their extra) land as Soon: one
-        // heads-up is the old "due now" behaviour, not a nag loop.
+        // An alarm with no recognisable kind — an intent from an older
+        // build, say — is treated as the due-time alert: one notification
+        // at the deadline, never a nag loop.
         val kind = reminderKindOrNull(intent.getStringExtra(EXTRA_REMINDER_KIND))
-            ?: ReminderKind.Soon
+            ?: ReminderKind.Due
         val pending = goAsync()
         alarmScope.launch {
             try {
@@ -388,16 +502,12 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             }
         }
         val name = task?.name.orEmpty().ifEmpty { "Task due" }
-        // The fetch already carries the whole task — surface it instead
-        // of a bare "Due now" (#130 follow-up).
         val today = LocalDate.now(IST)
         val dueLine = if (task != null) {
             friendlyDue(task.dueDate, task.dueTime, today)
         } else {
             ""
         }
-        // The estimate is an input, not something to show: what the user
-        // needs is when to start and when it is due.
         // A zero estimate has no start of its own, so the start line would
         // repeat the due line. Compared as instants, not as rendered text:
         // the start is zero-padded and the due side is echoed from storage,
@@ -409,31 +519,21 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             task?.startParts()?.let { (d, t) -> friendlyDue(d, t, today) }
                 ?.takeIf { it.isNotEmpty() }
         }
-        val summary = listOf(
-            kind.lead,
-            dueLine.ifEmpty { null },
-            startLine?.let { "start $it" },
-        ).filterNotNull().joinToString(" · ")
+        val message = reminderMessage(kind, dueLine, startLine)
         // Locals: task is nullable and conditions below don't smart-cast.
         val taskDesc = task?.description.orEmpty()
-        val repeat = task?.repeatLabel().orEmpty()
-        // Lead line says which reminder this is, so a start nudge and a
-        // heads-up never read as the same alert.
-        val lead = when (kind) {
-            ReminderKind.Start ->
-                "Start now${dueLine.ifEmpty { "" }.let { if (it.isEmpty()) "" else ", due $it" }}."
-            ReminderKind.Soon ->
-                "Due in ${TaskReminders.HEADS_UP_MINUTES} minutes."
-            ReminderKind.Overdue ->
-                "Overdue${if (dueLine.isNotEmpty()) " since $dueLine" else ""}."
-        }
+        // Expanded view, at most three lines: the message, the task's own
+        // description, and the window it has to happen in. Deliberately not
+        // a dump of every field — the repeat rule, the parallel flag and
+        // the estimate are things to look up in the app, not to read on a
+        // lock screen (issue #160).
         val big = buildList {
-            add(lead)
+            add(message)
             if (taskDesc.isNotEmpty()) add(taskDesc)
-            if (dueLine.isNotEmpty()) add(dueLine)
-            if (startLine != null) add("Starts $startLine")
-            if (repeat.isNotEmpty()) add("Repeats $repeat")
-            if (task?.parallelable == true) add("Can run in parallel")
+            when {
+                startLine != null && dueLine.isNotEmpty() -> add("$startLine \u2192 $dueLine")
+                dueLine.isNotEmpty() -> add("Due $dueLine")
+            }
         }.joinToString("\n")
         // Inline complete reuses the widget trampoline (no visible UI:
         // completes, refreshes widget/alarms, finishes). Data URI + own
@@ -443,7 +543,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             appCtx, ("done:$taskId").hashCode(),
             Intent(appCtx, TaskCompleteActivity::class.java)
                 .putExtra(TaskWidget.EXTRA_COMPLETE_ID, taskId)
-                .setData(Uri.parse("agento://reminder/$taskId/complete")),
+                .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}/complete")),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE)
@@ -462,7 +562,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         val launch = Intent(appCtx, MainActivity::class.java)
             .setAction(TaskWidget.ACTION_TASKS)
             .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
-            .setData(Uri.parse("agento://reminder/$taskId"))
+            .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}"))
         val tap = PendingIntent.getActivity(
             appCtx, taskId.hashCode(), launch,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -470,16 +570,18 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         val notif = NotificationCompat.Builder(appCtx, TaskReminders.CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_agenda)
             .setContentTitle(name)
-            .setContentText(summary)
+            .setContentText(message)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(tap)
             // No icon (0): framework checkables render badly as action
             // icons on some OEMs.
             .addAction(0, "Done", done)
-        // Expanded view only when there's a description —
-        // otherwise it duplicates the summary in a second page.
-        if (taskDesc.isNotEmpty()) {
+        // Expanded view whenever it would add something: a task with no
+        // description still carries its window, and "Due now" alone leaves
+        // the time unsaid. When the body *is* just the message there is
+        // no second page worth opening.
+        if (big.lineSequence().count() > 1) {
             notif.setStyle(
                 NotificationCompat.BigTextStyle().bigText(big),
             )
