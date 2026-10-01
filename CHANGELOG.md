@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.12.2]
+
+- **Task Manager UI moved out of MainActivity** (#163, second of four
+  moves). The list screen, rows, detail sheet, editor dialog and the
+  date/time pickers now live in `TaskManagerScreen.kt`, with the two small
+  helpers only they use (`DetailLine`, `FormLabel`). Moved verbatim apart
+  from `private` → `internal` and the import list, which carries exactly
+  what the moved code references. No behaviour changes.
+
 ## [4.12.1]
 
 - **Task domain moved out of MainActivity** (#163, first of four moves).
