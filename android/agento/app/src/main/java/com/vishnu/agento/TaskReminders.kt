@@ -11,9 +11,10 @@ import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
@@ -269,14 +270,21 @@ object TaskReminders {
         context.applicationContext.getSharedPreferences(
             AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
 
-    /** Recompute alarms off-thread. Safe to call often; diffs only.
-     * Returns the worker Job so callers that must outlive a broadcast
-     * (BootReceiver) can join it. */
-    fun refresh(context: Context): Job {
+    /**
+     * Recompute alarms off-thread. Safe to call often; diffs only.
+     *
+     * Returns a [Deferred] rather than a plain Job, so the outcome travels
+     * back as a value the caller can await: a Job that completes is a Job
+     * that threw nothing, which is no way to tell [TaskSyncWorker] that its
+     * half-hourly run fetched nothing. Reminders switched off counts as
+     * [RefreshOutcome.Ok] — there was nothing to do, and nothing failed.
+     */
+    fun refresh(context: Context): Deferred<RefreshOutcome> {
         val appCtx = context.applicationContext
-        if (!isEnabled(appCtx)) return Job().also { it.complete() }
-        return scope.launch {
-            val tasks = TasksApi(appCtx).list("open").getOrNull() ?: return@launch
+        return scope.async {
+            if (!isEnabled(appCtx)) return@async RefreshOutcome.Ok
+            val tasks = TasksApi(appCtx).list("open").getOrNull()
+                ?: return@async RefreshOutcome.Failed
             // IST-pinned (#124): due times are entered as wall-clock IST,
             // so "now" and the arming horizon must read the same zone.
             val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
@@ -383,6 +391,7 @@ object TaskReminders {
                 )
                 .apply()
             }
+            RefreshOutcome.Ok
         }
     }
 
