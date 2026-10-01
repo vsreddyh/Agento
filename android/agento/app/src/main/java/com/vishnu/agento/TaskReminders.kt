@@ -283,31 +283,46 @@ object TaskReminders {
             // that would fire an extra alert on every refresh, which happens
             // after each task mutation — but they do compete for budget, or
             // the nag set would grow without bound and the cap would only
-            // ever apply to new work. The moment it went overdue rides along
-            // as the tiebreak: a nag's own fire time is always "in a few
-            // seconds", so the due date and time are the only things left to
-            // rank them by. Zero-padded, so string order is time order.
-            val carried = LinkedHashMap<String, String>()
-            val wanted = LinkedHashMap<String, Long>()
+            // ever apply to new work. What it went overdue rides along as
+            // the tiebreak: a nag's own fire time is always "in a few
+            // seconds", so the due instant is the only thing left to rank
+            // one against another.
+            val carried = LinkedHashMap<String, Bid>()
+            val wanted = LinkedHashMap<String, Bid>()
             var timed = 0
             for (t in tasks) {
                 if (!t.dueDate.isIsoDate() || t.dueTime.isBlank()) continue
                 if (t.dueDate > horizon) continue
-                timed++
-                for ((kind, at) in reminderPoints(
+                // One clock for every comparison below: the ranking, the
+                // reminder points and the budget's own tie-break. Parsed
+                // rather than read off the strings, because ClockTime takes
+                // "9:00" as readily as "09:00" and a concatenated date and
+                // time would sort those two the wrong way round.
+                val dueAt = dueMillisOrNull(t.dueDate, t.dueTime) ?: continue
+                val points = reminderPoints(
                     t.dueDate, t.dueTime, t.estimatedMinutes, nowMillis,
-                )) {
+                )
+                // Counted once the task has actually produced a point, so
+                // the reported total is a denominator the numbers divide into
+                // rather than one inflated by rows the parser rejected.
+                if (points.isEmpty()) continue
+                timed++
+                for ((kind, at) in points) {
                     val key = alarmKey(t.id, kind)
-                    if (kind == ReminderKind.Overdue && key in armed) {
-                        carried[key] = t.dueDate + t.dueTime
-                        continue
-                    }
-                    val fire = if (kind == ReminderKind.Overdue) {
-                        nowMillis + NAG_FIRE_OFFSET
-                    } else {
-                        at
-                    }
-                    wanted[key] = fire
+                    val nag = kind == ReminderKind.Overdue
+                    val bid = Bid(
+                        key = key,
+                        nag = nag,
+                        fire = if (nag) nowMillis + NAG_FIRE_OFFSET else at,
+                        // The moment it went overdue, for the nag ordering
+                        // below. Zero for one-shots, which order by fire time
+                        // alone and never tie.
+                        tie = if (nag) dueAt else 0L,
+                    )
+                    // An armed nag owns its own cadence: re-arming one here
+                    // would fire an extra alert on every refresh, so it is
+                    // carried — but it still competes for budget.
+                    if (nag && key in armed) carried[key] = bid else wanted[key] = bid
                 }
             }
             // The budget (#165). One-shots rank ahead of nags, each group
@@ -317,12 +332,9 @@ object TaskReminders {
             // this did — meant a long-dated task could take every kind of
             // alert away from a task that was due tomorrow. Nags tie on fire
             // time, so they are ordered by how long each has been overdue.
-            val candidates = buildList {
-                for ((key, fire) in wanted) add(Bid(key, key.isNagKey(), fire, ""))
-                for ((key, due) in carried) {
-                    add(Bid(key, true, nowMillis + NAG_FIRE_OFFSET, due))
-                }
-            }
+            val candidates = ArrayList<Bid>(wanted.size + carried.size)
+            candidates.addAll(wanted.values)
+            candidates.addAll(carried.values)
             val capped = candidates
                 .sortedWith(compareBy({ it.nag }, { it.fire }, { it.tie }))
                 .take(MAX_ALARMS)
@@ -337,9 +349,11 @@ object TaskReminders {
                 // after the upgrade, for the old "due now" moment.
                 if (key.contains('#')) cancelKind(appCtx, key) else cancelLegacy(appCtx, key)
             }
-            for ((key, fire) in wanted) {
-                if (key in capped) armAlarm(appCtx, key, fire)
+            for (bid in wanted.values) {
+                if (bid.key in capped) armAlarm(appCtx, bid.key, bid.fire)
             }
+            val byKey = candidates.associateBy { it.key }
+            val kept = capped.mapNotNull(byKey::get)
             val wantedOneShots = candidates.count { !it.nag }
             saveBudget(
                 appCtx,
@@ -348,10 +362,9 @@ object TaskReminders {
                     wanted = candidates.size,
                     cap = MAX_ALARMS,
                     armed = capped.size,
-                    droppedOneShots = wantedOneShots -
-                        capped.count { !it.isNagKey() },
-                    droppedNags = candidates.size - wantedOneShots -
-                        capped.count { it.isNagKey() },
+                    droppedOneShots = wantedOneShots - kept.count { !it.nag },
+                    droppedNags = (candidates.size - wantedOneShots) -
+                        kept.count { it.nag },
                 ),
             )
             prefs(appCtx).edit()
@@ -438,10 +451,6 @@ object TaskReminders {
     /** Alarm identity is one per task *and* kind: "<taskId>#<kind>". */
     private fun alarmKey(taskId: String, kind: ReminderKind) = "$taskId#${kind.key}"
 
-    /** True for an overdue nag key, by its suffix. */
-    private fun String.isNagKey(): Boolean =
-        endsWith("#${ReminderKind.Overdue.key}")
-
     /**
      * What the last [refresh] had to choose between (#165).
      *
@@ -479,12 +488,17 @@ object TaskReminders {
         }
     }
 
-    /** One alarm's claim on the budget, and the order it claims in. */
+    /**
+     * One alarm's claim on the budget, and the order it claims in.
+     *
+     * [tie] is the parsed due instant, used to order nags against each other
+     * once they all share [NAG_FIRE_OFFSET]. Longest overdue wins the slot.
+     */
     private data class Bid(
         val key: String,
         val nag: Boolean,
         val fire: Long,
-        val tie: String,
+        val tie: Long,
     )
 
     /**
