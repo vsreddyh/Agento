@@ -476,11 +476,19 @@ object TaskReminders {
         val tie: String,
     )
 
-    /** What the last refresh decided, or null before the first one. */
+    /**
+     * What the last refresh decided, or null before the first one.
+     *
+     * Six small non-negative counts in one comma-separated pref rather than
+     * six keys or a joined object: [SharedPreferences] has no array accessor
+     * (that is `Bundle`), and a single key means one atomic write and one
+     * read, with no partial state to guard against.
+     */
     internal fun budget(appCtx: Context): Budget? {
-        val raw = prefs(appCtx).getIntArray(PREF_BUDGET, null) ?: return null
-        return if (raw.size == 6) {
-            Budget(raw[0], raw[1], raw[2], raw[3], raw[4], raw[5])
+        val raw = prefs(appCtx).getString(PREF_BUDGET, null) ?: return null
+        val parts = raw.split(',').map { it.toIntOrNull() ?: return null }
+        return if (parts.size == 6) {
+            Budget(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5])
         } else {
             null
         }
@@ -488,9 +496,11 @@ object TaskReminders {
 
     private fun saveBudget(appCtx: Context, b: Budget) {
         prefs(appCtx).edit()
-            .putIntArray(PREF_BUDGET, intArrayOf(
-                b.tasks, b.wanted, b.cap, b.armed, b.droppedOneShots, b.droppedNags,
-            ))
+            .putString(
+                PREF_BUDGET,
+                "${b.tasks},${b.wanted},${b.cap},${b.armed}," +
+                    "${b.droppedOneShots},${b.droppedNags}",
+            )
             .apply()
     }
 
