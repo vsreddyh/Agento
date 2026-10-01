@@ -169,7 +169,13 @@ internal fun TaskManagerScreen(
                     TaskReminders.refresh(context)
                 }
             },
-            onFailure = { e -> error = serverDetail(e.message ?: e.javaClass.simpleName) },
+            // The flag describes the rows on screen, so it resets with
+            // them: a failed fetch leaves yesterday's rows up, and they
+            // must not keep advertising yesterday's truncation.
+            onFailure = { e ->
+                error = serverDetail(e.message ?: e.javaClass.simpleName)
+                listTruncated = false
+            },
         )
         loading = false
     }
