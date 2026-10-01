@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -572,6 +573,9 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	stored, _ := toInt(cur["revision"])
 	guarded, want := false, 0
 	if v, ok := fields["expected_revision"]; ok && v != nil {
+		if f, isFloat := v.(float64); isFloat && f != math.Trunc(f) {
+			return nil, fail("expected_revision must be an integer >= 0")
+		}
 		want, ok = toInt(v)
 		if !ok || want < 0 {
 			return nil, fail("expected_revision must be an integer >= 0")
@@ -665,14 +669,33 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		set["parallelable"] = b
 	}
 	// Nothing to change means nothing to write: without this the bump
-	// below would mint a new revision for a read.
+	// below would mint a new revision for a read. Guarded, the revision
+	// is still re-verified with a fresh read — otherwise a write landing
+	// between our read and this return reports success to a stale editor.
 	if len(set) == 0 {
-		return toDoc(cur), nil
+		if !guarded {
+			return toDoc(cur), nil
+		}
+		var latest bson.M
+		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&latest); ferr != nil {
+			return nil, fail("unknown task '%s'", id)
+		}
+		if now, _ := toInt(latest["revision"]); now != want {
+			return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, now)
+		}
+		return toDoc(latest), nil
 	}
 	update := bson.M{"$set": set, "$inc": bson.M{"revision": 1}}
 	filt := bson.M{"_id": oid}
 	if guarded {
-		filt["revision"] = want
+		// A doc that predates revisions has no field but reads as 0
+		// (toDoc backfill): matching only revision:0 would false-conflict
+		// it forever, unretryably, against its own displayed number.
+		if want == 0 {
+			filt["$or"] = []bson.M{{"revision": 0}, {"revision": bson.M{"$exists": false}}}
+		} else {
+			filt["revision"] = want
+		}
 	}
 	res, err := s.tasks.UpdateOne(ctx, filt, update)
 	if err != nil {
