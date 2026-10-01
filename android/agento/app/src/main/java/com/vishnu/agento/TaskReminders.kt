@@ -225,6 +225,12 @@ object TaskReminders {
     private const val PREF_ENABLED = "task_reminders_enabled"
     const val CHANNEL_ID = "task_reminders"
     private const val HORIZON_DAYS = 7L
+    // An overdue point's own time is in the past by definition, so every nag
+    // is nudged a few seconds out to fire once a refresh settles. Carried and
+    // new alike share this offset, so the nag group is ordered purely by how
+    // long a task has been overdue — with no accidental head start for
+    // whichever nag happens to be armed already.
+    private const val NAG_FIRE_OFFSET = 5_000L
     // A self-imposed guard, not a platform limit: Android allows far more,
     // and Samsung's documented ceiling is 500 pending alarms per app. At
     // three armed points per task, 200 covers roughly 65 timed tasks — past
@@ -277,9 +283,10 @@ object TaskReminders {
             // that would fire an extra alert on every refresh, which happens
             // after each task mutation — but they do compete for budget, or
             // the nag set would grow without bound and the cap would only
-            // ever apply to new work. The task's due date rides along as the
-            // tiebreak: a nag's own fire time is always "in a few seconds",
-            // so there is nothing else left to rank them by.
+            // ever apply to new work. The moment it went overdue rides along
+            // as the tiebreak: a nag's own fire time is always "in a few
+            // seconds", so the due date and time are the only things left to
+            // rank them by. Zero-padded, so string order is time order.
             val carried = LinkedHashMap<String, String>()
             val wanted = LinkedHashMap<String, Long>()
             var timed = 0
@@ -292,14 +299,11 @@ object TaskReminders {
                 )) {
                     val key = alarmKey(t.id, kind)
                     if (kind == ReminderKind.Overdue && key in armed) {
-                        carried[key] = t.dueDate
+                        carried[key] = t.dueDate + t.dueTime
                         continue
                     }
-                    // The overdue point's own time is in the past by
-                    // definition; nudge it a few seconds out so it fires
-                    // once the refresh settles instead of never.
                     val fire = if (kind == ReminderKind.Overdue) {
-                        nowMillis + 5_000L
+                        nowMillis + NAG_FIRE_OFFSET
                     } else {
                         at
                     }
@@ -311,10 +315,13 @@ object TaskReminders {
             // lose is a repeating nag, not an alert the user has no other
             // way of learning is coming. Ranking purely by fire time — as
             // this did — meant a long-dated task could take every kind of
-            // alert away from a task that was due tomorrow.
+            // alert away from a task that was due tomorrow. Nags tie on fire
+            // time, so they are ordered by how long each has been overdue.
             val candidates = buildList {
                 for ((key, fire) in wanted) add(Bid(key, key.isNagKey(), fire, ""))
-                for ((key, due) in carried) add(Bid(key, true, nowMillis, due))
+                for ((key, due) in carried) {
+                    add(Bid(key, true, nowMillis + NAG_FIRE_OFFSET, due))
+                }
             }
             val capped = candidates
                 .sortedWith(compareBy({ it.nag }, { it.fire }, { it.tie }))
@@ -457,14 +464,18 @@ object TaskReminders {
 
         /** One line, for the diagnostics card and the exported report. */
         fun line(): String {
-            val head = "reminders $armed/$cap wanted=$wanted tasks=$tasks"
-            val dropped = if (dropped == 0) {
+            // Only the non-zero counts: "dropped 0 alert(s) and 3 nag(s)"
+            // reads as a bug in the counter rather than as a fact.
+            val lost = buildList {
+                if (droppedOneShots > 0) add("$droppedOneShots alert(s)")
+                if (droppedNags > 0) add("$droppedNags nag(s)")
+            }
+            val dropped = if (lost.isEmpty()) {
                 ""
             } else {
-                " — OVER BUDGET, dropped $droppedOneShots alert(s)" +
-                    (if (droppedNags > 0) " and $droppedNags nag(s)" else "")
+                " — OVER BUDGET, dropped " + lost.joinToString(" and ")
             }
-            return head + dropped
+            return "reminders $armed/$cap wanted=$wanted tasks=$tasks$dropped"
         }
     }
 
@@ -512,7 +523,9 @@ object TaskReminders {
         for (key in prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()) {
             if (key.contains('#')) cancelKind(appCtx, key) else cancelLegacy(appCtx, key)
         }
-        prefs(appCtx).edit().remove(PREF_ARMED).apply()
+        // The budget goes with them: leaving it behind would have Settings
+        // reporting slots "used" against an alarm set nothing is holding.
+        prefs(appCtx).edit().remove(PREF_ARMED).remove(PREF_BUDGET).apply()
     }
 
     private fun operation(appCtx: Context, key: String): PendingIntent {
