@@ -737,8 +737,13 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 		return Repeat{}, false, nil
 	}
 	rep := repeatFromDoc(cur)
-	// Wrong types fail loudly rather than reading as absent.
+	// Wrong types fail loudly rather than reading as absent. Fractionals
+	// are rejected, not truncated: 3.5 is a caller bug, and the store is
+	// the last layer that can say so (same guard as expected_revision).
 	if v, ok := fields["repeat_every"]; ok && v != nil {
+		if f, isFloat := v.(float64); isFloat && f != math.Trunc(f) {
+			return rep, true, fail("repeat_every must be an integer %d-%d", RepeatEveryMin, RepeatEveryMax)
+		}
 		n, ok := toInt(v)
 		if !ok {
 			return rep, true, fail("repeat_every must be an integer %d-%d", RepeatEveryMin, RepeatEveryMax)
