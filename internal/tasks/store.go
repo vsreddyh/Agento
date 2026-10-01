@@ -489,8 +489,8 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 			{"description": bson.M{"$regex": rx, "$options": "i"}},
 		}
 	}
-	cap := clampLimit(limit)
-	cur, err := s.tasks.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "due_date", Value: 1}, {Key: "createdAt", Value: 1}}).SetLimit(cap+1))
+	lim := clampLimit(limit)
+	cur, err := s.tasks.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "due_date", Value: 1}, {Key: "createdAt", Value: 1}}).SetLimit(lim+1))
 	if err != nil {
 		return nil, false, err
 	}
@@ -506,8 +506,8 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 	if err := cur.Err(); err != nil {
 		return nil, false, err
 	}
-	if int64(len(out)) > cap {
-		return out[:cap], true, nil
+	if int64(len(out)) > lim {
+		return out[:lim], true, nil
 	}
 	return out, false, nil
 }

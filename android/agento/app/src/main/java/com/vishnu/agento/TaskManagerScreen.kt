@@ -555,7 +555,11 @@ internal fun TaskManagerScreen(
                 } else {
                     Text(
                         "${visible.size} of ${tasks.size}" +
-                            if (listTruncated) " — showing the first ${tasks.size}; search to narrow" else "",
+                            // No narrowing promise: search filters the fetched
+                            // page client-side, so past the cap it cannot
+                            // find what was never fetched (#168 follow-up is
+                            // wiring ?search= end to end).
+                            if (listTruncated) " — showing the first ${tasks.size}" else "",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

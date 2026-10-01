@@ -253,7 +253,10 @@ class TasksApi(context: Context) {
                     Result.success(parseOne(body))
                 },
                 onFailure = { e ->
-                    if ("unknown task" in (e.message ?: "")) {
+                    // Code and body: a gateway 404 (wrong server) must never
+                    // read as a finished task.
+                    val msg = e.message ?: ""
+                    if ("HTTP 404:" in msg && "unknown task" in msg) {
                         Result.success(null)
                     } else {
                         Result.failure(e)
