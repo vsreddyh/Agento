@@ -412,6 +412,7 @@ object TaskReminders {
                 ).encode(),
             )
             }
+        }
         return RefreshOutcome.Ok
     }
 
