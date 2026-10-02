@@ -88,8 +88,8 @@ object ThemeStore {
     fun save(context: android.content.Context, mode: String) {
         context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
             .edit {
-               putString(KEY, mode)
-           }
+                putString(KEY, mode)
+            }
     }
 }
 

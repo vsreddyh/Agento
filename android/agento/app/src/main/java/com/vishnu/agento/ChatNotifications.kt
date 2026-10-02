@@ -33,8 +33,8 @@ object ChatNotifications {
     fun setEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
             .edit {
-               putBoolean(KEY_NOTIFY_DONE, enabled)
-           }
+                putBoolean(KEY_NOTIFY_DONE, enabled)
+            }
     }
 
     /** True when posting is allowed (pre-33 always; 33+ needs the runtime grant). */
