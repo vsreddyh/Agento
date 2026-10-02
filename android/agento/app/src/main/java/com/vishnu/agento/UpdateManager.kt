@@ -7,13 +7,14 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import androidx.core.net.toUri
+import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.io.File
-import java.util.concurrent.TimeUnit
 
 /** GitHub repo whose Releases carry the signed APKs (published by android-apk.yml). */
 private const val UPDATE_REPO = "vsreddyh/Agento"
@@ -73,12 +74,8 @@ object UpdateManager {
                 @Suppress("DEPRECATION")
                 pm.getPackageInfo(context.packageName, 0)
             }
-            val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                info.longVersionCode
-            } else {
-                @Suppress("DEPRECATION")
-                info.versionCode.toLong()
-            }
+            // No SDK guard: longVersionCode exists since 28 = minSdk.
+            val code = info.longVersionCode
             (info.versionName ?: "?") to code
         } catch (e: Exception) {
             "?" to 0L
@@ -202,12 +199,13 @@ object UpdateManager {
 
     /** Android 8+ requires the user to allow "install unknown apps" per app. */
     fun canInstallUnknownApps(context: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
-            context.packageManager.canRequestPackageInstalls()
+        // No SDK guard: minSdk (28) is past O, so install-unknown-apps is
+        // always a per-app permission check, never free.
+        context.packageManager.canRequestPackageInstalls()
 
     /** Opens this app's "install unknown apps" system toggle. */
     fun unknownSourcesIntent(context: Context): Intent =
-        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
+        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:${context.packageName}".toUri())
 
     /** Fires the platform package installer for a downloaded APK. */
     fun installIntent(context: Context, apk: File): Intent {

@@ -1,12 +1,14 @@
 package com.vishnu.agento
 
 import android.content.Context
+import androidx.core.content.edit
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -15,7 +17,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 data class ChatMessage(
     val role: String, // "user" | "assistant"
@@ -244,27 +245,34 @@ class ChatApi(context: Context) {
         model: String,
         effort: String = "",
     ) {
-        val edit = prefs.edit()
-            .putString("server_base_url", baseUrl.trim().trimEnd('/'))
-            .putString("app_password", password.trim())
-            .remove("api_base_url") // legacy: unified key is written above
-            .remove("server_url") // legacy: unified key is written above
-            .remove("path_$tab") // legacy: path field removed, defaults apply
-            .putString("provider_$tab", provider.trim())
-            .putString("model_$tab", model.trim())
+        // Clamp to the model's vocabulary so a stale tab pick can never
+        // be persisted under a model that can't speak it (reads back via
+        // effortFor, which clamps the same way). Computed before the single
+        // commit below: base keys and effort land atomically, so a crash
+        // cannot save one without the other.
         val e = effort.trim().lowercase()
-        if (e.isNotEmpty()) {
-            // Clamp to the model's vocabulary so a stale tab pick can never
-            // be persisted under a model that can't speak it (reads back via
-            // effortFor, which clamps the same way).
-            val valid = if (model.trim().isEmpty()) e
-                else e.takeIf { it in EffortCatalog.optionsFor(model.trim()) }
+        val valid = if (e.isEmpty()) {
+            null
+        } else if (model.trim().isEmpty()) {
+            e
+        } else {
+            e.takeIf { it in EffortCatalog.optionsFor(model.trim()) }
+        }
+        prefs.edit {
+            putString("server_base_url", baseUrl.trim().trimEnd('/'))
+            putString("app_password", password.trim())
+            remove("api_base_url") // legacy: unified key is written above
+            remove("server_url") // legacy: unified key is written above
+            remove("path_$tab") // legacy: path field removed, defaults apply
+            putString("provider_$tab", provider.trim())
+            putString("model_$tab", model.trim())
             if (valid != null) {
-                edit.putString("effort_$tab", valid)
-                if (model.trim().isNotEmpty()) edit.putString("effort_${tab}_${model.trim()}", valid)
+                putString("effort_$tab", valid)
+                if (model.trim().isNotEmpty()) {
+                    putString("effort_${tab}_${model.trim()}", valid)
+                }
             }
         }
-        edit.apply()
     }
 
     /** Fetches the Hermes provider-aware picker inventory that backs the

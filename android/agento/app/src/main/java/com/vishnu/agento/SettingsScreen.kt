@@ -59,6 +59,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -109,7 +111,7 @@ internal fun SettingsScreen(
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     // Bumped after a settings import so the fields below reload from prefs.
-    var settingsRefresh by remember { mutableStateOf(0) }
+    var settingsRefresh by remember { mutableIntStateOf(0) }
 
     /** Preloads the live provider/model catalog (pickers live per tab now). */
     LaunchedEffect(settingsRefresh) {
@@ -245,12 +247,12 @@ internal fun SettingsScreen(
                                 val api = ChatApi(context)
                                 val prefs = context.getSharedPreferences(
                                     AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-                                prefs.edit()
-                                    .putString("server_base_url", state.serverUrl.trim().trimEnd('/'))
-                                    .putString("app_password", state.password.trim())
-                                    .remove("api_base_url")
-                                    .remove("server_url")
-                                    .apply()
+                                prefs.edit {
+                                    putString("server_base_url", state.serverUrl.trim().trimEnd('/'))
+                                    putString("app_password", state.password.trim())
+                                    remove("api_base_url")
+                                    remove("server_url")
+                                }
                                 error = ""
                                 scope.launch { snackbar.showSnackbar(Toasts.SERVER_SAVED) }
                                 scope.launch {
@@ -409,7 +411,7 @@ internal fun SettingsScreen(
                                         onClick = {
                                             val intent = android.content.Intent(
                                                 android.content.Intent.ACTION_VIEW,
-                                                android.net.Uri.parse(HealthConnectManager.playStoreUrl()),
+                                                HealthConnectManager.playStoreUrl().toUri(),
                                             )
                                             runCatching { context.startActivity(intent) }
                                         },
@@ -872,7 +874,7 @@ internal fun AppUpdateSection() {
     var failed by remember { mutableStateOf(false) }
     var latest by remember { mutableStateOf<AppRelease?>(null) }
     var busy by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf(-1f) }
+    var progress by remember { mutableFloatStateOf(-1f) }
 
     /** Returns from the "install unknown apps" toggle — install if allowed now. */
     val unknownSourcesReturn = rememberLauncherForActivityResult(

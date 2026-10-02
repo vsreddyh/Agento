@@ -721,6 +721,11 @@ internal fun TaskManagerScreen(
                             },
                             repeatRule = if (repChanged) now?.third else null,
                             parallelable = next.parallelable,
+                            // The revision the dialog read, not a fresh
+                            // lookup: the task may have scrolled out of the
+                            // fetched page, and a null lookup would send
+                            // the edit unguarded (#184).
+                            expectedRevision = next.revision,
                         ).fold(
                             onSuccess = { editing = null; refreshTick++; pokeWidget() },
                             onFailure = ::fail,

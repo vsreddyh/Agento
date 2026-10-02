@@ -2,14 +2,14 @@ package com.vishnu.agento
 
 import android.app.DownloadManager
 import android.content.Context
-import android.net.Uri
 import android.os.Environment
+import androidx.core.net.toUri
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 data class RemoteEntry(
     val name: String,
@@ -96,7 +96,7 @@ class StorageApi(context: Context) {
         val url = "$base/api/files/download?path=" +
             java.net.URLEncoder.encode(
                 (if (path.isEmpty()) "" else "$path/") + name, "UTF-8")
-        val req = DownloadManager.Request(Uri.parse(url))
+        val req = DownloadManager.Request(url.toUri())
             .addRequestHeader("Authorization", "Bearer ${password()}")
             .setTitle(name)
             .setNotificationVisibility(

@@ -6,16 +6,17 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.util.Log
 import android.view.View
 import android.widget.RemoteViews
+import androidx.core.content.edit
+import androidx.core.net.toUri
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -120,16 +121,16 @@ class TaskWidget : AppWidgetProvider() {
     override fun onDeleted(context: Context, appWidgetIds: IntArray) {
         // Drop per-placement prefs (view/density/due) so removed widgets
         // don't leak keys forever.
-        val edit = prefs(context).edit()
-        for (id in appWidgetIds) {
-            edit.remove("task_widget_view_$id")
-                .remove("task_widget_density_$id")
-                .remove("task_widget_due_$id")
-                .remove("task_widget_scroll_$id")
+        prefs(context).edit {
+            for (id in appWidgetIds) {
+                remove("task_widget_view_$id")
+                remove("task_widget_density_$id")
+                remove("task_widget_due_$id")
+                remove("task_widget_scroll_$id")
                 // Retired diagnostic ladder: drop its key on delete too.
-                .remove("task_widget_style_$id")
+                remove("task_widget_style_$id")
+            }
         }
-        edit.apply()
     }
 
     /** Fetches open tasks off-thread; goAsync keeps the broadcast alive. */
@@ -415,7 +416,7 @@ class TaskWidget : AppWidgetProvider() {
                 context, ROW_COMPLETE_CODE,
                 Intent(context, TaskCompleteActivity::class.java)
                     .putExtra(EXTRA_COMPLETE_ID, task.id)
-                    .setData(Uri.parse("agento://task/${task.id}/complete")),
+                    .setData("agento://task/${task.id}/complete".toUri()),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val openTask = PendingIntent.getActivity(
@@ -423,7 +424,7 @@ class TaskWidget : AppWidgetProvider() {
                 Intent(context, MainActivity::class.java)
                     .setAction(ACTION_TASKS)
                     .putExtra(EXTRA_TASK_ID, task.id)
-                    .setData(Uri.parse("agento://task/${task.id}")),
+                    .setData("agento://task/${task.id}".toUri()),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             return buildRow(context.packageName, compact, showDue, today, task).apply {
@@ -478,7 +479,9 @@ class TaskWidget : AppWidgetProvider() {
                 TaskWidgetView.Done -> TaskWidgetView.All
                 TaskWidgetView.All -> TaskWidgetView.Open
             }
-            prefs(context).edit().putString("task_widget_view_$appWidgetId", next.name).apply()
+            prefs(context).edit {
+                putString("task_widget_view_$appWidgetId", next.name)
+            }
         }
 
         /** Re-pull server tasks and push to every installed widget. Call
@@ -659,7 +662,7 @@ class TaskWidget : AppWidgetProvider() {
             // per id; a plain opaque URI is guaranteed unique.
             val svc = Intent(context, TaskWidgetService::class.java).apply {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-                data = Uri.parse("agento://widget/$appWidgetId")
+                data = "agento://widget/$appWidgetId".toUri()
             }
             // Two shapes, both proven on the affected launcher (#137):
             // the scrollable list (default) and the plain-row layout.

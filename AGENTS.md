@@ -88,7 +88,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   and each `SOUL.md` are **committed** so bot personality + learned state
   survives moving between VPSes. Only transient session/log/state files are
   git-ignored (runtime `memories/` are not tracked).
-- CI: `android-apk.yml` (builds debug+release APKs, `main` branch only) and `mcps-test.yml` (`go build` + `go vet` + `go test ./...` over `cmd/`/`internal/`, `main` only; DB tests skip without `MONGODB_URI`). No linter. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
+- CI: `android-apk.yml` (lint + debug/release APKs, `main` branch only) and `mcps-test.yml` (`go build` + `go vet` + `go test ./...` over `cmd/`/`internal/`, `main` only; DB tests skip without `MONGODB_URI`). `./gradlew lintDebug` (release variant on `main`) fails on errors; the report uploads always. Fix what it reports rather than baselining. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
   `podman-compose -f docker/docker-compose.yml config`, then check gateway logs on the live machine.
 - Git identity: every commit as `vsreddyh <shouryanreddyh@gmail.com>` (`git -c user.name=vsreddyh -c user.email=shouryanreddyh@gmail.com commit ...`). Never use another name/email.
 - Agent model: always run agent sessions on `muse-spark-1.3-contributor` ONLY (cheapest; everything else is too expensive). This is the agent-side rule — the Android app default (`mimo-v2.6-flash`) is separate and stays.

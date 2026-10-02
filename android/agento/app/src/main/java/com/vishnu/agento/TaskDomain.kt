@@ -200,6 +200,10 @@ internal data class ServerTaskDraft(
     val repeatCustom: Boolean = false,
     val repeatRule: String = "",
     val parallelable: Boolean = false,
+    // The revision the editor read. Never shown, never edited: it goes
+    // straight back on save as expected_revision, so a task that is no
+    // longer in the list (filter, truncation) still guards correctly.
+    val revision: Int = 0,
 )
 
 internal fun ServerTask.toDraft() = ServerTaskDraft(
@@ -214,6 +218,7 @@ internal fun ServerTask.toDraft() = ServerTaskDraft(
     repeatCustom = repeatCustom,
     repeatRule = repeatRule,
     parallelable = parallelable,
+    revision = revision,
 )
 
 /** Repeat units offered by the editor, matching the server's vocabulary. */

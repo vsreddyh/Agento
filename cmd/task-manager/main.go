@@ -10,11 +10,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
+	"agento/internal/mongostore"
 	"agento/internal/tasks"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,7 +30,7 @@ func repeatOf(doc map[string]any) tasks.Repeat {
 	if s, ok := doc["repeat_rule"].(string); ok {
 		rep.Text = s
 	}
-	if n, ok := toInt(doc["repeat_every"]); ok {
+	if n, ok := mongostore.ToInt(doc["repeat_every"]); ok {
 		rep.Every = n
 	}
 	if u, ok := doc["repeat_unit"].(string); ok {
@@ -38,21 +40,6 @@ func repeatOf(doc map[string]any) tasks.Repeat {
 		rep.Custom = b
 	}
 	return rep.Normalize()
-}
-
-// toInt mirrors the store's number handling for response maps.
-func toInt(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int32:
-		return int(n), true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	}
-	return 0, false
 }
 
 // repeatHint spells out the exact create_task keys that reproduce a
@@ -67,7 +54,15 @@ func repeatHint(rep tasks.Repeat) string {
 }
 
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
-	return nil, map[string]any{"ok": false, "error": err.Error()}, nil
+	out := map[string]any{"ok": false, "error": err.Error()}
+	// A lost revision race is actionable, not just reportable: the agent
+	// re-reads the task and retries, rather than re-sending the same edit.
+	// Structured (not parsed out of the message) so the branch is exact.
+	var se *tasks.StoreError
+	if errors.As(err, &se) && se.Conflict {
+		out["conflict"] = true
+	}
+	return nil, out, nil
 }
 
 func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
@@ -144,7 +139,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_task",
-		Description: "Edit name/description/due_date/due_time/estimated_minutes/repeat/parallelable. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected). The repeat accepts the same four keys (repeat_every/repeat_unit/repeat_custom/repeat_rule) and is validated as a whole; sending repeat_rule \"\" with no structured key clears the whole rule (one-shot). Works on open or done tasks."},
+		Description: "Edit name/description/due_date/due_time/estimated_minutes/repeat/parallelable. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected). The repeat accepts the same four keys (repeat_every/repeat_unit/repeat_custom/repeat_rule) and is validated as a whole; OMIT ALL FOUR repeat keys to leave the recurrence alone; sending repeat_rule \"\" with no structured key clears the whole rule (one-shot). expected_revision: pass the revision the task showed when read; a mismatch means someone else wrote first and the edit is rejected, so re-read and retry. Works on open or done tasks."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			ID               string  `json:"id"`
 			Name             string  `json:"name"`
@@ -156,6 +151,7 @@ func main() {
 			RepeatUnit       *string `json:"repeat_unit"`
 			RepeatCustom     *bool   `json:"repeat_custom"`
 			RepeatRule       *string `json:"repeat_rule"`
+			ExpectedRevision *int    `json:"expected_revision"`
 			Parallelable     *bool   `json:"parallelable"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
 			fields := map[string]any{}
@@ -188,6 +184,9 @@ func main() {
 			}
 			if in.RepeatRule != nil {
 				fields["repeat_rule"] = strings.TrimSpace(*in.RepeatRule)
+			}
+			if in.ExpectedRevision != nil {
+				fields["expected_revision"] = *in.ExpectedRevision
 			}
 			if in.Parallelable != nil {
 				fields["parallelable"] = *in.Parallelable

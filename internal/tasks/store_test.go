@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"agento/internal/mongo"
+	"agento/internal/mongostore"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"os"
@@ -504,6 +505,146 @@ func TestLegacyDocBackfill(t *testing.T) {
 	}
 }
 
+// The app sends all four repeat keys on every repeat edit, with
+// zero-values for a one-shot (repeat_every 0, unit "", custom false, rule
+// ""); an unrelated edit omits all four. Each literal body must
+// round-trip through mergeRepeat unchanged (#184).
+func TestUpdateRepeatRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	mk := func() string {
+		doc, err := s.Create(ctx, "round trip", "repeat probe", tomorrow, "08:00", intP(0), Repeat{}, boolP(false))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return doc["id"].(string)
+	}
+	// One-shot zeros onto a one-shot task: stays a valid one-shot.
+	id := mk()
+	doc, err := s.Update(ctx, id, map[string]any{
+		"repeat_every": 0, "repeat_unit": "", "repeat_custom": false, "repeat_rule": "",
+	})
+	if err != nil {
+		t.Fatalf("one-shot body: %v", err)
+	}
+	if doc["repeat_rule"] != "" || doc["repeat_custom"] != false {
+		t.Fatalf("one-shot body drifted: %v", doc)
+	}
+	// A cadence onto it: set whole.
+	doc, err = s.Update(ctx, id, map[string]any{
+		"repeat_every": 3, "repeat_unit": "days", "repeat_custom": false, "repeat_rule": "",
+	})
+	if err != nil {
+		t.Fatalf("cadence body: %v", err)
+	}
+	if n, _ := mongostore.ToInt(doc["repeat_every"]); n != 3 || doc["repeat_unit"] != "days" {
+		t.Fatalf("cadence body drifted: %v", doc)
+	}
+	// Zero-values back onto the cadence: cleared by overwrite.
+	doc, err = s.Update(ctx, id, map[string]any{
+		"repeat_every": 0, "repeat_unit": "", "repeat_custom": false, "repeat_rule": "",
+	})
+	if err != nil {
+		t.Fatalf("clear body: %v", err)
+	}
+	if n, _ := mongostore.ToInt(doc["repeat_every"]); n != 0 || doc["repeat_unit"] != "" {
+		t.Fatalf("clear body drifted: %v", doc)
+	}
+	// Custom words: set whole, structured keys neutral.
+	doc, err = s.Update(ctx, id, map[string]any{
+		"repeat_every": 0, "repeat_unit": "", "repeat_custom": true, "repeat_rule": "every payday",
+	})
+	if err != nil {
+		t.Fatalf("custom body: %v", err)
+	}
+	if doc["repeat_custom"] != true || doc["repeat_rule"] != "every payday" {
+		t.Fatalf("custom body drifted: %v", doc)
+	}
+	// No repeat keys at all: the rule survives an unrelated edit.
+	doc, err = s.Update(ctx, id, map[string]any{"name": "renamed"})
+	if err != nil {
+		t.Fatalf("unrelated edit: %v", err)
+	}
+	if doc["repeat_custom"] != true || doc["repeat_rule"] != "every payday" {
+		t.Fatalf("unrelated edit touched the rule: %v", doc)
+	}
+	// Legacy clear: rule text alone with no structured keys clears all.
+	doc, err = s.Update(ctx, id, map[string]any{"repeat_rule": ""})
+	if err != nil {
+		t.Fatalf("legacy clear: %v", err)
+	}
+	if doc["repeat_custom"] != false || doc["repeat_rule"] != "" {
+		t.Fatalf("legacy clear drifted: %v", doc)
+	}
+	// Half a rule is rejected, not stored: count with no unit.
+	if _, err := s.Update(ctx, id, map[string]any{"repeat_every": 3}); err == nil {
+		t.Fatal("count without unit must fail")
+	}
+}
+
+func TestUpdateRevision(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	doc, err := s.Create(ctx, "raced", "revision probe", tomorrow, "08:00", intP(0), Repeat{}, boolP(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := doc["id"].(string)
+	if n, _ := mongostore.ToInt(doc["revision"]); n != 0 {
+		t.Fatalf("create must start the chain at 0: %v", doc["revision"])
+	}
+	rev := func() int {
+		d, err := s.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, _ := mongostore.ToInt(d["revision"])
+		return n
+	}
+	// Fresh write with the matching revision: ok, and the chain moves.
+	if _, err := s.Update(ctx, id, map[string]any{"name": "v1", "expected_revision": 0}); err != nil {
+		t.Fatalf("matching revision: %v", err)
+	}
+	if rev() != 1 {
+		t.Fatal("successful update must bump the revision")
+	}
+	// The same number again: someone else wrote first.
+	if _, err := s.Update(ctx, id, map[string]any{"name": "stale", "expected_revision": 0}); err == nil {
+		t.Fatal("stale revision must conflict")
+	} else if se, ok := err.(*StoreError); !ok || !se.Conflict {
+		t.Fatalf("stale revision must be a conflict error: %v", err)
+	}
+	// No guard: old callers keep working, unchecked.
+	if _, err := s.Update(ctx, id, map[string]any{"name": "unguarded"}); err != nil {
+		t.Fatalf("absent guard: %v", err)
+	}
+	if rev() != 2 {
+		t.Fatal("unguarded update must still bump")
+	}
+	// Wrong types fail loudly instead of reading as absent.
+	if _, err := s.Update(ctx, id, map[string]any{"expected_revision": "three"}); err == nil {
+		t.Fatal("string revision must fail")
+	}
+	if _, err := s.Update(ctx, id, map[string]any{"expected_revision": -1}); err == nil {
+		t.Fatal("negative revision must fail")
+	}
+	// Complete and reopen join the same chain.
+	if _, _, err := s.Complete(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if rev() != 3 {
+		t.Fatalf("complete must bump: got %d", rev())
+	}
+	if _, err := s.Reopen(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if rev() != 4 {
+		t.Fatalf("reopen must bump: got %d", rev())
+	}
+}
+
 func TestOverdueAndTTLIndex(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -573,10 +714,10 @@ func TestListLimitAndTruncated(t *testing.T) {
 		t.Fatalf("capped list: %d rows truncated=%v err=%v", len(rows), truncated, err)
 	}
 	// The ceiling holds: no caller can ask past MaxLimit.
-	if got := clampLimit(1 << 30); got != MaxLimit {
+	if got := mongostore.ClampLimit(1<<30, DefaultLimit, MaxLimit); got != MaxLimit {
 		t.Fatalf("clampLimit(huge) = %d, want %d", got, MaxLimit)
 	}
-	if got := clampLimit(0); got != DefaultLimit {
+	if got := mongostore.ClampLimit(0, DefaultLimit, MaxLimit); got != DefaultLimit {
 		t.Fatalf("clampLimit(0) = %d, want %d", got, DefaultLimit)
 	}
 }

@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 
 /**
  * Hermes reply notifications (issue #58).
@@ -31,7 +32,9 @@ object ChatNotifications {
 
     fun setEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putBoolean(KEY_NOTIFY_DONE, enabled).apply()
+            .edit {
+                putBoolean(KEY_NOTIFY_DONE, enabled)
+            }
     }
 
     /** True when posting is allowed (pre-33 always; 33+ needs the runtime grant). */

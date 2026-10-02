@@ -221,12 +221,12 @@ object Toasts {
 /** Friendly empty state: icon + headline + explainer + optional action. */
 @Composable
 fun EmptyState(
+    modifier: Modifier = Modifier,
     icon: ImageVector,
     title: String,
     subtitle: String,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier.fillMaxWidth().padding(24.dp),
@@ -260,9 +260,9 @@ fun EmptyState(
 /** Titled card grouping one settings section (title + explainer + content). */
 @Composable
 fun SectionCard(
+    modifier: Modifier = Modifier,
     title: String,
     subtitle: String = "",
-    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     Card(modifier = modifier.fillMaxWidth()) {
@@ -285,7 +285,7 @@ fun SectionCard(
 
 /** Colored status chip (tasks); unknown values fall back to neutral Todo. */
 @Composable
-fun StatusChip(status: String, onClick: (() -> Unit)? = null, modifier: Modifier = Modifier) {
+fun StatusChip(modifier: Modifier = Modifier, status: String, onClick: (() -> Unit)? = null) {
     val (container, content) = when (status) {
         "Ongoing" -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
         "Paused" -> Color(0xFFFFE3B3) to Color(0xFF4A2C00)
@@ -312,9 +312,9 @@ fun StatusChip(status: String, onClick: (() -> Unit)? = null, modifier: Modifier
 /** Inline error: friendly headline + next step + expandable technical details. */
 @Composable
 fun ErrorCard(
+    modifier: Modifier = Modifier,
     raw: String,
     onRetry: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
     if (raw.isBlank()) return
     val friendly = remember(raw) { friendlyError(raw) }

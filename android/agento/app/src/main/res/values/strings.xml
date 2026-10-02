@@ -9,7 +9,6 @@
     <string name="task_widget_empty">All done!</string>
     <string name="task_widget_refresh">Refresh tasks</string>
     <string name="task_widget_complete">Complete task</string>
-    <string name="task_widget_open_task">Open task</string>
     <string name="task_reminder_channel">Task reminders</string>
     <string name="task_reminder_channel_desc">A nudge to start, a heads-up 5 minutes before due, and a repeat every 15 minutes while a task is overdue</string>
     <string name="channel_name">Health Sync</string>

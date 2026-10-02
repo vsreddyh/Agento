@@ -8,6 +8,53 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.14.1]
+
+- **Android lint runs on every build** (#177). Errors fail the job; the
+  report uploads always. Fixed the full inventory instead of baselining:
+  an internal Health Connect API replaced with an explicit stage mapping,
+  33 `edit()`/`Uri.parse` call sites on the KTX extensions, dead SDK
+  guards, modifier-first composables, RTL padding, two dead strings (the
+  manifest now uses `@string/app_name`), `tools:targetApi` on the
+  31-only widget attributes, an SDK-guarded foreground-service type,
+  primitive state holders, and a monochrome launcher icon. Left standing
+  with reasons: dependency bumps and the targetSdk raise are release
+  decisions, not lint cleanup; cleartext stays because the server URL is
+  user-configured; one `stopService` warning is a lint false positive
+  (identical component intents match).
+
+## [4.14.0]
+
+- **Shared Mongo plumbing, split HTTP routes** (#171, backend only — no
+  app delta, so no version bump of its own). `internal/mongostore`
+  holds the one shape three stores repeated: connect-with-convention,
+  the env pair, tolerant int/bool readers (including the driver's int32),
+  and the list cap policy — with pure unit tests that run in CI. The
+  1,033-line `health-api/main.go` is now five files (`main`, `health`,
+  `files`, `tasks`, `projects`) with one `register(mux)` each, and the
+  task store's repeat rules and rollover live in `repeat.go`/`rollover.go`.
+  No behaviour changes. Two honest corrections to the issue: only two
+  `toInt` copies existed (not three), and cookbook/healthcheck keep their
+  env-internal constructors (a different shape, not a duplication).
+
+- **One validation authority for repeats.** The HTTP layer stated the
+  repeat bounds a second time, as a string inside an error message, while
+  the store enforced them for real. The HTTP layer now checks types only
+  and the store decides shape — the bounds live in exactly one place, so
+  the next range change cannot update one message and miss the other.
+- **The absence convention is written down.** Omit all four repeat keys and
+  the recurrence is left alone; send keys and they are validated whole.
+  The old "empty rule text clears everything" behaviour stays for older
+  clients, but it is a documented compatibility rule now, not a comment.
+  The app's literal request bodies (one-shot zeros, cadence, custom words,
+  absent entirely) are asserted to round-trip unchanged.
+- **Edits carry a revision.** Every task has a `revision`, bumped on each
+  mutation. Pass the one you read as `expected_revision` and a task someone
+  else touched rejects with 409 ("reload and retry") instead of silently
+  overwriting — the agent editing in chat while the app editor is open is
+  the case this exists for. Absent means unchecked, so old callers keep
+  working; the app sends what it read.
+
 ## [4.13.0]
 
 - **Task lists are bounded.** Every task fetch now carries a limit (server

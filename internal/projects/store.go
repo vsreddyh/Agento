@@ -8,15 +8,12 @@
 package projects
 
 import (
+	"agento/internal/mongostore"
 	"context"
-	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
-
-	"agento/internal/mongo"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -55,18 +52,10 @@ type Store struct {
 
 // New connects to uri/dbName and ensures indexes.
 func New(uri, dbName string) (*Store, error) {
-	uri = strings.TrimSpace(uri)
-	if uri == "" {
-		return nil, errors.New("MONGODB_URI is not set — MongoDB is the only backend")
-	}
-	if strings.TrimSpace(dbName) == "" {
-		dbName = "hermes"
-	}
-	c, err := mongo.ConnectURI(uri)
+	c, db, err := mongostore.Open(uri, dbName)
 	if err != nil {
 		return nil, err
 	}
-	db := c.Database(dbName)
 	s := &Store{client: c, db: db, projects: db.Collection(coll)}
 	if err := s.EnsureSchema(context.Background()); err != nil {
 		return nil, err
@@ -76,7 +65,8 @@ func New(uri, dbName string) (*Store, error) {
 
 // FromEnv builds a Store from MONGODB_URI/MONGODB_DB (single root .env).
 func FromEnv() (*Store, error) {
-	return New(os.Getenv("MONGODB_URI"), os.Getenv("MONGODB_DB"))
+	uri, db := mongostore.Env()
+	return New(uri, db)
 }
 
 // EnsureSchema creates the query indexes (idempotent). No TTL: projects
@@ -162,7 +152,7 @@ func (s *Store) List(ctx context.Context, status, search string, limit int) ([]m
 		filt["$or"] = []bson.M{{"name": rx}, {"note": rx}}
 	}
 	cur, err := s.projects.Find(ctx, filt,
-		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}).SetLimit(clampLimit(limit)))
+		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}).SetLimit(mongostore.ClampLimit(limit, DefaultLimit, MaxLimit)))
 	if err != nil {
 		return nil, err
 	}
@@ -176,17 +166,6 @@ func (s *Store) List(ctx context.Context, status, search string, limit int) ([]m
 		out = append(out, toDoc(doc))
 	}
 	return out, cur.Err()
-}
-
-// clampLimit applies the List cap policy (default + ceiling).
-func clampLimit(limit int) int64 {
-	if limit <= 0 {
-		return DefaultLimit
-	}
-	if limit > MaxLimit {
-		return MaxLimit
-	}
-	return int64(limit)
 }
 
 // Get fetches one project by hex id.

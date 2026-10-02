@@ -3,6 +3,7 @@ package com.vishnu.agento
 import android.app.Application
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
@@ -85,7 +86,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         SyncRunner.runAsync(app) { result ->
             val prefs = app.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
             if (result.success) {
-                prefs.edit().putString("last_sync_at", java.time.Instant.now().toString()).apply()
+                prefs.edit {
+                    putString("last_sync_at", java.time.Instant.now().toString())
+                }
             }
             _state.value = _state.value.copy(
                 syncing = false,

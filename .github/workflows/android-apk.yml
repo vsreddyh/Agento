@@ -105,6 +105,27 @@ jobs:
       # main builds release ONLY; branches/PRs build debug ONLY (faster CI,
       # and release signing stays on main). The verify step below enforces
       # that the built APK filename matches the resolved version.
+      # Android lint (Compose checks, accessibility, unused resources).
+      # Errors fail the job; the report uploads unconditionally so warnings
+      # are read, not buried (#177). Runs before the build to fail fast, on
+      # the same variant the build uses (release-only issues must not slip
+      # through on main). NOTE: defaults.run.working-directory does NOT
+      # apply to uses: steps, so artifact paths are repo-root-relative.
+      - name: Run Android lint
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            ./gradlew lintRelease --stacktrace
+          else
+            ./gradlew lintDebug --stacktrace
+          fi
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: android/agento/app/build/reports/lint-results-*
+          if-no-files-found: error
       - name: Build APK
         run: |
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
