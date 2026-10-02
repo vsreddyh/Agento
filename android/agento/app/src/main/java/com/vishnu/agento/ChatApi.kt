@@ -245,6 +245,19 @@ class ChatApi(context: Context) {
         model: String,
         effort: String = "",
     ) {
+        // Clamp to the model's vocabulary so a stale tab pick can never
+        // be persisted under a model that can't speak it (reads back via
+        // effortFor, which clamps the same way). Computed before the single
+        // commit below: base keys and effort land atomically, so a crash
+        // cannot save one without the other.
+        val e = effort.trim().lowercase()
+        val valid = if (e.isEmpty()) {
+            null
+        } else if (model.trim().isEmpty()) {
+            e
+        } else {
+            e.takeIf { it in EffortCatalog.optionsFor(model.trim()) }
+        }
         prefs.edit {
             putString("server_base_url", baseUrl.trim().trimEnd('/'))
             putString("app_password", password.trim())
@@ -253,20 +266,10 @@ class ChatApi(context: Context) {
             remove("path_$tab") // legacy: path field removed, defaults apply
             putString("provider_$tab", provider.trim())
             putString("model_$tab", model.trim())
-        }
-        val e = effort.trim().lowercase()
-        if (e.isNotEmpty()) {
-            // Clamp to the model's vocabulary so a stale tab pick can never
-            // be persisted under a model that can't speak it (reads back via
-            // effortFor, which clamps the same way).
-            val valid = if (model.trim().isEmpty()) e
-                else e.takeIf { it in EffortCatalog.optionsFor(model.trim()) }
             if (valid != null) {
-                prefs.edit {
-                    putString("effort_$tab", valid)
-                    if (model.trim().isNotEmpty()) {
-                        putString("effort_${tab}_${model.trim()}", valid)
-                    }
+                putString("effort_$tab", valid)
+                if (model.trim().isNotEmpty()) {
+                    putString("effort_${tab}_${model.trim()}", valid)
                 }
             }
         }

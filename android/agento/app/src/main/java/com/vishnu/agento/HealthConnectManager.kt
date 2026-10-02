@@ -273,8 +273,11 @@ enum class HealthConnectAvailability {
 
 /**
  * Sleep stage number to its display name, off the public
- * `SleepSessionRecord.STAGE_TYPE_*` constants. Replaces the library's
- * internal map one-to-one (unknown for anything unrecognized, as before).
+ * `SleepSessionRecord.STAGE_TYPE_*` constants. The library's internal map
+ * is off-limits (RestrictedApi), so the vocabulary is stated here. The
+ * fallback keeps the old code's exact string: unrecognized ints produced
+ * "UNKNOWN" before, and nothing downstream parses these either way (the
+ * server stores hours, not stage words).
  */
 internal fun sleepStageName(stage: Int): String = when (stage) {
     SleepSessionRecord.STAGE_TYPE_AWAKE -> "awake"
@@ -283,6 +286,6 @@ internal fun sleepStageName(stage: Int): String = when (stage) {
     SleepSessionRecord.STAGE_TYPE_LIGHT -> "light"
     SleepSessionRecord.STAGE_TYPE_DEEP -> "deep"
     SleepSessionRecord.STAGE_TYPE_REM -> "rem"
-    else -> "unknown"
+    else -> "UNKNOWN"
 }
 
