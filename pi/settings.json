@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "Pi agent-dir settings. Mounted at /opt/pi (PI_CODING_AGENT_DIR).",
+    "Knobs only — profile personality lives in pi/profiles/<name>/AGENTS.md.",
+    "",
+    "defaultTools is ADDITIVE (+name), never a replacement list. Passing --tools",
+    "on the CLI REPLACES the selection and filters MCP tools out of the callable",
+    "registry, starving codemode of everything it exists to call.",
+    "",
+    "Kept deliberately short: prose lives in pi/README.md. Unknown keys are",
+    "tolerated at 1.0.0 (verified), but a stricter Pi release should not be",
+    "able to fail the boot over a comment."
+  ],
+  "defaultTools": [
+    "read",
+    "write",
+    "edit",
+    "bash",
+    "grep",
+    "find",
+    "ls",
+    "+codemode"
+  ],
+  "defaultThinkingLevel": "off",
+  "showCacheMissNotices": true,
+  "cacheWarming": "streaming",
+  "hideThinkingBlock": true,
+  "retry": {
+    "enabled": true,
+    "maxRetries": 3,
+    "baseDelayMs": 2000,
+    "maxAgentDelayMs": 60000
+  }
+}
