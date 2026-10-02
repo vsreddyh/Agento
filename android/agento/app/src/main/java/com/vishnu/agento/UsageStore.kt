@@ -75,15 +75,14 @@ object UsageStore {
     /** Drops the retired character-estimate keys so only real counts remain. */
     fun clearLegacy(context: Context) {
         val p = prefs(context)
-        // No dirty flag: edit{} commits unconditionally, and an empty
-        // commit is a no-op write, so the conditional apply buys nothing.
-        p.edit {
-            for (t in TABS) {
-                for (k in listOf("usage_sent_$t", "usage_recv_$t")) {
-                    if (p.contains(k)) {
-                        remove(k)
-                    }
-                }
+        // Collect first, commit once: edit{} always queues a disk write,
+        // so the write happens only when there is something to retire.
+        val doomed = TABS.flatMap { t ->
+            listOf("usage_sent_$t", "usage_recv_$t")
+        }.filter { p.contains(it) }
+        if (doomed.isNotEmpty()) {
+            p.edit {
+                doomed.forEach { remove(it) }
             }
         }
 

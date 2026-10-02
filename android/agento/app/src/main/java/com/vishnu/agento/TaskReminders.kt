@@ -411,7 +411,6 @@ object TaskReminders {
                         kept.count { it.nag },
                 ).encode(),
             )
-            }
         }
         return RefreshOutcome.Ok
     }
