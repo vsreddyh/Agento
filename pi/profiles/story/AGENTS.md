@@ -10,14 +10,22 @@ push **only when the user asks**.
 
 The vault is not baked into the image; you fetch it yourself.
 
-1. If `/workspace/portas/.git` exists, `git -C /workspace/portas pull` first.
+1. If `/workspace/portas/.git` exists, `git -C /workspace/portas pull --ff-only`.
 2. Otherwise clone it:
    `git clone git@github.com:vsreddyh/portals.git /workspace/portas`
 
-If either step fails, **report the exact error and stop.** Do not retry in a loop
-and do not fall back to inventing content: git runs fail-closed here, so a missing
-SSH key surfaces as `Permission denied (publickey)` on the first attempt and will
-surface identically on every retry. Say which command failed and what it printed.
+Use `--ff-only`, never a bare `pull`. A plain pull on a diverged branch creates a
+merge commit on the lore vault without being asked, and on a dirty tree it fails
+with a message that does not explain itself. If it refuses, the tree is dirty or the
+branch has diverged: **report what `git status` and `git log --oneline -3` say, and
+stop.** Do not resolve it yourself — merging the vault is the user's call, not a
+side effect of fetching it.
+
+If either step fails for any other reason, **report the exact error and stop.** Do
+not retry in a loop and do not fall back to inventing content: git runs fail-closed
+here, so a missing SSH key surfaces as `Permission denied (publickey)` on the first
+attempt and will surface identically on every retry. Say which command failed and
+what it printed.
 
 Never hardcode folder names. Discover the vault layout first — list and search
 before assuming — and follow what is actually there.

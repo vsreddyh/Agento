@@ -45,7 +45,7 @@ free-form text to parse. Reading and repair: `query_transactions`, `summarize`,
 `fix_last_transaction`, `delete_transactions`, `prune_old` (90-day TTL, dry-run by
 default).
 
-**cookbook** — reusable recipes, permanent and never pruned. Order matters:
+**cookbook** — 11 tools, permanent and never pruned. Order matters:
 `add_ingredient` once → `add_recipe` once (quantity strings like "2 spoons", with
 per-serving macros) → `log_cook` per attempt (`cooking_note` = what differed,
 `aftertaste_note` = what to improve) → `update_recipe` only when the user approves.
@@ -53,7 +53,7 @@ per-serving macros) → `log_cook` per attempt (`cooking_note` = what differed,
 `get_recipe`, `list_cooks`. Remove with `delete_ingredient` (refused while a recipe
 still uses it) and `delete_recipe` (also removes that recipe's cook logs).
 
-**health-check** — daily tracking. `log_meal` takes **user-supplied macros only**
+**health-check** — 9 tools, daily tracking. `log_meal` takes **user-supplied macros only**
 (`items[{name, qty?, kcal, protein, carbs, fat, fiber}]`): never estimate them, and
 ask for whatever is missing — the tool names the exact absent macro. `log_weight`
 is never pruned. Also `log_sleep`, `log_workout`, `daily_summary` (calories in vs
@@ -66,11 +66,17 @@ out, plus weight and sleep), `query_meals`, `fix_last_meal`, `delete_meals`, and
 **project-manager** — 5 tools: `create_project`, `list_projects`, `get_project`,
 `update_project`, `delete_project`.
 
-The tool lists here were read from `pi mcp list`, not from the Go sources — an
-earlier draft of this file picked up three money tools that exist as strings in the
-source but are not registered, and missed two task tools, because grepping for
-identifiers is not the same as asking the server what it serves. If a tool here
-does not resolve, trust `describeNamespace()` over this file.
+The tool lists here were read from `pi mcp list`, not from the Go sources, and that
+distinction has caught two separate mistakes: an early draft listed three money
+tools that exist as strings in `cmd/miser-money` but are never registered
+(`log_expense`, `log_income`, `log_transfer`) and missed two real task tools
+(`complete_task`, `reopen_task`), and a later draft of the destructive list named
+`delete_cook`, which does not exist at all. Grepping for identifiers, or writing a
+tool name from memory, are both worse than asking the server. If a tool here does
+not resolve, trust `describeNamespace()` over this file.
+
+Per-server counts — 11 / 11 / 9 / 7 / 5 — are stated above deliberately, so that a
+future tool added to one server shows up as a mismatch instead of silently drifting.
 
 ## Destructive operations
 
@@ -84,12 +90,19 @@ recipe, which date range:
   than the recipe itself
 - `delete_ingredient` — refused while a recipe still uses it; report that rather
   than working around it
-- `delete_task`, `delete_project`, `delete_cook`
+- `delete_task`, `delete_project`
 
-Safe to call without asking: every `list_*`, `get_*`, `query_*`, `summarize`,
-`daily_summary`, `get_balances`, `scale_recipe` (pure arithmetic — reads the recipe
-and returns scaled numbers, writing nothing), and the `fix_*` tools, which correct
-the most recent entry rather than deleting anything.
+Cook logs cannot be deleted individually — there is no `delete_cook`. A cook log
+only goes away with its recipe via `delete_recipe`, so if the user wants one
+removed, say that rather than reaching for a tool that does not exist.
+
+Safe to call without asking, because these only read: every `list_*`, `get_*`,
+`query_*`, `summarize`, `daily_summary`, `get_balances`, and `scale_recipe` (pure
+arithmetic — it reads the recipe and returns scaled numbers, writing nothing).
+
+`fix_last_transaction` and `fix_last_meal` are **writes** — they update the most
+recent row in place. Do them when the user has just asked for a correction, without
+asking again, but do not volunteer them as a way to tidy up data you think is wrong.
 
 ## Interaction
 

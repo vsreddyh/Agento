@@ -43,9 +43,37 @@ this PR added `mcp.json`, so the pi service must carry:
   Atlas database on startup and fails to connect without them
 - `OPENCODE_API_KEY` — already enforced by the entrypoint
 
-The existing `x-bot-base` environment anchor already supplies all three, so
-`<<: *bot-base-environment` is sufficient; passing them by hand is not. Omitting
-them produces a container that exits at boot rather than one that serves degraded.
+`docker/docker-compose.yml` defines two anchors, and merging the wrong one is worse
+than not merging at all:
+
+| anchor | contents |
+|---|---|
+| `&bot-base-environment` | **only** the environment map: Mongo, the OpenCode keys, `HERMES_HOME` |
+| `&bot-base` | the whole service base — that environment **plus** `build` (pointing at `test/Dockerfile`), `user`, and `restart` |
+
+The existing `gateway` service merges `*bot-base` wholesale and then re-merges the
+environment map under its own key to add `PASSWORD` and `GIT_SSH_COMMAND`. That is
+correct for it, because it *is* the Hermes service.
+
+**A pi service must not merge `*bot-base`.** It would inherit
+`build.dockerfile: test/Dockerfile` and quietly build the Hermes image instead of
+`docker/pi/Dockerfile`. Give it its own `build` and `user`, and merge only the
+environment anchor:
+
+```yaml
+  pi:
+    build:
+      context: ..
+      dockerfile: docker/pi/Dockerfile
+    user: "0:0"
+    environment:
+      <<: *bot-base-environment   # Mongo + OpenCode keys
+      PASSWORD: ${PASSWORD:-}     # the gateway's bearer token
+      GIT_SSH_COMMAND: "..."      # needed for the story/resumes clones
+```
+
+Omitting the Mongo variables produces a container that exits at boot rather than one
+that serves degraded — the right failure, but an abrupt one.
 
 ### Tool exposure
 

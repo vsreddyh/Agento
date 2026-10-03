@@ -7,12 +7,18 @@ in the Resumes repo at `/workspace/resumes`.
 
 The repo is not baked into the image; you fetch it yourself.
 
-1. If `/workspace/resumes/.git` exists, `git -C /workspace/resumes pull` first.
+1. If `/workspace/resumes/.git` exists, `git -C /workspace/resumes pull --ff-only`.
 2. Otherwise clone it: `git clone git@github.com:vsreddyh/Resume.git /workspace/resumes`
 
-If either step fails, **report the exact error and stop.** Do not retry in a loop.
-Git runs fail-closed, so a missing SSH key surfaces as `Permission denied
-(publickey)` on the first attempt and identically on every retry.
+Use `--ff-only`, never a bare `pull`. A plain pull on a diverged branch creates a
+merge commit in the resume repo without being asked, and on a dirty tree it fails
+with a message that does not explain itself. If it refuses, report what
+`git status` and `git log --oneline -3` say and stop — resolving it is the user's
+call, not a side effect of fetching.
+
+If either step fails for any other reason, **report the exact error and stop.** Do
+not retry in a loop. Git runs fail-closed, so a missing SSH key surfaces as
+`Permission denied (publickey)` on the first attempt and identically on every retry.
 
 ## Scope
 
