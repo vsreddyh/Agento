@@ -1,0 +1,24 @@
+# Runtime state, never committed (AGENTS.md: leave state files uncommitted).
+
+# Provider credentials Pi writes on /login. The committed .env is the source
+# of truth; OPENCODE_API_KEY is injected by compose instead.
+auth.json
+
+# Session transcripts and per-profile working state.
+sessions/
+logs/
+tmp/
+
+# Model catalog cache Pi refreshes from pi.dev on startup.
+models-store.json
+
+# MCP OAuth tokens (Pi stores them per server name + URL).
+mcp-auth.json
+
+# Never let a stray key land here.
+*.key
+*.pem
+.env
+
+# Stray logs at the agent-dir root (Pi and MCP probes write outside logs/).
+*.log
