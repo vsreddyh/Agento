@@ -75,7 +75,47 @@ environment anchor:
 Omitting the Mongo variables produces a container that exits at boot rather than one
 that serves degraded — the right failure, but an abrupt one.
 
-### `tectonic` is missing from the pi image — blocking
+### The `pi` compose service
+
+`docker-compose.yml` has a `pi` service that runs `pi-gateway` from this image. Two
+things about it are deliberate, and both were got wrong while writing it:
+
+- **It runs `pi-gateway`, not the image's default CMD.** The image defaults to `pi
+  --mode rpc` on stdio, which serves no port. `pi-gateway` is what serves HTTP *and*
+  spawns one `pi --mode rpc` child per profile with `profiles/<name>` as its cwd —
+  which is the mechanism that makes each agent load its own `AGENTS.md`. So it is
+  built into the image and is the container's main process.
+- **It listens on 8643, not 8642.** The `gateway` service still owns 8642 until the
+  Hermes removal, so both coexist and an app tab can be pointed at either to compare.
+  nginx still proxies `/p/*` to `:8642`; moving it is one line and belongs to the
+  removal PR.
+
+Verified end to end in the real container: the entrypoint registers three repos as
+`safe.directory`, `pi mcp list` connects all five MCP servers (11/11/9/7/5), all
+three profiles are discovered, `/healthz` answers 200, auth rejects both a missing
+and a wrong bearer token with 401, and each profile answers from its own
+`AGENTS.md`:
+
+```
+god     -> 65                  (its weight goal)
+story   -> /workspace/portals  (its vault path)
+resumes -> tectonic            (its compile tool)
+```
+
+### `tectonic`'s cache is not persisted
+
+Tectonic downloads its TeX package bundle on first use — **42 MB** into
+`/root/.cache`, which is not a mounted volume. So the first `.tex` compile after
+every `podman up` re-downloads it and needs network; later compiles are fast.
+
+Left unfixed deliberately. A persistent cache means either a named volume — which
+survives a `TECTONIC_VERSION` bump and can then serve a bundle the new binary cannot
+read — or pointing `XDG_CACHE_HOME` into the bind-mounted `pi/` tree, which puts
+42 MB of downloaded assets in the working directory. Neither is right by default,
+and a slow first compile is the better failure. Add a cache volume if the latency
+bothers you, and clear it when bumping the version.
+
+### `tectonic` is installed — this was the one blocking gap
 
 The `resumes` profile compiles every tailored `.tex` to `exports/` with `tectonic`.
 `docker/pi/Dockerfile` installs only `git`, `ca-certificates` and `findutils`, so
@@ -94,18 +134,30 @@ asset:
 | asset to use | `tectonic-0.17.0-x86_64-unknown-linux-musl.tar.gz` (~9.9 MiB) |
 | why musl, not gnu | statically linked, so no new runtime dependencies in a slim Debian image; the `-gnu` asset is ~22 MiB and pulls glibc expectations |
 
-This belongs in `docker/pi/Dockerfile`, pinned by version **and sha256** the way
-`PI_VERSION` and the base-image digests already are — an unpinned download from the
-network into a live image is exactly the supply-chain surface this repo avoids
-elsewhere. It is tracked here rather than done in the profile-instructions PR so the
-image change keeps its own review.
+This was tracked here as a Dockerfile follow-up rather than done in the
+profile-instructions PR, so the image change kept its own review. It is now installed,
+pinned by version **and sha256** the way `PI_VERSION` and the base-image digests
+already are — an unpinned download from the network into a live image is exactly the
+supply-chain surface this repo avoids elsewhere. Bump with:
 
-The `resumes` instruction is deliberately **not** softened to match the gap. Telling
+```
+podman build --build-arg TECTONIC_VERSION=0.18.0 \
+             --build-arg TECTONIC_SHA256=<sha256 of the musl asset> \
+             -f docker/pi/Dockerfile .
+```
+
+Confirmed compiling in the built image, not merely present: a minimal article
+produced a 3.6 KiB PDF at `/probe/out/probe.pdf`.
+
+The `resumes` instruction was deliberately **not** softened to match the gap while it
+was open. Telling
 the agent to skip compiling because the binary is missing would produce resumes with
 no PDF and no error, which is worse than a compile that fails loudly.
 
-Swept the profiles for other external binaries: they reference only `git` (present)
-and `tectonic`. This is the only gap.
+Swept all four instruction files for external binaries the profiles tell the agent to
+run: only `git` and `tectonic` appear, and both are now in the image. `curl` was added
+at the same time as tectonic, not for the profiles but for the compose healthcheck,
+which needs an HTTP client in the container and previously had none.
 
 ### Tool exposure
 

@@ -113,6 +113,83 @@ services:
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────
+  # Pi — the agent host. One container, one Pi process per profile (god, story,
+  # resumes), fronted by the pi-gateway binary which serves the OpenAI-compatible
+  # surface the Android app already speaks.
+  #
+  # Listens on 8643, NOT 8642, and that is deliberate: the `gateway` service above
+  # still owns 8642 until the Hermes removal PR, so the two coexist and each app
+  # tab can be pointed at one or the other to compare before anything is switched.
+  # nginx keeps proxying /p/* to :8642 until then; switching it is one-line and is
+  # part of the removal PR, not this one.
+  #
+  # This service merges *bot-base-environment ONLY, never *bot-base — the latter
+  # carries `build.dockerfile: test/Dockerfile`, which would quietly build the
+  # Hermes image. It needs its own build and user below. (See pi/README.md.)
+  #
+  # Starts as root for the same reason gateway does: the bind-mounted workspace and
+  # pi/ dir are owned by the host uid, so a non-root process cannot write session
+  # trees or repo checkouts there.
+  # ──────────────────────────────────────────────────────
+  pi:
+    build:
+      context: ..
+      dockerfile: docker/pi/Dockerfile
+    user: "0:0"
+    # pi-gateway, NOT the image's default CMD. It serves the HTTP surface and spawns
+    # one `pi --mode rpc` per profile with that profile's directory as cwd — which is
+    # what makes each agent load its own AGENTS.md. Running the image default (`pi
+    # --mode rpc` on stdio) starts a process that serves no port at all.
+    # The entrypoint execs this, after its `pi mcp list` check.
+    command: ["/usr/local/bin/pi-gateway"]
+    ports:
+      # Direct port, for comparing one profile by hand. The app should go through
+      # the proxy (:8080) once nginx is pointed here.
+      - "${PI_SERVER_PORT:-8643}:8643"
+    volumes:
+      # The Pi agent dir: settings.json, mcp.json, AGENTS.md, profiles/<n>/.
+      # Pi writes sessions/, auth.json and models-store.json here; all gitignored.
+      - ../pi:/opt/pi
+      # Repos the agent works in: workspace/portals (story), workspace/resumes.
+      - ../workspace:/workspace
+      # VPS SSH keys, least-privilege file mounts (read-only): story and resumes
+      # clone and pull their own repos as the VPS GitHub identity. Without these
+      # both profiles fail closed on the first clone with Permission denied
+      # (publickey) — which is why their AGENTS.md says stop and report rather than
+      # retry. Same mounts and same GIT_SSH_COMMAND as the gateway service.
+      - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519:/root/.ssh/id_ed25519:ro
+      - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519.pub:/root/.ssh/id_ed25519.pub:ro
+      - ${VPS_SSH_DIR:-/root/.ssh}/known_hosts:/root/.ssh/known_hosts:ro
+    environment:
+      # Mongo + the OpenCode keys. Required: all five MCP servers open Atlas at
+      # startup and docker/pi/entrypoint.sh runs `pi mcp list` at boot and DIES if
+      # any server fails, so a missing MONGODB_URI is a container that exits rather
+      # than one that serves degraded.
+      <<: *bot-base-environment
+      # Bearer token for the pi-gateway HTTP surface. Same value the app sends to
+      # the Hermes gateway today, so a tab can be repointed without re-entering it.
+      PASSWORD: ${PASSWORD:-}
+      PI_CODING_AGENT_DIR: /opt/pi
+      PI_PROFILE_DIR: /opt/pi/profiles
+      # Provider key name Pi itself reads.
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      # Fail-closed SSH for agent-run git, same as gateway: only the mounted key is
+      # ever offered, never prompt, never trust unknown hosts (a GitHub key rotation
+      # fails loudly until known_hosts is updated on the VPS).
+      GIT_SSH_COMMAND: "ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes"
+    healthcheck:
+      # /healthz is unauthenticated by design, so the probe needs no credential.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8643/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      # Generous: the entrypoint runs `pi mcp list` before handing off, which
+      # connects all five MCP servers. A short start_period reports unhealthy while
+      # that is still in progress.
+      start_period: 60s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────────
   # Retention — one-shot data lifecycle job, run via cron
   # (scripts/retention.sh run → podman-compose run --rm retention).
   # Needs MONGODB_URI / MONGODB_DB only.

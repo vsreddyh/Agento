@@ -63,7 +63,8 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/miser-money ./cmd/miser-money \
  && go build -trimpath -ldflags="-s -w" -o /out/cookbook ./cmd/cookbook \
  && go build -trimpath -ldflags="-s -w" -o /out/health-check ./cmd/health-check \
  && go build -trimpath -ldflags="-s -w" -o /out/task-manager ./cmd/task-manager \
- && go build -trimpath -ldflags="-s -w" -o /out/project-manager ./cmd/project-manager
+ && go build -trimpath -ldflags="-s -w" -o /out/project-manager ./cmd/project-manager \
+ && go build -trimpath -ldflags="-s -w" -o /out/pi-gateway ./cmd/pi-gateway
 
 FROM ${NODE_IMAGE} AS runtime
 
@@ -75,8 +76,34 @@ FROM ${NODE_IMAGE} AS runtime
 #   it explicitly means a busybox find or a leaner npm can never silently break
 #   the git safe.directory registration.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates findutils \
+ && apt-get install -y --no-install-recommends git ca-certificates findutils curl \
  && rm -rf /var/lib/apt/lists/*
+
+# tectonic — the LaTeX engine the `resumes` profile compiles every tailored .tex
+# with. It is NOT in Debian stable (checked the package index by name across all
+# suites), so apt cannot supply it and the upstream release asset is the only route.
+#
+# musl build, deliberately: it is statically linked, so it adds no runtime
+# dependencies to this slim image. The -gnu asset is ~22 MiB and expects a glibc we
+# would then be shipping assumptions about.
+#
+# Pinned by version AND sha256, like the base digests above and PI_VERSION below. An
+# unpinned download from the network into a live image is exactly the supply-chain
+# surface this repo avoids elsewhere; to bump:
+#   podman build --build-arg TECTONIC_VERSION=0.18.0 \
+#                --build-arg TECTONIC_SHA256=<sha256 of the musl asset> ...
+ARG TECTONIC_VERSION=0.17.0
+ARG TECTONIC_SHA256=8533d07f9ccbd7a65824b9e0459041bca34af1eb33daba48f59215593753a3b7
+ARG TECTONIC_TARGET=x86_64-unknown-linux-musl
+
+RUN set -eux; \
+    url="https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/tectonic-${TECTONIC_VERSION}-${TECTONIC_TARGET}.tar.gz"; \
+    curl -fsSL "$url" -o /tmp/tectonic.tar.gz; \
+    echo "${TECTONIC_SHA256}  /tmp/tectonic.tar.gz" | sha256sum -c -; \
+    tar xzf /tmp/tectonic.tar.gz -C /usr/local/bin tectonic; \
+    chmod 755 /usr/local/bin/tectonic; \
+    rm -f /tmp/tectonic.tar.gz; \
+    tectonic --version
 
 # Pi, pinned so an upstream release cannot change behaviour under a running
 # stack without a deliberate bump here. Requires Node >= 22.19.0.
@@ -99,9 +126,18 @@ COPY --from=gobuild /out/cookbook         /usr/local/bin/cookbook
 COPY --from=gobuild /out/health-check     /usr/local/bin/health-check
 COPY --from=gobuild /out/task-manager     /usr/local/bin/task-manager
 COPY --from=gobuild /out/project-manager  /usr/local/bin/project-manager
+
+# pi-gateway is the container's main process, not an optional extra. It serves the
+# OpenAI-compatible HTTP surface AND spawns one `pi --mode rpc` child per profile,
+# each with its cwd set to that profile's directory — which is what makes Pi load
+# the right AGENTS.md. Without this binary in the image the container would start
+# `pi --mode rpc` on stdio (the default CMD), serve nothing, and pass its healthcheck
+# on nothing at all.
+COPY --from=gobuild /out/pi-gateway       /usr/local/bin/pi-gateway
+
 RUN chmod 755 /usr/local/bin/miser-money /usr/local/bin/cookbook \
              /usr/local/bin/health-check /usr/local/bin/task-manager \
-             /usr/local/bin/project-manager
+             /usr/local/bin/project-manager /usr/local/bin/pi-gateway
 
 COPY docker/pi/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
