@@ -12,7 +12,8 @@ state (see `.gitignore`).
 | `mcp.json` | yes | the five in-repo Go MCP servers: miser-money, cookbook, health-check, task-manager, project-manager. |
 | `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all three. |
 | `profiles/<name>/AGENTS.md` | yes | one per profile (god / story / resumes). Each profile's own instructions and personality. |
-| `profiles/<name>/skills/` | yes *(later PR)* | Intended per-profile skills. **Does not load as laid out** — see the profile-skills finding below; needs an explicit `--skill` path per profile. |
+| `profiles/<name>/skills/` | yes | Per-profile skills. **Not discovered as laid out** — see the profile-skills finding below; loaded by an explicit `--skill` path per profile. |
+| `extensions/` | yes | Pi extensions loaded by every profile. Currently one: `subagent.ts`, the `spawn_subagent` delegation tool. See the subagent section below. |
 | `auth.json` | **no** | provider credentials. `OPENCODE_API_KEY` is injected by compose. |
 | `models-store.json` | **no** | model catalog cache Pi refreshes at startup. |
 | `sessions/` | **no** | session transcripts. |
@@ -353,6 +354,143 @@ Each has a named home so they are not quietly lost:
 5. **`depends_on`.** Use `condition: service_started` for the Pi service. A
    plain `depends_on` would make the proxy refuse to come up when Pi's MCP
    check fails, taking healthy `gateway` chat down with it.
+
+## Subagent spawning is a separate process, and that is the whole point
+
+`extensions/subagent.ts` registers `spawn_subagent`: run an independent agent to
+completion on a self-contained task and return its answer. This is the delegation
+the Hermes profiles had.
+
+The subagent is a **separate `pi` process** driven over RPC, not an in-process
+`createAgentSession`. That is not a style preference; the in-process route leaks.
+
+An SDK session does not load the CLI's built-in extensions, so reproducing MCP
+means hand-building a `DefaultResourceLoader`. That does work — 43 MCP tools,
+measured — but the child then owns five MCP server subprocesses that nothing ever
+reclaims:
+
+| step | result |
+|---|---|
+| `AgentSession.dispose()` | does **not** emit `session_shutdown` |
+| MCP extension closes connections | **only** on `session_shutdown` |
+| `AgentSessionRuntime.dispose()` | does emit it — but does not reproduce the MCP wiring (0 tools) |
+| `session.extensionRunnerRef.current` | **unpopulated** for SDK sessions, so the event cannot be raised by hand |
+| shared loader across children | corrupts MCP: 43 tools → 23, servers dying |
+
+Measured cost of the in-process route: **five processes stranded per delegation**,
+accumulating for the life of the container. A process is reaped by
+`RpcClient.stop()`, which SIGTERMs the CLI and the CLI closes its own MCP clients on
+the way out — **0 processes left behind**, measured across repeated delegations.
+
+Sharing one loader to get "only one connection set" was tried and is wrong: it drops
+the child to 23 tools and servers die. One loader per child is correct.
+
+What the child's flags buy, each structural rather than checked at runtime:
+
+| flag | why |
+|---|---|
+| `--no-extensions` | the child loads no extension, **including this one**, so `spawn_subagent` does not exist in its world and it cannot recurse. A depth counter is a limit a bug could step past; an absent tool cannot be called. |
+| `-e builtin:mcp -e builtin:codemode -e builtin:tool-search` | `--no-extensions` disables the built-in extensions too, so they are re-enabled by name. Without this the child has no money/cookbook/health/task/project tools and delegation is useless. Measured: 50 tools, 43 of them MCP. |
+| `--no-session` | no session file per delegation for the gateway's session store — which has never heard of these conversations — to accumulate. |
+| forwarded `--skill <path>` | read from this process's own `argv`, so per-profile skills reach the child. |
+
+Cost is **not** guessed from the stream: `getSessionStats()` is authoritative.
+Per-delta usage repeats within one message, so summing streamed frames multiplies a
+single turn's cost. That figure is folded into the tool result's own `usage`, because
+Pi adds nested result usage to the caller totals — otherwise delegation looks nearly
+free while being one of the most expensive things the agent can do. Stats are fetched
+**best-effort**: a failure there sets `details.usageUnavailable` rather than throwing,
+because discarding an answer the parent already paid six processes for is the worst
+available outcome, and the natural response — retry — pays that cost again.
+
+### What the tool validates before it spawns anything
+
+Every model-controlled value is checked *before* a process exists, so a bad value is
+refused where the parent can see what it asked for rather than as a child that dies
+during startup:
+
+| input | rule | why |
+|---|---|---|
+| `task` | must be non-empty and <= 20k characters | output is truncated on the way back, so input is bounded for symmetry; 20k chars (~5k tokens) is generous, and the error tells the caller to name files rather than paste them |
+| `timeoutSeconds` | must be finite and >= 1s, capped at 900s | a subagent pins six processes for as long as it runs, so a sub-second timeout would pay the full spawn cost to expire immediately; `0` silently becoming the default would hide the mistake |
+| `thinking` | an explicitly requested level must be one of `off, minimal, low, medium, high, xhigh, max` | Pi **silently accepts an unknown level**, so a typo would leave the child at a depth nobody chose. The **inherited** level is passed through unvalidated on purpose — it came from a working parent, and checking it would mean a new Pi level breaks delegation for every profile using it |
+| `cwd` | must be non-empty, exist, and be a directory; a relative path resolves against this agent's directory | a typo guard, **not** a security boundary — the caller already holds `bash` and full filesystem access. `""` is a typo, not an inheritance request |
+| `model` | trimmed, must name a model, resolved against the parent's registry | the CLI resolves lazily, so an unknown id would otherwise fail on the child's first turn; `undefined` inherits but `""` is a typo, and `provider/` with no model must not reach the registry |
+
+`off` is deliberately in the thinking whitelist even though it is absent from Pi's
+`ThinkingLevel` union — it lives in `ModelThinkingLevel`, and it is the value every
+profile here actually runs (`muse-spark-1.3-contributor:off`). A whitelist built from
+the declared type alone would reject the common case.
+
+### Startup is inside the timeout, and the answer never grows unbounded
+
+Three things that looked fine and were not, all the same class of bug: a value that
+is bounded on the way *out* but unbounded on the way *in*, or a wait nobody is
+holding.
+
+| thing | before | after |
+|---|---|---|
+| `client.start()` | unbounded — `timeoutMs` covered only `promptAndWait`, so a child stalling while connecting MCP sat there past `timeoutSeconds` with six processes pinned | raced against the same `timeoutMs` by `within()`, which clears its timer in `.finally`. Losing the race costs nothing but the wait: the caller's `finally` still stops the child |
+| `answerOf` | joined every `text_delta` first and truncated the result, so a runaway child could bloat the parent before the cut | accumulation stops at `2 × MAX_RESULT_CHARS`. The overshoot is deliberate — it leaves `truncate` enough text to report how many characters were actually dropped instead of a made-up number |
+| `cliPath()` | returned `process.argv[1]` as-is; a relative entry passes `existsSync` here and then resolves against the child's cwd | returned absolute. Same bug class as the relative `cwd` and relative `--skill` cases above: verified here, wrong there, no error |
+
+The cap is applied to the *append* rather than only the loop condition: a child that
+emits one enormous delta would pass a between-events check and overshoot by its
+whole size in a single step, which is exactly the case the cap exists for.
+
+Three smaller coercions, all the same lesson — a guard that reports the wrong thing
+is worse than no guard, because the parent trusts it:
+
+| value | trap | fix |
+|---|---|---|
+| `timeoutSeconds: NaN` | `JSON.stringify(NaN)` is `"null"`, so the error said the caller passed `null` | `String(seconds)`, which prints `NaN` |
+| `modelRegistry.find()` | `=== undefined` treats a `null` "not found" as a real model, and the child fails on its first turn instead | falsy check — `find` is third-party |
+| session stats | `Number.isFinite(-1)` is true, so a negative count would subtract from every total it is added to | `Math.max(0, …)` in `count()` |
+
+### One ceiling for the whole call, not one per phase
+
+`timeoutSeconds` bounds *the delegation*, not each of its phases. Startup and the
+prompt share one budget: the prompt is given `timeoutMs - (elapsed)`, so a child
+that takes 14 minutes to start still cannot push the call past the 15 minutes the
+caller asked to be capped at. Granting both phases the full `timeoutMs` would have
+made the advertised "hard ceiling" worth double, which is the same resource claim
+the ceiling exists to make. If startup has already consumed the budget the call
+fails immediately rather than prompting with a negative allowance.
+
+The validators are also total functions: `task`, `cwd`, `model` and `thinking` are
+taken as `unknown` and `typeof`-checked, so a wrong-typed value gets the message that
+names the field instead of a `TypeError` from `.trim()` that names nothing. The
+schema already enforces these types, so this is defence for a caller that does not.
+
+### Teardown is bounded, and a leak leaves a trace
+
+The `finally` that calls `client.stop()` is the one wait with no budget behind it:
+the startup and prompt deadlines were both inside `timeoutSeconds`, but a child
+stalling while closing its MCP servers would pin all six processes indefinitely,
+with nothing left waiting on them. `stop()` is therefore raced against its own
+30s ceiling — deliberately outside `MAX_TIMEOUT_MS`, because by then the call has
+already failed or answered and there is no delegation budget left to spend.
+
+Its failure is logged rather than swallowed silently. Swallowing is right for the
+error that *explains* the failure (the original must not be replaced by a teardown
+complaint), but this is the one path where the processes may genuinely still be
+running, and a leak with no trace is what makes the next occurrence undebuggable.
+
+The tool's own `timeoutSeconds` description says `plus up to 30s to tear the child
+down afterwards`, so the contract the model reads is the contract the code has.
+
+`resolveCwd` maps **only** `ENOENT`/`ENOTDIR` to "no such directory". `EACCES`,
+`EPERM` and `ELOOP` mean the path is there and something else is wrong; reporting
+those as missing sends the caller to fix a path that exists, so they are re-thrown
+with the real code (`cannot use cwd <path>: EACCES`).
+
+### One at a time, not in parallel
+
+Each delegation is one `pi` process plus five MCP servers, so parallel calls fan out
+linearly. The tool description says to call them serially rather than shipping a
+semaphore: a hard cap would throttle legitimate parallel work, and Pi already runs a
+tool batch in order by default. This is a prompt-level guard, not an enforced one —
+worth revisiting if the model ever starts fanning out on its own.
 
 ## Tool selection is additive, never a list
 
