@@ -9,16 +9,56 @@ state (see `.gitignore`).
 | path | committed | purpose |
 |---|---|---|
 | `settings.json` | yes | Pi's own knobs — tool selection, retry, cache warming. **Not** personality. |
-| `mcp.json` | yes *(later PR)* | the five in-repo Go MCP servers. Not in the runtime PR. |
-| `profiles/<name>/AGENTS.md` | yes *(later PR)* | one per profile (god / story / resumes). The single source of truth for instructions, replacing every `SOUL.md`. |
+| `mcp.json` | yes | the five in-repo Go MCP servers: miser-money, cookbook, health-check, task-manager, project-manager. |
+| `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all three. |
+| `profiles/<name>/AGENTS.md` | yes | one per profile (god / story / resumes). Each profile's own instructions and personality. |
 | `profiles/<name>/skills/` | yes *(later PR)* | skills, loaded because each session's cwd is that profile dir. |
 | `auth.json` | **no** | provider credentials. `OPENCODE_API_KEY` is injected by compose. |
 | `models-store.json` | **no** | model catalog cache Pi refreshes at startup. |
 | `sessions/` | **no** | session transcripts. |
 
-Only `settings.json` exists so far. The three "later PR" rows are the intended
-layout, not current contents — the runtime PR is the image plus agent-dir
-skeleton; profile config and MCP wiring come after the gateway that serves them.
+### How instructions are layered
+
+Pi loads context files from the agent directory, the working directory, **and every
+parent directory of the working directory**. Each profile runs with its cwd set to
+`/opt/pi/profiles/<name>/`, so in practice:
+
+- `/opt/pi/AGENTS.md` — the shared layer, loaded for all three profiles
+- `/opt/pi/profiles/<name>/AGENTS.md` — that profile's layer
+- `/opt/pi/profiles/AGENTS.md` and `/workspace/AGENTS.md` — **would also load**, for
+  every profile, if either existed. Neither is committed. This is worth knowing
+  before dropping an `AGENTS.md` anywhere above a profile directory: it silently
+  becomes part of every profile's system prompt.
+
+Context-file discovery does not require project trust, so an `AGENTS.md` is loaded
+even for an untrusted directory. Treat the content of one as untrusted input.
+
+### Wiring constraint for whoever adds the compose service
+
+`docker/pi/entrypoint.sh` runs `pi mcp list` at boot when `mcp.json` exists, and
+**calls `die` if any server fails to connect**. That check only became active when
+this PR added `mcp.json`, so the pi service must carry:
+
+- `MONGODB_URI` and `MONGODB_DB` — every one of the five servers opens the shared
+  Atlas database on startup and fails to connect without them
+- `OPENCODE_API_KEY` — already enforced by the entrypoint
+
+The existing `x-bot-base` environment anchor already supplies all three, so
+`<<: *bot-base-environment` is sufficient; passing them by hand is not. Omitting
+them produces a container that exits at boot rather than one that serves degraded.
+
+### Tool exposure
+
+The MCP servers are left at `codemode` exposure, which is Pi's default. Their tools
+are therefore **not declared to the model**; it reaches them from a `codemode`
+script as `tools.mcp__<server>__<tool>({...})`, finding them with `searchTools()`,
+`describeTool()` or `describeNamespace()`. That keeps 43 tool definitions out of
+every request, which is most of the token saving available here.
+
+The cost is that the model has to write JavaScript to call a tool, and the model
+instructions must say so — a profile file that told the agent to call `log_meal`
+directly would describe a tool that does not exist in that form. `god`'s
+`AGENTS.md` documents the real call shape instead.
 
 ## Why no HTTP server here
 

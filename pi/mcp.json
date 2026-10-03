@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "miser-money": {
+      "command": "/usr/local/bin/miser-money",
+      "args": []
+    },
+    "cookbook": {
+      "command": "/usr/local/bin/cookbook",
+      "args": []
+    },
+    "health-check": {
+      "command": "/usr/local/bin/health-check",
+      "args": []
+    },
+    "task-manager": {
+      "command": "/usr/local/bin/task-manager",
+      "args": []
+    },
+    "project-manager": {
+      "command": "/usr/local/bin/project-manager",
+      "args": []
+    }
+  }
+}
