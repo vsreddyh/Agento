@@ -161,14 +161,32 @@ services:
       - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519.pub:/root/.ssh/id_ed25519.pub:ro
       - ${VPS_SSH_DIR:-/root/.ssh}/known_hosts:/root/.ssh/known_hosts:ro
     environment:
-      # Mongo + the OpenCode keys. Required: all five MCP servers open Atlas at
-      # startup and docker/pi/entrypoint.sh runs `pi mcp list` at boot and DIES if
-      # any server fails, so a missing MONGODB_URI is a container that exits rather
-      # than one that serves degraded.
+      # Mongo + the OpenCode keys, inherited so the two stacks cannot drift apart.
+      #
+      # This anchor also carries four Hermes variables — HERMES_HOME,
+      # HERMES_ALLOW_ROOT_GATEWAY, HERMES_API_KEY, OPENCODE_ZEN_API_KEY. They are
+      # INERT here: nothing in the pi image reads them, and HERMES_HOME=/opt/data is
+      # meaningless in a container that mounts /opt/pi. They are inherited anyway on
+      # purpose. Restating the environment explicitly would duplicate the Mongo and
+      # provider-key wiring, and the failure mode of that duplication is the bug this
+      # stack has been fighting throughout — someone adds a variable to the anchor
+      # for Hermes and the pi service silently does not get it. Here a new variable
+      # reaches both, and an unused one costs a few bytes.
+      #
+      # A genuinely required variable going missing is still loud: the entrypoint
+      # dies if any MCP server fails to connect.
       <<: *bot-base-environment
       # Bearer token for the pi-gateway HTTP surface. Same value the app sends to
       # the Hermes gateway today, so a tab can be repointed without re-entering it.
       PASSWORD: ${PASSWORD:-}
+      # Explicit rather than relying on the binary's default, because three separate
+      # places have to agree on this number: here, the port mapping below, and the
+      # healthcheck's URL.
+      #
+      # Do NOT add PI_GATEWAY_ADDR to this service. It wins outright over
+      # PI_SERVER_PORT (see cmd/pi-gateway/main.go), so setting it would move the
+      # listener off the mapped port and out from under the healthcheck.
+      PI_SERVER_PORT: "8643"
       PI_CODING_AGENT_DIR: /opt/pi
       PI_PROFILE_DIR: /opt/pi/profiles
       # Provider key name Pi itself reads.
@@ -179,6 +197,9 @@ services:
       GIT_SSH_COMMAND: "ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes"
     healthcheck:
       # /healthz is unauthenticated by design, so the probe needs no credential.
+      # The :8643 here must stay in step with PI_SERVER_PORT above and the port
+      # mapping; it is not derived from either, so changing one means changing all
+      # three.
       test: ["CMD", "curl", "-fsS", "http://localhost:8643/healthz"]
       interval: 10s
       timeout: 5s

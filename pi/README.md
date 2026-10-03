@@ -131,8 +131,26 @@ asset:
 | | |
 |---|---|
 | latest release | `tectonic@0.17.0` |
-| asset to use | `tectonic-0.17.0-x86_64-unknown-linux-musl.tar.gz` (~9.9 MiB) |
+| asset to use | the `-unknown-linux-musl` build, per arch: `x86_64` on amd64, `aarch64` on arm64 (~9.9 MiB each) |
 | why musl, not gnu | statically linked, so no new runtime dependencies in a slim Debian image; the `-gnu` asset is ~22 MiB and pulls glibc expectations |
+| pin | `TECTONIC_SHA256_AMD64` / `TECTONIC_SHA256_ARM64` |
+
+The arch is mapped from `TARGETARCH` rather than hardcoded, and anything other than
+amd64/arm64 is refused with the arch named. An earlier version pinned only the x86_64
+triple, so a build on Apple Silicon or an ARM VPS would fetch the Intel asset and
+fail at the version probe — loudly, but only after a wasted 10 MB download.
+
+`ARG TARGETARCH` has to be **declared** for podman's automatic value to be visible in
+the build step, and the symptom of omitting it is the quiet one: the default falls
+back to amd64, an unsupported-arch build succeeds with the Intel asset, and the guard
+never fires. Both halves verified by building rather than by reading:
+
+- `--build-arg TARGETARCH=riscv64` → refused, `TARGETARCH='riscv64'. Supported: amd64, arm64.`
+- `--build-arg TARGETARCH=arm64` → selects `aarch64-unknown-linux-musl`, digest
+  matches the real asset (`sha256sum: OK`), extracts cleanly, then fails with
+  `Exec format error` because an aarch64 binary cannot run on this amd64 host. So the
+  mapping and the digest are confirmed, but **executing on real arm64 hardware is
+  untested** — build with `--platform linux/arm64` on such a host to confirm it.
 
 This was tracked here as a Dockerfile follow-up rather than done in the
 profile-instructions PR, so the image change kept its own review. It is now installed,
@@ -142,7 +160,8 @@ supply-chain surface this repo avoids elsewhere. Bump with:
 
 ```
 podman build --build-arg TECTONIC_VERSION=0.18.0 \
-             --build-arg TECTONIC_SHA256=<sha256 of the musl asset> \
+             --build-arg TECTONIC_SHA256_AMD64=<sha256 of the musl asset> \
+             --build-arg TECTONIC_SHA256_ARM64=<sha256 of the aarch64 asset> \
              -f docker/pi/Dockerfile .
 ```
 

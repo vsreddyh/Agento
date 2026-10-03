@@ -83,23 +83,46 @@ RUN apt-get update \
 # with. It is NOT in Debian stable (checked the package index by name across all
 # suites), so apt cannot supply it and the upstream release asset is the only route.
 #
-# musl build, deliberately: it is statically linked, so it adds no runtime
-# dependencies to this slim image. The -gnu asset is ~22 MiB and expects a glibc we
-# would then be shipping assumptions about.
+# musl builds, deliberately: statically linked, so no runtime dependencies in this
+# slim image. The -gnu assets are ~22 MiB and expect a glibc we would then be
+# shipping assumptions about.
 #
-# Pinned by version AND sha256, like the base digests above and PI_VERSION below. An
+# Pinned by version AND sha256 per architecture, like the base digests above. An
 # unpinned download from the network into a live image is exactly the supply-chain
-# surface this repo avoids elsewhere; to bump:
+# surface this repo avoids elsewhere. Both digests are of assets downloaded and
+# hashed here, not copied from a release note.
+#
+# The arch is mapped rather than hardcoded. An earlier version pinned only the
+# x86_64 triple, so a build on Apple Silicon or an ARM VPS fetched the Intel asset
+# and failed at the version probe — loudly, but confusingly, and only after a wasted
+# 10 MB download. Anything outside these two now fails immediately, naming the arch.
+#
 #   podman build --build-arg TECTONIC_VERSION=0.18.0 \
-#                --build-arg TECTONIC_SHA256=<sha256 of the musl asset> ...
+#                --build-arg TECTONIC_SHA256_AMD64=<sha> \
+#                --build-arg TECTONIC_SHA256_ARM64=<sha> -f docker/pi/Dockerfile .
 ARG TECTONIC_VERSION=0.17.0
-ARG TECTONIC_SHA256=8533d07f9ccbd7a65824b9e0459041bca34af1eb33daba48f59215593753a3b7
-ARG TECTONIC_TARGET=x86_64-unknown-linux-musl
+ARG TECTONIC_SHA256_AMD64=8533d07f9ccbd7a65824b9e0459041bca34af1eb33daba48f59215593753a3b7
+ARG TECTONIC_SHA256_ARM64=b10954a95404f3ab2328d2fa59a5ebab8e657f893fab096f98be8db7c0c979b8
+# Declared explicitly, which is what makes it visible inside the RUN below. Podman
+# and buildkit both supply TARGETARCH automatically, but an undeclared automatic arg
+# is not in scope — and the symptom of getting that wrong is the quiet one:
+# ${TARGETARCH:-amd64} falls back to amd64, a build for an unsupported arch succeeds
+# with the Intel asset, and the guard below never fires. Verified by building with
+# --build-arg TARGETARCH=riscv64 and confirming it is refused.
+ARG TARGETARCH
 
 RUN set -eux; \
-    url="https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/tectonic-${TECTONIC_VERSION}-${TECTONIC_TARGET}.tar.gz"; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) triple=x86_64-unknown-linux-musl;  sha="${TECTONIC_SHA256_AMD64}" ;; \
+      arm64) triple=aarch64-unknown-linux-musl; sha="${TECTONIC_SHA256_ARM64}" ;; \
+      *) echo "FATAL: tectonic ${TECTONIC_VERSION} publishes no musl build for" >&2; \
+         echo "       TARGETARCH='${TARGETARCH:-}'. Supported: amd64, arm64." >&2; \
+         echo "       Build with --platform linux/amd64 to override." >&2; \
+         exit 1 ;; \
+    esac; \
+    url="https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/tectonic-${TECTONIC_VERSION}-${triple}.tar.gz"; \
     curl -fsSL "$url" -o /tmp/tectonic.tar.gz; \
-    echo "${TECTONIC_SHA256}  /tmp/tectonic.tar.gz" | sha256sum -c -; \
+    echo "${sha}  /tmp/tectonic.tar.gz" | sha256sum -c -; \
     tar xzf /tmp/tectonic.tar.gz -C /usr/local/bin tectonic; \
     chmod 755 /usr/local/bin/tectonic; \
     rm -f /tmp/tectonic.tar.gz; \
