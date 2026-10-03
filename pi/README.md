@@ -329,31 +329,53 @@ sudo chown -R 10000:10000 workspace/
 Do that with the stack stopped. Doing it while a container is running races with
 whatever the agent happens to be writing.
 
-## Deferred, with the target written down
+## The five deferred items, and where each one landed
 
-These were flagged in review on the runtime PR and are **not** addressed there.
-Each has a named home so they are not quietly lost:
+All five were flagged in review on the runtime PR. Four landed with the `pi`
+compose service; the fifth landed with the cutover.
 
-1. **Auth.** `gateway` gets `PASSWORD=${PASSWORD:-}`. Whatever serves `:8643`
-   must require the same bearer token on both the direct port and the
-   `/p/pi/*` route. An unauthenticated route to an agent with a shell is not
-   acceptable.
-2. **nginx prefix stripping.** `proxy_pass $pi/;` inside a `location` that uses
-   a *variable* does **not** strip the prefix the way a static
-   `proxy_pass http://pi/;` does — with variables nginx forwards the original
-   URI. `/p/pi/v1/models` would arrive as `/p/pi/v1/models`. Needs an explicit
-   `rewrite ^/p/pi(/.*)$ $1 break;` before `proxy_pass`.
-3. **SSH mounts.** `docker/docker-compose.yml`'s `gateway` mounts the VPS
-   keypair read-only and pins `GIT_SSH_COMMAND` for fail-closed agent-run git,
-   because story/resumes push their repos. The Pi service needs the same three
-   mounts plus the same `GIT_SSH_COMMAND`, or repo sync is broken.
-4. **Healthcheck.** `pi mcp list` exits 0 with zero servers configured, so it
-   proves nothing until `mcp.json` exists. Once it does, it is a genuine
-   connectivity probe (it connects, it does not lint). A readiness check that
-   actually dials the served port is still wanted on top.
-5. **`depends_on`.** Use `condition: service_started` for the Pi service. A
-   plain `depends_on` would make the proxy refuse to come up when Pi's MCP
-   check fails, taking healthy `gateway` chat down with it.
+| item | status |
+|---|---|
+| **Auth** | done. The `pi` service takes `PASSWORD=${PASSWORD:-}`, the same value the Hermes gateway did, so a tab can be repointed without re-entering it. Verified: both a missing and a wrong bearer token answer 401. |
+| **SSH mounts** | done. Same three keypair mounts and the same fail-closed `GIT_SSH_COMMAND` as `gateway`, so story/resumes push their repos unchanged. |
+| **Healthcheck** | done. `curl -fsS http://localhost:8643/healthz` inside the container, with a 60s `start_period` because the entrypoint connects all five MCP servers first. The entrypoint's `pi mcp list` is the connectivity gate; this is the port check on top of it. |
+| **`depends_on`** | done, in the short list form (`- pi`). The long form is not available on this stack at all: podman-compose builds its dependency graph with `deps = {x: {} for x in deps}`, so any `condition:` value is an unhashable dict and it dies with `TypeError: cannot use 'dict' as a dict key` before reading a service. Verified in both spellings. The short form still means *start pi first* — podman-compose's own `config` output renders it as `condition: service_started` — and ordering is all this needs, because nginx re-resolves `pi` per request. Deliberately **not** gated on pi's *health*: that healthcheck fails whenever its MCP check does, and a proxy held back by it would take health-api's `/api/*` routes down too — health sync has nothing to do with the agent. |
+| **nginx prefix stripping** | done, in the cutover PR. `rewrite ^/p(/.*)$ $1 break;` before `proxy_pass $chat`, and it is load-bearing rather than tidying. Measured against nginx 1.27 with echo upstreams: with the rewrite `/p/god/v1/chat/completions` arrives as `/god/v1/chat/completions`; without it the original path arrives unchanged, and pi-gateway reads the first segment `p` as a profile name and 404s. |
+
+The unprefixed `/api/model/options` needs no rewrite: pi-gateway serves that path
+itself, with `api` a reserved first segment rather than a profile name.
+
+## What the cutover changed, and what is left of Hermes
+
+The cutover is one line plus a rewrite — `set $chat http://pi:8643` — and it is
+reversible by changing it back. Both stacks stay in the compose file until the
+Hermes removal, so a tab can be pointed at either port to compare.
+
+The proxy's read/send timeout went from 300s to **960s** in the same change, and
+that is not cosmetic: a `spawn_subagent` delegation is capped at 900s of work plus
+up to 30s of teardown, so a turn that legitimately spends that budget would be cut
+mid-answer at 300s while the agent kept working. 960s = 900 + 30 + 30s of margin.
+It is an idle timeout between bytes, not a total-turn limit.
+
+Still on Hermes, and still running:
+
+- the `gateway` service, `test/Dockerfile`, `test/entrypoint.sh`, and the nine
+  tracked files under `gateway/` (`SOUL.md` x3, `config.yaml.template` x3,
+  `podman-management/SKILL.md` x2, and a `.curator_state` that should never have
+  been tracked). Its untracked runtime state on this host stays where it is.
+- `scripts/hermes.sh`, which still builds the Hermes bot image and reports
+  "gateway (3 profiles)".
+- `README.md`, `documentation.md` and the root `AGENTS.md`, which all describe the
+  Hermes gateway as the live chat path.
+
+Two parity questions the cutover does not answer, both of which need deciding
+rather than code:
+
+- `podman-management` exists for two Hermes profiles with no Pi equivalent.
+- `SOUL.md` personality (god 44 / story 59 / resumes 61 lines) has no Pi
+  counterpart file. It appears to have been folded into `pi/profiles/*/AGENTS.md`,
+  but nothing here says so, and Pi has no `SOUL` concept of its own — so "the
+  personality survived" is currently an assumption, not a verified fact.
 
 ## Subagent spawning is a separate process, and that is the whole point
 
