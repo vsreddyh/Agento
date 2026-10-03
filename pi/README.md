@@ -12,7 +12,7 @@ state (see `.gitignore`).
 | `mcp.json` | yes | the five in-repo Go MCP servers: miser-money, cookbook, health-check, task-manager, project-manager. |
 | `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all three. |
 | `profiles/<name>/AGENTS.md` | yes | one per profile (god / story / resumes). Each profile's own instructions and personality. |
-| `profiles/<name>/skills/` | yes *(later PR)* | skills, loaded because each session's cwd is that profile dir. |
+| `profiles/<name>/skills/` | yes *(later PR)* | Intended per-profile skills. **Does not load as laid out** — see the profile-skills finding below; needs an explicit `--skill` path per profile. |
 | `auth.json` | **no** | provider credentials. `OPENCODE_API_KEY` is injected by compose. |
 | `models-store.json` | **no** | model catalog cache Pi refreshes at startup. |
 | `sessions/` | **no** | session transcripts. |
@@ -210,31 +210,62 @@ through nginx — not `pi` itself.
 
 ### What the gateway serves today
 
-| route | served by the Pi gateway |
+| route | served by the Pi gateway | source |
+|---|---|---|
+| `POST /{profile}/v1/chat/completions` | yes — SSE streaming, and a standard non-streamed completion when `stream` is false | Pi RPC |
+| `GET /healthz` | yes — unauthenticated liveness | — |
+| `GET /api/model/options` | yes | `get_available_models`, grouped by provider |
+| `GET /{profile}/api/model/options` | yes — same handler, per-profile | `get_available_models` |
+| `GET /{profile}/v1/skills` | yes | `get_commands`, filtered to `source == "skill"` |
+| `GET /{profile}/v1/toolsets` | yes | `<agent-dir>/mcp.json` |
+
+All three inventory routes were capability loss until this PR: `ChatApi.fetchCatalog`
+and both `ServerApi` calls request them, and nginx routes them to the gateway
+upstream (`docker/proxy/nginx.conf` sends `/p/*` and both `/api/model/options`
+spellings there). They are read-only, bearer-authenticated like chat, and answer 405
+with `Allow: GET` on the wrong verb.
+
+### Why those sources and not a filesystem scan
+
+- **Models** come from `get_available_models`, so the picker lists what the agent can
+  actually switch to. Verified live: 2 providers, 79 + 29 models.
+- **Skills** come from `get_commands` filtered to `source == "skill"`, which reports
+  what Pi *actually loaded*, with the path and scope it came from. A filesystem scan
+  would be easier and wrong: Pi discovers skills from the agent directory and from
+  project directories that need trust, so a directory of `SKILL.md` files is not the
+  same thing as a loaded skill. This is not hypothetical — see below.
+- **Toolsets** come from `mcp.json`, which is the configured set the entrypoint has
+  already proven connectable (it runs `pi mcp list` at boot and refuses to start on
+  failure). Pi exposes no RPC that enumerates tools or MCP servers, so per-server
+  tool lists are omitted rather than sent empty: the app reads a missing array as
+  "unknown" and an empty one as "this server has no tools", and only the first is
+  true.
+
+`/v1/skills` currently returns `[]`, and that is the correct answer rather than a
+stub: no skills are installed yet. See the profile-skills finding below.
+
+### Profile skills do NOT load from `profiles/<name>/skills/`
+
+This README claimed they did, on the grounds that each session's cwd is the profile
+directory. **Measured, that is false.** With one distinctly-named skill planted per
+candidate location and `PI_CODING_AGENT_DIR` set explicitly:
+
+| location | discovered |
 |---|---|
-| `POST /{profile}/v1/chat/completions` | yes — SSE streaming, and a standard non-streamed completion when `stream` is false |
-| `GET /healthz` | yes — unauthenticated liveness |
-| `GET /{profile}/api/model/options` | **no** |
-| `GET /api/model/options` | **no** |
-| `GET /{profile}/v1/skills` | **no** |
-| `GET /{profile}/v1/toolsets` | **no** |
+| `<agent-dir>/skills/` | **yes** |
+| `<cwd>/skills/` | no |
+| `<cwd>/.agents/skills/` | no |
 
-The four unserved routes are not hypothetical: `ChatApi.fetchCatalog` and both
-`ServerApi` inventory calls in the Android app request them today, and nginx
-routes all of them to the gateway upstream (`docker/proxy/nginx.conf` sends
-`/p/*` and both `/api/model/options` spellings there). Until they are served,
-those app features are capability loss, and the proxy is still pointing at
-Hermes for them.
+`.agents/skills/` in a project directory is a documented location, but project
+resources need trust, which a headless RPC session does not grant. An earlier probe
+appeared to contradict this; it had simply not set `PI_CODING_AGENT_DIR`, so the agent
+directory was somewhere else entirely.
 
-Nothing in this list is launch-blocking: `/health` and `/api/files*` are served by
-health-api through a different proxy location, `fetchCatalog` degrades to the app's
-bundled offline provider list, and the two inventory pages would simply be empty.
-It is still loss, so it is tracked rather than left to be discovered during the
-Hermes removal.
-
-`/v1/models` is deliberately absent from this table. Earlier drafts of this file
-listed it because the Hermes API server exposed it; the app never calls it — it
-builds its provider and model dropdowns from `/api/model/options` instead.
+Consequence: per-profile skills need an explicit `--skill <path>` on each Pi child
+(the gateway already spawns one per profile with its own cwd and args), or a
+project-level settings file, or they must be shared in the agent directory. The
+`profiles/<name>/skills/` layout this file describes will load nothing until one of
+those is done.
 
 Emulating that surface is what keeps the Android app unchanged: it already
 builds requests as `$serverUrl$profilePath/v1/...` and already sends

@@ -54,6 +54,12 @@ type Config struct {
 	// indefinitely.
 	TurnTimeout time.Duration
 
+	// AgentDir is Pi's agent directory (PI_CODING_AGENT_DIR), used to read mcp.json
+	// for the toolsets inventory. Optional: empty means "no agent directory
+	// configured", and the toolsets endpoint then reports an empty list rather than
+	// failing, since a gateway with no MCP configuration is a legitimate state.
+	AgentDir string
+
 	// KeepaliveInterval writes an SSE comment while waiting, so proxies and the
 	// app do not treat an idle stream as dead. Zero means "no choice made" and is
 	// replaced with the default; set it to KeepaliveDisabled to turn the comments
@@ -234,11 +240,32 @@ func (s *Server) authenticate(r *http.Request) error {
 	return nil
 }
 
+// reservedPathSegment is the API version root. It cannot be a profile name: routing
+// reads a leading "v1" as "no profile segment here", so a profile called v1 would be
+// unreachable and would shadow every unprefixed request.
+const reservedPathSegment = "v1"
+
+// requireMethod enforces that a route is reached with the right verb, answering 405
+// with an Allow header rather than letting the handler run and misreport.
+//
+// Split out because five routes need it and the 405 body should read the same each
+// time. A client that sends POST to a GET inventory route is a bug worth naming
+// precisely: 404 would send it looking for a different path.
+func requireMethod(w http.ResponseWriter, r *http.Request, want, route string) bool {
+	if r.Method == want {
+		return true
+	}
+	w.Header().Set("Allow", want)
+	apiError(w, http.StatusMethodNotAllowed, "invalid_request_error", "",
+		route+" accepts "+want)
+	return false
+}
+
 // splitProfile separates an optional leading profile segment from the endpoint.
 //
 // The proxy strips /p/pi before forwarding, so the app's per-tab profile path
-// arrives first: /story/v1/chat/completions. A path that starts with the API
-// version has no profile segment and falls back to the default.
+// arrives first: /story/v1/chat/completions. A path that starts with a reserved
+// first segment has no profile and falls back to the default.
 //
 // Decided on the FIRST segment alone. An earlier version inferred it from the
 // second segment, which mistook "v1" in /v1/chat/completions for a profile name
@@ -252,9 +279,12 @@ func (s *Server) splitProfile(urlPath string) (profile, rest string) {
 		return s.cfg.DefaultProfile, ""
 	}
 	head, tail, hasTail := strings.Cut(trimmed, "/")
-	// The endpoint root itself is "v1"; anything else in first position is a
-	// profile name.
-	if head == "v1" || head == "" {
+	// Reserved first segments. "v1" is the API version root. "api" is reserved too,
+	// because the provider picker is reachable both as /api/model/options (routed to
+	// this service directly by nginx) and as /{profile}/api/model/options; without
+	// the reservation the first form reads "api" as a profile name and 404s as
+	// "unknown profile api", which is a needlessly confusing way to say "wrong path".
+	if head == reservedPathSegment || head == "api" || head == "" {
 		return s.cfg.DefaultProfile, trimmed
 	}
 	if !hasTail {
@@ -312,6 +342,32 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleChat(w, r, handler)
+
+	// Read-only inventories behind the same version prefix. The app reaches
+	// /{profile}/v1/skills and /{profile}/v1/toolsets through ServerApi, and nginx
+	// forwards /p/* here, so the profile prefix has already been consumed.
+	case "v1/skills":
+		if !requireMethod(w, r, http.MethodGet, "/v1/skills") {
+			return
+		}
+		s.handleSkills(w, r, handler)
+	case "v1/toolsets":
+		if !requireMethod(w, r, http.MethodGet, "/v1/toolsets") {
+			return
+		}
+		s.handleToolsets(w, r, handler)
+
+	// The provider picker. Two spellings reach here and both are real:
+	//   /api/model/options             nginx routes this exact path to the gateway
+	//   /{profile}/api/model/options   the app builds it from the per-tab path
+	// `api` is reserved as a first segment for the same reason `v1` is — otherwise
+	// "api" would be read as a profile name and every picker fetch would 404 as
+	// "unknown profile api".
+	case "api/model/options", "model/options":
+		if !requireMethod(w, r, http.MethodGet, "/api/model/options") {
+			return
+		}
+		s.handleModelOptions(w, r, handler)
 	default:
 		if rest == "v1" || strings.HasPrefix(rest, "v1/") {
 			apiError(w, http.StatusNotFound, "invalid_request_error", "",

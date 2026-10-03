@@ -169,7 +169,11 @@ func run() error {
 	}
 
 	srv, err := gateway.New(gateway.Config{
-		Password:          password,
+		Password: password,
+		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
+		// reach the gateway as well as the Pi children. agentDir is already resolved
+		// above and defaults to /opt/pi.
+		AgentDir:          agentDir,
 		DefaultProfile:    defaultProfile,
 		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),
 		KeepaliveInterval: secondsEnvAllowDisabled("PI_KEEPALIVE", 20),

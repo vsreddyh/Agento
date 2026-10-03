@@ -297,6 +297,17 @@ func post(t *testing.T, srv *Server, path, token, body string) *httptest.Respons
 	return rec
 }
 
+// get is post's read-only counterpart, for the inventory routes. No Content-Type:
+// these routes take no body, and setting one would suggest they do.
+func get(t *testing.T, srv *Server, path, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	return rec
+}
+
 const validBody = `{"model":"mimo-v2.6-flash","model_options":{"reasoning_effort":"low"},` +
 	`"messages":[{"role":"user","content":"hi"}],"stream":true}`
 

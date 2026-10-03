@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1700,5 +1702,340 @@ func TestAgentStderrIsTailedNotLoggedWhole(t *testing.T) {
 	// The tail keeps the END, which is where the actual error is.
 	if !strings.Contains(out, "wedged stack trace line") {
 		t.Fatal("the tail dropped the stderr content entirely")
+	}
+}
+
+// The three inventory routes are what the app's provider picker and its Skills/MCP
+// pages are built from. All four of the app's requests currently go to Hermes, so
+// these are capability, not convenience — and each is checked against the shape
+// ServerApi/ChatApi actually parses rather than the shape that seemed natural.
+
+func TestInventoryModelOptionsMatchesTheAppShape(t *testing.T) {
+	agent := newFakeAgent()
+	agent.responses["get_available_models"] = map[string]any{"models": []any{
+		// Two providers, deliberately out of order, plus a duplicate id and two
+		// unusable rows, so grouping, sorting and filtering are all exercised.
+		map[string]any{"id": "mimo-v2.6-flash", "name": "MiMo", "provider": "opencode-go", "reasoning": true},
+		map[string]any{"id": "muse-spark-1.3-contributor", "name": "Muse", "provider": "opencode-go", "reasoning": true},
+		map[string]any{"id": "claude-fable-5", "name": "Fable", "provider": "opencode", "reasoning": true},
+		map[string]any{"id": "mimo-v2.6-flash", "name": "dupe", "provider": "opencode-go"},
+		map[string]any{"id": "", "provider": "opencode"},
+		map[string]any{"id": "no-provider", "provider": ""},
+		map[string]any{"id": "x", "provider": "   "},
+	}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := get(t, srv, "/api/model/options", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	// Exactly what ChatApi.fetchCatalog parses.
+	var parsed struct {
+		Providers []struct {
+			Slug   string   `json:"slug"`
+			Name   string   `json:"name"`
+			Models []string `json:"models"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("app's parse failed: %v (%s)", err, rec.Body)
+	}
+	if len(parsed.Providers) != 2 {
+		t.Fatalf("got %d providers, want 2: %+v", len(parsed.Providers), parsed.Providers)
+	}
+	// Sorted by slug, so the dropdown does not reshuffle between refreshes.
+	if parsed.Providers[0].Slug != "opencode" || parsed.Providers[1].Slug != "opencode-go" {
+		t.Fatalf("providers not sorted by slug: %+v", parsed.Providers)
+	}
+	// Sorted and de-duplicated within the provider.
+	got := parsed.Providers[1].Models
+	want := []string{"mimo-v2.6-flash", "muse-spark-1.3-contributor"}
+	if len(got) != len(want) {
+		t.Fatalf("models = %v, want %v (sorted, deduped)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("models = %v, want %v", got, want)
+		}
+	}
+}
+
+// Skills must come from what Pi reports it loaded, not from a filesystem scan. The
+// skill:" prefix Pi adds for /skill:name is a command-namespace detail and would
+// render as literal text in the app's list; extension commands are not skills.
+func TestInventorySkillsFiltersAndStripsPrefix(t *testing.T) {
+	agent := newFakeAgent()
+	agent.responses["get_commands"] = map[string]any{"commands": []any{
+		map[string]any{
+			"name": "skill:note-taking", "description": "Capture notes.",
+			"source": "skill",
+			"sourceInfo": map[string]any{
+				"path": "/opt/pi/skills/note-taking/SKILL.md", "scope": "user",
+			},
+		},
+		map[string]any{
+			"name": "skill:apple", "description": "Apple things.",
+			"source": "skill",
+			"sourceInfo": map[string]any{
+				"path": "/opt/pi/skills/apple/SKILL.md", "scope": "user",
+			},
+		},
+		// Not skills: an extension command and a prompt template.
+		map[string]any{"name": "mcp", "description": "MCP servers.", "source": "extension"},
+		map[string]any{"name": "fix-tests", "description": "Fix.", "source": "prompt"},
+		// A skill whose command name is empty after stripping is dropped.
+		map[string]any{"name": "skill:", "source": "skill"},
+	}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := get(t, srv, "/v1/skills", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	// The app tries a bare array first, so it must BE a bare array.
+	var parsed []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Enabled     bool   `json:"enabled"`
+		Path        string `json:"path"`
+		Scope       string `json:"scope"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("app's parse failed: %v (%s)", err, rec.Body)
+	}
+	if len(parsed) != 2 {
+		t.Fatalf("got %d skills, want 2 (extensions and prompts excluded): %+v", len(parsed), parsed)
+	}
+	// Sorted case-insensitively.
+	if parsed[0].Name != "apple" || parsed[1].Name != "note-taking" {
+		t.Fatalf("not sorted: %+v", parsed)
+	}
+	for _, s := range parsed {
+		if strings.HasPrefix(s.Name, "skill:") {
+			t.Fatalf("prefix not stripped: %q", s.Name)
+		}
+		if !s.Enabled {
+			t.Fatalf("%q reported disabled; a loaded skill is available", s.Name)
+		}
+		if s.Path == "" || s.Scope == "" {
+			t.Fatalf("%q missing provenance: %+v", s.Name, s)
+		}
+	}
+}
+
+// An empty inventory is a valid empty page, not an error: the app shows "Nothing
+// listed" and only transport failures are errors.
+func TestInventoryEmptyIsSuccessNotError(t *testing.T) {
+	agent := newFakeAgent()
+	agent.responses["get_commands"] = map[string]any{"commands": []any{}}
+	agent.responses["get_available_models"] = map[string]any{"models": []any{}}
+	srv := newTestServer(t, agent, Config{})
+
+	for _, path := range []string{"/v1/skills", "/api/model/options"} {
+		rec := get(t, srv, path, "test-token")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: got %d, want 200. body=%s", path, rec.Code, rec.Body)
+		}
+	}
+	// Skills must be an array, not null: rootArray would fail on a null body and the
+	// app would report a parse error rather than an empty page.
+	if body := get(t, srv, "/v1/skills", "test-token").Body.String(); body != "[]" {
+		t.Fatalf("empty skills body = %q, want []", body)
+	}
+}
+
+// An unreachable agent must not read as "this server offers nothing". The picker
+// showing an empty list is indistinguishable from a real answer, so this is a 502.
+func TestInventoryUpstreamFailureIsNotAnEmptyList(t *testing.T) {
+	agent := newFakeAgent()
+	agent.failCommands["get_available_models"] = errors.New("agent gone")
+	agent.failCommands["get_commands"] = errors.New("agent gone")
+	srv := newTestServer(t, agent, Config{})
+
+	for _, path := range []string{"/api/model/options", "/v1/skills"} {
+		rec := get(t, srv, path, "test-token")
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("%s: got %d, want 502. body=%s", path, rec.Code, rec.Body)
+		}
+	}
+}
+
+// "api" is a reserved first segment. Without that, /api/model/options reads "api" as
+// a profile name and 404s as "unknown profile api".
+func TestAPISegmentIsNotReadAsAProfile(t *testing.T) {
+	srv := newTestServer(t, newFakeAgent(), Config{})
+
+	profile, rest := srv.splitProfile("/api/model/options")
+	if profile != "default" {
+		t.Fatalf("profile = %q, want the default", profile)
+	}
+	if rest != "api/model/options" {
+		t.Fatalf("rest = %q, want api/model/options", rest)
+	}
+
+	// Both spellings the app uses must reach the handler.
+	agent := newFakeAgent()
+	agent.responses["get_available_models"] = map[string]any{"models": []any{}}
+	srv2, err := New(Config{Password: "test-token"}, map[string]Agent{"default": agent, "story": agent})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, path := range []string{"/api/model/options", "/story/api/model/options"} {
+		rec := get(t, srv2, path, "test-token")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: got %d, want 200. body=%s", path, rec.Code, rec.Body)
+		}
+	}
+}
+
+// Inventory routes are read-only, so a POST is 405 with Allow rather than a 404 that
+// would send a client looking for a different path.
+func TestInventoryRoutesRejectTheWrongVerb(t *testing.T) {
+	agent := newFakeAgent()
+	agent.responses["get_commands"] = map[string]any{"commands": []any{}}
+	agent.responses["get_available_models"] = map[string]any{"models": []any{}}
+	srv := newTestServer(t, agent, Config{})
+
+	for _, path := range []string{"/v1/skills", "/v1/toolsets", "/api/model/options"} {
+		rec := post(t, srv, path, "test-token", "")
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s: got %d, want 405. body=%s", path, rec.Code, rec.Body)
+		}
+		if allow := rec.Header().Get("Allow"); allow != http.MethodGet {
+			t.Fatalf("%s: Allow = %q, want GET", path, allow)
+		}
+	}
+}
+
+// Every inventory route sits behind the bearer token, like chat. These pages list the
+// agent's skills and MCP servers, which is not public information.
+func TestInventoryRoutesRequireAuth(t *testing.T) {
+	srv := newTestServer(t, newFakeAgent(), Config{})
+
+	for _, path := range []string{"/v1/skills", "/v1/toolsets", "/api/model/options"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: got %d, want 401", path, rec.Code)
+		}
+	}
+}
+
+// Toolsets come from the agent directory's mcp.json: the configured set, which the
+// entrypoint has already proven connectable. Disabled servers and entries with
+// neither a command nor a URL are not live toolsets and must not be listed.
+func TestInventoryToolsetsReadsMCPConfig(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"mcpServers":{
+      "cookbook":{"command":"/usr/local/bin/cookbook"},
+      "miser-money":{"command":"/usr/local/bin/miser-money"},
+      "off-server":{"command":"/usr/local/bin/x","disabled":true},
+      "broken":{"description":"no command or url"},
+      "remote":{"url":"https://example.test/mcp"}
+    }}`
+	if err := os.WriteFile(filepath.Join(dir, "mcp.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write mcp.json: %v", err)
+	}
+	agent := newFakeAgent()
+	srv, err := New(Config{Password: "test-token", AgentDir: dir},
+		map[string]Agent{"default": agent})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := get(t, srv, "/v1/toolsets", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	var parsed []struct {
+		Name       string `json:"name"`
+		Enabled    bool   `json:"enabled"`
+		Configured bool   `json:"configured"`
+		Tools      []any  `json:"tools"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("parse: %v (%s)", err, rec.Body)
+	}
+	// cookbook, miser-money, remote — sorted. NOT off-server, NOT broken.
+	if len(parsed) != 3 {
+		t.Fatalf("got %d toolsets, want 3: %+v", len(parsed), parsed)
+	}
+	want := []string{"cookbook", "miser-money", "remote"}
+	for i, w := range want {
+		if parsed[i].Name != w {
+			t.Fatalf("toolsets = %+v, want %v", parsed, want)
+		}
+	}
+	for _, ts := range parsed {
+		if !ts.Enabled || !ts.Configured {
+			t.Fatalf("%q reported not enabled/configured: %+v", ts.Name, ts)
+		}
+		// Pi exposes no RPC that enumerates a server's tools, so this must be absent
+		// rather than an empty array: the app reads a missing array as "unknown" and
+		// an empty one as "this server has no tools", and only the first is true.
+		if ts.Tools != nil {
+			t.Fatalf("%q advertised a tools array we cannot populate: %+v", ts.Name, ts)
+		}
+	}
+}
+
+// A missing or unreadable mcp.json is a legitimate empty state, not a 5xx: the page
+// should render empty. The log line is what distinguishes it from a real empty list.
+func TestInventoryToolsetsToleratesMissingMCPConfig(t *testing.T) {
+	var logged strings.Builder
+	agent := newFakeAgent()
+	srv, err := New(Config{
+		Password: "test-token",
+		AgentDir: t.TempDir(), // exists but has no mcp.json
+		Logf:     func(f string, a ...any) { logged.WriteString(f) },
+	}, map[string]Agent{"default": agent})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := get(t, srv, "/v1/toolsets", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); body != "[]" {
+		t.Fatalf("body = %q, want []", body)
+	}
+	if !strings.Contains(logged.String(), "mcp.json") {
+		t.Fatalf("no log line distinguished this from a deliberate empty list: %q", logged.String())
+	}
+
+	// No agent directory configured at all is also fine.
+	srv2, err := New(Config{Password: "test-token"}, map[string]Agent{"default": agent})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if rec := get(t, srv2, "/v1/toolsets", "test-token"); rec.Code != http.StatusOK {
+		t.Fatalf("no AgentDir: got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+}
+
+// A malformed mcp.json must not take the page down either, and must not be silently
+// reported as "no servers".
+func TestInventoryToolsetsReportsMalformedConfig(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mcp.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var logged strings.Builder
+	agent := newFakeAgent()
+	srv, err := New(Config{
+		Password: "test-token", AgentDir: dir,
+		Logf: func(f string, a ...any) { logged.WriteString(f) },
+	}, map[string]Agent{"default": agent})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rec := get(t, srv, "/v1/toolsets", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(logged.String(), "mcp.json") {
+		t.Fatalf("malformed config was silent: %q", logged.String())
 	}
 }
