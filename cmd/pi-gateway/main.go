@@ -91,9 +91,27 @@ func run() error {
 		dir := filepath.Join(profileDir, profile)
 
 		client, err := pi.Start(ctx, pi.Options{
-			Bin:  piBin,
-			Dir:  dir,
-			Args: []string{"--model", defaultModel, "--session-dir", filepath.Join(agentDir, "sessions")},
+			Bin: piBin,
+			Dir: dir,
+			Args: append(
+				[]string{"--model", defaultModel, "--session-dir", filepath.Join(agentDir, "sessions")},
+				// Per-profile skills, named explicitly.
+				//
+				// Pi does NOT discover a bare skills/ directory in the working
+				// directory. Measured with one distinctly-named skill per candidate
+				// location and PI_CODING_AGENT_DIR set: <agent-dir>/skills/ is found,
+				// <cwd>/skills/ is not, and <cwd>/.agents/skills/ is not either
+				// (project resources need trust, which a headless RPC session never
+				// grants). So --skill <path> is the only route to skills that differ
+				// per profile, and it is repeatable.
+				//
+				// Only added when the profile has at least one valid skill (a subdirectory
+				// containing a SKILL.md): passing --skill at a path with no skill in it
+				// is at best inert and at worst an error, and a skill-less profile must
+				// still start. No count of which profiles have skills, because that
+				// goes stale the moment someone adds one.
+				skillArgs(profileSkillDir(dir))...,
+			),
 			// Env replaces rather than merges, so the parent environment is copied
 			// explicitly — setting it to just the provider key would leave the child
 			// without PATH and the exec failure would look unrelated.
@@ -292,8 +310,72 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// secondsEnv reads a seconds-valued environment variable.
+// profileSkillDir is where a profile's own skills live: <profileDir>/skills.
 //
+// Kept as a named function so the path convention has one definition, and so the
+// existence check and the argument below cannot disagree about it.
+func profileSkillDir(profileDir string) string {
+	return filepath.Join(profileDir, "skills")
+}
+
+// skillArgs returns --skill arguments for the skills a profile actually has.
+//
+// Returns nothing when the profile has none: Pi errors on a --skill path that does not
+// exist, so an unconditional argument would stop a skill-less profile from starting.
+// No count of how many profiles are in that state — it goes stale the moment someone
+// adds a skill.
+//
+// "Has some" means at least one immediate subdirectory contains a SKILL.md, not merely
+// that the directory has entries. A stray README or .DS_Store in skills/ would
+// otherwise opt a profile into --skill pointing at a directory with no valid skill in
+// it, and what Pi does with that is untested — so the question is not asked.
+func skillArgs(skillsDir string) []string {
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		// Absent is the expected case and needs no comment. Anything else is a
+		// misconfiguration — a permissions or I/O problem — and silently running
+		// without skills hides it, so it is reported at startup rather than discovered
+		// later as a profile that mysteriously lost its skills.
+		if !os.IsNotExist(err) {
+			warnf("cannot read skills directory %s: %v", skillsDir, err)
+		}
+		return nil
+	}
+	// The loop does not return on the first skill it finds. ReadDir sorts by name, so
+	// an early return meant a broken skill sorting after a healthy one was never
+	// visited and never reported — the profile loaded fine and the operator was never
+	// told part of it would not be there.
+	found := false
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		switch _, err := os.Stat(filepath.Join(skillsDir, e.Name(), "SKILL.md")); {
+		case err == nil:
+			found = true
+		case !os.IsNotExist(err):
+			// Same reasoning as the ReadDir above, applied to the per-skill check. A
+			// subdirectory that exists but whose SKILL.md cannot be stat'd — a
+			// permissions problem, say — is a real skill this gateway would silently
+			// not load. Reporting it keeps that failure the same shape as every other
+			// "configured but unreachable" case here: said once, at startup, rather
+			// than discovered later as a skill that mysteriously stopped working.
+			//
+			// Only non-IsNotExist errors reach this: a subdirectory without a
+			// SKILL.md is not a skill and is not an error, and warning about each one
+			// would bury the real failures.
+			warnf("cannot stat %s: %v", filepath.Join(skillsDir, e.Name(), "SKILL.md"), err)
+		}
+	}
+	if !found {
+		return nil
+	}
+	// The parent is passed once rather than one --skill per skill: Pi walks a --skill
+	// directory recursively, so it is equivalent and keeps the argument list fixed
+	// regardless of how many skills a profile gains.
+	return []string{"--skill", skillsDir}
+}
+
 // gatewayConfig maps the environment onto the gateway's configuration.
 //
 // Extracted from run() so the env-to-config mapping is testable. It was inline, and
@@ -318,6 +400,8 @@ func gatewayConfig(password, agentDir, defaultProfile string, logf func(string, 
 	}
 }
 
+// secondsEnv reads a seconds-valued environment variable.
+//
 // An unparsable or non-positive value falls back to the default AND says so: a
 // typo like PI_TURN_TIMEOUT=abc would otherwise be indistinguishable from a
 // deliberate default, and would quietly use the wrong timeout.

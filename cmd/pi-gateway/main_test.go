@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -351,5 +352,269 @@ func TestGatewayConfigKeepaliveZeroStaysDisabled(t *testing.T) {
 	cfg := gatewayConfig("pw", "/opt/pi", "god", func(string, ...any) {})
 	if cfg.KeepaliveInterval != gateway.KeepaliveDisabled {
 		t.Fatalf("PI_KEEPALIVE=0 gave %v, want KeepaliveDisabled", cfg.KeepaliveInterval)
+	}
+}
+
+// --skill is the only route to per-profile skills: Pi does not discover a bare
+// skills/ directory in the working directory (measured — <agent-dir>/skills/ is
+// found, <cwd>/skills/ is not). So the argument has to be added here, per profile.
+func TestSkillArgsPointAtTheProfileSkillDir(t *testing.T) {
+	profile := t.TempDir()
+	skills := filepath.Join(profile, "skills")
+	// A real SKILL.md, not just a directory: "has entries" is not "has skills", and a
+	// bare subdirectory is deliberately not enough (see TestSkillArgsIgnoreStrayFiles).
+	if err := os.MkdirAll(filepath.Join(skills, "some-skill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skills, "some-skill", "SKILL.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := skillArgs(profileSkillDir(profile))
+	if len(got) != 2 || got[0] != "--skill" || got[1] != skills {
+		t.Fatalf("skillArgs = %v, want [--skill %s]", got, skills)
+	}
+}
+
+// A profile with no skills must still start: Pi errors on a --skill path that does not
+// exist, so an unconditional argument would take out any skill-less profile.
+func TestSkillArgsOmittedWhenNoSkills(t *testing.T) {
+	profile := t.TempDir()
+	if got := skillArgs(profileSkillDir(profile)); got != nil {
+		t.Fatalf("no skills dir: got %v, want nil", got)
+	}
+
+	// Present but empty is the same thing.
+	skills := filepath.Join(profile, "skills")
+	if err := os.MkdirAll(skills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := skillArgs(profileSkillDir(profile)); got != nil {
+		t.Fatalf("empty skills dir: got %v, want nil", got)
+	}
+}
+
+// profileSkillDir is the path convention, pinned so it cannot move without this
+// failing: skills live at <profileDir>/skills, which is what --skill is pointed at.
+func TestProfileSkillDirConvention(t *testing.T) {
+	if got, want := profileSkillDir("/opt/pi/profiles/story"),
+		"/opt/pi/profiles/story/skills"; got != want {
+		t.Fatalf("profileSkillDir = %q, want %q", got, want)
+	}
+}
+
+// A stray file in skills/ must NOT opt a profile into --skill. "Has entries" is not
+// "has skills": a README or a .DS_Store would otherwise point Pi at a directory with
+// no SKILL.md in it, and what Pi does with that is untested — so the question is not
+// asked.
+func TestSkillArgsIgnoreStrayFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+	}{
+		{"a plain file in skills/", func(t *testing.T, dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a dotfile in skills/", func(t *testing.T, dir string) {
+			if err := os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a subdirectory with no SKILL.md", func(t *testing.T, dir string) {
+			if err := os.MkdirAll(filepath.Join(dir, "not-a-skill"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := t.TempDir()
+			skills := filepath.Join(profile, "skills")
+			if err := os.MkdirAll(skills, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			tc.setup(t, skills)
+			if got := skillArgs(profileSkillDir(profile)); got != nil {
+				t.Fatalf("got %v, want nil — no valid skill is present", got)
+			}
+		})
+	}
+
+	// And one real skill alongside the junk is still found.
+	profile := t.TempDir()
+	skills := filepath.Join(profile, "skills")
+	if err := os.MkdirAll(filepath.Join(skills, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skills, "real", "SKILL.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skills, "README.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := skillArgs(profileSkillDir(profile)); len(got) != 2 {
+		t.Fatalf("got %v, want a --skill pair alongside the junk", got)
+	}
+}
+
+// A skills directory that exists but cannot be read is a misconfiguration, and must
+// be reported rather than silently running without skills — the failure mode being a
+// profile that mysteriously lost its skills with nothing in the logs.
+func TestSkillArgsReportsUnreadableDirectory(t *testing.T) {
+	var logged strings.Builder
+	saved := warnf
+	warnf = func(format string, args ...any) { logged.WriteString(fmt.Sprintf(format, args...)) }
+	defer func() { warnf = saved }()
+
+	profile := t.TempDir()
+	skills := filepath.Join(profile, "skills")
+	if err := os.MkdirAll(skills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Make the directory unreadable. Running as root defeats a permission bit, so
+	// point at a path whose parent is a FILE instead: os.ReadDir then fails with
+	// ENOTDIR, which is the same class of unexpected error and works as root.
+	notADir := filepath.Join(profile, "skills-file")
+	if err := os.WriteFile(notADir, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := skillArgs(notADir); got != nil {
+		t.Fatalf("got %v, want nil", got)
+	}
+	if !strings.Contains(logged.String(), "cannot read skills directory") {
+		t.Fatalf("an unreadable skills dir was silent: %q", logged.String())
+	}
+
+	// An ABSENT directory is the expected case and must stay quiet.
+	logged.Reset()
+	if got := skillArgs(filepath.Join(profile, "nope")); got != nil {
+		t.Fatalf("absent: got %v, want nil", got)
+	}
+	if logged.String() != "" {
+		t.Fatalf("an absent skills dir was reported: %q", logged.String())
+	}
+}
+
+// A subdirectory whose SKILL.md cannot be stat'd is a real skill this gateway would
+// silently not load, and must be reported like the ReadDir failure above it.
+//
+// ENOTDIR is the reproducible trigger: SKILL.md is a symlink whose target runs
+// through a regular file, so stat fails with ENOTDIR — which is NOT IsNotExist, so it
+// reaches the reporting branch. A permission bit would be the natural choice and
+// cannot be used, because these tests may run as root.
+func TestSkillArgsReportsUnstattableSkill(t *testing.T) {
+	var logged strings.Builder
+	saved := warnf
+	warnf = func(format string, args ...any) { logged.WriteString(fmt.Sprintf(format, args...)) }
+	defer func() { warnf = saved }()
+
+	// Prove the trigger is what this test assumes, rather than trusting it.
+	probe := t.TempDir()
+	if err := os.Symlink("/etc/hostname/nope", filepath.Join(probe, "SKILL.md")); err != nil {
+		t.Skipf("cannot create the symlink this test needs: %v", err)
+	}
+	_, statErr := os.Stat(filepath.Join(probe, "SKILL.md"))
+	if statErr == nil || os.IsNotExist(statErr) {
+		t.Skipf("expected a non-IsNotExist stat error, got %v", statErr)
+	}
+
+	profile := t.TempDir()
+	skills := filepath.Join(profile, "skills")
+	if err := os.MkdirAll(filepath.Join(skills, "broken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/hostname/nope", filepath.Join(skills, "broken", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := skillArgs(profileSkillDir(profile)); got != nil {
+		t.Fatalf("got %v, want nil — the only skill is unusable", got)
+	}
+	if !strings.Contains(logged.String(), "cannot stat") {
+		t.Fatalf("an unstattable skill was silent: %q", logged.String())
+	}
+	if !strings.Contains(logged.String(), "broken") {
+		t.Fatalf("the offending skill was not named: %q", logged.String())
+	}
+}
+
+// The happy path with nothing to report: a healthy skill, no warning.
+//
+// Named for what it does rather than what I first intended. It was going to prove a
+// healthy skill is still found ALONGSIDE an unusable one, but ReadDir sorts by name and
+// "a-good" returns before "b-broken" is ever visited — so that would not have been
+// tested at all. The warning path is covered by TestSkillArgsReportsUnstattableSkill.
+func TestSkillArgsFindsHealthySkillWithoutWarning(t *testing.T) {
+	var logged strings.Builder
+	saved := warnf
+	warnf = func(format string, args ...any) { logged.WriteString(fmt.Sprintf(format, args...)) }
+	defer func() { warnf = saved }()
+
+	profile := t.TempDir()
+	skills := filepath.Join(profile, "skills")
+	// "a-good" sorts before "b-broken", so the healthy skill returns before the broken
+	// one is visited — which means this cannot also prove the warning fires. Kept as the
+	// positive case only; the warning is covered by the test above.
+	if err := os.MkdirAll(filepath.Join(skills, "a-good"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skills, "a-good", "SKILL.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := skillArgs(profileSkillDir(profile))
+	if len(got) != 2 || got[0] != "--skill" {
+		t.Fatalf("got %v, want a --skill pair", got)
+	}
+	if logged.String() != "" {
+		t.Fatalf("nothing should have been reported: %q", logged.String())
+	}
+}
+
+// A broken skill sorting AFTER a healthy one must still be reported. ReadDir sorts by
+// name, so an early return on the first valid SKILL.md meant this profile loaded fine
+// and the operator was never told part of it would not be there — the warning only
+// fired when the broken skill happened to sort first, which is luck, not behaviour.
+func TestSkillArgsReportsBrokenSkillAfterAHealthyOne(t *testing.T) {
+	var logged strings.Builder
+	saved := warnf
+	warnf = func(format string, args ...any) { logged.WriteString(fmt.Sprintf(format, args...)) }
+	defer func() { warnf = saved }()
+
+	profile := t.TempDir()
+	skills := filepath.Join(profile, "skills")
+
+	// "a-good" sorts first and is valid.
+	if err := os.MkdirAll(filepath.Join(skills, "a-good"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skills, "a-good", "SKILL.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// "b-broken" sorts second, so it is only reached if the loop does not return early.
+	if err := os.MkdirAll(filepath.Join(skills, "b-broken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	probe := t.TempDir()
+	if err := os.Symlink("/etc/hostname/nope", filepath.Join(probe, "SKILL.md")); err != nil {
+		t.Skipf("cannot create the symlink this test needs: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(probe, "SKILL.md")); err == nil || os.IsNotExist(err) {
+		t.Skipf("expected a non-IsNotExist stat error, got %v", err)
+	}
+	if err := os.Symlink("/etc/hostname/nope", filepath.Join(skills, "b-broken", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	got := skillArgs(profileSkillDir(profile))
+	if len(got) != 2 || got[0] != "--skill" {
+		t.Fatalf("got %v, want a --skill pair from the healthy skill", got)
+	}
+	if !strings.Contains(logged.String(), "b-broken") {
+		t.Fatalf("the broken skill sorting after the healthy one was not reported: %q",
+			logged.String())
 	}
 }
