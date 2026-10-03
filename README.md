@@ -14,9 +14,9 @@ Fully containerized agent stack running god + 2 sides (god main, story/resumes) 
   story   ┤ ONE Gateway   │ HERMES_HOME=  ▼
   resumes ┘ god + 2 sides │ /opt/data │   OpenCode Go Direct
            (multiplexed)  │  (gateway +  │  (https://opencode.ai/zen/go/v1)
-          └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
-Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
-                                     └──► /api/* ─► health-api ──► MongoDB
+          └── API server :8642 ──────────┤   (still published; nothing routes to it)
+Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► pi :8643 ──► MongoDB
+                                     └──► /api/* ─► health-api ─► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
 
@@ -65,7 +65,7 @@ Retention ───────────────► one-shot container (c
 - **App Password**: `PASSWORD` Bearer token matching the Agento Android app Password field (single credential for chat + sync). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password.)
 
 ### Network & Firewall Ports
-- Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `PASSWORD`, provider/model picked per tab from live dropdowns, paths `/p/story`, `/p/resumes`, `/p/default`. Direct ports `8642` (chat) / `8001` (sync) stay published for backward compatibility.
+- Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `PASSWORD`, provider/model picked per tab from live dropdowns, paths `/p/story`, `/p/resumes`, `/p/default`. Direct ports stay published for comparison: `8643` (pi, what `/p/*` reaches), `8642` (Hermes gateway, no longer routed to), `8001` (sync).
 - Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as `8642`).
 - Outbound HTTPS (`443/tcp`) for OpenCode Go (`opencode.ai`), MongoDB Atlas, and GitHub.
 

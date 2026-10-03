@@ -173,7 +173,7 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► 
 
 ## Android App API (Chat)
 
-The custom Android app (`android/agento/`, sidebar: God/Story/Resumes chats + Tasks + Storage + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to Hermes's built-in OpenAI-compatible API server on the gateway (`/p/* → :8642`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`):
+The custom Android app (`android/agento/`, sidebar: God/Story/Resumes chats + Tasks + Storage + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`). The Hermes gateway still publishes `:8642` and still answers there directly, but nothing proxies to it any more:
 
 ```bash
 curl http://<host>:8080/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
