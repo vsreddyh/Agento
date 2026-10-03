@@ -89,6 +89,16 @@ things about it are deliberate, and both were got wrong while writing it:
   Hermes removal, so both coexist and an app tab can be pointed at either to compare.
   nginx still proxies `/p/*` to `:8642`; moving it is one line and belongs to the
   removal PR.
+- **The host port is `PI_HOST_PORT`, not `PI_SERVER_PORT`.** The container always
+  listens on 8643; only the published host port moves. The name is deliberate:
+  `PI_SERVER_PORT` is what pi-gateway itself reads as its bind port, so sharing it
+  invites the obvious wrong fix — someone debugging a port problem sets
+  `PI_SERVER_PORT`, which moves only the host side, and if it were then also passed
+  into the container the listener would leave the mapped port and the healthcheck
+  with it. `PI_HOST_PORT` cannot collide with anything the binary reads.
+- **`PI_GATEWAY_ADDR` must not be set on that service.** It wins outright over
+  `PI_SERVER_PORT`, so setting it would move the listener off the mapped port and out
+  from under the healthcheck, which probes a fixed in-container `:8643`.
 
 Verified end to end in the real container: the entrypoint registers three repos as
 `safe.directory`, `pi mcp list` connects all five MCP servers (11/11/9/7/5), all

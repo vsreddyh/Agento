@@ -143,9 +143,16 @@ services:
     # The entrypoint execs this, after its `pi mcp list` check.
     command: ["/usr/local/bin/pi-gateway"]
     ports:
-      # Direct port, for comparing one profile by hand. The app should go through
-      # the proxy (:8080) once nginx is pointed here.
-      - "${PI_SERVER_PORT:-8643}:8643"
+      # HOST port only — the container always listens on 8643. Deliberately NOT
+      # named PI_SERVER_PORT: that is the variable pi-gateway itself reads as its
+      # bind port, so sharing the name invites the obvious wrong fix. Someone
+      # debugging a port problem reaches for PI_SERVER_PORT, which would move only
+      # this side; and if it were then also passed into the container, the listener
+      # would move off the mapped port and out from under the healthcheck.
+      # PI_HOST_PORT cannot collide with anything the binary reads.
+      #
+      # The app should go through the proxy (:8080) once nginx is pointed here.
+      - "${PI_HOST_PORT:-8643}:8643"
     volumes:
       # The Pi agent dir: settings.json, mcp.json, AGENTS.md, profiles/<n>/.
       # Pi writes sessions/, auth.json and models-store.json here; all gitignored.
@@ -180,8 +187,9 @@ services:
       # the Hermes gateway today, so a tab can be repointed without re-entering it.
       PASSWORD: ${PASSWORD:-}
       # Explicit rather than relying on the binary's default, because three separate
-      # places have to agree on this number: here, the port mapping below, and the
-      # healthcheck's URL.
+      # places have to agree on this number: here, the container side of the port
+      # mapping, and the healthcheck's URL. None of the three is derived from the
+      # others, so changing one means changing all three.
       #
       # Do NOT add PI_GATEWAY_ADDR to this service. It wins outright over
       # PI_SERVER_PORT (see cmd/pi-gateway/main.go), so setting it would move the
@@ -197,9 +205,9 @@ services:
       GIT_SSH_COMMAND: "ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes"
     healthcheck:
       # /healthz is unauthenticated by design, so the probe needs no credential.
-      # The :8643 here must stay in step with PI_SERVER_PORT above and the port
-      # mapping; it is not derived from either, so changing one means changing all
-      # three.
+      # This URL is INSIDE the container, so it uses the container port (8643) and
+      # never the host port — PI_HOST_PORT is not visible here. It must stay in step
+      # with PI_SERVER_PORT above; neither is derived from the other.
       test: ["CMD", "curl", "-fsS", "http://localhost:8643/healthz"]
       interval: 10s
       timeout: 5s
