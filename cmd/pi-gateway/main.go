@@ -14,13 +14,14 @@
 //	PI_GATEWAY_ADDR   listen address (default :8643)
 //	PI_CODING_AGENT_DIR  Pi agent dir (default /opt/pi)
 //	PI_PROFILE_DIR    where profile dirs live (default $PI_CODING_AGENT_DIR/profiles)
+//	PI_TURN_TIMEOUT   seconds for one assistant turn (default 600)
+//	PI_KEEPALIVE      seconds between SSE keepalive comments, 0 disables them
+//	                    (default 20)
+//	PI_INVENTORY_TIMEOUT  seconds for one model-list or skills read (default 30)
 //	PI_BIN            pi executable (default "pi" from PATH)
 //	PI_DEFAULT_MODEL  model per new session (default opencode-go/mimo-v2.6-flash)
 //	OPENCODE_API_KEY  provider key, required by Pi itself
 //	PI_READY_TIMEOUT  seconds to wait for each agent to answer a probe (default 60)
-//	PI_TURN_TIMEOUT   seconds for one assistant turn (default 600)
-//	PI_KEEPALIVE      seconds between SSE keepalive comments, 0 disables them
-//	                    (default 20)
 //	PI_DEFAULT_PROFILE  profile used when a request has no profile path segment
 //	                    (default "default")
 package main
@@ -43,10 +44,6 @@ import (
 	"agento/internal/gateway"
 	"agento/internal/pi"
 )
-
-// reservedProfileName cannot be used as a profile: routing reads a leading "v1"
-// segment as "no profile", so such a profile would be unreachable.
-const reservedProfileName = "v1"
 
 func main() {
 	if err := run(); err != nil {
@@ -168,17 +165,7 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gateway.Config{
-		Password: password,
-		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
-		// reach the gateway as well as the Pi children. agentDir is already resolved
-		// above and defaults to /opt/pi.
-		AgentDir:          agentDir,
-		DefaultProfile:    defaultProfile,
-		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),
-		KeepaliveInterval: secondsEnvAllowDisabled("PI_KEEPALIVE", 20),
-		Logf:              logger.Printf,
-	}, agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, logger.Printf), agents)
 	if err != nil {
 		return err
 	}
@@ -270,10 +257,13 @@ func discoverProfiles(dir string) ([]string, error) {
 			}
 			continue
 		}
-		if e.Name() == reservedProfileName {
+		if gateway.IsReservedProfileName(e.Name()) {
+			// Skipped rather than served: routing reads a leading segment matching a
+			// reserved name as "no profile", so this agent would start, hold a
+			// process, and be unreachable from every request.
 			fmt.Fprintf(os.Stderr,
-				"[gateway] skipping profile %q: %q is reserved for the API version segment\n",
-				e.Name(), reservedProfileName)
+				"[gateway] skipping profile %q: %q is reserved as a path segment (%s)\n",
+				e.Name(), e.Name(), strings.Join(gateway.ReservedProfileNames, ", "))
 			continue
 		}
 		profiles = append(profiles, e.Name())
@@ -304,6 +294,30 @@ func envOr(key, fallback string) string {
 
 // secondsEnv reads a seconds-valued environment variable.
 //
+// gatewayConfig maps the environment onto the gateway's configuration.
+//
+// Extracted from run() so the env-to-config mapping is testable. It was inline, and
+// nothing verified that a given variable reached the field it configures: removing the
+// InventoryTimeout line left every test green, because the test exercised secondsEnv
+// directly and never the wiring. A budget that cannot be shown to reach its field is
+// not configurable in any useful sense.
+func gatewayConfig(password, agentDir, defaultProfile string, logf func(string, ...any)) gateway.Config {
+	return gateway.Config{
+		Password: password,
+		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
+		// reach the gateway as well as the Pi children. run() has already resolved it
+		// and it defaults to /opt/pi.
+		AgentDir:       agentDir,
+		DefaultProfile: defaultProfile,
+		// Each budget is configurable for the same reason: the right value depends on
+		// the host, and changing it should not mean rebuilding the binary.
+		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),
+		KeepaliveInterval: secondsEnvAllowDisabled("PI_KEEPALIVE", 20),
+		InventoryTimeout:  secondsEnv("PI_INVENTORY_TIMEOUT", 30),
+		Logf:              logf,
+	}
+}
+
 // An unparsable or non-positive value falls back to the default AND says so: a
 // typo like PI_TURN_TIMEOUT=abc would otherwise be indistinguishable from a
 // deliberate default, and would quietly use the wrong timeout.

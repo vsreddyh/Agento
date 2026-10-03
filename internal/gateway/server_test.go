@@ -39,6 +39,11 @@ type fakeAgent struct {
 	// stderr is what Stderr() returns. A wedged real agent can emit megabytes.
 	stderr string
 
+	// hangCommands makes the named commands block until their context is done, which
+	// is how a wedged Pi presents: the RPC never answers. Absent a deadline on the
+	// caller's side, that blocks forever.
+	hangCommands map[string]bool
+
 	// noSettle suppresses the default agent_settled, so a test can exercise the
 	// agent-dying path instead of a turn that completes instantly.
 	noSettle bool
@@ -93,6 +98,10 @@ func (f *fakeAgent) Call(ctx context.Context, command string, payload map[string
 
 	if err != nil {
 		return nil, err
+	}
+	if f.hangCommands[command] {
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
 	if !hasResp {
 		switch command {

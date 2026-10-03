@@ -10,6 +10,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -1988,10 +1990,17 @@ func TestInventoryToolsetsToleratesMissingMCPConfig(t *testing.T) {
 	srv, err := New(Config{
 		Password: "test-token",
 		AgentDir: t.TempDir(), // exists but has no mcp.json
-		Logf:     func(f string, a ...any) { logged.WriteString(f) },
+		Logf:     func(f string, a ...any) { logged.WriteString(fmt.Sprintf(f, a...)) },
 	}, map[string]Agent{"default": agent})
 	if err != nil {
 		t.Fatalf("New: %v", err)
+	}
+
+	// The log line is emitted at startup, which is where the read now happens — the
+	// request path must not touch the disk at all.
+	if !strings.Contains(logged.String(), "mcp.json") {
+		t.Fatalf("no startup log line distinguished this from a deliberate empty list: %q",
+			logged.String())
 	}
 
 	rec := get(t, srv, "/v1/toolsets", "test-token")
@@ -2001,8 +2010,15 @@ func TestInventoryToolsetsToleratesMissingMCPConfig(t *testing.T) {
 	if body := rec.Body.String(); body != "[]" {
 		t.Fatalf("body = %q, want []", body)
 	}
-	if !strings.Contains(logged.String(), "mcp.json") {
-		t.Fatalf("no log line distinguished this from a deliberate empty list: %q", logged.String())
+
+	// And the file is not re-read per request: rewrite it with different contents and
+	// the answer must not change. mcp.json is fixed for the life of the process.
+	other := filepath.Join(srv.cfg.AgentDir, "mcp.json")
+	if err := os.WriteFile(other, []byte(`{"mcpServers":{"late":{"command":"/x"}}}`), 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if body := get(t, srv, "/v1/toolsets", "test-token").Body.String(); body != "[]" {
+		t.Fatalf("mcp.json was re-read per request: %s", body)
 	}
 
 	// No agent directory configured at all is also fine.
@@ -2026,7 +2042,7 @@ func TestInventoryToolsetsReportsMalformedConfig(t *testing.T) {
 	agent := newFakeAgent()
 	srv, err := New(Config{
 		Password: "test-token", AgentDir: dir,
-		Logf: func(f string, a ...any) { logged.WriteString(f) },
+		Logf: func(f string, a ...any) { logged.WriteString(fmt.Sprintf(f, a...)) },
 	}, map[string]Agent{"default": agent})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -2037,5 +2053,446 @@ func TestInventoryToolsetsReportsMalformedConfig(t *testing.T) {
 	}
 	if !strings.Contains(logged.String(), "mcp.json") {
 		t.Fatalf("malformed config was silent: %q", logged.String())
+	}
+}
+
+// Every name in ReservedProfileNames must actually be reserved by routing. The
+// invariant that broke in review: routing reserved "v1" and "api" while profile
+// discovery skipped only "v1", so a profiles/api directory would start a working
+// agent that no request could reach. Both sides now read this one list, and this
+// test is what keeps the list honest — a name added to it without adding a route (or
+// vice versa) fails here rather than in production.
+func TestEveryReservedNameIsReservedByRouting(t *testing.T) {
+	srv := newTestServer(t, newFakeAgent(), Config{})
+
+	if len(ReservedProfileNames) < 2 {
+		t.Fatalf("expected at least v1 and api reserved, got %v", ReservedProfileNames)
+	}
+	for _, name := range ReservedProfileNames {
+		if !IsReservedProfileName(name) {
+			t.Errorf("%q is listed as reserved but IsReservedProfileName says otherwise", name)
+		}
+		profile, rest := srv.splitProfile("/" + name + "/v1/chat/completions")
+		if profile != "default" {
+			t.Errorf("%q routed to profile %q; routing does not reserve it", name, profile)
+		}
+		// The path must survive intact, or the endpoint below it is unreachable.
+		if rest != name+"/v1/chat/completions" {
+			t.Errorf("%q: rest = %q, want the path preserved", name, rest)
+		}
+	}
+
+	// And a name that is NOT reserved must still route as a profile, or the
+	// reservation has swallowed the namespace.
+	profile, rest := srv.splitProfile("/god/v1/chat/completions")
+	if profile != "god" || rest != "v1/chat/completions" {
+		t.Errorf("a real profile name stopped routing: profile=%q rest=%q", profile, rest)
+	}
+}
+
+// The header comment claims every reflected value is bounded. It was not: only
+// skill descriptions and MCP server names went through bounded(), while provider
+// slugs, model ids, skill names and paths went raw. Those come from Pi's registry
+// and the filesystem rather than from the request, so they are semi-trusted — but
+// they are still per-request amplified echoes, and a comment that overstates what
+// the code does is worse than no comment.
+func TestInventoryBoundsEveryReflectedValue(t *testing.T) {
+	huge := strings.Repeat("é", 40_000) // multi-byte, so a byte cut shows
+
+	agent := newFakeAgent()
+	agent.responses["get_available_models"] = map[string]any{"models": []any{
+		map[string]any{"id": huge, "provider": huge},
+	}}
+	agent.responses["get_commands"] = map[string]any{"commands": []any{
+		map[string]any{
+			"name": "skill:" + huge, "description": huge, "source": "skill",
+			"sourceInfo": map[string]any{"path": huge, "scope": huge},
+		},
+	}}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mcp.json"),
+		[]byte(`{"mcpServers":{"`+huge+`":{"command":"/x"}}}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	srv, err := New(Config{Password: "test-token", AgentDir: dir},
+		map[string]Agent{"default": agent})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Per-field assertions below check runes, which is what bounded() counts. The
+	// body-size checks are only a coarse backstop, so they are expressed against the
+	// input size rather than a rune budget: `huge` is 80k runes (~160 KB as UTF-8), so
+	// anything near that in a response means a value got through whole. Budgeting this
+	// in bytes by hand is how the first version of this test came to contradict the
+	// code it was checking.
+	const mustStayUnder = 8 << 10 // 8 KiB
+
+	rec := get(t, srv, "/api/model/options", "test-token")
+	if n := len(rec.Body.Bytes()); n > mustStayUnder {
+		t.Errorf("model options body is %d bytes; unbounded values are getting through", n)
+	}
+	var models struct {
+		Providers []struct {
+			Slug   string   `json:"slug"`
+			Name   string   `json:"name"`
+			Models []string `json:"models"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &models); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(models.Providers) != 1 {
+		t.Fatalf("providers = %+v", models.Providers)
+	}
+	p := models.Providers[0]
+	for label, v := range map[string]string{
+		"slug": p.Slug, "name": p.Name, "model id": p.Models[0],
+	} {
+		if n := len([]rune(v)); n > maxEchoedLen+len("… (truncated)") {
+			t.Errorf("%s is %d runes; must be bounded", label, n)
+		}
+		if strings.ContainsRune(v, '�') {
+			t.Errorf("%s was cut mid-character: %q", label, v)
+		}
+	}
+
+	rec2 := get(t, srv, "/v1/skills", "test-token")
+	if n := len(rec2.Body.Bytes()); n > mustStayUnder {
+		t.Errorf("skills body is %d bytes; unbounded values are getting through", n)
+	}
+	var skills []struct{ Name, Description, Path, Scope string }
+	if err := json.Unmarshal(rec2.Body.Bytes(), &skills); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	for label, v := range map[string]string{
+		"name": skills[0].Name, "description": skills[0].Description,
+		"path": skills[0].Path, "scope": skills[0].Scope,
+	} {
+		if n := len([]rune(v)); n > maxEchoedLen+len("… (truncated)") {
+			t.Errorf("skill %s is %d runes; must be bounded", label, n)
+		}
+	}
+
+	rec3 := get(t, srv, "/v1/toolsets", "test-token")
+	if n := len(rec3.Body.Bytes()); n > mustStayUnder {
+		t.Errorf("toolsets body is %d bytes; unbounded values are getting through", n)
+	}
+}
+
+// A sort that folds case but has no tiebreak returns false both ways for "Apple" and
+// "apple", leaving their order to sort.Slice's instability — so the app's list
+// reshuffles between refreshes for reasons nobody can see.
+func TestInventorySkillSortIsDeterministic(t *testing.T) {
+	first := ""
+	for attempt := 0; attempt < 8; attempt++ {
+		agent := newFakeAgent()
+		agent.responses["get_commands"] = map[string]any{"commands": []any{
+			map[string]any{"name": "skill:Apple", "source": "skill"},
+			map[string]any{"name": "skill:apple", "source": "skill"},
+			map[string]any{"name": "skill:APple", "source": "skill"},
+		}}
+		srv := newTestServer(t, agent, Config{})
+		var got []struct{ Name string }
+		if err := json.Unmarshal(get(t, srv, "/v1/skills", "test-token").Body.Bytes(), &got); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		order := []string{got[0].Name, got[1].Name, got[2].Name}
+		if attempt == 0 {
+			first = strings.Join(order, ",")
+			continue
+		}
+		if strings.Join(order, ",") != first {
+			t.Fatalf("order changed between identical requests: %v then %v", first, order)
+		}
+	}
+	// Upper case sorts before lower case in ASCII, so the tiebreak is visible.
+	if first != "APple,Apple,apple" {
+		t.Fatalf("tiebreak order = %q, want APple,Apple,apple (raw-name tiebreak)", first)
+	}
+}
+
+// mcp.json is read once at startup. Rewriting it afterwards must not change the
+// answer, because Pi connected its servers at boot and the file cannot change
+// underneath a running process.
+func TestInventoryToolsetsDoesNotReReadPerRequest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"first":{"command":"/x"}}}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	srv, err := New(Config{Password: "test-token", AgentDir: dir},
+		map[string]Agent{"default": newFakeAgent()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if body := get(t, srv, "/v1/toolsets", "test-token").Body.String(); !strings.Contains(body, "first") {
+		t.Fatalf("initial body = %s", body)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"second":{"command":"/y"}}}`), 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	body := get(t, srv, "/v1/toolsets", "test-token").Body.String()
+	if strings.Contains(body, "second") {
+		t.Fatalf("mcp.json was re-read per request: %s", body)
+	}
+}
+
+// An oversized mcp.json is ignored with a log line rather than read into memory and
+// unmarshalled, and never takes the page down.
+func TestInventoryToolsetsRejectsOversizedMCPConfig(t *testing.T) {
+	dir := t.TempDir()
+	// Valid JSON, but larger than the cap: many servers.
+	var b strings.Builder
+	b.WriteString(`{"mcpServers":{`)
+	for i := 0; i < 40_000; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`"srv-padding-to-make-this-file-large-`)
+		b.WriteString(strings.Repeat("x", 24))
+		b.WriteString(`":{"command":"/x"}`)
+	}
+	b.WriteString("}}")
+	if b.Len() <= mcpConfigLimit {
+		t.Fatalf("test file is only %d bytes; must exceed the %d cap", b.Len(), mcpConfigLimit)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mcp.json"), []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var logged strings.Builder
+	srv, err := New(Config{
+		Password: "test-token", AgentDir: dir,
+		Logf: func(f string, a ...any) { logged.WriteString(fmt.Sprintf(f, a...)) },
+	}, map[string]Agent{"default": newFakeAgent()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !strings.Contains(logged.String(), "exceeds") {
+		t.Fatalf("oversized mcp.json was not reported: %q", logged.String())
+	}
+	rec := get(t, srv, "/v1/toolsets", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); body != "[]" {
+		t.Fatalf("body = %q, want []", body)
+	}
+}
+
+// Exactly two paths reach the provider picker, and they are the two a client
+// actually sends. This pins that list rather than leaving it implied by whatever the
+// switch happens to accept: the unprefixed spelling is load-bearing, because nginx
+// routes that exact path to this service and nothing rewrites it.
+//
+// It also pins the negative. An earlier version also accepted rest ==
+// "model/options", reachable only via "/god/model/options" — a path neither the app
+// nor nginx produces. That was a tolerant alias invented defensively, and untested
+// surface is how the next alias gets invented.
+func TestModelOptionsIsReachable(t *testing.T) {
+	agent := newFakeAgent()
+	agent.responses["get_available_models"] = map[string]any{"models": []any{
+		map[string]any{"id": "mimo-v2.6-flash", "provider": "opencode-go"},
+	}}
+	srv, err := New(Config{Password: "test-token"},
+		map[string]Agent{"default": agent, "god": agent})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, path := range []string{"/api/model/options", "/god/api/model/options"} {
+		profile, rest := srv.splitProfile(path)
+		if rest != "api/model/options" {
+			t.Fatalf("%s: rest = %q, want api/model/options", path, rest)
+		}
+		if rec := get(t, srv, path, "test-token"); rec.Code != http.StatusOK {
+			t.Fatalf("%s (profile %q): got %d, want 200. body=%s",
+				path, profile, rec.Code, rec.Body)
+		}
+	}
+
+	// The unreserved form is a profile name, not a route. "/model/options" reads
+	// "model" as a profile and 404s, which is correct: no such profile exists.
+	if rec := get(t, srv, "/model/options", "test-token"); rec.Code != http.StatusNotFound {
+		t.Errorf("/model/options: got %d, want 404 — it must not reach the handler",
+			rec.Code)
+	}
+	// And with a real profile, the alias that used to be accepted now 404s by route.
+	if rec := get(t, srv, "/god/model/options", "test-token"); rec.Code != http.StatusNotFound {
+		t.Errorf("/god/model/options: got %d, want 404 — the alias should be gone",
+			rec.Code)
+	}
+}
+
+// A wedged Pi must not hold an inventory request open indefinitely. These RPCs used
+// the raw request context, so a hung get_commands pinned a handler goroutine — and
+// the app's Skills page with it — until the client or a proxy gave up, for a call that
+// carries no work worth waiting for. Chat bounds its turn with TurnTimeout; metadata
+// gets its own, much shorter budget.
+//
+// The expiry surfaces as the same 502 as any other upstream error, so a client sees
+// one failure mode rather than two.
+func TestInventoryCallsAreBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command string
+		path    string
+	}{
+		{"model options", "get_available_models", "/api/model/options"},
+		{"skills", "get_commands", "/v1/skills"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := newFakeAgent()
+			agent.hangCommands = map[string]bool{tc.command: true}
+			srv, err := New(Config{Password: "test-token", InventoryTimeout: 50 * time.Millisecond},
+				map[string]Agent{"default": agent})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() { done <- get(t, srv, tc.path, "test-token") }()
+
+			select {
+			case rec := <-done:
+				if rec.Code != http.StatusBadGateway {
+					t.Fatalf("got %d, want 502 on expiry. body=%s", rec.Code, rec.Body)
+				}
+				// One failure mode: the same body a transport failure produces.
+				if !strings.Contains(rec.Body.String(), "upstream_error") {
+					t.Fatalf("expiry is not reported as an upstream error: %s", rec.Body)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("%s: request did not return; the call is unbounded", tc.path)
+			}
+		})
+	}
+}
+
+// The budget must be its own, not TurnTimeout's: an assistant turn legitimately runs
+// for minutes, while these are local reads that should answer in milliseconds.
+func TestInventoryTimeoutIsSeparateFromTurnTimeout(t *testing.T) {
+	cfg := Config{TurnTimeout: 9 * time.Minute}
+	cfg.withDefaults()
+	if cfg.InventoryTimeout >= cfg.TurnTimeout {
+		t.Fatalf("InventoryTimeout (%v) is not shorter than TurnTimeout (%v); a wedge "+
+			"would hold a metadata request as long as a whole model turn",
+			cfg.InventoryTimeout, cfg.TurnTimeout)
+	}
+	if cfg.InventoryTimeout <= 0 {
+		t.Fatalf("InventoryTimeout defaulted to %v; it must be a usable budget", cfg.InventoryTimeout)
+	}
+}
+
+// An mcp.json entry with neither command nor url is a config typo far more often
+// than it is a deliberate entry, and it used to vanish without a word. The symptom was
+// an MCP page quietly missing a server the operator could see in mcp.json, with
+// nothing anywhere saying why — the same shape as the entrypoint's silent profile
+// skip.
+func TestInventoryToolsetsReportsUntransportableServer(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"mcpServers":{
+      "good":{"command":"/usr/local/bin/cookbook"},
+      "typo":{"path":"/usr/local/bin/oops"},
+      "empty":{}
+    }}`
+	if err := os.WriteFile(filepath.Join(dir, "mcp.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var logged strings.Builder
+	srv, err := New(Config{
+		Password: "test-token", AgentDir: dir,
+		Logf: func(f string, a ...any) { logged.WriteString(fmt.Sprintf(f, a...)) },
+	}, map[string]Agent{"default": newFakeAgent()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Still only the one real toolset: an entry that cannot start must not be listed
+	// as enabled.
+	rec := get(t, srv, "/v1/toolsets", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "good") ||
+		strings.Contains(body, "typo") || strings.Contains(body, "empty") {
+		t.Fatalf("body = %s; only the transportable server should be listed", body)
+	}
+
+	// Both dropped entries are named, with the reason and the key that was expected.
+	log := logged.String()
+	for _, want := range []string{"typo", "empty", "command", "url"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("dropped server not reported: %q missing from %q", want, log)
+		}
+	}
+}
+
+// The skills row shape, pinned. `category` was in the struct and never populated:
+// the Agent Skills frontmatter spec has no such field and get_commands reports none,
+// so there was nothing honest to map and it was omitted from every response while
+// still promising grouping the server could never deliver.
+//
+// This asserts the exact key set rather than spot-checking values, so a field cannot
+// drift back in unpopulated — and so an added field has to be a deliberate act that
+// also updates this test.
+func TestSkillsRowShape(t *testing.T) {
+	agent := newFakeAgent()
+	agent.responses["get_commands"] = map[string]any{"commands": []any{
+		map[string]any{
+			"name": "skill:note-taking", "description": "Capture notes.",
+			"source": "skill",
+			"sourceInfo": map[string]any{
+				"path": "/opt/pi/skills/note-taking/SKILL.md", "scope": "user",
+			},
+		},
+	}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := get(t, srv, "/v1/skills", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("parse: %v (%s)", err, rec.Body)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1: %s", len(rows), rec.Body)
+	}
+
+	// Asserted on the STRUCT, not the emitted JSON, and that distinction matters:
+	// `category` was declared with omitempty and never set, so it produced identical
+	// bytes. An output assertion passes with the dead field present — which is
+	// exactly what happened when I first tried to pin this and the regression run came
+	// back green. The field was a lie in the type and in the comment, never on the wire.
+	typ := reflect.TypeOf(skillInfo{})
+	fields := make([]string, 0, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		fields = append(fields, typ.Field(i).Name)
+	}
+	sort.Strings(fields)
+	want := []string{"Description", "Enabled", "Name", "Path", "Scope"}
+	if strings.Join(fields, ",") != strings.Join(want, ",") {
+		t.Fatalf("skillInfo fields = %v, want exactly %v. A field nothing populates "+
+			"is wire surface that only rots — if you are adding one, populate it and "+
+			"update this test deliberately.", fields, want)
+	}
+
+	got := make([]string, 0, len(rows[0]))
+	for k := range rows[0] {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	wantKeys := []string{"description", "enabled", "name", "path", "scope"}
+	if strings.Join(got, ",") != strings.Join(wantKeys, ",") {
+		t.Fatalf("skill row keys = %v, want exactly %v", got, wantKeys)
+	}
+	// enabled is always present (no omitempty) so the app's optFlag has a bool to read.
+	if v, ok := rows[0]["enabled"].(bool); !ok || !v {
+		t.Fatalf("enabled = %v, want true", rows[0]["enabled"])
 	}
 }

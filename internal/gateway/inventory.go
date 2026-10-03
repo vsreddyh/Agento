@@ -27,7 +27,9 @@ package gateway
 // this package: these are authenticated but unauthenticated-prober-visible routes.
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -52,13 +54,24 @@ type modelOptionsResponse struct {
 	Providers []modelOption `json:"providers"`
 }
 
-// skillInfo is one row in the app's Skills page: name, description, category and
-// enabled. `path` and `scope` are extra — the app ignores unknown fields, and they are
-// the ones that make a surprising entry explainable ("why is this skill here?").
+// skillInfo is one row in the app's Skills page: name, description and enabled.
+// `path` and `scope` are extra — the app ignores unknown fields, and they are the ones
+// that make a surprising entry explainable ("why is this skill here?").
+//
+// No `category`, though the app reads one. It was here and never populated: the Agent
+// Skills frontmatter spec has no such field (name, description, license, compatibility,
+// metadata, allowed-tools, disable-model-invocation) and get_commands reports none, so
+// there was nothing honest to map. Deriving one from sourceInfo.scope would put
+// "user"/"project" into a user-facing grouping field.
+//
+// Worth being precise about why this mattered at all, since omitempty meant it emitted
+// identical bytes: it was a dead field in the type and a claim in the comment, not a
+// broken response. That is still worth removing — a field nothing populates invites the
+// next person to populate it wrongly — and TestSkillsRowShape now asserts the struct,
+// not the JSON, because an output assertion passes with the dead field present.
 type skillInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	Category    string `json:"category,omitempty"`
 	Enabled     bool   `json:"enabled"`
 	Path        string `json:"path,omitempty"`
 	Scope       string `json:"scope,omitempty"`
@@ -79,7 +92,14 @@ type toolsetInfo struct {
 // handleModelOptions serves GET /api/model/options and
 // GET /{profile}/api/model/options.
 func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request, h *agentHandler) {
-	rec, err := h.runner.agent.Call(r.Context(), "get_available_models", nil)
+	// Bounded, unlike a chat turn: see Config.InventoryTimeout. The raw request
+	// context here would let a wedged Pi hold this goroutine — and the app's Settings
+	// screen — until the client or a proxy gave up, on a call that carries no work
+	// worth waiting for.
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.InventoryTimeout)
+	defer cancel()
+
+	rec, err := h.runner.agent.Call(ctx, "get_available_models", nil)
 	if err != nil {
 		// One unreachable agent must not empty the picker for every profile, so this
 		// reports the failure instead of an empty list. An empty providers array is
@@ -114,8 +134,11 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request, h *a
 	order := make([]string, 0, len(payload.Models))
 	byProvider := map[string]*modelOption{}
 	for _, m := range payload.Models {
-		slug := strings.TrimSpace(m.Provider)
-		id := strings.TrimSpace(m.ID)
+		// Bounded at ingestion, before grouping and sorting, so dedup compares what
+		// will actually be rendered: two ids differing only past the bound would
+		// otherwise collapse into one row on screen but stay two rows here.
+		slug := bounded(strings.TrimSpace(m.Provider))
+		id := bounded(strings.TrimSpace(m.ID))
 		if slug == "" || id == "" {
 			// A model with no provider cannot be requested back, and one with no id
 			// cannot be named; either would produce a row the app shows but cannot use.
@@ -123,7 +146,7 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request, h *a
 		}
 		row, ok := byProvider[slug]
 		if !ok {
-			row = &modelOption{Slug: slug, Name: slug}
+			row = &modelOption{Slug: slug, Name: slug} // both bounded above
 			byProvider[slug] = row
 			order = append(order, slug)
 		}
@@ -146,7 +169,10 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request, h *a
 
 // handleSkills serves GET /{profile}/v1/skills.
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request, h *agentHandler) {
-	rec, err := h.runner.agent.Call(r.Context(), "get_commands", nil)
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.InventoryTimeout)
+	defer cancel()
+
+	rec, err := h.runner.agent.Call(ctx, "get_commands", nil)
 	if err != nil {
 		s.cfg.Logf("gateway: reading commands: %v", err)
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
@@ -188,15 +214,23 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request, h *agentHa
 			continue
 		}
 		skills = append(skills, skillInfo{
-			Name:        name,
+			Name:        bounded(name),
 			Description: bounded(c.Description),
 			Enabled:     true,
-			Path:        c.SourceInfo.Path,
-			Scope:       c.SourceInfo.Scope,
+			Path:        bounded(c.SourceInfo.Path),
+			Scope:       bounded(c.SourceInfo.Scope),
 		})
 	}
+	// Case-insensitive, with the raw name as tiebreak. Comparing only the folded
+	// form returns false both ways for "Apple" and "apple", which leaves their order
+	// down to sort.Slice's instability — so the app's list would reshuffle between
+	// refreshes for reasons no one can see.
 	sort.Slice(skills, func(i, j int) bool {
-		return strings.ToLower(skills[i].Name) < strings.ToLower(skills[j].Name)
+		li, lj := strings.ToLower(skills[i].Name), strings.ToLower(skills[j].Name)
+		if li != lj {
+			return li < lj
+		}
+		return skills[i].Name < skills[j].Name
 	})
 
 	// A bare array, which is the first shape the app's rootArray tries. An empty
@@ -206,17 +240,12 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request, h *agentHa
 
 // handleToolsets serves GET /{profile}/v1/toolsets.
 func (s *Server) handleToolsets(w http.ResponseWriter, r *http.Request, h *agentHandler) {
-	servers, err := s.configuredMCPServers()
-	if err != nil {
-		// Not fatal and not worth a 5xx: a missing or unreadable mcp.json means no
-		// servers, which is a real state the app renders as an empty page. The log is
-		// what distinguishes it from a deliberate empty list.
-		s.cfg.Logf("gateway: reading mcp.json: %v", err)
-	}
-	_ = h // toolsets are per-agent-directory, not per-profile; see configuredMCPServers.
+	// Per-agent-directory, not per-profile: Pi loads one agent directory, so every
+	// profile is served the same server set. h is unused for that reason.
+	_ = h
 
-	out := make([]toolsetInfo, 0, len(servers))
-	for _, name := range servers {
+	out := make([]toolsetInfo, 0, len(s.mcpServers))
+	for _, name := range s.mcpServers {
 		out = append(out, toolsetInfo{
 			Name:       name,
 			Label:      name,
@@ -227,23 +256,49 @@ func (s *Server) handleToolsets(w http.ResponseWriter, r *http.Request, h *agent
 	writeJSONResponse(w, http.StatusOK, out)
 }
 
-// configuredMCPServers lists the MCP server names from <agent-dir>/mcp.json.
+// mcpConfigLimit caps mcp.json. The shipped file is well under a kilobyte; this
+// exists so a corrupt or hostile file cannot be read into memory whole. It is read
+// once at startup, so this is a startup-bounded read, not a per-request one.
+const mcpConfigLimit = 1 << 20 // 1 MiB
+
+// readMCPServers lists the MCP server names from <agent-dir>/mcp.json.
 //
-// Shared across profiles rather than per-profile: Pi loads one agent directory, so
-// every profile is served the same server set. It takes no handler argument for the
-// same reason — the previous design implied a per-profile answer it cannot give.
+// Called once from New. mcp.json is the configured set, which the entrypoint has
+// already proven connectable: docker/pi/entrypoint.sh runs `pi mcp list` at boot and
+// refuses to start if any server fails. So a server listed here is one Pi connected to.
 //
-// mcp.json is the configured set, which the entrypoint has already proven connectable:
-// docker/pi/entrypoint.sh runs `pi mcp list` at boot and refuses to start if any
-// server fails. So a server listed here is one Pi is connected to.
-func (s *Server) configuredMCPServers() ([]string, error) {
-	dir := s.cfg.AgentDir
+// A failure is logged and yields no servers rather than propagating. The caller is
+// startup, where an unreadable mcp.json should cost the toolsets page and nothing
+// else.
+func readMCPServers(dir string, logf func(string, ...any)) []string {
 	if dir == "" {
-		return nil, nil
+		return nil
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "mcp.json"))
+	f, err := os.Open(filepath.Join(dir, "mcp.json"))
 	if err != nil {
-		return nil, err
+		// Both cases are logged, and both render as an empty page to the app. They are
+		// still worth telling apart at startup: "no MCP configured" is a decision,
+		// while "mcp.json is missing" is usually a mount that did not happen. Logged
+		// once here rather than per request, which is the reason this read moved.
+		if os.IsNotExist(err) {
+			logf("gateway: no mcp.json in %s; the toolsets list will be empty", dir)
+		} else {
+			logf("gateway: reading mcp.json: %v", err)
+		}
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+
+	// Read one byte past the limit so an oversized file is detectable rather than
+	// silently truncated into invalid JSON that happens to parse.
+	raw, err := io.ReadAll(io.LimitReader(f, mcpConfigLimit+1))
+	if err != nil {
+		logf("gateway: reading mcp.json: %v", err)
+		return nil
+	}
+	if len(raw) > mcpConfigLimit {
+		logf("gateway: mcp.json exceeds %d bytes; ignoring it", mcpConfigLimit)
+		return nil
 	}
 	var doc struct {
 		Servers map[string]struct {
@@ -255,7 +310,8 @@ func (s *Server) configuredMCPServers() ([]string, error) {
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, err
+		logf("gateway: parsing mcp.json: %v", err)
+		return nil
 	}
 
 	names := make([]string, 0, len(doc.Servers))
@@ -264,14 +320,22 @@ func (s *Server) configuredMCPServers() ([]string, error) {
 			continue
 		}
 		// A server with neither a command nor a URL cannot start; it is a config
-		// error rather than a toolset.
+		// error rather than a toolset, and listing it as enabled would be a lie the
+		// app cannot detect.
+		//
+		// Logged rather than skipped in silence, because the usual cause is a typo in
+		// the key ("path" instead of "command", say). Without this, the symptom is an
+		// MCP page quietly missing a server the operator can see in mcp.json, with
+		// nothing anywhere saying why. That is the same shape as the profile-skip
+		// silence fixed in the entrypoint.
 		if strings.TrimSpace(cfg.Command) == "" && strings.TrimSpace(cfg.URL) == "" {
+			logf("gateway: ignoring MCP server %q: neither \"command\" nor \"url\" is set", name)
 			continue
 		}
 		names = append(names, bounded(name))
 	}
 	sort.Strings(names)
-	return names, nil
+	return names
 }
 
 // writeJSONResponse writes a JSON body with the content type set.

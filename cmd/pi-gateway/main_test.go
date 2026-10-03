@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"agento/internal/gateway"
 )
@@ -129,11 +130,21 @@ func TestWithoutEnvIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// Routing reads a leading "v1" segment as "no profile", so a profile with that
-// name would be unreachable. It is skipped at startup rather than served wrong.
-func TestDiscoverProfilesSkipsReservedName(t *testing.T) {
+// Routing reads a leading reserved segment as "no profile", so a profile with one of
+// those names would start, hold a process, and be unreachable from every request.
+// Skipped at startup rather than served wrong.
+//
+// Driven from gateway.ReservedProfileNames rather than a local copy: discovery
+// originally skipped only "v1" while routing reserved "v1" and "api", which is
+// exactly how the two lists drift apart.
+func TestDiscoverProfilesSkipsReservedNames(t *testing.T) {
+	if len(gateway.ReservedProfileNames) < 2 {
+		t.Fatalf("expected at least v1 and api reserved, got %v", gateway.ReservedProfileNames)
+	}
 	dir := t.TempDir()
-	for _, name := range []string{"god", "story", reservedProfileName} {
+	want := []string{"god", "story"}
+	names := append(append([]string{}, want...), gateway.ReservedProfileNames...)
+	for _, name := range names {
 		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -147,12 +158,12 @@ func TestDiscoverProfilesSkipsReservedName(t *testing.T) {
 		t.Fatalf("discoverProfiles: %v", err)
 	}
 	for _, p := range profiles {
-		if p == reservedProfileName {
+		if gateway.IsReservedProfileName(p) {
 			t.Fatalf("reserved profile name %q was offered", p)
 		}
 	}
-	if len(profiles) != 2 {
-		t.Fatalf("profiles = %v, want god and story", profiles)
+	if len(profiles) != len(want) {
+		t.Fatalf("profiles = %v, want %v", profiles, want)
 	}
 }
 
@@ -255,5 +266,90 @@ func TestKeepaliveZeroDisables(t *testing.T) {
 		if got := secondsEnvAllowDisabled("PI_TEST_KEEPALIVE", 20); got.Seconds() != 20 {
 			t.Fatalf("%q: got %v, want the 20s default", v, got)
 		}
+	}
+}
+
+// PI_INVENTORY_TIMEOUT must be tunable like every other budget here. It was fixed at
+// 30s in withDefaults with no way to change it, so a loaded host that needed longer
+// had to rebuild the binary.
+func TestInventoryTimeoutIsConfigurable(t *testing.T) {
+	os.Unsetenv("PI_TEST_INVENTORY")
+	if got := secondsEnv("PI_TEST_INVENTORY", 30); got.Seconds() != 30 {
+		t.Fatalf("unset: got %v, want 30s", got)
+	}
+	t.Setenv("PI_TEST_INVENTORY", "90")
+	if got := secondsEnv("PI_TEST_INVENTORY", 30); got.Seconds() != 90 {
+		t.Fatalf("set to 90: got %v, want 90s", got)
+	}
+	// Garbage falls back rather than producing a zero budget that would fail every
+	// inventory request instantly.
+	t.Setenv("PI_TEST_INVENTORY", "abc")
+	if got := secondsEnv("PI_TEST_INVENTORY", 30); got.Seconds() != 30 {
+		t.Fatalf("garbage: got %v, want the 30s default", got)
+	}
+}
+
+// Every documented budget must actually reach the field it configures. This is the
+// assertion that was missing: exercising secondsEnv directly proved the parser works
+// and said nothing about the wiring, so deleting the InventoryTimeout line from
+// gatewayConfig left the suite green.
+//
+// Driven from the env var names, so a budget added to Config without a variable — or
+// a variable parsed but never passed through — fails here.
+func TestGatewayConfigPassesEveryBudgetThrough(t *testing.T) {
+	for _, tc := range []struct {
+		env   string
+		value string
+		want  time.Duration
+		get   func(gateway.Config) time.Duration
+	}{
+		{"PI_TURN_TIMEOUT", "111", 111 * time.Second,
+			func(c gateway.Config) time.Duration { return c.TurnTimeout }},
+		{"PI_KEEPALIVE", "22", 22 * time.Second,
+			func(c gateway.Config) time.Duration { return c.KeepaliveInterval }},
+		{"PI_INVENTORY_TIMEOUT", "33", 33 * time.Second,
+			func(c gateway.Config) time.Duration { return c.InventoryTimeout }},
+	} {
+		t.Run(tc.env, func(t *testing.T) {
+			t.Setenv(tc.env, tc.value)
+			cfg := gatewayConfig("pw", "/opt/pi", "god", func(string, ...any) {})
+			if got := tc.get(cfg); got != tc.want {
+				t.Fatalf("%s=%s did not reach the config: got %v, want %v",
+					tc.env, tc.value, got, tc.want)
+			}
+		})
+	}
+
+	// Defaults, with nothing set.
+	for _, k := range []string{"PI_TURN_TIMEOUT", "PI_KEEPALIVE", "PI_INVENTORY_TIMEOUT"} {
+		os.Unsetenv(k)
+	}
+	cfg := gatewayConfig("pw", "/opt/pi", "god", func(string, ...any) {})
+	for label, got := range map[string]time.Duration{
+		"TurnTimeout":       cfg.TurnTimeout,
+		"KeepaliveInterval": cfg.KeepaliveInterval,
+		"InventoryTimeout":  cfg.InventoryTimeout,
+	} {
+		if got <= 0 {
+			t.Errorf("%s defaulted to %v; every budget needs a usable value", label, got)
+		}
+	}
+
+	// The non-timeout fields must not be lost in the extraction.
+	if cfg.Password != "pw" || cfg.AgentDir != "/opt/pi" || cfg.DefaultProfile != "god" {
+		t.Errorf("non-timeout fields not carried through: %+v", cfg)
+	}
+	if cfg.Logf == nil {
+		t.Error("Logf was dropped by the extraction; a nil Logf would panic in New")
+	}
+}
+
+// PI_KEEPALIVE=0 must still mean "disabled" through the extracted builder, not just
+// through secondsEnvAllowDisabled in isolation.
+func TestGatewayConfigKeepaliveZeroStaysDisabled(t *testing.T) {
+	t.Setenv("PI_KEEPALIVE", "0")
+	cfg := gatewayConfig("pw", "/opt/pi", "god", func(string, ...any) {})
+	if cfg.KeepaliveInterval != gateway.KeepaliveDisabled {
+		t.Fatalf("PI_KEEPALIVE=0 gave %v, want KeepaliveDisabled", cfg.KeepaliveInterval)
 	}
 }

@@ -60,6 +60,22 @@ type Config struct {
 	// failing, since a gateway with no MCP configuration is a legitimate state.
 	AgentDir string
 
+	// InventoryTimeout bounds one read-only metadata call to a Pi agent
+	// (get_available_models, get_commands).
+	//
+	// Deliberately separate from TurnTimeout, and much shorter. These are local IPC
+	// reads of a child's own state and should answer in milliseconds; a turn
+	// legitimately runs for minutes because a model is involved. Using TurnTimeout
+	// here meant a wedged Pi held a handler goroutine — and the app's picker or
+	// Skills page — for up to ten minutes, for a request that carries no work worth
+	// waiting that long for.
+	//
+	// Generous rather than tight on purpose: at startup Pi is still connecting MCP
+	// servers, and a budget that flaked under that load would trade a rare wedge for
+	// a common spurious failure. Expiry surfaces as the same 502 as any other
+	// upstream error, so the client sees one failure mode, not two.
+	InventoryTimeout time.Duration
+
 	// KeepaliveInterval writes an SSE comment while waiting, so proxies and the
 	// app do not treat an idle stream as dead. Zero means "no choice made" and is
 	// replaced with the default; set it to KeepaliveDisabled to turn the comments
@@ -73,6 +89,9 @@ type Config struct {
 func (c *Config) withDefaults() {
 	if c.TurnTimeout <= 0 {
 		c.TurnTimeout = 10 * time.Minute
+	}
+	if c.InventoryTimeout <= 0 {
+		c.InventoryTimeout = 30 * time.Second
 	}
 	// Exactly zero means "the caller did not choose", which withDefaults fills in.
 	// A negative value is a deliberate KeepaliveDisabled and passes through — this
@@ -113,6 +132,10 @@ type Server struct {
 	cfg      Config
 	handlers map[string]*agentHandler
 	mux      *http.ServeMux
+
+	// mcpServers is the configured MCP server set, read once at startup. Empty when
+	// there is no agent directory or no readable mcp.json, which is a valid state.
+	mcpServers []string
 }
 
 // agentHandler is one profile's agent plus its session store.
@@ -145,6 +168,19 @@ func New(cfg Config, agents map[string]Agent) (*Server, error) {
 		handlers: make(map[string]*agentHandler, len(agents)),
 		mux:      http.NewServeMux(),
 	}
+
+	// Read once, here, rather than per request. mcp.json is fixed for the life of
+	// the process: the entrypoint runs `pi mcp list` at boot and refuses to start if
+	// any server fails, and Pi connects its MCP servers at startup. Re-reading it on
+	// every picker poll was pure disk I/O for a value that cannot change, and it read
+	// the file with no size limit, so a corrupt or oversized file was a cheap DoS on a
+	// route the app polls.
+	//
+	// A failure here is logged and treated as "no servers", not fatal: a gateway with
+	// no MCP configuration is a legitimate state, and the log is what distinguishes it
+	// from a deliberate empty list. Failing New would take chat down over a skills
+	// page.
+	s.mcpServers = readMCPServers(cfg.AgentDir, cfg.Logf)
 
 	// A profile is a distinct Pi process with its own personality and skills, so
 	// each needs its own session bookkeeping; sharing a store would let two
@@ -240,10 +276,35 @@ func (s *Server) authenticate(r *http.Request) error {
 	return nil
 }
 
-// reservedPathSegment is the API version root. It cannot be a profile name: routing
-// reads a leading "v1" as "no profile segment here", so a profile called v1 would be
-// unreachable and would shadow every unprefixed request.
+// ReservedProfileNames are directory names under the profile directory that cannot
+// be used as a profile, because routing reads a leading segment matching one of them
+// as "no profile segment here".
+//
+// Exported, and used by profile discovery, so that the skip and the reservation come
+// from one place.
+var ReservedProfileNames = []string{reservedPathSegment, "api"}
+
+// reservedPathSegment is the API version root — the segment that reads as "no profile
+// here" rather than as a profile name. Derived into ReservedProfileNames above rather
+// than written out again there, so the name has exactly one spelling.
+//
+// This exists as one list precisely because two lists is how this went wrong before:
+// routing tested `head == "v1" || head == "api"` inline while profile discovery
+// skipped only "v1". They drifted, and a profiles/api directory started a working
+// agent that no request could ever reach — every path segment "api" was claimed by
+// the provider-picker route instead. Silent, and visible only as a profile that
+// appears in `docker compose ps` and 404s.
 const reservedPathSegment = "v1"
+
+// IsReservedProfileName reports whether name may not be used as a profile directory.
+func IsReservedProfileName(name string) bool {
+	for _, r := range ReservedProfileNames {
+		if name == r {
+			return true
+		}
+	}
+	return false
+}
 
 // requireMethod enforces that a route is reached with the right verb, answering 405
 // with an Allow header rather than letting the handler run and misreport.
@@ -279,12 +340,14 @@ func (s *Server) splitProfile(urlPath string) (profile, rest string) {
 		return s.cfg.DefaultProfile, ""
 	}
 	head, tail, hasTail := strings.Cut(trimmed, "/")
-	// Reserved first segments. "v1" is the API version root. "api" is reserved too,
-	// because the provider picker is reachable both as /api/model/options (routed to
-	// this service directly by nginx) and as /{profile}/api/model/options; without
-	// the reservation the first form reads "api" as a profile name and 404s as
-	// "unknown profile api", which is a needlessly confusing way to say "wrong path".
-	if head == reservedPathSegment || head == "api" || head == "" {
+	// Reserved first segments: the API version root and the provider-picker
+	// namespace. Without reserving "api", /api/model/options — which nginx routes
+	// here unprefixed — reads "api" as a profile name and 404s as "unknown profile
+	// api", a needlessly confusing way to say "wrong path". Checked against the same
+	// list profile discovery skips, so the two cannot disagree.
+	// No `head == ""` case: trimmed returned early if empty, and Cut on a non-empty
+	// string never yields an empty head. The condition was unreachable.
+	if IsReservedProfileName(head) {
 		return s.cfg.DefaultProfile, trimmed
 	}
 	if !hasTail {
@@ -357,13 +420,19 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		}
 		s.handleToolsets(w, r, handler)
 
-	// The provider picker. Two spellings reach here and both are real:
-	//   /api/model/options             nginx routes this exact path to the gateway
-	//   /{profile}/api/model/options   the app builds it from the per-tab path
-	// `api` is reserved as a first segment for the same reason `v1` is — otherwise
-	// "api" would be read as a profile name and every picker fetch would 404 as
-	// "unknown profile api".
-	case "api/model/options", "model/options":
+	// The provider picker. Only the "api" spelling is routed: splitProfile returns the
+	// whole trimmed path when the first segment is reserved, and everything after the
+	// profile segment otherwise, so both paths a client actually sends land on
+	// rest == "api/model/options":
+	//
+	//	/api/model/options             nginx routes this exact path here
+	//	/{profile}/api/model/options   the app builds it from the per-tab path
+	//
+	// A bare "/god/model/options" reaches rest == "model/options", but nothing sends
+	// it: the app builds "{path}/api/model/options" and nginx routes the /api/ one.
+	// An earlier version accepted it as a tolerant alias, which was untested surface
+	// invented on the off-chance that some client strips the segment.
+	case "api/model/options":
 		if !requireMethod(w, r, http.MethodGet, "/api/model/options") {
 			return
 		}
