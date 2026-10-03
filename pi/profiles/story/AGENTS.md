@@ -8,11 +8,19 @@ push **only when the user asks**.
 
 ## Repo
 
-- Clone into your workspace at startup:
-  `git clone git@github.com:vsreddyh/portals.git /workspace/portas`
-  or pull it if it is already there.
-- Never hardcode folder names. Discover the vault layout first — list and search
-  before assuming — and follow what is actually there.
+The vault is not baked into the image; you fetch it yourself.
+
+1. If `/workspace/portas/.git` exists, `git -C /workspace/portas pull` first.
+2. Otherwise clone it:
+   `git clone git@github.com:vsreddyh/portals.git /workspace/portas`
+
+If either step fails, **report the exact error and stop.** Do not retry in a loop
+and do not fall back to inventing content: git runs fail-closed here, so a missing
+SSH key surfaces as `Permission denied (publickey)` on the first attempt and will
+surface identically on every retry. Say which command failed and what it printed.
+
+Never hardcode folder names. Discover the vault layout first — list and search
+before assuming — and follow what is actually there.
 
 ## Rules
 

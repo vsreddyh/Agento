@@ -7,7 +7,7 @@ projects. Five MCP tool backends, all in-repo Go binaries.
 
 They are MCP servers, not shell commands. Their tools are **not** declared to you
 as callable tools — they have `codemode` exposure, which is Pi's default and which
-keeps ~50 tool definitions out of every request. Call them from a `codemode`
+keeps all 43 tool definitions out of every request. Call them from a `codemode`
 script:
 
 ```js
@@ -15,18 +15,24 @@ const r = await tools.mcp__miser_money__log_transaction({ /* args */ });
 text(r);
 ```
 
-Hyphens in a server name become underscores in the tool identifier, so
-`mcp__health-check__log_meal` is `tools.mcp__health_check__log_meal`. Do not try to
-call `log_transaction` or `mcp__miser-money__log_transaction` directly; neither
-exists.
+**Always spell a server name with underscores.** `mcp__health-check__log_meal` is
+not callable; the underscore form `tools.mcp__health_check__log_meal` is. Likewise
+there is no bare `log_transaction` tool to call.
 
-To discover the exact tools and their arguments rather than guessing:
+Use the underscore form for `describeNamespace()` and `searchTools()` as well:
 
-- `describeNamespace("mcp__miser-money")` — every tool on one server, plus its
-  instructions. Hyphens are accepted here; underscore forms work too.
-- `searchTools("log a meal")` — ranks tools across all servers by relevance.
-- `describeTool(name)` — one tool's full TypeScript declaration.
-- `ALL_TOOLS` — everything callable, as `{ name, description }[]`.
+```js
+describeNamespace("mcp__miser_money")            // every tool on that server + its instructions
+searchTools("log a meal")                        // ranks tools across all servers
+describeTool("mcp__miser_money__log_transaction") // one tool's full declaration
+ALL_TOOLS                                        // everything callable: { name, description }[]
+```
+
+Pi's matcher happens to accept the hyphenated and bare forms too, so
+`describeNamespace("mcp__miser-money")` works today. Do not rely on it: that
+leniency is one comparison function inside Pi, not a documented contract, and
+using a single spelling everywhere is what keeps the identifiers in this file
+copy-pasteable.
 
 Use `Promise.allSettled()` when batching calls: one failure should not discard the
 results that succeeded.
@@ -65,6 +71,25 @@ earlier draft of this file picked up three money tools that exist as strings in 
 source but are not registered, and missed two task tools, because grepping for
 identifiers is not the same as asking the server what it serves. If a tool here
 does not resolve, trust `describeNamespace()` over this file.
+
+## Destructive operations
+
+These write to the database and some cannot be undone. Confirm with the user
+first, and state the scope before acting — how many records, which account or
+recipe, which date range:
+
+- `delete_transactions`, `delete_meals`, `prune_old` on either server
+- `archive_account`
+- `delete_recipe` — also removes that recipe's cook logs, so the loss is wider
+  than the recipe itself
+- `delete_ingredient` — refused while a recipe still uses it; report that rather
+  than working around it
+- `delete_task`, `delete_project`, `delete_cook`
+
+Safe to call without asking: every `list_*`, `get_*`, `query_*`, `summarize`,
+`daily_summary`, `get_balances`, `scale_recipe` (pure arithmetic — reads the recipe
+and returns scaled numbers, writing nothing), and the `fix_*` tools, which correct
+the most recent entry rather than deleting anything.
 
 ## Interaction
 

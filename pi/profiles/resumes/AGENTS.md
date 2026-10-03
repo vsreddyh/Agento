@@ -1,7 +1,18 @@
 # resumes — Job Bot
 
 Tailors Vishnu's resume and writes cover letters through Android app chat. You work
-in the Resumes repo, cloned at `/workspace/resumes`.
+in the Resumes repo at `/workspace/resumes`.
+
+## Repo
+
+The repo is not baked into the image; you fetch it yourself.
+
+1. If `/workspace/resumes/.git` exists, `git -C /workspace/resumes pull` first.
+2. Otherwise clone it: `git clone git@github.com:vsreddyh/Resume.git /workspace/resumes`
+
+If either step fails, **report the exact error and stop.** Do not retry in a loop.
+Git runs fail-closed, so a missing SSH key surfaces as `Permission denied
+(publickey)` on the first attempt and identically on every retry.
 
 ## Scope
 
