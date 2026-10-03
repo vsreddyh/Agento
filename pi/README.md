@@ -23,14 +23,70 @@ skeleton; profile config and MCP wiring come after the gateway that serves them.
 ## Why no HTTP server here
 
 Pi is a stdio process: `--mode rpc` speaks JSONL on stdin/stdout. The
-OpenAI-compatible surface the Android app already speaks (`/v1/chat/completions`,
-`/v1/models`, `/v1/skills`) is a separate gateway binary that speaks RPC to Pi
+OpenAI-compatible surface is a separate gateway binary that speaks RPC to Pi
 over the container's stdio pair. It is what gets published as a port and routed
 through nginx — not `pi` itself.
+
+### What the gateway serves today
+
+| route | served by the Pi gateway |
+|---|---|
+| `POST /{profile}/v1/chat/completions` | yes — SSE streaming, and a standard non-streamed completion when `stream` is false |
+| `GET /healthz` | yes — unauthenticated liveness |
+| `GET /{profile}/api/model/options` | **no** |
+| `GET /api/model/options` | **no** |
+| `GET /{profile}/v1/skills` | **no** |
+| `GET /{profile}/v1/toolsets` | **no** |
+
+The four unserved routes are not hypothetical: `ChatApi.fetchCatalog` and both
+`ServerApi` inventory calls in the Android app request them today, and nginx
+routes all of them to the gateway upstream (`docker/proxy/nginx.conf` sends
+`/p/*` and both `/api/model/options` spellings there). Until they are served,
+those app features are capability loss, and the proxy is still pointing at
+Hermes for them.
+
+Nothing in this list is launch-blocking: `/health` and `/api/files*` are served by
+health-api through a different proxy location, `fetchCatalog` degrades to the app's
+bundled offline provider list, and the two inventory pages would simply be empty.
+It is still loss, so it is tracked rather than left to be discovered during the
+Hermes removal.
+
+`/v1/models` is deliberately absent from this table. Earlier drafts of this file
+listed it because the Hermes API server exposed it; the app never calls it — it
+builds its provider and model dropdowns from `/api/model/options` instead.
 
 Emulating that surface is what keeps the Android app unchanged: it already
 builds requests as `$serverUrl$profilePath/v1/...` and already sends
 `X-Hermes-Session-Id`, so a gateway that honours both needs zero app changes.
+
+## Conversation isolation is logical, not physical
+
+Pi keeps one session file per conversation, and the gateway maps the app's
+`X-Hermes-Session-Id` onto it — so two conversations never share a transcript, and
+resuming one does not pull in the other's history. That part holds.
+
+It is not a security boundary. The agent runs `bash` as root, and session files
+live a couple of directories above its working directory:
+
+```
+/opt/pi/profiles/god      <- agent cwd
+/opt/pi/sessions/...      <- ../../sessions, readable
+```
+
+Asked "what did I tell my other chat?", the agent can simply read the other
+conversation's transcript off disk and answer from it. Observed during
+verification: a second conversation correctly reported UNKNOWN when answering
+from memory, then answered correctly with the first conversation's number once it
+listed the sessions directory.
+
+This is not new to the migration — the Hermes agent had the same reach
+(`gateway/state.db` sat at `../../state.db` from a profile working directory) — but
+it is worth stating plainly rather than letting "sessions are separate" imply an
+isolation guarantee.
+
+Closing it properly needs OS-level separation: a distinct user or container per
+conversation, or sessions on a filesystem the agent cannot read. None of that is in
+scope here, and it is worth deciding deliberately rather than discovering later.
 
 ## Base images are pinned by digest
 
