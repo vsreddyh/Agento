@@ -75,6 +75,38 @@ environment anchor:
 Omitting the Mongo variables produces a container that exits at boot rather than one
 that serves degraded — the right failure, but an abrupt one.
 
+### `tectonic` is missing from the pi image — blocking
+
+The `resumes` profile compiles every tailored `.tex` to `exports/` with `tectonic`.
+`docker/pi/Dockerfile` installs only `git`, `ca-certificates` and `findutils`, so
+after the Hermes image goes away **every resume compile fails**. Today it works only
+because `tectonic` happens to be in the `hermes-agent` base image that
+`test/Dockerfile` builds on — an accident of the base, not a declared dependency.
+
+Verified while writing this: there is **no `tectonic` package in Debian stable**
+(checked the Debian package index by name across all suites), so
+`apt-get install tectonic` cannot be the fix. The only route is the upstream release
+asset:
+
+| | |
+|---|---|
+| latest release | `tectonic@0.17.0` |
+| asset to use | `tectonic-0.17.0-x86_64-unknown-linux-musl.tar.gz` (~9.9 MiB) |
+| why musl, not gnu | statically linked, so no new runtime dependencies in a slim Debian image; the `-gnu` asset is ~22 MiB and pulls glibc expectations |
+
+This belongs in `docker/pi/Dockerfile`, pinned by version **and sha256** the way
+`PI_VERSION` and the base-image digests already are — an unpinned download from the
+network into a live image is exactly the supply-chain surface this repo avoids
+elsewhere. It is tracked here rather than done in the profile-instructions PR so the
+image change keeps its own review.
+
+The `resumes` instruction is deliberately **not** softened to match the gap. Telling
+the agent to skip compiling because the binary is missing would produce resumes with
+no PDF and no error, which is worse than a compile that fails loudly.
+
+Swept the profiles for other external binaries: they reference only `git` (present)
+and `tectonic`. This is the only gap.
+
 ### Tool exposure
 
 The MCP servers are left at `codemode` exposure, which is Pi's default. Their tools

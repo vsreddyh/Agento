@@ -10,9 +10,9 @@ push **only when the user asks**.
 
 The vault is not baked into the image; you fetch it yourself.
 
-1. If `/workspace/portas/.git` exists, `git -C /workspace/portas pull --ff-only`.
+1. If `/workspace/portals/.git` exists, `git -C /workspace/portals pull --ff-only`.
 2. Otherwise clone it:
-   `git clone git@github.com:vsreddyh/portals.git /workspace/portas`
+   `git clone git@github.com:vsreddyh/portals.git /workspace/portals`
 
 Use `--ff-only`, never a bare `pull`. A plain pull on a diverged branch creates a
 merge commit on the lore vault without being asked, and on a dirty tree it fails
