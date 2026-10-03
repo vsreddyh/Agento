@@ -89,9 +89,9 @@ services:
 
   # ──────────────────────────────────────────────────────
   # Proxy — single URL for the Agento app (chat + sync on one port).
-  # Routes /p/* → gateway :8642 and /api/* + /health → health-api :8000
+  # Routes /p/* → pi :8643 and /api/* + /health → health-api :8000
   # (see docker/proxy/nginx.conf). App Server URL: http://<host>:${APP_PORT:-8080}.
-  # Direct ports (:8642, :8001) stay published for backward compatibility.
+  # Direct ports (:8643, :8001) stay published for backward compatibility.
   # ──────────────────────────────────────────────────────
   proxy:
     image: docker.io/nginx:1.27-alpine
@@ -102,7 +102,22 @@ services:
       # otherwise shadow ours for Host: localhost).
       - ../docker/proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - gateway
+      # Short list form, and it has to be: `condition: service_started` is what a
+      # Compose implementation would want here, but podman-compose builds its
+      # dependency graph with `deps = {x: {} for x in deps}` and a mapping value is
+      # an unhashable dict, so ANY `condition:` form — list or mapping syntax —
+      # makes it die with `TypeError: cannot use 'dict' as a dict key` before it
+      # reads a single service. Verified, both spellings. So the ordering is all we
+      # get, and ordering is all this needs: nginx re-resolves `pi` per request
+      # (`resolver 10.89.0.1 valid=10s`), so a proxy that starts before pi answers
+      # 502 for a few seconds rather than never.
+      #
+      # Not waiting on pi's *health* is also the right behaviour independently: that
+      # healthcheck is a real connectivity gate (its entrypoint refuses to start if
+      # any of the five MCP servers will not connect), so a proxy gated on it would
+      # take health-api's /api/* routes down with it — and health sync has nothing
+      # to do with the agent.
+      - pi
       - health-api
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/ping"]
