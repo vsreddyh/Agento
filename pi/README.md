@@ -86,10 +86,12 @@ things about it are deliberate, and both were got wrong while writing it:
   spawns one `pi --mode rpc` child per profile with `profiles/<name>` as its cwd —
   which is the mechanism that makes each agent load its own `AGENTS.md`. So it is
   built into the image and is the container's main process.
-- **It listens on 8643, not 8642.** The `gateway` service still owns 8642 until the
-  Hermes removal, so both coexist and an app tab can be pointed at either to compare.
-  nginx still proxies `/p/*` to `:8642`; moving it is one line and belongs to the
-  removal PR.
+- **It listens on 8643, not 8642, and nginx now points at 8643.** The two coexist
+  so an app tab can be pointed at either to compare, but they are not peers any more:
+  `docker/proxy/nginx.conf` sets `$chat` to `pi:8643`, so the app's single URL is
+  served by Pi. `gateway` keeps running only so the comparison is possible — nothing
+  routes to it, and removing it changes no routing. The one-line switch is
+  `set $chat http://gateway:8642` if it ever needs to go back.
 - **The host port is `PI_HOST_PORT`, not `PI_SERVER_PORT`.** The container always
   listens on 8643; only the published host port moves. The name is deliberate:
   `PI_SERVER_PORT` is what pi-gateway itself reads as its bind port, so sharing it
@@ -329,31 +331,102 @@ sudo chown -R 10000:10000 workspace/
 Do that with the stack stopped. Doing it while a container is running races with
 whatever the agent happens to be writing.
 
-## Deferred, with the target written down
+## The five deferred items, and where each one landed
 
-These were flagged in review on the runtime PR and are **not** addressed there.
-Each has a named home so they are not quietly lost:
+All five were flagged in review on the runtime PR. Four landed with the `pi`
+compose service; the fifth landed with the cutover.
 
-1. **Auth.** `gateway` gets `PASSWORD=${PASSWORD:-}`. Whatever serves `:8643`
-   must require the same bearer token on both the direct port and the
-   `/p/pi/*` route. An unauthenticated route to an agent with a shell is not
-   acceptable.
-2. **nginx prefix stripping.** `proxy_pass $pi/;` inside a `location` that uses
-   a *variable* does **not** strip the prefix the way a static
-   `proxy_pass http://pi/;` does — with variables nginx forwards the original
-   URI. `/p/pi/v1/models` would arrive as `/p/pi/v1/models`. Needs an explicit
-   `rewrite ^/p/pi(/.*)$ $1 break;` before `proxy_pass`.
-3. **SSH mounts.** `docker/docker-compose.yml`'s `gateway` mounts the VPS
-   keypair read-only and pins `GIT_SSH_COMMAND` for fail-closed agent-run git,
-   because story/resumes push their repos. The Pi service needs the same three
-   mounts plus the same `GIT_SSH_COMMAND`, or repo sync is broken.
-4. **Healthcheck.** `pi mcp list` exits 0 with zero servers configured, so it
-   proves nothing until `mcp.json` exists. Once it does, it is a genuine
-   connectivity probe (it connects, it does not lint). A readiness check that
-   actually dials the served port is still wanted on top.
-5. **`depends_on`.** Use `condition: service_started` for the Pi service. A
-   plain `depends_on` would make the proxy refuse to come up when Pi's MCP
-   check fails, taking healthy `gateway` chat down with it.
+| item | status |
+|---|---|
+| **Auth** | done. The `pi` service takes `PASSWORD=${PASSWORD:-}`, the same value the Hermes gateway did, so a tab can be repointed without re-entering it. Verified: both a missing and a wrong bearer token answer 401. |
+| **SSH mounts** | done. Same three keypair mounts and the same fail-closed `GIT_SSH_COMMAND` as `gateway`, so story/resumes push their repos unchanged. |
+| **Healthcheck** | done. `curl -fsS http://localhost:8643/healthz` inside the container, with a 60s `start_period` because the entrypoint connects all five MCP servers first. The entrypoint's `pi mcp list` is the connectivity gate; this is the port check on top of it. |
+| **`depends_on`** | done, in the short list form (`- pi`). The long form is not available on this stack at all: podman-compose builds its dependency graph with `deps = {x: {} for x in deps}`, so any `condition:` value is an unhashable dict and it dies with `TypeError: cannot use 'dict' as a dict key` before reading a service. Verified in both spellings. The short form still means *start pi first* — podman-compose's own `config` output renders it as `condition: service_started` — and ordering is all this needs, because nginx re-resolves `pi` per request. Deliberately **not** gated on pi's *health*: that healthcheck fails whenever its MCP check does, and a proxy held back by it would take health-api's `/api/*` routes down too — health sync has nothing to do with the agent. |
+| **nginx prefix stripping** | done, in the cutover PR. `rewrite ^/p(/.*)$ $1 break;` before `proxy_pass $chat`, and it is load-bearing rather than tidying. Measured against nginx 1.27 with echo upstreams: with the rewrite `/p/god/v1/chat/completions` arrives as `/god/v1/chat/completions`; without it the original path arrives unchanged, and pi-gateway reads the first segment `p` as a profile name and 404s. |
+
+The unprefixed `/api/model/options` needs no rewrite: pi-gateway serves that path
+itself, with `api` a reserved first segment rather than a profile name.
+
+## What the cutover changed, and what is left of Hermes
+
+The cutover is one line plus a rewrite — `set $chat http://pi:8643` — and it is
+reversible by changing it back. Both stacks stay in the compose file until the
+Hermes removal, so a tab can be pointed at either port to compare.
+
+The timeouts moved too, and the chain has to be read from the inside out. A
+`spawn_subagent` delegation is capped at 900s of work plus up to 30s of teardown,
+so a turn may legitimately run for 930s:
+
+| layer | value | where |
+|---|---|---|
+| delegation ceiling | 900s | `MAX_TIMEOUT_MS`, `pi/extensions/subagent.ts` |
+| its teardown | +30s | `TEARDOWN_TIMEOUT_MS`, same file |
+| backend turn budget | 960s | `PI_TURN_TIMEOUT` on the `pi` service |
+| inventory budget | 30s | `PI_INVENTORY_TIMEOUT` on the `pi` service, behind a 40s picker proxy timeout |
+| proxy idle timeout (`/p/` only) | 990s | `docker/proxy/nginx.conf` — the picker routes use 40s, not this |
+
+Each layer is strictly above the one inside it, so the layer that fires is always
+the innermost one that has an answer. Two mistakes are visible in that table and
+both were live at some point: the proxy at 300s (cutting turns mid-answer while the
+agent kept working) and the backend at its 600s default (cutting at 600s a turn
+entitled to 930s, with a generous proxy waiting on a backend that had given up).
+The same ordering applies to the picker routes — `PI_INVENTORY_TIMEOUT` 30s behind
+a 40s proxy read timeout — so the backend's 502, which names the failure, arrives
+before nginx's 504, which does not.
+
+These are idle timeouts between bytes, not total-turn limits; the backend also
+writes an SSE keepalive every 20s (`PI_KEEPALIVE`).
+
+The read timeout is deliberately *not* mirrored on the send side. `proxy_read_timeout`
+governs the SSE response, which is the long part; `proxy_send_timeout` governs writing
+the request upstream, which is a small JSON POST across the compose network. At 990s
+that would let a stalled client hold a backend slot — and the profile lock a whole
+turn holds — for as long as the delegation ceiling allows, so `/p/` sends at 60s.
+
+Three more explicit values, all because the defaults are wrong *silently*:
+
+- `proxy_connect_timeout 5s` at server level, so a request arriving during a `pi`
+  restart fails fast to a retryable 502 instead of waiting out the 60s default on a
+  connection that was never going to be made.
+- `client_max_body_size 5m` on `/p/`. The 1m default answers a bare bodyless 413 to
+  a chat turn carrying a base64 image or a large tool payload. It is **not** raised to
+  match a large payload: the authority is `maxBodyBytes` in `internal/gateway/body.go`
+  (4 MiB), and nginx is set a little *above* it rather than equal to it, for the same
+  ordering reason as the timeouts. Measured with a backend stub enforcing that 4 MiB
+  cap: at 5m a 4.5 MiB request reaches pi-gateway and returns its JSON 413 naming the
+  limit, while at 4m nginx answers first with a bodiless HTML 413 and the message that
+  says what to fix never arrives. `/api/` keeps its own 5m for health payloads.
+- `X-Real-IP`, `X-Forwarded-For` and `X-Forwarded-Proto` on **every** proxying
+  location, not once at server level. nginx does not merge `proxy_set_header` across
+  levels: a location declaring any of its own inherits none of the parent level's, so
+  a server-level block is silently dropped by all four locations here, each of which
+  sets `Host`. Measured with them at server level — `X-Forwarded-Proto` and
+  `X-Real-IP` never arrived, and `X-Forwarded-For` arrived only when the client had
+  set one itself.
+
+`resolver 10.89.0.1` is hardcoded and must be re-derived if the compose subnet ever
+changes; `pi/README.md` and the conf both carry the one-line `podman network inspect`
+that prints it, because the failure mode is a stale-IP 502 that reads as a `pi` bug.
+
+Still on Hermes, and still running:
+
+- the `gateway` service, `test/Dockerfile`, `test/entrypoint.sh`, and the nine
+  tracked files under `gateway/` (`SOUL.md` x3, `config.yaml.template` x3,
+  `podman-management/SKILL.md` x2, and a `.curator_state` that should never have
+  been tracked). Its untracked runtime state on this host stays where it is.
+- `scripts/hermes.sh`, which still builds the Hermes bot image and reports
+  "gateway (3 profiles)".
+- `README.md`, `documentation.md` and the root `AGENTS.md`, which all describe the
+  Hermes gateway as the live chat path.
+
+Two parity questions the cutover does not answer, both of which need deciding
+rather than code:
+
+- `podman-management` exists for two Hermes profiles with no Pi equivalent.
+- `SOUL.md` personality (god 44 / story 59 / resumes 61 lines) has no Pi
+  counterpart file. It appears to have been folded into `pi/profiles/*/AGENTS.md`,
+  but nothing here says so, and Pi has no `SOUL` concept of its own — so "the
+  personality survived" is currently an assumption, not a verified fact.
 
 ## Subagent spawning is a separate process, and that is the whole point
 

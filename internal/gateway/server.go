@@ -736,9 +736,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 //
 //   - A proxy read timeout shorter than TurnTimeout cuts the connection with no
 //     partial output to show for it, and the client cannot resume from a session
-//     the way it can from a dropped stream. nginx currently sets proxy_read_timeout
-//     to 300s against a 600s default TurnTimeout, so the two are mismatched today;
-//     the app never hits this path because it always streams.
+//     the way it can from a dropped stream. The deployed chain is now ordered
+//     outermost-first — nginx 990s idle, this TurnTimeout 960s (PI_TURN_TIMEOUT),
+//     and under that the 900s + 30s spawn_subagent delegation ceiling — so the
+//     layer that fires is the innermost one that has an answer to give. A proxy
+//     shorter than this one would turn every long turn into an unexplained 504;
+//     the app never hits the buffered path anyway because it always streams.
 //   - The profile is blocked for the whole turn either way. Streaming occupies it
 //     too, so switching a client to non-streamed buys nothing but removes the
 //     progress signal.
