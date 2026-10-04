@@ -238,8 +238,20 @@ with `Allow: GET` on the wrong verb.
   "unknown" and an empty one as "this server has no tools", and only the first is
   true.
 
-`/v1/skills` currently returns `[]`, and that is the correct answer rather than a
-stub: no skills are installed yet. See the profile-skills finding below.
+`/v1/skills` reports what Pi actually loaded, per profile, with the path and scope it
+came from — verified live:
+
+```
+podman-management  user       /opt/pi/skills/podman-management/SKILL.md
+project-manager    user       /opt/pi/skills/project-manager/SKILL.md
+task-manager       user       /opt/pi/skills/task-manager/SKILL.md
+git-remote-preflight temporary /opt/pi/profiles/story/skills/git-remote-preflight/SKILL.md   (story only)
+```
+
+`user` is the agent dir, `temporary` an explicit `--skill`. Before the skills moved to
+`pi/skills/`, this route returned `[]` for god — the two MCP-tool skills were in the
+repo-root `skills/` tree, which nothing discovers. That is the shape of the trap this
+endpoint exists to make visible: skills present in git, absent from the agent.
 
 ### Profile skills do NOT load from `profiles/<name>/skills/`
 
@@ -433,14 +445,78 @@ into `gateway/profiles/*`, and reports "gateway (3 profiles)" and `:8642`. It st
 `init` and `start --build` still succeed, now building the pi image — which is why
 leaving it one layer behind is safe rather than broken.
 
-Two parity questions the cutover does not answer, both of which need deciding
-rather than code:
+### The wire contract kept the Hermes name on purpose
 
-- `podman-management` exists for two Hermes profiles with no Pi equivalent.
-- `SOUL.md` personality (god 44 / story 59 / resumes 61 lines) has no Pi
-  counterpart file. It appears to have been folded into `pi/profiles/*/AGENTS.md`,
-  but nothing here says so, and Pi has no `SOUL` concept of its own — so "the
-  personality survived" is currently an assumption, not a verified fact.
+`X-Hermes-Session-Id` is still the header pi-gateway reads (`internal/gateway/server.go`,
+`r.Header.Get("X-Hermes-Session-Id")`) and the app still sends. It is not an oversight
+and it is not a comment to tidy: it is the contract that keeps every app thread mapped
+to one conversation. Renaming it means the app sends `X-Pi-Session-Id`, the server
+accepts both for a release, and the old name is eventually dropped — a coordinated
+app-plus-server change, and a MAJOR by the repo's own versioning rules. The same is
+true of the app's `X-Hermes-Session-Id` KDoc: corrected to say "conversation" where it
+meant a session, but the header name stays.
+
+### Two capabilities the app still expects that pi-gateway does not serve
+
+Found while correcting the app's KDoc, and worth stating rather than leaving in a
+comment:
+
+1. **`GET api/sessions/{id}`** — the Hermes route behind the app's multi-device token
+   reconciliation (#121). pi-gateway has no equivalent; usage arrives on the chat
+   response's own `usage` object instead, which is per-device. The reconciliation has
+   no server side on Pi.
+2. **Tool-progress frames have no `label`.** pi-gateway sends `{"tool":…,"status":…}`
+   and deliberately omits a label, because Pi reports no per-call label to forward.
+   The app reads it optionally, so this is already handled — but a "label" that can
+   never be present is wire surface that will read as a bug to the next person.
+
+### Both parity questions, answered
+
+**Personality survived.** Checked rather than assumed: `git show f6feafc:gateway/SOUL.md`
+— pinned, because the path stops existing once this stack merges — opens "You are
+the Hermes god profile", and `pi/profiles/god/AGENTS.md` opens
+"General operator for Vishnu's money, food and health tracking… Five MCP tool
+backends". Same for `Portas-Maintainer` (story) and `Job Bot` (resumes) — the
+Hermes `SOUL.md` files were rewritten as Pi `AGENTS.md` files, role statement
+first, rather than lost. Pi has no `SOUL` concept of its own, and none is needed:
+a profile's identity *is* its `AGENTS.md`.
+
+**`podman-management` is back, once instead of twice.** Hermes kept an identical
+copy under two profiles' `skills/` directories and no equivalent survived the
+migration — measurably: `GET /p/god/v1/skills` returned `[]`, and the skill's own
+content had rotted to the point where it told the agent to `logs gateway` and
+`restart gateway` for a service that no longer existed. It now lives once at
+`pi/skills/podman-management/SKILL.md`, because the agent directory **is** a
+discovered skill location (measured in the profile-skills finding above, and
+confirmed live: all three profiles list it with `scope: "user"`, while story's own
+`git-remote-preflight` shows up as `scope: "temporary"` from its explicit
+`--skill`). One copy, three profiles, and no duplicated file to drift — the layout
+Hermes could not use because it did not know its agent directory was searched.
+
+## Skill files are checked, because nothing else checks them
+
+Three defects in this migration shared one shape: a `SKILL.md` that was correct when
+written and wrong later, with **nothing failing**. A skill pointing at a moved path, or
+telling the agent to run a binary its container does not have, is invisible in review
+and invisible at runtime — the agent simply cannot do what the file says. Two of the
+three were found only by a human happening to read them carefully.
+
+`internal/skills` asserts the mechanical rules in CI (`go test ./...`), across every
+skill Pi can load — `pi/skills/*/SKILL.md` and `pi/profiles/*/skills/*/SKILL.md`:
+
+| rule | the defect it exists for |
+|---|---|
+| frontmatter has `name:` and `description:` | a skill listed as blank on the Skills screen rather than refused |
+| every backticked repo-relative path resolves | a skill pointing at a tree this migration moved. `./x` resolves from the repo root; `../x` from the skill's own directory, with the **checkout** as the boundary — so a sibling skill (`../podman-management/SKILL.md`) is fine and `../../../etc/nginx.conf` is not |
+| every `/opt/…` or `/workspace/…` path is a real bind mount **and the file under it exists** | a leftover container path from the old image (`/opt/data/state.db`), or a path wearing a valid prefix (`/opt/pi/skills/nope/SKILL.md`) |
+| host-only tooling is labelled as host-only, per section | `podman`, `podman-compose`, `docker`, `compose`, `systemctl` — none exist in the pi image |
+| no bare `skills/<name>/SKILL.md` reference | the repo-root tree nothing discovers |
+| the file ends with a newline | the next diff touching the last line shows two changes, which trains people to skim diffs |
+
+Each rule was verified by reintroducing its defect and watching it fail — a check that
+passes on the broken tree is worse than no check. The container facts (which binaries
+exist, which paths are mounted) are constants beside the tests with the evidence
+recorded, so a change to the image fails a test rather than silently invalidating prose.
 
 ## Subagent spawning is a separate process, and that is the whole point
 

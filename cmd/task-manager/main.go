@@ -3,7 +3,7 @@
 // Storage: MongoDB (tasks collection). No status field — a task is open
 // while completedAt is null, done once set. Completed tasks expire via
 // TTL 3 days after completion; a repeat is stored but never interpreted
-// here (agent-side per skills/task-manager/SKILL.md).
+// here (agent-side per pi/skills/task-manager/SKILL.md).
 // Runs over stdio for MCP clients.
 package main
 
@@ -73,6 +73,72 @@ func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 	}, out, nil
 }
 
+// Input types are named rather than inline so that `internal/skills`-style assertions
+// and `cmd/task-manager/schema_test.go` can read the SAME tags the SDK infers the wire
+// schema from. An inline struct can only be checked by reading the handler, and the
+// handler and the published schema disagreed for the whole life of this file.
+//
+// Optionality here is not cosmetic. The SDK treats a field as required unless its tag
+// carries `omitempty`, so a pointer field without it is advertised as mandatory — and an
+// agent that believes it must send `due_date` cannot make the partial edit that avoids
+// clobbering a field it did not mean to touch.
+type createTaskInput struct {
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	DueDate          string `json:"due_date"`
+	DueTime          string `json:"due_time"`
+	EstimatedMinutes *int   `json:"estimated_minutes"`
+	// The repeat is optional as a block: no keys means one-shot. Each key is
+	// individually optional too, since Normalize treats a missing key as zero.
+	RepeatEvery  *int   `json:"repeat_every,omitempty"`
+	RepeatUnit   string `json:"repeat_unit,omitempty"`
+	RepeatCustom *bool  `json:"repeat_custom,omitempty"`
+	RepeatRule   string `json:"repeat_rule,omitempty"`
+	// Required by store.Create, which rejects a task with no estimate and one with no
+	// parallelable flag — so it stays required in the schema despite being a pointer.
+	Parallelable *bool `json:"parallelable"`
+}
+
+type listTasksInput struct {
+	State   string `json:"state,omitempty"`
+	Overdue bool   `json:"overdue,omitempty"`
+	Search  string `json:"search,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+}
+
+type getTaskInput struct {
+	ID string `json:"id"`
+}
+
+type updateTaskInput struct {
+	ID string `json:"id"`
+	// Every field below is optional: nil means untouched. Name is a plain string
+	// because it can never be cleared, so "" is how "untouched" is spelled.
+	Name             string  `json:"name,omitempty"`
+	Description      *string `json:"description,omitempty"`
+	DueDate          *string `json:"due_date,omitempty"`
+	DueTime          *string `json:"due_time,omitempty"`
+	EstimatedMinutes *int    `json:"estimated_minutes,omitempty"`
+	RepeatEvery      *int    `json:"repeat_every,omitempty"`
+	RepeatUnit       *string `json:"repeat_unit,omitempty"`
+	RepeatCustom     *bool   `json:"repeat_custom,omitempty"`
+	RepeatRule       *string `json:"repeat_rule,omitempty"`
+	ExpectedRevision *int    `json:"expected_revision,omitempty"`
+	Parallelable     *bool   `json:"parallelable,omitempty"`
+}
+
+type completeTaskInput struct {
+	ID string `json:"id"`
+}
+
+type reopenTaskInput struct {
+	ID string `json:"id"`
+}
+
+type deleteTaskInput struct {
+	ID string `json:"id"`
+}
+
 func main() {
 	var err error
 	store, err = tasks.FromEnv()
@@ -83,18 +149,7 @@ func main() {
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_task",
 		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). The repeat is EITHER structured (repeat_every 1-28 with repeat_unit days|weeks|months|years) OR a custom condition (repeat_custom true with repeat_rule = the user's words verbatim) — never both, and all of them empty/0 = one-shot (never interpreted server-side)."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			Name             string `json:"name"`
-			Description      string `json:"description"`
-			DueDate          string `json:"due_date"`
-			DueTime          string `json:"due_time"`
-			EstimatedMinutes *int   `json:"estimated_minutes"`
-			RepeatEvery      *int   `json:"repeat_every"`
-			RepeatUnit       string `json:"repeat_unit"`
-			RepeatCustom     *bool  `json:"repeat_custom"`
-			RepeatRule       string `json:"repeat_rule"`
-			Parallelable     *bool  `json:"parallelable"`
-		}) (*mcp.CallToolResult, map[string]any, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			rep := tasks.Repeat{
 				Every:  0,
 				Unit:   strings.TrimSpace(in.RepeatUnit),
@@ -113,12 +168,7 @@ func main() {
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_tasks",
 		Description: "List tasks. state open (default) | done | all; overdue=true keeps open tasks due before today (requires state=open); search matches name/description; limit caps rows (default 200, max 500) and truncated says whether more exist."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			State   string `json:"state"`
-			Overdue bool   `json:"overdue"`
-			Search  string `json:"search"`
-			Limit   int    `json:"limit"`
-		}) (*mcp.CallToolResult, map[string]any, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in listTasksInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, truncated, err := store.List(ctx, in.State, in.Overdue, in.Search, in.Limit)
 			if err != nil {
 				return fail(err)
@@ -128,9 +178,7 @@ func main() {
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_task",
 		Description: "Fetch one task by id."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			ID string `json:"id"`
-		}) (*mcp.CallToolResult, map[string]any, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in getTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Get(ctx, in.ID)
 			if err != nil {
 				return fail(err)
@@ -140,20 +188,7 @@ func main() {
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_task",
 		Description: "Edit name/description/due_date/due_time/estimated_minutes/repeat/parallelable. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected). The repeat accepts the same four keys (repeat_every/repeat_unit/repeat_custom/repeat_rule) and is validated as a whole; OMIT ALL FOUR repeat keys to leave the recurrence alone; sending repeat_rule \"\" with no structured key clears the whole rule (one-shot). expected_revision: pass the revision the task showed when read; a mismatch means someone else wrote first and the edit is rejected, so re-read and retry. Works on open or done tasks."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			ID               string  `json:"id"`
-			Name             string  `json:"name"`
-			Description      *string `json:"description"`
-			DueDate          *string `json:"due_date"`
-			DueTime          *string `json:"due_time"`
-			EstimatedMinutes *int    `json:"estimated_minutes"`
-			RepeatEvery      *int    `json:"repeat_every"`
-			RepeatUnit       *string `json:"repeat_unit"`
-			RepeatCustom     *bool   `json:"repeat_custom"`
-			RepeatRule       *string `json:"repeat_rule"`
-			ExpectedRevision *int    `json:"expected_revision"`
-			Parallelable     *bool   `json:"parallelable"`
-		}) (*mcp.CallToolResult, map[string]any, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in updateTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			fields := map[string]any{}
 			// Plain strings can't tell "" from absent, so only name (which
 			// can never be cleared) is non-pointer; nil pointer = untouched,
@@ -200,9 +235,7 @@ func main() {
 
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
 		Description: "Mark a task done (retained 3 days, then auto-deleted). A STRUCTURED repeat (repeat_every + repeat_unit) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			ID string `json:"id"`
-		}) (*mcp.CallToolResult, map[string]any, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, next, err := store.Complete(ctx, in.ID)
 			if err != nil {
 				return fail(err)
@@ -228,9 +261,7 @@ func main() {
 
 	mcp.AddTool(s, &mcp.Tool{Name: "reopen_task",
 		Description: "Reopen a completed task (clears completion, cancels the 3-day expiry)."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			ID string `json:"id"`
-		}) (*mcp.CallToolResult, map[string]any, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in reopenTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Reopen(ctx, in.ID)
 			if err != nil {
 				return fail(err)
@@ -240,9 +271,7 @@ func main() {
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_task",
 		Description: "Permanently delete a task (open or done)."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			ID string `json:"id"`
-		}) (*mcp.CallToolResult, map[string]any, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.Delete(ctx, in.ID)
 			if err != nil {
 				return fail(err)

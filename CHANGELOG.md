@@ -8,6 +8,29 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.14.2]
+
+- **Documentation that outlived the Hermes migration** (no behaviour change).
+  The KDoc named `/p/default` as the profile path example — `default` was
+  Hermes' name for the home profile, and pi serves `god`, `story` and
+  `resumes`, so the documented example 404s. The tool-progress frames are no
+  longer `hermes.tool.progress` frames: pi-gateway writes unlabelled
+  `{"tool":…,"status":…}` ones, deliberately without a `type` or a `label`
+  because Pi reports no per-call label to forward (the app already read the
+  label optionally, so nothing changes). "Gateway session" is now
+  "conversation" where that is what it meant.
+- **`GET api/sessions/{id}` documented as missing, not deleted.** It is the
+  Hermes route behind multi-device token reconciliation (#121) and
+  pi-gateway serves no equivalent — usage arrives per-device on the chat
+  response's own `usage` object — so `refreshServerTotals` 404s and keeps the
+  last value silently. The feature is real and the server side is all of it;
+  that gap is now written down instead of implied by a KDoc quoting a
+  response shape from a server that no longer exists.
+- **The `X-Hermes-Session-Id` header name is unchanged, on purpose.** It is
+  what pi-gateway reads, so renaming it is an app-plus-server change (send
+  the new name, accept both for a release, drop the old one) and a MAJOR, not
+  a comment cleanup.
+
 ## [4.14.1]
 
 - **Android lint runs on every build** (#177). Errors fail the job; the

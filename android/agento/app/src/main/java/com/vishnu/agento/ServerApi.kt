@@ -88,7 +88,7 @@ class ServerApi(context: Context) {
         }
     }
 
-    /** Lists skills for one profile path (e.g. `/p/default`). The server
+    /** Lists skills for one profile path (e.g. `/p/god`). The server
      * returns a bare JSON array; object-wrapped shapes fall back gracefully.
      * A valid-but-empty response is success (the UI shows "Nothing listed");
      * only transport/parse failures are errors. */
@@ -171,8 +171,8 @@ class ServerApi(context: Context) {
         }
 
     /** Tools + skills used during the latest server-side turn, read back from
-     * the gateway session the app pinned via `X-Hermes-Session-Id` (#120: one
-     * stable session per app thread, so this slices to the last turn).
+     * the conversation the app pinned via `X-Hermes-Session-Id` (#120: one
+     * stable conversation per app thread, so this slices to the last turn).
      * Assistant messages carry `tool_calls` (name + arguments JSON);
      * tool-result rows carry `tool_name`. Skill names come from
      * [skillNamesFromToolCall]. Only messages after the last `user`/`human`
@@ -223,8 +223,9 @@ class ServerApi(context: Context) {
             }
         }
 
-    /** Server-side totals for one gateway session (#121 reconciliation).
-     * Lenient: the wrapped `{"session":{...}}` shape is verified live, with
+    /** Server-side totals for one conversation (#121 reconciliation).
+     * Lenient: the wrapped `{"session":{...}}` shape is the Hermes one, verified
+     * live at the time, with
      * bare-object fallback; alternate token key names accepted; unknown or
      * missing sessions are success-with-null (pre-#120 thread ids, deleted
      * sessions) so the UI falls back to device sums. Only transport/parse
@@ -283,7 +284,7 @@ class ServerApi(context: Context) {
     }
 }
 
-/** One tool call recorded on a gateway session message. */
+/** One tool call recorded on a conversation message. */
 data class SessionToolCall(
     val name: String,
     val arguments: String = "",
@@ -313,10 +314,18 @@ fun lastTurnStartIndex(roles: List<String>): Int {
     return if (lastUser < 0) roles.size else lastUser + 1
 }
 
-/** Server-side token totals for one gateway session (`GET api/sessions/{id}`,
- * verified live: `{"object":"hermes.session","session":{input_tokens,
- * output_tokens, cache_read_tokens, ...}}`). The multi-device truth for
- * #121 reconcilation — device sums only cover turns this device served. */
+/**
+ * Server-side token totals for one conversation.
+ *
+ * Hermes answered this from `GET api/sessions/{id}` with
+ * `{"object":"hermes.session","session":{...}}`, verified live at the time. pi-gateway
+ * serves no such route: usage reaches the app on the chat response's own `usage`
+ * object, which is what [parseTokenUsage] reads. So this shape is what #121's
+ * multi-device reconciliation *expects*, not what it currently gets, and the totals it
+ * would need are a pi-gateway endpoint that does not exist yet. Tracked as an issue
+ * rather than quietly deleted, because the reconciliation is a real feature and the
+ * missing server side is the whole of it.
+ */
 data class SessionTotals(
     val prompt: Long = 0L,
     val completion: Long = 0L,
@@ -364,7 +373,7 @@ fun usageFromToolCalls(calls: List<SessionToolCall>): SessionUsage {
 }
 
 /**
- * Lenient parse of one gateway session object into totals: accepts
+ * Lenient parse of one server-side session object into totals: accepts
  * `input_tokens`/`prompt_tokens`, `output_tokens`/`completion_tokens`,
  * `cache_read_tokens`/`cached_tokens`, `reasoning_tokens`, plus
  * `message_count`/`tool_call_count` and `model`. Missing totals derive

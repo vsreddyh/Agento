@@ -8,6 +8,10 @@ auth.json
 sessions/
 logs/
 tmp/
+# Pi writes model/prompt caches under a profile and the agent dir; `clean` removes
+# these paths, so anything it deletes must also be ignored or it shows up as
+# untracked noise immediately afterwards.
+cache/
 
 # Model catalog cache Pi refreshes from pi.dev on startup.
 models-store.json

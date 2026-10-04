@@ -21,7 +21,7 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 
 ## System Architecture
 
-The stack runs god (main) + story/resumes (sides), a health sync API, and a scheduled retention job — **fully in containers**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
+The stack runs god (main) + story/resumes (sides), a health sync API, and a scheduled retention job — **fully in containers**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](docker/docker-compose.yml)).
 
 ```
                                Remote MongoDB (money, health, cookbook)
@@ -59,19 +59,19 @@ All profiles connect directly to OpenCode Go (`https://opencode.ai/zen/go/v1`) u
 
 ## Stack Lifecycle (Podman)
 
-All container management is orchestrated through [`scripts/hermes.sh`](file:///home/vsreddyh/Documents/Discord-bots/scripts/hermes.sh), backed by [`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml).
+All container management is orchestrated through [`scripts/hermes.sh`](scripts/hermes.sh), backed by [`docker/docker-compose.yml`](docker/docker-compose.yml).
 
 ### `init`
 1. Verifies host dependencies (podman, compose, python3, curl, cron) and installs missing requirements.
-2. Builds the agent image ([`docker/pi/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/docker/pi/Dockerfile): Node + Pi + the in-repo Go MCP binaries) and the `health-api` image.
+2. Builds the agent image ([`docker/pi/Dockerfile`](docker/pi/Dockerfile): Node + Pi + the in-repo Go MCP binaries) and the `health-api` image.
 3. Initializes root `.env` from `.env.example` if not already present.
-4. Copies skill files from `skills/` into each profile directory.
+4. Reports the skills it finds under `pi/skills/` and each profile's own `skills/`, and warns if there are none. Nothing is copied: both locations are tracked in git and bind-mounted into the container.
 5. Installs the daily data retention cron job (runs daily at 03:00).
 
 ### `start`
 1. Cleans up any stale native PIDs in `run/bots/*.pid`.
 2. Starts the compose stack in detached mode: `podman-compose -f docker/docker-compose.yml up -d --build`.
-3. Runs an initial retention check using [`scripts/retention.sh`](file:///home/vsreddyh/Documents/Discord-bots/scripts/retention.sh).
+3. Runs an initial retention check using [`scripts/retention.sh`](scripts/retention.sh).
 
 ### `stop`
 Gracefully halts running containers: `podman-compose -f docker/docker-compose.yml down`.
@@ -89,7 +89,7 @@ Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered con
 
 ## Bot Profiles
 
-Each profile is a directory under [`pi/profiles/`](file:///home/vsreddyh/Documents/Discord-bots/pi/profiles) — god, story and resumes alike, with no asymmetry between them. Each runs as its own `pi` process with that directory as its working directory, which is how Pi loads its `AGENTS.md`, so a profile *is* a directory rather than a runtime option. `pi-gateway` starts one process per profile and routes `/p/<profile>/…` to it:
+Each profile is a directory under [`pi/profiles/`](pi/profiles) — god, story and resumes alike, with no asymmetry between them. Each runs as its own `pi` process with that directory as its working directory, which is how Pi loads its `AGENTS.md`, so a profile *is* a directory rather than a runtime option. `pi-gateway` starts one process per profile and routes `/p/<profile>/…` to it:
 
 | Profile | App Tab | Workspace & Domain Data |
 |---|---|---|
@@ -225,11 +225,20 @@ All settings are configured in the single root `.env` file:
 ### Adding a New Bot Profile
 1. Create a plan in `profile-plans/<bot>-plan.md`.
 2. Create the profile directory `pi/profiles/<name>/` with its `AGENTS.md` and `skills/`.
-3. Add the bot identifier to the `BOTS` array in `scripts/hermes.sh`.
+3. Add the profile name to the `PROFILES` array in `scripts/hermes.sh`.
 4. Rebuild and restart the pi container:
    ```bash
    ./scripts/hermes.sh restart
    ```
 
 ### Adding a Skill
-Place the skill directory containing `SKILL.md` inside `skills/` and execute `./scripts/hermes.sh init` to distribute the skill to all bot profiles.
+Put the skill directory containing `SKILL.md` in one of two places, and commit it:
+
+- `pi/skills/<name>/` — shared by every profile. The agent directory is a discovered
+  skill location, so no further step is needed.
+- `pi/profiles/<name>/skills/<name>/` — that profile only. Pi does **not** discover
+  skills from a profile's working directory (measured; see `pi/README.md`), so
+  pi-gateway passes it explicitly with `--skill`.
+
+`./scripts/hermes.sh init` only reports what it finds; there is no distribution step to
+run, and nothing to re-run after editing a skill.

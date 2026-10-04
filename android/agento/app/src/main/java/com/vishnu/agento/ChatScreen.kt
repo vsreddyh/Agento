@@ -449,7 +449,7 @@ internal fun TabModelSheet(
 /** Per-thread usage header (#121): thread total + last-turn context size
  * (the prompt of the latest reported turn — the full history is resent, so
  * prompt size IS the context pressure gauge) + counted/unreported turns.
- * The server line reconciles against the gateway session total (covers
+ * The server line reconciles against the server-side conversation total (covers
  * turns served to other devices); the baseline line explains large
  * first-turn prompts (SOUL.md + skills + tools load before turn 1). */
 @Composable

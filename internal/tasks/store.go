@@ -8,7 +8,7 @@
 // Completed tasks are retained 3 days via expiresAt TTL
 // (= completedAt + RetentionDays); open tasks carry no expiresAt and never
 // expire. A Repeat is never interpreted here — advancing to the next
-// occurrence is purely the agent's job (see skills/task-manager/SKILL.md);
+// occurrence is purely the agent's job (see pi/skills/task-manager/SKILL.md);
 // complete_task only echoes the rule back so the caller can't miss it.
 package tasks
 

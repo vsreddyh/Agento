@@ -52,7 +52,12 @@ sealed interface ChatEvent {
      * the stream carried no usable `usage` object — e.g. a failed turn). */
     data class Done(val fullText: String, val usage: TokenUsage? = null) : ChatEvent
     data class Error(val message: String) : ChatEvent
-    /** Live tool-start signal from `hermes.tool.progress` SSE frames. */
+    /**
+     * Live tool-start signal, from the unlabelled progress frames pi-gateway writes to
+     * the SSE stream: `{"tool":"bash","status":"start"}`. There is no `type` field on
+     * them and no `label` — pi-gateway sends neither on purpose (Pi has no per-call
+     * label to forward), which is why [label] below is optional rather than absent.
+     */
     data class ToolProgress(
         val tool: String,
         val label: String = "",
@@ -421,7 +426,7 @@ class ChatApi(context: Context) {
      * Token counts come from the stream's `usage` object (final chunk), parsed
      * leniently via [parseTokenUsage] — null when the server reports nothing
      * usable. Tool-start visibility comes through as [ChatEvent.ToolProgress] parsed
-     * from the gateway's `hermes.tool.progress` SSE frames. [sessionId] is
+     * from the progress frames described on [ChatEvent.ToolProgress]. [sessionId] is
      * sent as `X-Hermes-Session-Id` (blank = omitted). The app passes its
      * stable per-thread id (#120) so turns append to one server session;
      * the agent loop itself is unchanged (full history is still sent per
@@ -503,7 +508,7 @@ class ChatApi(context: Context) {
                         // frames without counts leave the last-seen intact.
                         runCatching { parseTokenUsage(JSONObject(data)) }
                             .getOrNull()?.let { seenUsage = it }
-                        // Tool-progress frames carry {"tool","label",...} and no
+                        // Tool-progress frames carry {"tool","status",...} and no
                         // choices array — surface them instead of dropping them.
                         val progress = runCatching {
                             val o = JSONObject(data)

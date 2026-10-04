@@ -37,12 +37,13 @@ data class ChatUiState(
     val threadId: String = "",
     /** Reachability of the server; null = not checked yet. */
     val online: Boolean? = null,
-    /** Distinct tool names seen live this turn (hermes.tool.progress frames). */
+    /** Distinct tool names seen live this turn (pi-gateway's progress frames). */
     val activeTools: List<String> = emptyList(),
     /** Label of the latest live tool frame, e.g. what the tool is doing. */
     val activeToolLabel: String = "",
-    /** Server-side totals for the active thread's gateway session (#121);
-     * null = unknown (fetch failed, or the thread predates stable sessions). */
+    /** Server-side totals for the active thread's conversation (#121);
+     * null = unknown — which is also the steady state today, since pi-gateway
+     * serves no `api/sessions/{id}`; see [SessionTotals]. */
     val serverTokens: SessionTotals? = null,
     /** Text queued while streaming (#122): auto-sends when the reply
      * finishes cleanly, restored to the composer on failure/stop. */
@@ -535,7 +536,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Reasoning trace accumulator (bounded by the sender; mirrored here
         // so the placeholder update below can't grow it past the cap).
         val racc = StringBuilder()
-        // One stable gateway session per app thread (#120): the thread id
+        // One stable conversation per app thread (#120): the thread id
         // ships as X-Hermes-Session-Id so turns append to the same server
         // session (titles/costs read per conversation). Captured up front:
         // a thread switch mid-turn must not retarget the in-flight request.
@@ -759,7 +760,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Post-turn usage fetch: merges server-recorded tools + skills into the
      * finished message so they persist and render as chips. Silent on
      * failure — the live tools attached at Done stay. [sessionId] is the
-     * stable per-thread gateway session (#120); the fetch slices to the
+     * stable per-thread conversation (#120); the fetch slices to the
      * last turn server-side, so earlier turns never bleed into this
      * reply's chips. The patch targets the
      * index captured at Done time (verified by timestamp, with a timestamp

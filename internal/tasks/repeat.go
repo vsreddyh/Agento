@@ -14,7 +14,7 @@ import (
 // split out of store.go so the rule outlives the file it grew in (#171).
 //
 // The server stores the recurrence but never advances it: creating the
-// next occurrence is the caller's job (see skills/task-manager/SKILL.md).
+// next occurrence is the caller's job (see pi/skills/task-manager/SKILL.md).
 
 // Repeat is a task's recurrence, in one of two mutually exclusive modes:
 //
@@ -23,7 +23,7 @@ import (
 //
 // An all-zero Repeat is a one-shot task. The server stores the recurrence
 // but never advances it: creating the next occurrence is the caller's job
-// (see skills/task-manager/SKILL.md).
+// (see pi/skills/task-manager/SKILL.md).
 type Repeat struct {
 	// Every is the count, RepeatEveryMin..RepeatEveryMax; 0 = unset.
 	Every int
