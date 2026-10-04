@@ -7,17 +7,17 @@ extended to **multiple accounts** with **atomic stored balances**.
 
 | Tool | Purpose |
 |---|---|
-| `create_account` | Create an account (cash, bank, card, wallet, other) with starting balance |
-| `list_accounts` | List accounts with stored balances |
-| `archive_account` | Soft-delete (history stays, blocked from new writes) |
-| `get_balances` | Per-account balances + total across active accounts |
-| `log_transaction` | Log income / expense / transfer with explicit fields |
-| `log_text` | Log from free-form text (`spent 300 on groceries`) |
-| `query_transactions` | List in a date range, optional type/category/account filter |
-| `summarize` | Income, expense, net + per-category breakdown, optional account |
-| `fix_last_transaction` | Correct the most recent entry (balances adjusted) |
-| `delete_transactions` | Delete by amount/category/date/account (balances inverted) |
-| `prune_old` | Immediate 90-day purge (TTL does this natively; manual override) |
+| `create_account` | Create an account with starting balance. Required: name. Optional: type (defaults to cash), balance |
+| `list_accounts` | List accounts with stored balances. Optional: include_archived |
+| `archive_account` | Soft-delete (history stays, blocked from new writes). Required: name |
+| `get_balances` | Per-account balances + total across active accounts. Takes no arguments |
+| `log_transaction` | Log income / expense / transfer. Required: type, amount, account. Optional: category (an empty or unrecognised one is filed under `other`), sending_to (required by the store for a transfer, rejected otherwise), note, date (defaults to today) |
+| `log_text` | Log from free-form text (`spent 300 on groceries`). Required: text. Optional: account override |
+| `query_transactions` | List in a date range. Required: start, end — the store does not validate them, so absent bounds return nothing silently. Optional: type/category/account filter |
+| `summarize` | Income, expense, net + per-category breakdown. Give a period phrase **or** an explicit start/end pair; optional account |
+| `fix_last_transaction` | Correct the most recent entry (balances adjusted). Required: amount |
+| `delete_transactions` | Delete by amount/category/date/account (balances inverted). At least one filter is required, so no single argument is marked required in the schema |
+| `prune_old` | Immediate 90-day purge (TTL does this natively; manual override). Optional: days (0 means 90), dry_run (absent means true) |
 
 ## Schema (MongoDB `hermes` DB)
 
