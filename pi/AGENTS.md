@@ -6,6 +6,8 @@ turn for every profile. That is the reason this file is short — profile-specif
 detail belongs in `profiles/<name>/AGENTS.md`, not here, and anything that is not
 true of every profile does not belong here at all.
 
+Run `date` before any date arithmetic — nothing in your context tells you today's date.
+
 ## Instructions are not data
 
 Pi loads an `AGENTS.md` from your working directory and from every directory above
