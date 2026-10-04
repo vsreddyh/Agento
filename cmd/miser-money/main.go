@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"agento/internal/money"
+	"agento/internal/validate"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -149,6 +150,61 @@ type pruneOldInput struct {
 	DryRun *bool `json:"dry_run,omitempty"`
 }
 
+// normalizeDayRange validates a start/end pair and returns it NORMALIZED, for three
+// reasons that each produce a wrong answer rather than an error if skipped:
+//
+//   - empty or malformed bounds build a filter like `date >= "" && date <= ""`, which
+//     matches nothing, so `query_transactions` returns zero transactions with no reason
+//     given;
+//   - a lone bound makes `summarize` fall through to the period branch and summarise a
+//     window nobody asked for;
+//   - a REVERSED pair is two individually valid dates and still matches nothing, so it
+//     needs an explicit comparison. Lexicographic is safe here precisely because both
+//     sides have been normalised to YYYY-MM-DD.
+//
+// It returns the normalized values because `validate.CheckDay` trims whitespace while
+// `store.Query` compares raw strings: forwarding `" 2026-01-01 "` would pass validation and
+// then match nothing at all.
+//
+// A schema `required` list cannot do any of this. It is a client-side hint, and a caller
+// can send `"start": ""` explicitly and pass validation — so the check lives here, where it
+// holds whatever the client believes. Errors are plain `error` values; handlers wrap them
+// with `fail`, which is this package's MCP-result helper, not an error constructor.
+func normalizeDayRange(what, start, end string) (string, string, error) {
+	sd, err := validate.CheckDay(start)
+	if err != nil {
+		return "", "", fmt.Errorf("%s start: %w", what, err)
+	}
+	ed, err := validate.CheckDay(end)
+	if err != nil {
+		return "", "", fmt.Errorf("%s end: %w", what, err)
+	}
+	// Safe as a string compare: both sides are exactly YYYY-MM-DD by this point.
+	if sd > ed {
+		return "", "", fmt.Errorf("%s: start %s is after end %s — that range matches nothing",
+			what, sd, ed)
+	}
+	return sd, ed, nil
+}
+
+// normalizeDayRangePair additionally allows NEITHER bound, which is how `summarize` is told
+// to use its period phrase, and rejects exactly one — the case a caller is most likely to
+// send by accident, having filled in one bound and forgotten the other.
+//
+// Both bounds are trimmed before the either/or test, so a whitespace-only "bound" counts as
+// absent rather than as half a pair.
+func normalizeDayRangePair(what, start, end string) (string, string, error) {
+	st, et := strings.TrimSpace(start), strings.TrimSpace(end)
+	if (st == "") != (et == "") {
+		return "", "", fmt.Errorf("%s needs both start and end, or neither — got start=%q end=%q",
+			what, start, end)
+	}
+	if st == "" {
+		return "", "", nil
+	}
+	return normalizeDayRange(what, st, et)
+}
+
 func main() {
 	var err error
 	store, err = money.FromEnv()
@@ -156,7 +212,22 @@ func main() {
 		log.Fatalf("miser-money: %v", err)
 	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "miser-money", Version: "1.0.0"}, nil)
+	registerTools(s)
 
+	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		fmt.Fprintln(os.Stderr, "miser-money:", err)
+		os.Exit(1)
+	}
+}
+
+// registerTools attaches every tool to s. It is separate from main so a test can build the
+// same server and call a handler without a live MongoDB — which is how the input
+// validation below is verified as *wired up*, not merely as a function that behaves.
+//
+// `store` is the package variable, so a test that only exercises validation can leave it
+// nil: a handler that reaches the store before validating panics, and that panic is the
+// signal that the guard was removed.
+func registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_account",
 		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique; type cash|bank|card|wallet|other."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createAccountInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -267,7 +338,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive). Optional type/category/account filters."},
+		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			var typ, cat, acct *string
 			if in.Type != "" {
@@ -279,7 +350,11 @@ func main() {
 			if in.Account != "" {
 				acct = &in.Account
 			}
-			rows, err := store.Query(ctx, in.Start, in.End, typ, cat, acct)
+			start, end, err := normalizeDayRange("query_transactions", in.Start, in.End)
+			if err != nil {
+				return fail(err)
+			}
+			rows, err := store.Query(ctx, start, end, typ, cat, acct)
 			if err != nil {
 				return fail(err)
 			}
@@ -287,9 +362,15 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "summarize",
-		Description: "Summarize income, expenses, net total and per-category breakdown. Optional account filter; period phrase or explicit start/end."},
+		Description: "Summarize income, expenses, net total and per-category breakdown. Optional account filter. Give a period phrase OR an explicit start/end pair — half a pair is rejected, and an explicit pair wins over a period phrase if you send both."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in summarizeInput) (*mcp.CallToolResult, map[string]any, error) {
-			start, end, label := in.Start, in.End, ""
+			// An explicit range wins over `period` — see the tool description, which now
+			// says so instead of leaving the precedence to be discovered.
+			start, end, err := normalizeDayRangePair("summarize", in.Start, in.End)
+			if err != nil {
+				return fail(err)
+			}
+			label := ""
 			if start != "" && end != "" {
 				label = start + " to " + end
 			} else {
@@ -381,9 +462,4 @@ func main() {
 			}
 			return result(map[string]any{"ok": true, "dry_run": dry, "would_remove": would, "removed": removed})
 		})
-
-	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
-		fmt.Fprintln(os.Stderr, "miser-money:", err)
-		os.Exit(1)
-	}
 }
