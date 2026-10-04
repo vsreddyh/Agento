@@ -34,5 +34,6 @@ Done), `note`, `createdAt`, `updatedAt` (bumped on every edit).
 go run ./cmd/project-manager      # stdio transport (or go build -o project-manager ./cmd/project-manager)
 ```
 
-The binary is baked into the bot image (`test/Dockerfile`) and registered
-on the god profile (`gateway/config.yaml.template`).
+The binary is baked into the agent image (`docker/pi/Dockerfile`) and registered
+for every profile through `pi/mcp.json`, which is what `docker/pi/entrypoint.sh`
+verifies at boot by refusing to start if any server fails to connect.

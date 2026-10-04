@@ -1,6 +1,6 @@
-# Hermes Android stack
+# Agento Android stack
 
-Fully containerized agent stack running god + 2 sides (god main, story/resumes) direct against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one multiplexed gateway container** with a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), native browser automation via the built-in browser toolset, Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully containerized agent stack running god + story + resumes against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one pi container** — one `pi` process per profile behind an OpenAI-compatible gateway — serving the custom **Android app** (3 chat tabs + Settings), native browser automation via the built-in browser toolset, Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
@@ -11,10 +11,9 @@ Fully containerized agent stack running god + 2 sides (god main, story/resumes) 
                                              ▲
                               Containers
   god ────┐               │
-  story   ┤ ONE Gateway   │ HERMES_HOME=  ▼
-  resumes ┘ god + 2 sides │ /opt/data │   OpenCode Go Direct
-           (multiplexed)  │  (gateway +  │  (https://opencode.ai/zen/go/v1)
-          └── API server :8642 ──────────┤   (still published; nothing routes to it)
+  story   ┤ ONE pi host   │  agent dir   ▼   OpenCode Go Direct
+  resumes ┘ 3 pi processes│   /opt/pi     │  (https://opencode.ai/zen/go/v1)
+           (one per profile)└─ API :8643 ─┤
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► pi :8643 ──► MongoDB
                                      └──► /api/* ─► health-api ─► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
@@ -22,10 +21,10 @@ Retention ───────────────► one-shot container (c
 
 | Service | Container / Process | Published Port | Purpose |
 |---|---|---|---|
-| `gateway` | `gateway` container (direct exec, PID 1) | `8642` (app API) | Multiplexed gateway for god + 2 sides + OpenAI-compatible API server |
+| `pi` | `pi` container (`pi-gateway`, PID 1) | `8643` (app API) | The agent host: one `pi` process per profile (god, story, resumes) behind an OpenAI-compatible gateway |
 | `health-api` | `health-api` container | `8001` | Ingests Health Connect sync data from Android and persists to MongoDB |
-| `proxy` | `proxy` container (nginx) | `8080` | Single app URL: routes `/p/*` → gateway chat, `/api/*` → health sync |
-| `retention` | `retention` container (one-shot) | — | Data retention policy runner (`cmd/retention`, Go binary in bot image) |
+| `proxy` | `proxy` container (nginx) | `8080` | Single app URL: routes `/p/*` → pi chat, `/api/*` → health sync |
+| `retention` | `retention` container (one-shot) | — | Data retention policy runner (`cmd/retention`, its own `docker/retention/Dockerfile` image) |
 
 ---
 
@@ -45,9 +44,9 @@ Retention ───────────────► one-shot container (c
 
 | Specification | Minimum Requirement | Recommended (Production) | Notes |
 |---|---|---|---|
-| **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Image build (LaTeX/tectonic, Hermes, Playwright chromium) benefits from multiple cores. |
-| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The multiplexed `gateway` (hermes + Go MCP binaries + bundled chromium) consumes ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
-| **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, Go build cache, local repo clones, Playwright chromium, and logs. |
+| **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Image build (Go, LaTeX/tectonic) benefits from multiple cores. |
+| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The `pi` container (Node + Pi + five Go MCP servers) consumes ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
+| **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, Go build cache, local repo clones, Pi's own runtime caches, and logs. |
 | **OS** | Linux (Ubuntu 22.04+, Debian 12+, Arch, Fedora) | Ubuntu 22.04/24.04 LTS or Debian 12 | Linux kernel 5.10+ with systemd and package manager (`apt`, `pacman`, or `dnf`). |
 
 ### Required Host Tools & Access
@@ -56,7 +55,7 @@ Retention ───────────────► one-shot container (c
 - **SSH Key Pair**: Configured in `~/.ssh` with read/write access to private GitHub repos for Git-backed bots:
   - `git@github.com:vsreddyh/portals.git` (Story bot lore vault)
   - `git@github.com:vsreddyh/Resume.git` (Resumes bot CV repository)
-  - Bootstrap order matters: the gateway bind-mounts `id_ed25519`(.pub) + `known_hosts` read-only and **fails to start without them** — provision keys before the first `./scripts/hermes.sh start` (set `VPS_SSH_DIR` in `.env` if the VPS user isn't root).
+  - Bootstrap order matters: the pi service bind-mounts `id_ed25519`(.pub) + `known_hosts` read-only and **fails to start without them** — provision keys before the first `./scripts/hermes.sh start` (set `VPS_SSH_DIR` in `.env` if the VPS user isn't root).
 
 ### Required External Services & API Keys
 - **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai). One key for the single `opencode-go` provider, selected per request in app Settings (model `mimo-v2.6-flash`).
@@ -65,8 +64,8 @@ Retention ───────────────► one-shot container (c
 - **App Password**: `PASSWORD` Bearer token matching the Agento Android app Password field (single credential for chat + sync). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password.)
 
 ### Network & Firewall Ports
-- Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `PASSWORD`, provider/model picked per tab from live dropdowns, paths `/p/story`, `/p/resumes`, `/p/default`. Direct ports stay published for comparison: `8643` (pi, what `/p/*` reaches), `8642` (Hermes gateway, no longer routed to), `8001` (sync).
-- Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as `8642`).
+- Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `PASSWORD`, provider/model picked per tab from live dropdowns, paths `/p/story`, `/p/resumes`, `/p/god`. Direct ports stay published for comparison: `8643` (pi, what `/p/*` reaches) and `8001` (sync).
+- Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as the proxy).
 - Outbound HTTPS (`443/tcp`) for OpenCode Go (`opencode.ai`), MongoDB Atlas, and GitHub.
 
 ---
@@ -87,7 +86,7 @@ cp .env.example .env && nano .env
 
 # 4. Inspect container health and logs
 ./scripts/hermes.sh status
-podman-compose -f docker/docker-compose.yml logs -f gateway
+podman-compose -f docker/docker-compose.yml logs -f pi
 
 # 5. Stop the stack
 ./scripts/hermes.sh stop
@@ -173,19 +172,21 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 ├── README.md                # Stack overview and quickstart guide
 ├── documentation.md         # Deep-dive architecture and component documentation
 ├── docker/
-│   ├── docker-compose.yml   # Unified compose configuration (health-api + gateway + retention)
-│   ├── health-api/          # Health Connect Go sync service (Dockerfile, binary in bot image)
-├── test/
-│   ├── Dockerfile           # Derived bot image (official hermes + Go MCP binaries)
-│   └── entrypoint.sh        # Config rendering + secret fail-fast, then execs gateway
+│   ├── docker-compose.yml   # Unified compose configuration (health-api + pi + proxy + retention)
+│   ├── health-api/          # Health Connect Go sync service (Dockerfile, binary in the image)
+│   ├── pi/                  # The Pi agent image + entrypoint (MCP connectivity gate, then pi-gateway)
+│   ├── retention/           # The one-shot retention image (one Go binary)
+│   └── proxy/               # nginx conf: the app's single URL
 ├── mcps/
 │   ├── money/               # miser-money MCP (accounts + transactions; code in cmd/ + internal/)
 │   ├── cookbook/            # cookbook MCP (permanent recipe library; code in cmd/ + internal/)
 │   └── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
-├── gateway/               # God = default profile = gateway home (HERMES_HOME)
-│   ├── config.yaml.template # model + platforms.api_server + MCPs
-│   ├── SOUL.md              # god operator
-│   └── profiles/            # Nested side profiles (story, resumes)
+├── pi/                    # The Pi agent dir, bind-mounted at /opt/pi
+│   ├── mcp.json            # the five in-repo Go MCP servers
+│   ├── settings.json       # Pi's own knobs (tool selection, retry, cache warming)
+│   ├── AGENTS.md           # rules shared by every profile
+│   ├── extensions/         # loaded by every profile (spawn_subagent)
+│   └── profiles/           # god, story, resumes — each its own pi process
 ├── cmd/                 # Go services (each builds to a static binary)
 │   ├── mongo/             # MongoDB CLI helper for bot toolsets
 │   ├── retention/         # Data lifecycle prune runner

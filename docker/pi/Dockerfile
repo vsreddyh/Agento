@@ -41,9 +41,10 @@ ARG NODE_IMAGE=node@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83
 # Binary set: 5 of the 7 the old image shipped. The two omissions are on
 # purpose and neither is agent-reachable:
 #   retention — a one-shot lifecycle job. It runs as its own compose service
-#               (`podman-compose run --rm retention`, entrypoint
-#               /usr/local/bin/retention) built from test/Dockerfile, so it
-#               never needs to exist inside the agent container.
+#               (`podman-compose run --rm retention`) on its own image
+#               (docker/retention/Dockerfile), so it never needs to exist inside
+#               the agent container — and, more importantly, so deleting the old
+#               Hermes-derived image it used to build from was possible.
 #   mongo     — an operator CLI for ad-hoc queries. No skill invokes it; agents
 #               reach MongoDB through the MCP servers, not the shell.
 #
