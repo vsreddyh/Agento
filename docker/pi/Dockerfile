@@ -22,7 +22,7 @@ ARG NODE_IMAGE=node@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83
 #
 # Two stages:
 #   gobuild — builds the in-repo MCP servers (money, cookbook, health-check,
-#             task-manager, project-manager) exactly as before.
+#             task-manager, project-manager, notes) exactly as before.
 #   runtime — Node for Pi (@earendil-works/pi-coding-agent) plus those
 #             binaries on PATH.
 #
@@ -65,6 +65,7 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/miser-money ./cmd/miser-money \
  && go build -trimpath -ldflags="-s -w" -o /out/health-check ./cmd/health-check \
  && go build -trimpath -ldflags="-s -w" -o /out/task-manager ./cmd/task-manager \
  && go build -trimpath -ldflags="-s -w" -o /out/project-manager ./cmd/project-manager \
+ && go build -trimpath -ldflags="-s -w" -o /out/notes ./cmd/notes \
  && go build -trimpath -ldflags="-s -w" -o /out/pi-gateway ./cmd/pi-gateway
 
 FROM ${NODE_IMAGE} AS runtime
@@ -178,6 +179,7 @@ COPY --from=gobuild /out/cookbook         /usr/local/bin/cookbook
 COPY --from=gobuild /out/health-check     /usr/local/bin/health-check
 COPY --from=gobuild /out/task-manager     /usr/local/bin/task-manager
 COPY --from=gobuild /out/project-manager  /usr/local/bin/project-manager
+COPY --from=gobuild /out/notes             /usr/local/bin/notes
 
 # pi-gateway is the container's main process, not an optional extra. It serves the
 # OpenAI-compatible HTTP surface AND spawns one `pi --mode rpc` child per profile,
@@ -189,7 +191,8 @@ COPY --from=gobuild /out/pi-gateway       /usr/local/bin/pi-gateway
 
 RUN chmod 755 /usr/local/bin/miser-money /usr/local/bin/cookbook \
              /usr/local/bin/health-check /usr/local/bin/task-manager \
-             /usr/local/bin/project-manager /usr/local/bin/pi-gateway
+             /usr/local/bin/project-manager /usr/local/bin/notes \
+             /usr/local/bin/pi-gateway
 
 COPY docker/pi/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

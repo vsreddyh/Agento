@@ -162,6 +162,7 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 - `hc_meals`, `hc_days`: Purges records where `date < today - 30d`.
 - `hc_weight`: **Permanent retention** (never pruned).
 - `cookbook_ingredients`, `cookbook_recipes`, `cookbook_cook_log`: **Permanent retention** (never pruned).
+- `notes`: **Permanent retention** (never pruned) — the agent's no-op.
 
 ---
 
@@ -180,9 +181,10 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 ├── mcps/
 │   ├── money/               # miser-money MCP (accounts + transactions; code in cmd/ + internal/)
 │   ├── cookbook/            # cookbook MCP (permanent recipe library; code in cmd/ + internal/)
-│   └── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
+│   ├── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
+│   └── notes/               # notes MCP (permanent markdown notes + lists; code in cmd/ + internal/)
 ├── pi/                    # The Pi agent dir, bind-mounted at /opt/pi
-│   ├── mcp.json            # the five in-repo Go MCP servers
+│   ├── mcp.json            # the six in-repo Go MCP servers
 │   ├── settings.json       # Pi's own knobs (tool selection, retry, cache warming)
 │   ├── AGENTS.md           # rules shared by every profile
 │   ├── extensions/         # loaded by every profile (spawn_subagent)
@@ -193,8 +195,9 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── health-api/        # Health Connect sync service
 │   ├── miser-money/       # money MCP server (stdio)
 │   ├── cookbook/          # cookbook MCP server (stdio)
-│   └── health-check/      # health-check MCP server (stdio)
-├── internal/              # Shared Go packages (mongo, validate, money, cookbook, healthcheck)
+│   ├── health-check/      # health-check MCP server (stdio)
+│   └── notes/             # notes MCP server (stdio)
+├── internal/              # Shared Go packages (mongo, validate, money, cookbook, healthcheck, notes)
 ├── scripts/
 │   ├── hermes.sh            # Main orchestration CLI
 │   ├── retention.sh         # Retention execution wrapper

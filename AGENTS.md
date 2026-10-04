@@ -29,7 +29,7 @@ Runs god + story + resumes against OpenCode Go directly (no LLM proxy).
 ONE pi container runs one `pi` process per profile — a profile is a directory
 with its own `AGENTS.md`, not a runtime option — fronted by `pi-gateway`, an
 OpenAI-compatible API server (:8643) for the custom Android app, with remote
-MongoDB for domain data (money, health, cookbook). **The live stack is fully
+MongoDB for domain data (money, health, cookbook, notes). **The live stack is fully
 containerized** — one compose file (`docker/docker-compose.yml`): health-api +
 one `pi` container (direct to `https://opencode.ai/zen/go/v1`) + nginx +
 a one-shot retention job. Development runs the SAME single compose file against
