@@ -123,4 +123,3 @@ func Round1(f float64) float64 {
 	}
 	return float64(int(f*10-0.5)) / 10
 }
-

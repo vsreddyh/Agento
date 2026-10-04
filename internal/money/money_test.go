@@ -226,10 +226,10 @@ func TestTransferValidation(t *testing.T) {
 		typ, dst string
 		extra    string
 	}{
-		{"transfer", "HDFC", ""},   // same source/dest
-		{"transfer", "", ""},       // no sending_to
-		{"transfer", "Nope", ""},   // unknown dest
-		{"expense", "Cash", "x"},   // sending_to on non-transfer
+		{"transfer", "HDFC", ""}, // same source/dest
+		{"transfer", "", ""},     // no sending_to
+		{"transfer", "Nope", ""}, // unknown dest
+		{"expense", "Cash", "x"}, // sending_to on non-transfer
 	}
 	for _, c := range bad {
 		st := c.dst

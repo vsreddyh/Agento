@@ -257,7 +257,12 @@ type piUsage struct {
 	Output     int64 `json:"output"`
 	CacheRead  int64 `json:"cacheRead"`
 	CacheWrite int64 `json:"cacheWrite"`
-	Total      int64 `json:"totalTokens"`
+	// Reasoning is decoded but not sent on the streaming path: toWire below deliberately
+	// omits it, because a turn's reasoning tokens are already inside Output for every
+	// provider that reports them separately, and publishing both would double-count. The
+	// session-totals route reads it, where the app wants the split.
+	Reasoning int64 `json:"reasoning"`
+	Total     int64 `json:"totalTokens"`
 }
 
 func (u piUsage) toWire() *usage {
@@ -507,6 +512,42 @@ func decodeUsage(rec pi.Record) (piUsage, bool) {
 		return piUsage{}, false
 	}
 	return *payload.Usage, true
+}
+
+// decodeTurnError reports a turn Pi could not complete.
+//
+// Without this the gateway is blind to failure in the most expensive way possible: an
+// errored turn produces no content, so the stream simply ends and the client receives an
+// empty completion with `finish_reason: "stop"` — indistinguishable from a turn that
+// legitimately had nothing to say. That is how a live outage presented as a healthy stack
+// answering with blanks: pi recorded `stopReason: "error"` in every session file while
+// every HTTP response said 200.
+//
+// Only `stopReason: "error"` counts. Pi also ends turns with "stop", "toolUse" and
+// similar, and treating any non-empty stop reason as a failure would turn every completed
+// turn into an error.
+func decodeTurnError(rec pi.Record) (string, bool) {
+	var payload struct {
+		Message *struct {
+			Role         string `json:"role"`
+			StopReason   string `json:"stopReason"`
+			ErrorMessage string `json:"errorMessage"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Raw, &payload); err != nil || payload.Message == nil {
+		return "", false
+	}
+	m := payload.Message
+	if m.Role != "assistant" || m.StopReason != "error" {
+		return "", false
+	}
+	// Pi's own message is the useful part — it names the cause — but it is model- or
+	// dependency-supplied text and goes to a client, so it is bounded like every other
+	// reflected value in this package.
+	if msg := strings.TrimSpace(m.ErrorMessage); msg != "" {
+		return bounded(msg), true
+	}
+	return "the agent reported a failed turn with no detail", true
 }
 
 // turn is the user content a single request contributes to Pi.

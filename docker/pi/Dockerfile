@@ -140,10 +140,38 @@ RUN set -eux; \
 # (verified), so nothing is lost and the supply-chain surface is smaller. If a
 # future Pi version needs one, this line is where to notice.
 ARG PI_VERSION=1.0.0
-RUN npm install -g --no-audit --no-fund --ignore-scripts \
-      "@earendil-works/pi-coding-agent@${PI_VERSION}" \
- && npm cache clean --force \
- && pi --version
+
+# The dependency tree is pinned by ASSERTION, not by a lockfile.
+#
+# `npm install -g` cannot consume a lockfile, and making it do so would mean installing
+# into a project prefix and then hand-moving node_modules into /usr/local/lib and rewriting
+# the bin symlinks -- a much larger change to the image for the same guarantee. So the
+# install stays as it is and its RESULT is checked against a committed manifest.
+#
+# This exists because of a live outage: a rebuild to pick up an unrelated change came back
+# with a different tree, every turn failed with an opaque undici error about a character
+# above U+00FF, and the gateway reported each failure as an empty 200. Nothing tied the
+# build to what it had produced before, so a rebuild was a silent upgrade and the only
+# evidence was in session files.
+#
+# A mismatch fails the build. That is the whole point: if the tree really must change, it
+# is a deliberate act -- bump PI_VERSION, regenerate the manifest, commit both, and let the
+# review show it.
+COPY docker/pi/pi-deps.lock /usr/local/share/pi-deps.lock
+RUN set -eu; \
+    npm install -g --no-audit --no-fund --ignore-scripts \
+      "@earendil-works/pi-coding-agent@${PI_VERSION}"; \
+    actual=/tmp/pi-deps.actual; \
+    node -e 'const {execSync}=require("child_process");const d=JSON.parse(execSync("npm ls -g --all --json",{encoding:"utf8",stdio:["ignore","pipe","ignore"]}));const out=new Set();(function w(n){for(const [k,v] of Object.entries(n.dependencies||{})){if(v.version)out.add(k+"@"+v.version);w(v);}})(d);require("fs").writeFileSync(process.argv[1],[...out].sort().join("\n")+"\n")' "$actual"; \
+    if ! diff -u /usr/local/share/pi-deps.lock "$actual"; then \
+      echo "FATAL: Pi's dependency tree differs from docker/pi/pi-deps.lock (above)." >&2; \
+      echo "       A rebuild must not change what runs. If the change is intended," >&2; \
+      echo "       bump PI_VERSION, regenerate the manifest, and commit both together." >&2; \
+      exit 1; \
+    fi; \
+    rm -f "$actual"; \
+    npm cache clean --force; \
+    pi --version
 
 COPY --from=gobuild /out/miser-money      /usr/local/bin/miser-money
 COPY --from=gobuild /out/cookbook         /usr/local/bin/cookbook

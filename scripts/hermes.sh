@@ -377,6 +377,25 @@ legacy_native_bots() {
     return 0
 }
 
+# One real turn through the app's own path, asserted to return words.
+#
+# This is not a health check: the container healthcheck passes on a process that is listening
+# while every turn it handles fails. That gap is not theoretical — a rebuild left this stack
+# answering HTTP 200 with an empty body for every request, healthcheck green throughout, and
+# the only evidence was `stopReason: "error"` inside session files. One cheap turn closes it,
+# so a broken deploy fails here instead of being noticed later by a person.
+smoke_chat() {
+    # Not fatal to the caller: a provider outage is not a reason to leave the stack down,
+    # and tearing down a working gateway because a model is briefly unavailable helps
+    # nobody. The failure is loud and the exit code says so.
+    if bash "$SCRIPTS_DIR/smoke.sh"; then
+        return 0
+    fi
+    warn "The stack is up but did not answer a real turn. See the checks above."
+    warn "If it was already like this before this run, the cause is not this deploy."
+    return 1
+}
+
 cmd_start() {
     load_root_env
     mkdir -p "$RUN_DIR"
@@ -401,10 +420,18 @@ cmd_start() {
     # PI_NO_BUILD, with HERMES_NO_BUILD still honoured: the old name is what any
     # existing muscle memory, runbook or .env uses, and silently ignoring it would
     # turn "skip the rebuild" into a full rebuild — the expensive direction.
+    # --force-recreate whenever we build, because `up --build` on its own does NOT
+    # recreate a container whose compose config is unchanged — and rebuilding the image does
+    # not change that config. Without this flag a restart silently keeps the OLD container:
+    # the build succeeds, the smoke test passes against the previous image, and the deploy
+    # is a no-op that reports success. That is not hypothetical; it is how a live session-
+    # routes fix sat in an image while the running server 404'd, through two restarts.
+    #
+    # Skipped when PI_NO_BUILD=1, where nothing was built and there is nothing to roll.
     if [[ "${PI_NO_BUILD:-${HERMES_NO_BUILD:-0}}" == "1" ]]; then
         podman_compose -f "$COMPOSE" up -d 2>&1 || { error "podman-compose up failed."; exit 1; }
     else
-        podman_compose -f "$COMPOSE" up -d --build 2>&1 || { error "podman-compose up failed."; exit 1; }
+        podman_compose -f "$COMPOSE" up -d --build --force-recreate 2>&1 || { error "podman-compose up failed."; exit 1; }
         podman image prune -f 2>&1 | sed 's/^/  /' || true
     fi
 
@@ -412,7 +439,11 @@ cmd_start() {
     bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
 
     echo ""
+    # Before the status table, so a failed turn is the last thing on screen.
+    smoke_chat || SMOKE_FAILED=1
+
     cmd_status
+    return "${SMOKE_FAILED:-0}"
 }
 
 cmd_stop() {
@@ -429,16 +460,19 @@ cmd_stop() {
 }
 
 cmd_restart() {
-    # Rebuild for changed files (`up -d --build` only rebuilds layers whose
-    # COPY/requirements changed).
+    # Rebuild for changed files (`--build` only rebuilds layers whose COPY/requirements
+    # changed), and recreate unconditionally: see the --force-recreate note in cmd_start.
+    # A rebuild that leaves the old container running is not a restart.
     echo "=== Restarting (rebuild with cache) ==="
     info "Rebuilding changed layers..."
-    podman_compose -f "$COMPOSE" up -d --build 2>&1 || { error "podman-compose up failed."; exit 1; }
+    podman_compose -f "$COMPOSE" up -d --build --force-recreate 2>&1 || { error "podman-compose up failed."; exit 1; }
     # `start` prunes dangling images, `restart` does not
     info "Running data retention ..."
     bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
     echo ""
+    smoke_chat || SMOKE_FAILED=1
     cmd_status
+    return "${SMOKE_FAILED:-0}"
 }
 
 # ────────────────────────────────────────────────────────────

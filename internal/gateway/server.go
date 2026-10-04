@@ -394,6 +394,22 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The two session routes, matched by prefix rather than as switch cases because the
+	// conversation id is a path segment. Handled before the switch so the two routes share
+	// one place, and so a malformed id is reported by the same code that parses it.
+	//
+	// Reachable two ways: /{profile}/api/sessions/{id} from a tab configured with a
+	// profile path, and /api/sessions/{id} unprefixed — splitProfile reserves "api", so
+	// the second resolves to the default profile with the whole path as `rest`. One case
+	// serves both, which is the same reason /api/model/options needs no profile.
+	if strings.HasPrefix(rest, "api/sessions/") {
+		if !requireMethod(w, r, http.MethodGet, "/api/sessions/{id}") {
+			return
+		}
+		s.handleSession(w, handler, rest)
+		return
+	}
+
 	switch rest {
 	case "v1/chat/completions":
 		// A known endpoint reached with the wrong verb is 405, not 404: the
@@ -664,6 +680,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 			if u, ok := decodeUsage(rec); ok {
 				lastUsage = u
 			}
+			// A turn Pi could not complete is reported as an error, not as an empty
+			// success. Checked before the delta switch because an errored turn emits no
+			// content at all, so without this the stream would end cleanly and the client
+			// would see a 200 with `finish_reason: stop` and no text.
+			if msg, failed := decodeTurnError(rec); failed {
+				s.writeStreamError(sse, msg)
+				return
+			}
 
 			switch rec.Type {
 			case "message_update":
@@ -777,6 +801,12 @@ func (s *Server) handleChatBuffered(
 			// loop for why.
 			if u, ok := decodeUsage(rec); ok {
 				lastUsage = u
+			}
+			if msg, failed := decodeTurnError(rec); failed {
+				// 502, not 200-with-blanks: the gateway is healthy and the agent is not,
+				// and the caller has to be able to tell that apart from a short answer.
+				apiError(w, http.StatusBadGateway, "upstream_error", "", msg)
+				return
 			}
 
 			switch rec.Type {

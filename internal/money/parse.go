@@ -23,11 +23,11 @@ var categoryHints = map[string][]string{
 		"diesel", "parking", "flight", "transport", "travel"},
 	"bills": {"electric", "water", "internet", "wifi", "phone", "mobile", "recharge",
 		"gas bill", "utility", "bill"},
-	"rent":        {"rent", "lease", "landlord"},
-	"shopping":    {"amazon", "flipkart", "cloth", "shirt", "shoe", "dress", "shopping", "myntra"},
-	"health":      {"doctor", "hospital", "medic", "pharma", "gym", "health"},
-	"fun":         {"movie", "game", "party", "concert", "netflix", "fun", "entertainment"},
-	"salary":      {"salary", "paycheck", "wage", "income", "credited", "salary credit"},
+	"rent":     {"rent", "lease", "landlord"},
+	"shopping": {"amazon", "flipkart", "cloth", "shirt", "shoe", "dress", "shopping", "myntra"},
+	"health":   {"doctor", "hospital", "medic", "pharma", "gym", "health"},
+	"fun":      {"movie", "game", "party", "concert", "netflix", "fun", "entertainment"},
+	"salary":   {"salary", "paycheck", "wage", "income", "credited", "salary credit"},
 }
 
 var amountRE = regexp.MustCompile(`(?i)(?:₹|rs\.?\s?|\$)?\s?(\d+(?:,\d+)*(?:\.\d{1,2})?)`)
