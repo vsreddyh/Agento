@@ -680,6 +680,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 			if u, ok := decodeUsage(rec); ok {
 				lastUsage = u
 			}
+			// A turn Pi could not complete is reported as an error, not as an empty
+			// success. Checked before the delta switch because an errored turn emits no
+			// content at all, so without this the stream would end cleanly and the client
+			// would see a 200 with `finish_reason: stop` and no text.
+			if msg, failed := decodeTurnError(rec); failed {
+				s.writeStreamError(sse, msg)
+				return
+			}
 
 			switch rec.Type {
 			case "message_update":
@@ -793,6 +801,12 @@ func (s *Server) handleChatBuffered(
 			// loop for why.
 			if u, ok := decodeUsage(rec); ok {
 				lastUsage = u
+			}
+			if msg, failed := decodeTurnError(rec); failed {
+				// 502, not 200-with-blanks: the gateway is healthy and the agent is not,
+				// and the caller has to be able to tell that apart from a short answer.
+				apiError(w, http.StatusBadGateway, "upstream_error", "", msg)
+				return
 			}
 
 			switch rec.Type {
