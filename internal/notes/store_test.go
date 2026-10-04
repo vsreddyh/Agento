@@ -259,6 +259,14 @@ func TestPreviewSkipsBlanksAndHeadings(t *testing.T) {
 		{"# Groceries\n\n- milk", "- milk"},
 		{"# Groceries\n## Friday", ""}, // nothing but headings: nothing to preview
 		{"  # indented heading\n- eggs", "- eggs"},
+		// A '#' only starts a heading when a space or end-of-line follows it. These are
+		// content: skipping them is how a note whose first line is a tag ends up
+		// previewing as the wrong line entirely.
+		{"#milk\n- eggs", "#milk"},
+		{"#1 milk\n- eggs", "#1 milk"},
+		// A bare "#" with nothing after it is an empty ATX heading, so it is skipped
+		// like any other heading.
+		{"#\n- eggs", "- eggs"},
 	} {
 		if got := preview(tc.body); got != tc.want {
 			t.Errorf("preview(%q) = %q, want %q", tc.body, got, tc.want)

@@ -350,6 +350,13 @@ func docOut(d bson.M) bson.M {
 	return out
 }
 
+// headingRe matches an ATX heading and only a heading: 1-6 '#' followed by
+// whitespace or end of line. A bare `strings.HasPrefix(line, "#")` is broader than
+// that and eats content: "#milk" and "#1 milk" are grocery items, not headings, and
+// skipping them means a note whose first line is a tag previews as whatever comes
+// after it. Markdown requires the space.
+var headingRe = regexp.MustCompile(`^#{1,6}(\s|$)`)
+
 // preview is the first line of the body that says something: blanks and ATX
 // headings ("# Groceries") are skipped, because `title` already carries the heading
 // and repeating it wastes the one field a summary has. A grocery list previews as
@@ -361,7 +368,7 @@ func docOut(d bson.M) bson.M {
 func preview(body string) string {
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" || headingRe.MatchString(line) {
 			continue
 		}
 		return trunc(line, 80)

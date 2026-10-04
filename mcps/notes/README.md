@@ -19,7 +19,7 @@ these are not guessable from the argument names.
 | `get_note` | `id` | — |
 | `list_notes` | — | `tag`, `pinned_only`, `limit` (0 → 50) |
 | `search_notes` | `text` | `limit` (0 → 20) |
-| `update_note` | `id` | everything else — **an omitted arg is left alone; an arg sent as empty clears that field** |
+| `update_note` | `id` | everything else — **an omitted arg is left alone; `body`/`tags` sent as empty clear that field, but an empty `title` is rejected** |
 | `delete_note` | `id` | — |
 
 Notes are addressed by **id only**. Titles are not unique, so a title does not
@@ -46,7 +46,9 @@ Two behaviours worth knowing before calling anything:
   omits. `title`, `body` and `tags` are pointers in the input struct, so *omitted*
   (leave alone) and *empty* (clear, on purpose) stay distinguishable — a plain
   `string` + `omitempty` would make `body=""` a silent no-op and the agent would
-  report success on an edit that never happened.
+  report success on an edit that never happened. `title` is the one field where
+  empty is refused rather than honoured: a note with no title cannot be found or
+  listed meaningfully, so the store rejects it instead of storing one.
 - `search_notes` caps `limit` at 50, not 200: it returns full bodies, so the
   ceiling is on bytes in context, not on rows.
 

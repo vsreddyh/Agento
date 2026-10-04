@@ -157,7 +157,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_note",
-		Description: "Patch a note. An arg you omit is left alone; an arg you send as empty CLEARS that field, so body=\"\" empties the note and tags=[] removes every tag. The body replaces, it does not append — editing one line means sending the whole new body. Confirm with the user before overwriting a body you did not write."},
+		Description: "Patch a note. An arg you omit is left alone; body=\"\" empties the note and tags=[] removes every tag (an empty title is refused). The body replaces, it does not append — editing one line means sending the whole new body. Confirm with the user before overwriting a body you did not write."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateNoteInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Pointers, so absent (leave alone) and empty (clear) stay distinct — see
 			// updateNoteInput. Anything that reaches this block is an edit the caller

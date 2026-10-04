@@ -35,7 +35,7 @@ the list", it is a note. Do not create a task with no due date to hold a list.
 | `get_note` | `id` | — |
 | `list_notes` | — | `tag`, `pinned_only`, `limit` (0 → 50) |
 | `search_notes` | `text` | `limit` (0 → 20) |
-| `update_note` | `id` | `title`, `body`, `tags`, `pinned` — **omitted args are left alone; an empty arg clears the field** |
+| `update_note` | `id` | `title`, `body`, `tags`, `pinned` — **omitted args are left alone; `body`/`tags` sent as empty clear that field, but an empty `title` is rejected** |
 | `delete_note` | `id` | — (unknown id returns an error, not a silent no-op) |
 
 Notes are addressed by **id only**. Titles are not unique — two notes called
