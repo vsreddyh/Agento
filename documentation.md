@@ -65,7 +65,7 @@ All container management is orchestrated through [`scripts/hermes.sh`](file:///h
 1. Verifies host dependencies (podman, compose, python3, curl, cron) and installs missing requirements.
 2. Builds the agent image ([`docker/pi/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/docker/pi/Dockerfile): Node + Pi + the in-repo Go MCP binaries) and the `health-api` image.
 3. Initializes root `.env` from `.env.example` if not already present.
-4. Copies skill files from `skills/` into each profile directory.
+4. Reports the skills it finds under `pi/skills/` and each profile's own `skills/`, and warns if there are none. Nothing is copied: both locations are tracked in git and bind-mounted into the container.
 5. Installs the daily data retention cron job (runs daily at 03:00).
 
 ### `start`
@@ -232,4 +232,13 @@ All settings are configured in the single root `.env` file:
    ```
 
 ### Adding a Skill
-Place the skill directory containing `SKILL.md` inside `skills/` and execute `./scripts/hermes.sh init` to distribute the skill to all bot profiles.
+Put the skill directory containing `SKILL.md` in one of two places, and commit it:
+
+- `pi/skills/<name>/` — shared by every profile. The agent directory is a discovered
+  skill location, so no further step is needed.
+- `pi/profiles/<name>/skills/<name>/` — that profile only. Pi does **not** discover
+  skills from a profile's working directory (measured; see `pi/README.md`), so
+  pi-gateway passes it explicitly with `--skill`.
+
+`./scripts/hermes.sh init` only reports what it finds; there is no distribution step to
+run, and nothing to re-run after editing a skill.

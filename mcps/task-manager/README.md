@@ -29,7 +29,7 @@ store, same validation — see `cmd/health-api/main.go`).
 - **No status field:** openness is `completedAt == null`. Never add one.
 - **No server-side repeat logic:** `repeat_rule` is never parsed here.
   The agent interprets it and creates the next occurrence (see
-  `skills/task-manager/SKILL.md`); `complete_task` only echoes the rule
+  `pi/skills/task-manager/SKILL.md`); `complete_task` only echoes the rule
   back with a `follow_up` nudge.
 - **Retention:** done tasks auto-delete 3 days after completion via TTL.
   Open tasks never expire. `reopen_task` clears the expiry.

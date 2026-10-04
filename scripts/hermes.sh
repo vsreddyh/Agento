@@ -7,8 +7,8 @@ set -euo pipefail
 # https://opencode.ai/zen/go/v1, no LLM proxy — runs as compose services in
 # docker/docker-compose.yml. init self-installs the host tools it needs (curl,
 # podman + podman-compose, python3, cron), builds the images, seeds the single
-# root .env, copies skills, and installs the retention cron. Only git + sudo must
-# pre-exist. All env lives in the root .env (no per-profile .env files).
+# root .env, reports the skills it finds, and installs the retention cron. Only git
+# + sudo must pre-exist. All env lives in the root .env (no per-profile .env files).
 # No host agent install, venvs, or native processes.
 # NOTE: container harness only — this script never installs the opencode CLI
 # (LLM traffic goes direct to OpenCode Go over HTTPS; no CLI needed).
@@ -48,7 +48,7 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed the root .env (all env vars) + skills, set up host tools (curl, podman, python, cron), install retention cron
+  init       Build images, seed the root .env (all env vars), report the skills found, set up host tools (curl, podman, python, cron), install retention cron
   start      Start the whole container stack (health-api, pi (3 profiles), proxy, retention)
   stop       Stop the container stack
   restart    Stop then start
@@ -313,30 +313,39 @@ cmd_init() {
         chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$REPO/workspace" "$PI_HOME" 2>/dev/null || true
     fi
 
-    # Per-profile skills live at pi/profiles/<name>/skills/ and reach each child
-    # through an explicit --skill, because Pi does NOT discover them from a
-    # profile's working directory (measured; see pi/README.md). The repo's own
-    # skills/ tree is what they are copied from.
-    info "Installing project skills into each profile..."
-    if [[ -d "$REPO/skills" ]]; then
-        local b
-        for b in "${PROFILES[@]}"; do
-            local home; home="$(profile_home "$b")"
-            local label="$b"
-            # One-time cleanup: the docker-management skill was renamed to
-            # podman-management — drop the orphaned copy if present.
-            rm -rf "$home/skills/docker-management"
-            local skill_dir skill_name target
-            for skill_dir in "$REPO/skills"/*/; do
-                skill_name="$(basename "$skill_dir")"
-                target="$home/skills/$skill_name"
-                if [[ ! -d "$target" ]]; then
-                    mkdir -p "$home/skills"
-                    cp -r "$skill_dir" "$target"
-                    info "  $label: installed skill $skill_name"
-                fi
-            done
+    # Skills are NOT copied. They used to be: `init` copied every skill from the
+    # repo's `skills/` tree into each profile's own `skills/` directory, which is how
+    # Hermes loaded them. Pi discovers `<agent-dir>/skills/` on its own (measured —
+    # pi/README.md), so the copies were a second source of truth that could drift from
+    # the first, and `if [[ ! -d "$target" ]]` meant an existing checkout never
+    # received a fix. Skills now live in git, in the two places Pi reads them:
+    #   pi/skills/<name>/          — shared by every profile (agent dir)
+    #   pi/profiles/<name>/skills/ — that profile only, passed with --skill
+    # Both are bind-mounted into the container, so `init` has nothing to install.
+    # Distinct loop variables (`b` for the profile, `d`/`s` for directories) so a
+    # reader does not have to check which one a given line means.
+    local skill_count=0
+    local s
+    for s in "$PI_HOME"/skills/*/; do
+        [[ -d "$s" ]] || continue
+        skill_count=$((skill_count + 1))
+        info "  shared skill: $(basename "$s")"
+    done
+    local b d
+    for b in "${PROFILES[@]}"; do
+        d="$(profile_home "$b")/skills"
+        [[ -d "$d" ]] || continue
+        for s in "$d"/*/; do
+            [[ -d "$s" ]] || continue
+            skill_count=$((skill_count + 1))
+            info "  $b skill: $(basename "$s")"
         done
+    done
+    # `if`, not `[[ … ]] && warn`: an &&-list evaluates to 1 when the test is false,
+    # which is the happy path here, and a construct that fails on success is one
+    # edit away from a `set -e` trap.
+    if (( skill_count == 0 )); then
+        warn "no skills found under $PI_HOME/skills or any profile's skills/ — profiles will run without them"
     fi
 
 install_retention_cron

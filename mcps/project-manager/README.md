@@ -26,7 +26,7 @@ Done), `note`, `createdAt`, `updatedAt` (bumped on every edit).
   write, stored canonical). Blank status defaults to Todo.
 - **Permanent:** no TTL, no retention pruning. Done means finished.
 - **Shared board:** the app's Projects tab reads/writes the same rows
-  (see `skills/project-manager/SKILL.md`); local `tasks.json` is gone.
+  (see `pi/skills/project-manager/SKILL.md`); local `tasks.json` is gone.
 
 ## Run
 

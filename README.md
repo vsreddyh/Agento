@@ -100,7 +100,7 @@ podman-compose -f docker/docker-compose.yml logs -f pi
 
 | Command | Action |
 |---|---|
-| `./scripts/hermes.sh init` | Self-installs host deps (curl, podman + compose, python3, cron), builds images, creates directories, copies skills, sets up cron. Hermes harness only — never installs the opencode CLI. |
+| `./scripts/hermes.sh init` | Self-installs host deps (curl, podman + compose, python3, cron), builds images, creates directories, reports the skills it finds, sets up cron. Container harness only — never installs the opencode CLI. |
 | `./scripts/hermes.sh start` | Starts all services (`podman-compose up -d --build`) and runs retention once. |
 | `./scripts/hermes.sh stop` | Shuts down the stack (`podman-compose down`). |
 | `./scripts/hermes.sh restart` | Performs a clean stop and start sequence. |
@@ -199,5 +199,5 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── hermes.sh            # Main orchestration CLI
 │   ├── retention.sh         # Retention execution wrapper
 │   └── sysmon.sh            # Resource metrics monitoring script
-└── skills/                  # Core skill definitions propagated to bot profiles
+└── pi/skills/               # Skills shared by every profile (plus per-profile ones under pi/profiles/<name>/skills/)
 ```

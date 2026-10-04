@@ -238,8 +238,20 @@ with `Allow: GET` on the wrong verb.
   "unknown" and an empty one as "this server has no tools", and only the first is
   true.
 
-`/v1/skills` currently returns `[]`, and that is the correct answer rather than a
-stub: no skills are installed yet. See the profile-skills finding below.
+`/v1/skills` reports what Pi actually loaded, per profile, with the path and scope it
+came from — verified live:
+
+```
+podman-management  user       /opt/pi/skills/podman-management/SKILL.md
+project-manager    user       /opt/pi/skills/project-manager/SKILL.md
+task-manager       user       /opt/pi/skills/task-manager/SKILL.md
+git-remote-preflight temporary /opt/pi/profiles/story/skills/git-remote-preflight/SKILL.md   (story only)
+```
+
+`user` is the agent dir, `temporary` an explicit `--skill`. Before the skills moved to
+`pi/skills/`, this route returned `[]` for god — the two MCP-tool skills were in the
+repo-root `skills/` tree, which nothing discovers. That is the shape of the trap this
+endpoint exists to make visible: skills present in git, absent from the agent.
 
 ### Profile skills do NOT load from `profiles/<name>/skills/`
 
@@ -458,14 +470,28 @@ comment:
    The app reads it optionally, so this is already handled — but a "label" that can
    never be present is wire surface that will read as a bug to the next person.
 
-Two parity questions the cutover does not answer, both of which need deciding
-rather than code:
+### Both parity questions, answered
 
-- `podman-management` exists for two Hermes profiles with no Pi equivalent.
-- `SOUL.md` personality (god 44 / story 59 / resumes 61 lines) has no Pi
-  counterpart file. It appears to have been folded into `pi/profiles/*/AGENTS.md`,
-  but nothing here says so, and Pi has no `SOUL` concept of its own — so "the
-  personality survived" is currently an assumption, not a verified fact.
+**Personality survived.** Checked rather than assumed: `git show f6feafc:gateway/SOUL.md`
+— pinned, because the path stops existing once this stack merges — opens "You are
+the Hermes god profile", and `pi/profiles/god/AGENTS.md` opens
+"General operator for Vishnu's money, food and health tracking… Five MCP tool
+backends". Same for `Portas-Maintainer` (story) and `Job Bot` (resumes) — the
+Hermes `SOUL.md` files were rewritten as Pi `AGENTS.md` files, role statement
+first, rather than lost. Pi has no `SOUL` concept of its own, and none is needed:
+a profile's identity *is* its `AGENTS.md`.
+
+**`podman-management` is back, once instead of twice.** Hermes kept an identical
+copy under two profiles' `skills/` directories and no equivalent survived the
+migration — measurably: `GET /p/god/v1/skills` returned `[]`, and the skill's own
+content had rotted to the point where it told the agent to `logs gateway` and
+`restart gateway` for a service that no longer existed. It now lives once at
+`pi/skills/podman-management/SKILL.md`, because the agent directory **is** a
+discovered skill location (measured in the profile-skills finding above, and
+confirmed live: all three profiles list it with `scope: "user"`, while story's own
+`git-remote-preflight` shows up as `scope: "temporary"` from its explicit
+`--skill`). One copy, three profiles, and no duplicated file to drift — the layout
+Hermes could not use because it did not know its agent directory was searched.
 
 ## Subagent spawning is a separate process, and that is the whole point
 

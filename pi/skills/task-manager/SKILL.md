@@ -8,7 +8,7 @@ description: "Personal task manager: create, list, complete, and roll recurring 
 Agent-side task tracking backed by the `task-manager` MCP server (MongoDB).
 This is NOT the app's Projects tab — that is a separate project board the
 agent manages through the `project-manager` MCP server (see
-`skills/project-manager/SKILL.md`). Everything here goes through MCP tools.
+`pi/skills/project-manager/SKILL.md`). Everything here goes through MCP tools.
 
 ## Columns
 

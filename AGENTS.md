@@ -88,10 +88,13 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   directory as its cwd, which is the mechanism that loads them; per-profile skills
   are passed explicitly with `--skill`, because Pi does **not** discover them from
   a profile's working directory (measured — `pi/README.md`).
-- Skills: project skills live in `skills/` and are copied into every profile on
-  init, landing at `pi/profiles/<name>/skills/`. Skill content and each profile's
-  instructions are **committed** so personality survives moving between VPSes. Only
-  transient session/log/state files are git-ignored.
+- Skills: live in git, in the two places Pi reads them, and are **never copied**.
+  `pi/skills/<name>/` is shared by every profile (the agent dir is a discovered skill
+  location); `pi/profiles/<name>/skills/` is that profile only, passed to its child
+  with `--skill`. `./scripts/hermes.sh init` reports what it finds and warns when it
+  finds nothing. Skill content and each profile's instructions are committed so
+  personality survives moving between VPSes; only transient session/log/state files
+  are git-ignored.
 - CI: `android-apk.yml` (lint + debug/release APKs, `main` branch only) and `mcps-test.yml` (`go build` + `go vet` + `go test ./...` over `cmd/`/`internal/`, `main` only; DB tests skip without `MONGODB_URI`). `./gradlew lintDebug` (release variant on `main`) fails on errors; the report uploads always. Fix what it reports rather than baselining. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
   `podman-compose -f docker/docker-compose.yml config`, then check pi logs on the live machine.
 - Git identity: every commit as `vsreddyh <shouryanreddyh@gmail.com>` (`git -c user.name=vsreddyh -c user.email=shouryanreddyh@gmail.com commit ...`). Never use another name/email.
