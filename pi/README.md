@@ -44,22 +44,18 @@ this PR added `mcp.json`, so the pi service must carry:
   Atlas database on startup and fails to connect without them
 - `OPENCODE_API_KEY` — already enforced by the entrypoint
 
-`docker/docker-compose.yml` defines two anchors, and merging the wrong one is worse
-than not merging at all:
+`docker/docker-compose.yml` defines one anchor, `&mongo-env`, holding only the
+environment the MongoDB-facing services share — provider key, `MONGODB_URI`,
+`MONGODB_DB`. The pi service merges it and then adds `PASSWORD`,
+`GIT_SSH_COMMAND` and its own `PI_*` variables under its own key.
 
-| anchor | contents |
-|---|---|
-| `&bot-base-environment` | **only** the environment map: Mongo, the OpenCode keys, `HERMES_HOME` |
-| `&bot-base` | the whole service base — that environment **plus** `build` (pointing at `test/Dockerfile`), `user`, and `restart` |
-
-The existing `gateway` service merges `*bot-base` wholesale and then re-merges the
-environment map under its own key to add `PASSWORD` and `GIT_SSH_COMMAND`. That is
-correct for it, because it *is* the Hermes service.
-
-**A pi service must not merge `*bot-base`.** It would inherit
-`build.dockerfile: test/Dockerfile` and quietly build the Hermes image instead of
-`docker/pi/Dockerfile`. Give it its own `build` and `user`, and merge only the
-environment anchor:
+This used to be two anchors, and merging the wrong one was worse than not merging
+at all: `&bot-base` carried `build.dockerfile: test/Dockerfile` alongside the
+environment, so a service that merged it wholesale would inherit the **Hermes**
+image build instead of `docker/pi/Dockerfile` — quietly, because the anchor looked
+like it was only about the environment. The Hermes service was the only thing that
+merged it, so both anchors are now one. **If a second agent host ever appears, it
+needs its own `build` and `user`, and the anchor is not where they come from.**
 
 ```yaml
   pi:
@@ -68,8 +64,8 @@ environment anchor:
       dockerfile: docker/pi/Dockerfile
     user: "0:0"
     environment:
-      <<: *bot-base-environment   # Mongo + OpenCode keys
-      PASSWORD: ${PASSWORD:-}     # the gateway's bearer token
+      <<: *mongo-env              # provider key + Mongo
+      PASSWORD: ${PASSWORD:-}     # the app's bearer token
       GIT_SSH_COMMAND: "..."      # needed for the story/resumes clones
 ```
 
@@ -86,12 +82,10 @@ things about it are deliberate, and both were got wrong while writing it:
   spawns one `pi --mode rpc` child per profile with `profiles/<name>` as its cwd —
   which is the mechanism that makes each agent load its own `AGENTS.md`. So it is
   built into the image and is the container's main process.
-- **It listens on 8643, not 8642, and nginx now points at 8643.** The two coexist
-  so an app tab can be pointed at either to compare, but they are not peers any more:
-  `docker/proxy/nginx.conf` sets `$chat` to `pi:8643`, so the app's single URL is
-  served by Pi. `gateway` keeps running only so the comparison is possible — nothing
-  routes to it, and removing it changes no routing. The one-line switch is
-  `set $chat http://gateway:8642` if it ever needs to go back.
+- **It listens on 8643, not 8642.** 8642 was the Hermes gateway's port and is now
+  free; nginx points at `pi:8643`, so the app's single URL is served here. The port
+  was left alone deliberately — moving it would churn an app-facing default to
+  collide with a number nothing uses.
 - **The host port is `PI_HOST_PORT`, not `PI_SERVER_PORT`.** The container always
   listens on 8643; only the published host port moves. The name is deliberate:
   `PI_SERVER_PORT` is what pi-gateway itself reads as its bind port, so sharing it
@@ -131,10 +125,10 @@ bothers you, and clear it when bumping the version.
 ### `tectonic` is installed — this was the one blocking gap
 
 The `resumes` profile compiles every tailored `.tex` to `exports/` with `tectonic`.
-`docker/pi/Dockerfile` installs only `git`, `ca-certificates` and `findutils`, so
-after the Hermes image goes away **every resume compile fails**. Today it works only
-because `tectonic` happens to be in the `hermes-agent` base image that
-`test/Dockerfile` builds on — an accident of the base, not a declared dependency.
+`docker/pi/Dockerfile` installs `git`, `ca-certificates`, `curl`, `findutils` and
+`tectonic` — the last one because without it **every resume compile fails**. It
+used to work only because `tectonic` happened to be in the `hermes-agent` base image
+`test/Dockerfile` built on: an accident of the base, not a declared dependency.
 
 Verified while writing this: there is **no `tectonic` package in Debian stable**
 (checked the Debian package index by name across all suites), so
@@ -408,16 +402,36 @@ Three more explicit values, all because the defaults are wrong *silently*:
 changes; `pi/README.md` and the conf both carry the one-line `podman network inspect`
 that prints it, because the failure mode is a stale-IP 502 that reads as a `pi` bug.
 
-Still on Hermes, and still running:
+### What removing Hermes touched, and what it left behind
 
-- the `gateway` service, `test/Dockerfile`, `test/entrypoint.sh`, and the nine
-  tracked files under `gateway/` (`SOUL.md` x3, `config.yaml.template` x3,
-  `podman-management/SKILL.md` x2, and a `.curator_state` that should never have
-  been tracked). Its untracked runtime state on this host stays where it is.
-- `scripts/hermes.sh`, which still builds the Hermes bot image and reports
-  "gateway (3 profiles)".
-- `README.md`, `documentation.md` and the root `AGENTS.md`, which all describe the
-  Hermes gateway as the live chat path.
+Gone: the `gateway` service, `test/Dockerfile`, `test/entrypoint.sh`,
+`docker/gateway-patches/` (two Python shims for the Hermes image), the nine
+tracked files under `gateway/`, and `default-config.yaml` at the repo root — an
+orphan whose own header pointed at `gateway/config.yaml.template` for its
+per-profile counterpart and said it was kept "for local Hermes CLI parity". There
+is no Hermes CLI, and `git grep` found nothing that read it, so leaving a
+`HERMES_API_KEY` template with a dead pointer only invited the next reader to wire
+it back up. `docker/pi/Dockerfile` was already independent of
+the Hermes base image, and `retention` moved to its own 18 MB image first, so
+nothing had to be rewritten to make the deletion possible — it was two layers of
+unnecessary coupling, removed in that order.
+
+Left on disk on purpose: the **untracked** runtime state under `gateway/` — session
+transcripts, `state.db` and its WAL, `cache/`, `logs/`, the rendered `config.yaml`,
+and `gateway/.ssh/`. None of it is in git and none of it can be recovered from git,
+so deleting the service did not delete any of it, and this file says so rather than
+letting a future reader assume the directory is gone. It is dead weight and can be
+removed by hand whenever that is wanted.
+
+Rewritten in the same change, because this deletion falsified them:
+`README.md`, `documentation.md`, `.env.example` and the root `AGENTS.md`.
+
+Still to rewrite, and stacked as its own PR because it is a behaviour change rather
+than prose: `scripts/hermes.sh`, which still `mkdir`s a gateway home, copies skills
+into `gateway/profiles/*`, and reports "gateway (3 profiles)" and `:8642`. It stays
+*functional* meanwhile — `podman-compose build` builds whatever compose defines, so
+`init` and `start --build` still succeed, now building the pi image — which is why
+leaving it one layer behind is safe rather than broken.
 
 Two parity questions the cutover does not answer, both of which need deciding
 rather than code:
@@ -590,4 +604,5 @@ right" may not be the one that works.
 The scan is scoped to `/workspace`. A blanket `*` would exempt every directory
 in the container, including paths with no business being exempted.
 
-`test/Dockerfile` still carries the non-matching pattern; tracked in #216.
+`test/Dockerfile` carried the same non-matching pattern, and went with the Hermes
+image; #216 is now only reachable through the history.

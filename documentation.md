@@ -7,7 +7,7 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 1. [System Architecture](#system-architecture)
 2. [LLM Connection (Direct Go)](#llm-connection-direct-go)
 3. [Stack Lifecycle (Podman)](#stack-lifecycle-podman)
-4. [Bot Profiles & Multiplexing](#bot-profiles--multiplexing)
+4. [Bot Profiles](#bot-profiles)
 5. [Remote MongoDB & Storage Model](#remote-mongodb--storage-model)
 6. [Data Retention & Lifecycle](#data-retention--lifecycle)
 7. [Health Connect Pipeline](#health-connect-pipeline)
@@ -28,20 +28,19 @@ The stack runs god (main) + story/resumes (sides), a health sync API, and a sche
                                             ▲
                              Containers
   god ────┐               │
-  story   ┤ ONE Gateway   │ HERMES_HOME=  ▼
-  resumes ┘ god + 2 sides │ /opt/data │   OpenCode Go Direct
-           (multiplexed)  │  (gateway +  │  (https://opencode.ai/zen/go/v1)
-         └── API server :8642 ──────────┤   (Android app chat backend, via proxy /p/*)
-Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► gateway ──► MongoDB
+  story   ┤ ONE pi host   │  agent dir   ▼   OpenCode Go Direct
+  resumes ┘ 3 pi processes│   /opt/pi     │  (https://opencode.ai/zen/go/v1)
+           (one per profile)└─ API :8643 ─┤
+Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► pi ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.6-flash`).
 - **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **gateway**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving god + 2 sides from the official image (entrypoint renders templates with secret fail-fast, then execs the gateway directly — their s6 tree is bypassed).
-- **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → gateway chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
-- **app API**: Hermes built-in OpenAI-compatible server (`platforms.api_server` in `gateway/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
+- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process per profile (god, story, resumes) with that profile's directory as its working directory, which is how each loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of them. The entrypoint refuses to start if any of the five MCP servers fails to connect.
+- **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
+- **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **browser**: Web automation via the native built-in browser toolset (`browser_*` tools); no MCP server needed.
 - **retention**: One-shot retention job executing the `retention` Go binary (`cmd/retention/main.go`) via cron or on stack start.
 - **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched.
@@ -52,9 +51,9 @@ Retention ───────────────► one-shot container (c
 
 All profiles connect directly to OpenCode Go (`https://opencode.ai/zen/go/v1`) using `OPENCODE_API_KEY` defined in the root `.env`.
 
-- **Config Rendering**: Rendered as `api_key: ${OPENCODE_API_KEY}` in each profile's `config.yaml` from `config.yaml.template` by [`test/entrypoint.sh`](file:///home/vsreddyh/Documents/Discord-bots/test/entrypoint.sh).
+- **Config**: each profile's own `pi/profiles/<name>/AGENTS.md`, loaded because the profile directory is that process's working directory. There is no template rendering and no secret file to render: the provider key arrives as an environment variable.
 - **Vision Model**: Auxiliary vision queries utilize `mimo-v2.6-flash` natively over OpenCode Go.
-- **Streaming Support**: Direct SSE passthrough when streaming is enabled in Hermes settings.
+- **Streaming Support**: Direct SSE passthrough when the request sets `stream: true` (the app always does).
 
 ---
 
@@ -64,7 +63,7 @@ All container management is orchestrated through [`scripts/hermes.sh`](file:///h
 
 ### `init`
 1. Verifies host dependencies (podman, compose, python3, curl, cron) and installs missing requirements.
-2. Builds the derived bot image ([`test/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/test/Dockerfile): official hermes image + in-repo Go MCP binaries) and the `health-api` image.
+2. Builds the agent image ([`docker/pi/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/docker/pi/Dockerfile): Node + Pi + the in-repo Go MCP binaries) and the `health-api` image.
 3. Initializes root `.env` from `.env.example` if not already present.
 4. Copies skill files from `skills/` into each profile directory.
 5. Installs the daily data retention cron job (runs daily at 03:00).
@@ -88,19 +87,19 @@ Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered con
 
 ---
 
-## Bot Profiles & Multiplexing
+## Bot Profiles
 
-[`gateway/`](file:///home/vsreddyh/Documents/Discord-bots/gateway) IS the god profile — Hermes' built-in `default` profile is the gateway home itself (`HERMES_HOME=/opt/data`). Story and resumes are side profiles nested under `gateway/profiles/<bot>/`:
+Each profile is a directory under [`pi/profiles/`](file:///home/vsreddyh/Documents/Discord-bots/pi/profiles) — god, story and resumes alike, with no asymmetry between them. Each runs as its own `pi` process with that directory as its working directory, which is how Pi loads its `AGENTS.md`, so a profile *is* a directory rather than a runtime option. `pi-gateway` starts one process per profile and routes `/p/<profile>/…` to it:
 
 | Profile | App Tab | Workspace & Domain Data |
 |---|---|---|
-| `default` (god, main) | God | Money (`money_transactions`), cookbook (`cookbook_*`), health (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync — lives at the gateway home itself |
+| `god` (main) | God | Money (`money_transactions`), cookbook (`cookbook_*`), health (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync — `pi/profiles/god/`, same shape as the other two |
 | `story` (side) | Story | Lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) |
 | `resumes` (side) | Resumes | LaTeX CV workspace in Git repo (`workspace/resumes`, `vsreddyh/Resume`) |
 
 ### Environment & Token Injection
 - All tokens and channel IDs reside in the root `.env`.
-- During container startup, [`test/entrypoint.sh`](file:///home/vsreddyh/Documents/Discord-bots/test/entrypoint.sh) renders `config.yaml` for the gateway home and each named profile from the container env.
+- The pi entrypoint (`docker/pi/entrypoint.sh`) registers the bind-mounted repos with git, gates startup on `pi mcp list` connecting all five MCP servers, then execs `pi-gateway`. There is no config rendering: each profile's `AGENTS.md` is loaded because its directory is that process's working directory.
 - This ensures discrete credential scoping without mixing secrets across bot instances.
 
 ---
@@ -122,7 +121,7 @@ Domain data for `money`, `health-check`, `cookbook`, `task-manager`, and `projec
 | `projects` | Project-manager | `name`, `status` (Todo\|Ongoing\|Paused\|Done), `note`, `createdAt`, `updatedAt` — **permanent**, shared with the app's Projects tab |
 
 ### Database Helper CLI
-Bots and scripts interact with MongoDB using the `mongo` Go CLI (`cmd/mongo/main.go`, baked into the bot image at `/usr/local/bin/mongo`):
+Bots and scripts interact with MongoDB using the `mongo` Go CLI (`cmd/mongo/main.go`). It is **not** in the pi image — no skill invokes it, and agents reach MongoDB through the MCP servers rather than a shell — so it is built by hand when an operator needs it:
 
 ```bash
 go run ./cmd/mongo count money_transactions '{"type":"expense"}'
@@ -173,7 +172,7 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► 
 
 ## Android App API (Chat)
 
-The custom Android app (`android/agento/`, sidebar: God/Story/Resumes chats + Tasks + Storage + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`). The Hermes gateway still publishes `:8642` and still answers there directly, but nothing proxies to it any more:
+The custom Android app (`android/agento/`, sidebar: God/Story/Resumes chats + Tasks + Storage + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`). There is no Hermes gateway any more — `:8642` is neither published nor proxied:
 
 ```bash
 curl http://<host>:8080/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
@@ -182,16 +181,16 @@ curl http://<host>:8080/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
 Direct (bypassing the proxy):
 
 ```bash
-curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
-curl http://<host>:8642/p/story/v1/chat/completions \
+curl http://<host>:8643/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
+curl http://<host>:8643/p/story/v1/chat/completions \
   -H "Authorization: Bearer <PASSWORD>" -H "Content-Type: application/json" \
   -d '{"provider": "opencode-go", "model": "mimo-v2.6-flash", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
 
-- One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default`). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
-- Provider + model are picked per tab from its own model sheet (top-bar button) backed by live dropdowns from `GET /p/<profile>/api/model/options` (explicit selection required — no gateway default). The gateway's provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
+- One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/god`). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth for which models that profile can actually switch to.
+- Provider + model are picked per tab from its own model sheet (top-bar button) backed by live dropdowns from `GET /p/<profile>/api/model/options` (explicit selection required — pi-gateway has no default). The provider key lives ONLY in the git-ignored root `.env` on the VPS — never in git.
 - Chat history is threaded per tab and persisted on-device (survives restarts; the switcher revisits/deletes threads). Tasks, reminders, and threads are included in Settings backup exports.
-- Config lives in `gateway/config.yaml.template` (`platforms.api_server`, key rendered from `PASSWORD`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
+- Config lives in the `pi` service (`docker/docker-compose.yml`): the bearer token is `PASSWORD` and the bind port is `PI_SERVER_PORT` (`8643`), published as `${PI_HOST_PORT:-8643}:8643`. Through the proxy the same `PASSWORD` authenticates, which is why the cutover needed no app change.
 
 ---
 
@@ -217,7 +216,7 @@ All settings are configured in the single root `.env` file:
 ## Security & Isolation
 
 - **Secrets Management**: Live API keys and database credentials reside exclusively in the git-ignored `.env` file.
-- **Container Isolation**: `gateway` container mounts only required directories (`gateway`, `workspace`, `/tools` read-only) with no host container-socket access (Podman is daemonless — there is no shared socket).
+- **Container Isolation**: the `pi` container mounts only what it needs (`pi/`, `workspace/`, three read-only SSH files) with no host container-socket access (Podman is daemonless — there is no shared socket). The agent runs as root inside it, because the bind-mounted workspace is owned by the host uid.
 
 ---
 
@@ -225,9 +224,9 @@ All settings are configured in the single root `.env` file:
 
 ### Adding a New Bot Profile
 1. Create a plan in `profile-plans/<bot>-plan.md`.
-2. Create profile directory `gateway/profiles/<bot>/` with `config.yaml.template`, `SOUL.md`, and skills.
+2. Create the profile directory `pi/profiles/<name>/` with its `AGENTS.md` and `skills/`.
 3. Add the bot identifier to the `BOTS` array in `scripts/hermes.sh`.
-4. Rebuild and restart the gateway container:
+4. Rebuild and restart the pi container:
    ```bash
    ./scripts/hermes.sh restart
    ```

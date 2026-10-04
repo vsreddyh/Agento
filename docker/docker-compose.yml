@@ -1,27 +1,36 @@
 # ──────────────────────────────────────────────────────
-# Shared service definition (env + build context for the bot image).
-# ──────────────────────────────────────────────────────
-x-bot-base: &bot-base
-  build:
-    context: ..
-    dockerfile: test/Dockerfile
-  user: "1000:1000"
-  environment: &bot-base-environment
-    HERMES_HOME: /opt/data
-    HOME: /opt/data
-    # Official image refuses root gateways unless explicitly allowed
-    # (we run root so bind-mounted state stays host-owned; same as before).
-    HERMES_ALLOW_ROOT_GATEWAY: 1
-    OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-    # hermes-agent resolves provider credentials ONLY from these two names
-    # (plugins/model-providers/opencode-zen: env_vars per provider) — same
-    # single key value under both names.
-    OPENCODE_ZEN_API_KEY: ${OPENCODE_API_KEY:-}
-    OPENCODE_GO_API_KEY: ${OPENCODE_API_KEY:-}
-    HERMES_API_KEY: ${OPENCODE_API_KEY:-}
-    MONGODB_URI: ${MONGODB_URI:-}
-    MONGODB_DB: ${MONGODB_DB:-hermes}
-  restart: unless-stopped
+# Shared environment for the services that talk to MongoDB.
+#
+# The anchor IS the mapping — three variables, no `environment:` wrapper. That is
+# not a style choice. podman-compose merges an anchor with `<<:` without
+# interpreting it, so a wrapper here does not merge: it produces one environment
+# entry literally named `environment`, whose value is the stringified mapping.
+# Nothing else is set, and it looks correct in `config` output, which still prints
+# the three variables underneath. Measured, after this file got that shape by
+# accident: the container's env was
+#
+#   environment={'OPENCODE_API_KEY': '...', 'MONGODB_URI': 'mongodb+srv://...', 'MONGODB_DB': 'hermes'}
+#
+# and nothing else, so all five MCP servers failed with `MONGODB_URI is not set`
+# and the pi entrypoint refused to start. Usage is therefore:
+#
+#   environment:
+#     <<: *mongo-env
+#     PASSWORD: ...
+#
+# This replaced two anchors: `x-bot-base`, which existed to build the Hermes bot
+# image and so carried `build`/`user`/`restart` next to this mapping (a service
+# merging it wholesale inherited the Hermes image), and the `&bot-base-environment`
+# half of it, which is what survives here. The four `HERMES_*` variables that used
+# to sit alongside these went with the image that read them — a variable nothing
+# reads misleads whoever reads this file next.
+#
+# MONGODB_DB's default stays `hermes`: that is the name of the Atlas database, not
+# a reference to the agent, and changing it would point the stack at an empty one.
+x-mongo-env: &mongo-env
+  OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+  MONGODB_URI: ${MONGODB_URI:-}
+  MONGODB_DB: ${MONGODB_DB:-hermes}
 
 services:
 
@@ -40,6 +49,11 @@ services:
       # VPS exports folder for mobile downloads (#26); read-only is enough.
       - ../exports:/exports:ro
     environment:
+      # Deliberately NOT `<<: *mongo-env`. That anchor carries OPENCODE_API_KEY, and
+      # this service never calls a model — it ingests Health Connect rows and writes
+      # them to MongoDB. Merging it would put a provider credential in a container
+      # that has no use for one, so the two Mongo variables are restated instead.
+      # Recorded here because the next dedup pass would otherwise "fix" this.
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
       PASSWORD: ${PASSWORD:-}
@@ -52,48 +66,12 @@ services:
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────
-  # Multiplexed gateway — ONE container serves god (default profile =
-  # gateway home) + story/resumes sides, with money/cookbook/health-check
-  # MCPs on god, plus the built-in OpenAI-compatible API server (:8642)
-  # for the custom Android app. HERMES_HOME (gateway/) IS god; story/resumes
-  # are nested under gateway/profiles/. The entrypoint renders each
-  # profile's config from these env vars.
-  #
-  # ALL env comes from the single root .env (compose interpolation).
-  # ──────────────────────────────────────────────────────
-  gateway:
-    <<: *bot-base
-    # Starts as root so bind-mounted state stays host-owned (their s6 tree is bypassed).
-    user: "0:0"
-    ports:
-      - "${API_SERVER_PORT:-8642}:8642"
-    volumes:
-      - ../gateway:/opt/data
-      - ../workspace:/workspace
-      # VPS SSH keys, least-privilege file mounts (read-only): side profiles
-      # push/pull their repos (resumes, portals) as the VPS GitHub identity.
-      # Only the keypair + known_hosts are visible — never authorized_keys or
-      # other keys. Missing sources fail container creation (fail fast);
-      # override the source dir via VPS_SSH_DIR in the root .env when the
-      # VPS user isn't root.
-      - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519:/root/.ssh/id_ed25519:ro
-      - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519.pub:/root/.ssh/id_ed25519.pub:ro
-      - ${VPS_SSH_DIR:-/root/.ssh}/known_hosts:/root/.ssh/known_hosts:ro
-    environment:
-      <<: *bot-base-environment
-      PASSWORD: ${PASSWORD:-}
-      # Fail-closed SSH for agent-run git: only the mounted key is ever
-      # offered, never prompt, never trust unknown hosts (a GitHub key
-      # rotation fails loudly until known_hosts is updated on the VPS).
-      GIT_SSH_COMMAND: "ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes"
-
-  # ──────────────────────────────────────────────────────
   # Proxy — single URL for the Agento app (chat + sync on one port).
   # Routes /p/* → pi :8643 and /api/* + /health → health-api :8000
   # (see docker/proxy/nginx.conf). App Server URL: http://<host>:${APP_PORT:-8080}.
-  # Direct ports stay published for comparison, and all three are still live:
-  # :8642 Hermes gateway (nothing routes to it any more; removed in the next PR),
-  # :8643 pi, :8001 health-api.
+  # Direct ports stay published for comparison: :8643 (pi) and :8001 (health-api).
+  # The Hermes gateway's :8642 went with the service, and nothing but its own
+  # documentation still referred to it.
   # ──────────────────────────────────────────────────────
   proxy:
     image: docker.io/nginx:1.27-alpine
@@ -134,23 +112,18 @@ services:
   # resumes), fronted by the pi-gateway binary which serves the OpenAI-compatible
   # surface the Android app already speaks.
   #
-  # Listens on 8643, NOT 8642, and that is deliberate: the `gateway` service above
-  # still owns 8642 until the Hermes removal PR, so the two coexist and each app
-  # tab can be pointed at either port to compare.
+  # This is the only agent host. It was the second one: `gateway` (the Hermes
+  # runtime, :8642) coexisted with this service while the app's single URL was being
+  # moved across, and it is gone now. Nothing routes to :8642 and nothing depends on
+  # it — the comparison it existed for is done.
   #
-  # nginx DOES point here now: `docker/proxy/nginx.conf` sets `$chat` to this
-  # service, so the app's single URL (:8080) is served by Pi. `gateway` keeps
-  # running only so the comparison is possible — nothing routes to it any more,
-  # and nothing depends on it. Removing it is the next PR, and it changes no
-  # routing.
+  # The port stays 8643, not 8642: 8642 was never this service's to take, it was the
+  # number the app already knew. Nothing reads that port any more, so moving would
+  # churn an app-facing default for no gain.
   #
-  # This service merges *bot-base-environment ONLY, never *bot-base — the latter
-  # carries `build.dockerfile: test/Dockerfile`, which would quietly build the
-  # Hermes image. It needs its own build and user below. (See pi/README.md.)
-  #
-  # Starts as root for the same reason gateway does: the bind-mounted workspace and
-  # pi/ dir are owned by the host uid, so a non-root process cannot write session
-  # trees or repo checkouts there.
+  # Starts as root because the bind-mounted workspace and pi/ dir are owned by the
+  # host uid, so a non-root process cannot write session trees or repo checkouts
+  # there.
   # ──────────────────────────────────────────────────────
   pi:
     build:
@@ -184,28 +157,22 @@ services:
       # clone and pull their own repos as the VPS GitHub identity. Without these
       # both profiles fail closed on the first clone with Permission denied
       # (publickey) — which is why their AGENTS.md says stop and report rather than
-      # retry. Same mounts and same GIT_SSH_COMMAND as the gateway service.
+      # retry. Same mounts and same GIT_SSH_COMMAND the gateway service used, which
+      # is what story/resumes' instructions were written against.
       - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519:/root/.ssh/id_ed25519:ro
       - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519.pub:/root/.ssh/id_ed25519.pub:ro
       - ${VPS_SSH_DIR:-/root/.ssh}/known_hosts:/root/.ssh/known_hosts:ro
     environment:
-      # Mongo + the OpenCode keys, inherited so the two stacks cannot drift apart.
-      #
-      # This anchor also carries four Hermes variables — HERMES_HOME,
-      # HERMES_ALLOW_ROOT_GATEWAY, HERMES_API_KEY, OPENCODE_ZEN_API_KEY. They are
-      # INERT here: nothing in the pi image reads them, and HERMES_HOME=/opt/data is
-      # meaningless in a container that mounts /opt/pi. They are inherited anyway on
-      # purpose. Restating the environment explicitly would duplicate the Mongo and
-      # provider-key wiring, and the failure mode of that duplication is the bug this
-      # stack has been fighting throughout — someone adds a variable to the anchor
-      # for Hermes and the pi service silently does not get it. Here a new variable
-      # reaches both, and an unused one costs a few bytes.
+      # Mongo + the provider key, from the shared anchor so they cannot drift from
+      # health-api's. Restating them here would duplicate the wiring, and that
+      # duplication is the bug this stack has been fighting throughout: someone adds a
+      # variable to the anchor and this service silently does not get it.
       #
       # A genuinely required variable going missing is still loud: the entrypoint
       # dies if any MCP server fails to connect.
-      <<: *bot-base-environment
-      # Bearer token for the pi-gateway HTTP surface. Same value the app sends to
-      # the Hermes gateway today, so a tab can be repointed without re-entering it.
+      <<: *mongo-env
+      # Bearer token for the pi-gateway HTTP surface — the same value the app already
+      # sends, which is why the cutover needed no app change.
       PASSWORD: ${PASSWORD:-}
       # Explicit rather than relying on the binary's default, because three separate
       # places have to agree on this number: here, the container side of the port
@@ -234,11 +201,14 @@ services:
       PI_INVENTORY_TIMEOUT: "30"
       PI_CODING_AGENT_DIR: /opt/pi
       PI_PROFILE_DIR: /opt/pi/profiles
-      # Provider key name Pi itself reads.
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-      # Fail-closed SSH for agent-run git, same as gateway: only the mounted key is
-      # ever offered, never prompt, never trust unknown hosts (a GitHub key rotation
-      # fails loudly until known_hosts is updated on the VPS).
+      # OPENCODE_API_KEY is NOT repeated here: it arrives from *mongo-env, and saying
+      # it twice is exactly the drift the anchor comment warns about — two places to
+      # change when the provider key's name does. `OPENCODE_API_KEY` is also the name
+      # Pi itself reads, so one value serves both.
+      #
+      # Fail-closed SSH for agent-run git: only the mounted key is ever offered,
+      # never prompt, never trust unknown hosts (a GitHub key rotation fails loudly
+      # until known_hosts is updated on the VPS).
       GIT_SSH_COMMAND: "ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes"
     healthcheck:
       # /healthz is unauthenticated by design, so the probe needs no credential.
@@ -261,14 +231,16 @@ services:
   # Needs MONGODB_URI / MONGODB_DB only.
   # ──────────────────────────────────────────────────────
   retention:
-    # Its own minimal image (one Go binary + ca-certificates), NOT test/Dockerfile.
-    # That file is the Hermes runtime, and this job used to depend on it for a
-    # single binary — the last thing keeping the Hermes image alive.
+    # Its own minimal image: one Go binary plus ca-certificates, 18 MB. It used to
+    # build from test/Dockerfile, the Hermes runtime, for a single binary — the last
+    # thing keeping that image alive, and now deleted.
     build:
       context: ..
       dockerfile: docker/retention/Dockerfile
     user: "1000:1000"
     environment:
+      # Same reasoning as health-api, and for the same reason: Mongo only. This
+      # container prunes collections and talks to no model.
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
     entrypoint: ["/usr/local/bin/retention"]

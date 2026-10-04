@@ -2,13 +2,14 @@
 
 ## Hard rule: this repo on this machine IS the live stack
 
-- This checkout is the live deployment: `gateway/` is bind-mounted into the
-  running gateway container (`HERMES_HOME=/opt/data`), and the container
-  stack (`docker/docker-compose.yml`) runs from here. There is no separate
+- This checkout is the live deployment: `pi/` is bind-mounted into the running
+  pi container (`PI_CODING_AGENT_DIR=/opt/pi`), and the container stack
+  (`docker/docker-compose.yml`) runs from here. There is no separate
   "live machine" — changes here affect production.
-- `gateway/` holds live runtime state (pids, heartbeats, logs, sqlite WALs,
-  cache). NEVER commit runtime state: only edit source files (templates,
-  scripts, compose, code, docs). Check `git status` before staging and leave
+- `gateway/` holds the *former* Hermes runtime state (transcripts, sqlite WALs,
+  caches) and nothing reads it any more, but it is not in git and cannot be
+  recovered from git, so it is left on disk. NEVER commit runtime state: only
+  edit source files (templates, scripts, compose, code, docs). Check `git status` before staging and leave
   state files (`.pid`, `.heartbeat`, `logs/`, `*.db*`, `cache/`,
   `.curator_state` churn) uncommitted.
 - Read-only live inspection is always fine: `podman ps/logs`,
@@ -17,26 +18,28 @@
 - Disruptive actions need explicit user go-ahead first (STOP and ask):
   `start|stop|restart|init|clean`, recreating containers, editing the live
   `.env`, touching MongoDB data. No surprise restarts.
-- No host Hermes install exists here (`~/.hermes/`, `hermes` CLI, systemd
-  unit, `hermes dashboard` are not used) — everything runs in the one
-  compose stack below.
+- No host agent install exists here (no `pi` binary on PATH outside the
+  container, no systemd unit) — everything runs in the one compose stack below.
+  The script name `scripts/hermes.sh` is a leftover from the Hermes era and is
+  kept so the cron/sysmon helpers and the docs keep pointing at something real.
 
 ## What this project is
 
-Runs god (main) + story/resumes (sides) against
-OpenCode Go directly (no proxy). ONE multiplexed gateway process
-for god + 2 sides (Hermes `gateway.multiplex_profiles`, direct exec),
-a built-in OpenAI-compatible API server (:8642) for the custom Android app,
-and remote MongoDB for domain data (money, health, cookbook). **The live stack
-is fully containerized** — one compose file (`docker/docker-compose.yml`): health-api + one `gateway` container (god + 2 sides, direct to `https://opencode.ai/zen/go/v1`, direct exec) +
-a one-shot retention job. Development runs the SAME single compose file
-against Atlas. No host Hermes install, no native processes.
+Runs god + story + resumes against OpenCode Go directly (no LLM proxy).
+ONE pi container runs one `pi` process per profile — a profile is a directory
+with its own `AGENTS.md`, not a runtime option — fronted by `pi-gateway`, an
+OpenAI-compatible API server (:8643) for the custom Android app, with remote
+MongoDB for domain data (money, health, cookbook). **The live stack is fully
+containerized** — one compose file (`docker/docker-compose.yml`): health-api +
+one `pi` container (direct to `https://opencode.ai/zen/go/v1`) + nginx +
+a one-shot retention job. Development runs the SAME single compose file against
+Atlas. No host agent install, no native processes.
 
 ```
 god+story+resumes
-   └─► ONE `gateway` container (HERMES_HOME=/opt/data = gateway/, official image + custom entrypoint)
+   └─► ONE `pi` container (PI_CODING_AGENT_DIR=/opt/pi = pi/, one pi process per profile)
         └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model mimo-v2.6-flash)
-proxy (:8080, single app URL: /p/* → gateway chat, /api/* → health sync)  •  health-api (:8001)
+proxy (:8080, single app URL: /p/* → pi chat, /api/* → health sync)  •  health-api (:8001)
 MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo vsreddyh/Resume) — separate git repos
 ```
@@ -51,7 +54,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 - `scripts/hermes.sh` = single entry point (`init|start|stop|restart|status|clean`),
   a thin Podman orchestrator over `docker/docker-compose.yml`. No host installs.
   `init` self-installs the host tools it needs: **podman + compose, curl,
-  python3, cron** (only git + sudo must pre-exist). Hermes harness only —
+  python3, cron** (only git + sudo must pre-exist). Container harness only —
   `init` never installs the opencode CLI. health-api (:8001) binds `0.0.0.0` inside its container.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
   (`podman-compose run --rm retention` → `cmd/retention` Go binary); cron daily 03:00
@@ -61,35 +64,36 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 - `cmd/mongo` = shared MongoDB CLI; `cmd/retention` = data lifecycle (both Go).
   `MONGODB_URI`/`MONGODB_DB` in root `.env` (Atlas, all environments).
 - Podman: `docker/docker-compose.yml` = the whole stack (health-api
-   + gateway + retention) — the ONLY compose file. All environments run the
-   same file against the Atlas `MONGODB_URI`. The bot image is built from `test/Dockerfile` +
-   `test/entrypoint.sh` (renders templates, execs gateway; in-repo Go MCP servers + CLIs built by a golang stage onto the official image); those are the image source, not
-   a mirror stack.
+   + pi + proxy + retention) — the ONLY compose file. All environments run the
+   same file against the Atlas `MONGODB_URI`. The agent image is built from `docker/pi/Dockerfile` +
+   `docker/pi/entrypoint.sh` (registers bind-mounted repos with git, then `pi mcp list`
+   as a fail-fast connectivity gate, then execs pi-gateway; in-repo Go MCP servers built by a
+   golang stage); those are the image source, not a mirror stack. The Hermes `gateway`
+   service, `test/Dockerfile` and the tracked `gateway/` config are gone — `gateway/` on
+   disk is untracked runtime state only.
    Provider keys + `PASSWORD` are injected via compose `environment:` interpolation
    from the root `.env`; `podman_compose()` always passes `--env-file "$REPO/.env"`
    (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
    silently falls back empty/default).
 - LLM: direct to OpenCode (`https://opencode.ai/zen/go/v1`, model `mimo-v2.6-flash`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` goes to OpenCode Go.
-- App API: Hermes built-in OpenAI-compatible server on the gateway
-  (`platforms.api_server`, `:8642`, single-password `PASSWORD`); one port, each app
-  tab uses its profile path (`/p/story|resumes|default`) and sends per-request
-  provider `opencode-go` + model from app Settings. Provider key
-  live only in the VPS `.env`, never in git.
-- Bot config source is `gateway/config.yaml.template` (god = default profile =
-  gateway home) and `gateway/profiles/<bot>/config.yaml.template` (the two
-  side profiles — nested because Hermes multiplexes named profiles under the
-  gateway home). Templates use `${HERMES_BASE_URL}` and `${HERMES_CWD}` plus
-  `${PASSWORD}` on the gateway home.
-  `test/entrypoint.sh` renders each to a git-ignored `config.yaml` at container
-  start with container defaults: `https://opencode.ai/zen/go/v1` + `/workspace/<bot>`.
+- App API: `pi-gateway` (`cmd/pi-gateway`), the OpenAI-compatible server in the pi
+  container (`:8643`, single-password `PASSWORD`); one port, each app tab uses its
+  profile path (`/p/story|resumes|god`) and sends per-request provider `opencode-go` +
+  model from app Settings, plus `model_options.reasoning_effort` (required — Pi
+  accepts an unrecognised level silently). Provider key lives only in the VPS
+  `.env`, never in git.
+- Profile config is `pi/profiles/<name>/AGENTS.md` (the profile's own instructions
+  and personality) and `pi/AGENTS.md` (shared by every profile, since Pi layers it
+  into all of them). `pi-gateway` starts one `pi --mode rpc` per profile with that
+  directory as its cwd, which is the mechanism that loads them; per-profile skills
+  are passed explicitly with `--skill`, because Pi does **not** discover them from
+  a profile's working directory (measured — `pi/README.md`).
 - Skills: project skills live in `skills/` and are copied into every profile on
-  init. Hermes skill content (incl. autogenerated + `nousresearch/`), the
-  skill-curator learning state (`.curator_state`/`.usage.json`),
-  and each `SOUL.md` are **committed** so bot personality + learned state
-  survives moving between VPSes. Only transient session/log/state files are
-  git-ignored (runtime `memories/` are not tracked).
+  init, landing at `pi/profiles/<name>/skills/`. Skill content and each profile's
+  instructions are **committed** so personality survives moving between VPSes. Only
+  transient session/log/state files are git-ignored.
 - CI: `android-apk.yml` (lint + debug/release APKs, `main` branch only) and `mcps-test.yml` (`go build` + `go vet` + `go test ./...` over `cmd/`/`internal/`, `main` only; DB tests skip without `MONGODB_URI`). `./gradlew lintDebug` (release variant on `main`) fails on errors; the report uploads always. Fix what it reports rather than baselining. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
-  `podman-compose -f docker/docker-compose.yml config`, then check gateway logs on the live machine.
+  `podman-compose -f docker/docker-compose.yml config`, then check pi logs on the live machine.
 - Git identity: every commit as `vsreddyh <shouryanreddyh@gmail.com>` (`git -c user.name=vsreddyh -c user.email=shouryanreddyh@gmail.com commit ...`). Never use another name/email.
 - Agent model: always run agent sessions on `muse-spark-1.3-contributor` ONLY (cheapest; everything else is too expensive). This is the agent-side rule — the Android app default (`mimo-v2.6-flash`) is separate and stays.
 - Git workflow (no exceptions): ALL changes land on `main` via branch + PR — never commit or push directly to `main`, not even one-line fixes. After a PR merges, delete the branch locally AND remotely (`git branch -d <b>` + `git push origin --delete <b>`), then prune (`git fetch --prune`). Wipe any other branches already merged into `main` at the same time.
@@ -111,11 +115,12 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 - `make setup` in docker/ references `docker/.env.example` which doesn't exist;
   compose reads the ROOT `.env` via `--env-file "$REPO/.env"` (there is no
   `env_file:` directive). `make` targets wrap compose in `docker/`.
-- Legacy native install: `start` detects stale `run/bots/*.pid` processes and
-  stops them first; if a `hermes-gateway` systemd unit survives, `stop`
-  best-effort stops it. `clean` no longer touches `~/.hermes` (no host install).
-- Migration (first container start after the native era): stop old native bots /
-  health-api before `./scripts/hermes.sh start`, or two
-  gateways will fight over the same ports.
+- Legacy native install (pre-container): `start` detects stale `run/bots/*.pid`
+  processes and stops them first; if a `hermes-gateway` systemd unit survives,
+  `stop` best-effort stops it. Both are inert on a host that never had one, and
+  are kept for the hosts that did.
+- Port collisions: the Hermes gateway owned `:8642` and pi owns `:8643`, so the
+  two never fought — but a leftover native bot or a hand-started `pi` on the same
+  port will, and the symptom is a crash-loop, not a clear message.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
 - Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service.
