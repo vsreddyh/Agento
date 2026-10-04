@@ -3,29 +3,34 @@ set -euo pipefail
 
 # Fully-containerized live stack orchestrator (Podman).
 #
-# Everything (health-api, gateway (3 profiles), retention) — direct to https://opencode.ai/zen/go/v1, no proxy
-# runs as compose services in docker/docker-compose.yml. init self-installs the
-# host tools it needs (curl, podman + podman-compose, python3, cron),
-# builds the images, seeds the single root .env, copies skills,
-# and installs the retention cron. Only git + sudo must pre-exist.
-# All env lives in the root .env (no per-profile .env files).
-# No host Hermes install, venvs, or native processes.
-# NOTE: Hermes harness only — this script never installs the opencode CLI
+# Everything (health-api, pi (3 profiles), proxy, retention) — direct to
+# https://opencode.ai/zen/go/v1, no LLM proxy — runs as compose services in
+# docker/docker-compose.yml. init self-installs the host tools it needs (curl,
+# podman + podman-compose, python3, cron), builds the images, seeds the single
+# root .env, copies skills, and installs the retention cron. Only git + sudo must
+# pre-exist. All env lives in the root .env (no per-profile .env files).
+# No host agent install, venvs, or native processes.
+# NOTE: container harness only — this script never installs the opencode CLI
 # (LLM traffic goes direct to OpenCode Go over HTTPS; no CLI needed).
+#
+# The name is left over from when the agent host was the Hermes gateway.
+# Renaming is a separate mechanical change — README.md, documentation.md,
+# AGENTS.md, vps.md and the cron/sysmon helpers all reference it — and a
+# half-renamed script is worse than an honestly-documented old name.
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUN_DIR="$REPO/run"
 COMPOSE="$REPO/docker/docker-compose.yml"
-BOTS=(story resumes)
-GATEWAY_HOME="$REPO/gateway"
+# Every agent profile, not just the git-backed ones. Under Hermes these were
+# split: `gateway/` was both the gateway home AND the god profile, with story and
+# resumes nested under it. Pi has no such asymmetry — each profile is a directory
+# under the agent dir and each runs as its own process, god included.
+PROFILES=(god story resumes)
+PI_HOME="$REPO/pi"
 
-# Multiplex layout: gateway/ is BOTH the gateway home (HERMES_HOME) and the
-# god profile (Hermes' built-in "default" profile IS the home dir). Story and
-# resumes are side profiles NESTED under it (gateway/profiles/<bot>/).
 profile_home() {
-    local b="$1"
-    echo "$REPO/gateway/profiles/$b"
+    echo "$PI_HOME/profiles/$1"
 }
 
 # shellcheck source=scripts/lib/common.sh
@@ -44,7 +49,7 @@ Usage: $(basename "$0") <command>
 
 Commands:
   init       Build images, seed the root .env (all env vars) + skills, set up host tools (curl, podman, python, cron), install retention cron
-  start      Start the whole container stack (health-api, gateway (3 profiles))
+  start      Start the whole container stack (health-api, pi (3 profiles), proxy, retention)
   stop       Stop the container stack
   restart    Stop then start
   status     Show all service states
@@ -231,34 +236,44 @@ cmd_init() {
     ensure_python || true
     ensure_cron || true
 
-    info "Building container images (bot image, health-api)..."
+    info "Building container images (agent, health-api)..."
     podman_compose -f "$COMPOSE" build 2>&1 || { error "podman-compose build failed."; exit 1; }
     info "Pruning unused images (prevents GBs of bloat)..."
     podman image prune -f 2>&1 | sed 's/^/  /' || true
 
-    mkdir -p "$GATEWAY_HOME" "$REPO/workspace"
-    # Official image runs hermes as UID 10000 (hermes user) — bind mounts
-    # must belong to it or the gateway crash-loops on permission errors.
-    # Root on the host still has full access; override with HERMES_UID/GID.
-    chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" "$REPO/workspace" "$GATEWAY_HOME" 2>/dev/null || true
+    mkdir -p "$PI_HOME" "$REPO/workspace"
+    # No chown here, and that is the fix rather than an omission. This used to hand
+    # the workspace to uid/gid 10000 because the official Hermes image ran as 10000
+    # and bind mounts had to belong to it or the gateway crash-looped. Nothing runs as
+    # 10000 any more: the pi service is `user: "0:0"` precisely so the host-owned
+    # workspace stays writable. Left in place it did the opposite of its purpose —
+    # run as root without SUDO_USER it handed the tree to a uid that owns nothing
+    # here, and with SUDO_USER it was silently undone a few lines later.
+    #
+    # Ownership of the host's own files is the SUDO_USER fix-up's job, further down,
+    # and on a non-sudo run the invoking user already owns what they just created.
+    # HERMES_UID/HERMES_GID therefore have no remaining reader in this script.
     local b
-    for b in "${BOTS[@]}"; do
+    for b in "${PROFILES[@]}"; do
         mkdir -p "$(profile_home "$b")"
-        # Story lives in the portals vault, not workspace/story (retired) —
-        # never recreate it; every other bot keeps workspace/<name>.
+        # Only story and resumes are repo-backed. God works in its own profile
+        # directory and has no repo, so it gets NO workspace/<name> — an empty
+        # orphan dir there would later read as deliberate.
         if [[ "$b" == "story" ]]; then
+            # Story lives in the portals vault, not workspace/story (retired) —
+            # never recreate it.
             mkdir -p "$REPO/workspace/portals"
             # Retired dir: rmdir only removes it when empty, so this can
             # never delete real content — manual deletion also stays safe.
             rmdir "$REPO/workspace/story" 2>/dev/null || true
-        else
-            mkdir -p "$REPO/workspace/$b"
+        elif [[ "$b" == "resumes" ]]; then
+            mkdir -p "$REPO/workspace/resumes"
         fi
     done
     # Fix ownership before cloning: when run via sudo, dirs are root-owned and
     # clone as $SUDO_USER would get Permission denied. Do it now, not after.
     if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
-        chown -R "$SUDO_USER:${SUDO_USER:-$(id -gn "$SUDO_USER")}" "$REPO/workspace" "$GATEWAY_HOME" 2>/dev/null || true
+        chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$REPO/workspace" "$PI_HOME" 2>/dev/null || true
     fi
 
     # Each git-backed bot keeps its own repo clone in workspace/ (private; SSH
@@ -295,23 +310,23 @@ cmd_init() {
     # When run with sudo, ensure workspace/profile dirs stay owned by the
     # invoking user (not root), so dev edits don't need sudo. Prod also benefits.
     if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
-        chown -R "$SUDO_USER:${SUDO_USER:-$(id -gn "$SUDO_USER")}" "$REPO/workspace" "$GATEWAY_HOME" 2>/dev/null || true
+        chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$REPO/workspace" "$PI_HOME" 2>/dev/null || true
     fi
 
-    info "Installing project skills into god + each side profile..."
+    # Per-profile skills live at pi/profiles/<name>/skills/ and reach each child
+    # through an explicit --skill, because Pi does NOT discover them from a
+    # profile's working directory (measured; see pi/README.md). The repo's own
+    # skills/ tree is what they are copied from.
+    info "Installing project skills into each profile..."
     if [[ -d "$REPO/skills" ]]; then
-        local homes=("$GATEWAY_HOME")
         local b
-        for b in "${BOTS[@]}"; do
-            homes+=("$(profile_home "$b")")
-        done
-        local home
-        for home in "${homes[@]}"; do
-            local label; label="$(basename "$home")"
-            [[ "$label" == "gateway" ]] && label="god"
+        for b in "${PROFILES[@]}"; do
+            local home; home="$(profile_home "$b")"
+            local label="$b"
             # One-time cleanup: the docker-management skill was renamed to
             # podman-management — drop the orphaned copy if present.
             rm -rf "$home/skills/docker-management"
+            local skill_dir skill_name target
             for skill_dir in "$REPO/skills"/*/; do
                 skill_name="$(basename "$skill_dir")"
                 target="$home/skills/$skill_name"
@@ -331,7 +346,7 @@ install_retention_cron
     info "Initialization complete."
     echo "  Next: edit .env with real keys (OPENCODE_API_KEY, PASSWORD, Mongo URI), then ./scripts/hermes.sh start"
     echo "  Access: Agento app (single URL: chat + sync) at http://<host>:8080  (APP_PORT in .env)"
-    echo "  Access: app API at http://<host>:8642  (bearer PASSWORD)"
+    echo "  Access: agent API at http://<host>:8643  (bearer PASSWORD)"
     echo "  Access: health-api at http://<host>:8001"
 }
 
@@ -358,7 +373,7 @@ cmd_start() {
     mkdir -p "$RUN_DIR"
 
     legacy_native_bots || {
-        warn "Native gateways still running — stopping them (legacy migration)."
+        warn "Native bots still running — stopping them (legacy migration)."
         local pf
         for pf in "$RUN_DIR"/bots/*.pid; do
             [[ -f "$pf" ]] || continue
@@ -371,10 +386,13 @@ cmd_start() {
         done
     }
 
-    info "Starting container stack (health-api, gateway (3 profiles))..."
+    info "Starting container stack (health-api, pi (3 profiles), proxy)..."
     # Restarts reuse layers; only `init` prunes. `up --build` rebuilds layers
     # whose COPY/requirements changed.
-    if [[ "${HERMES_NO_BUILD:-0}" == "1" ]]; then
+    # PI_NO_BUILD, with HERMES_NO_BUILD still honoured: the old name is what any
+    # existing muscle memory, runbook or .env uses, and silently ignoring it would
+    # turn "skip the rebuild" into a full rebuild — the expensive direction.
+    if [[ "${PI_NO_BUILD:-${HERMES_NO_BUILD:-0}}" == "1" ]]; then
         podman_compose -f "$COMPOSE" up -d 2>&1 || { error "podman-compose up failed."; exit 1; }
     else
         podman_compose -f "$COMPOSE" up -d --build 2>&1 || { error "podman-compose up failed."; exit 1; }
@@ -418,7 +436,7 @@ cmd_restart() {
 # STATUS
 # ────────────────────────────────────────────────────────────
 cmd_status() {
-    echo "Hermes Agent Status (podman stack)" && echo ""
+    echo "Agent Status (podman stack)" && echo ""
     podman_compose -f "$COMPOSE" ps
     echo ""
     echo "Logs: podman-compose -f docker/docker-compose.yml logs -f <service>"
@@ -429,12 +447,13 @@ cmd_status() {
 # ────────────────────────────────────────────────────────────
 cmd_clean() {
     echo -e "${RED}This wipes:${NC}"
-    echo "  - all profile runtime state (sessions, logs, DBs, rendered config)"
-    echo "  - per-profile .env files (regenerated at container start)"
+    echo "  - every conversation transcript, and pi runtime state (sessions, logs, cache)"
+    echo "  - the provider credentials Pi wrote at login (pi/auth.json)"
     echo "  - the retention cron entry"
     echo "  - container volumes and containers"
-    echo -e "${RED}Remote MongoDB is NOT touched. Committed files (skills, memories,"
-    echo -e "SOUL.md, templates) are KEPT. Committed files are NOT touched.${NC}"
+    echo -e "${RED}Remote MongoDB is NOT touched. Everything tracked in git —"
+    echo -e "pi/settings.json, pi/mcp.json, the AGENTS.md files, skills, the"
+    echo -e "workspace repos — is KEPT.${NC}"
     read -r -p "Type 'yes' to wipe everything: " answer
     if [[ "$answer" != "yes" ]]; then
         warn "Clean aborted."
@@ -450,39 +469,32 @@ cmd_clean() {
     info "run/ removed."
 
     local b
-    for b in "${BOTS[@]}"; do
+    for b in "${PROFILES[@]}"; do
         wipe_profile "$b"
     done
-    # Also wipe gateway home (god) rendered config / runtime (Hermes
-    # writes state there too).
-    if [[ -d "$GATEWAY_HOME" ]]; then
-        info "Wiping gateway home runtime state ..."
-        rm -f "$GATEWAY_HOME/config.yaml" "$GATEWAY_HOME/config.rendered.yaml" \
-            "$GATEWAY_HOME/auth.lock" "$GATEWAY_HOME/gateway.lock" \
-            "$GATEWAY_HOME/channel_directory.json" \
-            "$GATEWAY_HOME/.skills_prompt_snapshot.json" "$GATEWAY_HOME/.clean_shutdown"
-        rm -rf "$GATEWAY_HOME"/.cache "$GATEWAY_HOME"/.local "$GATEWAY_HOME"/sessions \
-            "$GATEWAY_HOME"/state "$GATEWAY_HOME"/state.db* "$GATEWAY_HOME"/logs "$GATEWAY_HOME"/cron "$GATEWAY_HOME"/kanban* \
-            "$GATEWAY_HOME"/gateway* "$GATEWAY_HOME"/bin "$GATEWAY_HOME"/data "$GATEWAY_HOME"/image_cache "$GATEWAY_HOME"/audio_cache \
-            "$GATEWAY_HOME"/hooks "$GATEWAY_HOME"/sandboxes "$GATEWAY_HOME"/platforms "$GATEWAY_HOME"/pairing "$GATEWAY_HOME"/cache
+    # Agent-dir runtime state, named file by file on purpose: pi/ is a TRACKED
+    # directory (settings.json, mcp.json, AGENTS.md, profiles/*/AGENTS.md, skills),
+    # so a blanket `rm -rf` here would delete committed configuration that `init`
+    # does not recreate. Only what Pi writes at runtime goes.
+    if [[ -d "$PI_HOME" ]]; then
+        info "Wiping pi agent-dir runtime state ..."
+        rm -rf "$PI_HOME"/sessions "$PI_HOME"/logs "$PI_HOME"/cache "$PI_HOME"/tmp
+        rm -f "$PI_HOME"/auth.json "$PI_HOME"/models-store.json "$PI_HOME"/mcp-auth.json
     fi
 
     echo ""
     info "Clean complete. Re-run ./scripts/hermes.sh init to start over."
 }
 
+# A profile directory is TRACKED too (AGENTS.md, skills/), so this removes
+# session and cache state and nothing else — `rm -rf` on a profile would delete
+# the instructions the next `init` would not put back.
 wipe_profile() {
     local b="$1"
     local d; d="$(profile_home "$b")"
     [[ -d "$d" ]] || return 0
     info "Wiping $b runtime state ..."
-    rm -f "$d/config.yaml" "$d/config.rendered.yaml" "$d/.env" \
-        "$d/auth.lock" "$d/gateway.lock" "$d/channel_directory.json" \
-        "$d/.skills_prompt_snapshot.json" "$d/.clean_shutdown"
-    rm -rf "$d"/.cache "$d"/.local "$d"/sessions \
-        "$d"/state "$d"/state.db* "$d"/logs "$d"/cron "$d"/kanban* \
-        "$d"/gateway* "$d"/bin "$d"/data "$d"/image_cache "$d"/audio_cache \
-        "$d"/hooks "$d"/sandboxes "$d"/platforms "$d"/pairing "$d"/cache
+    rm -rf "$d"/sessions "$d"/logs "$d"/cache "$d"/tmp
 }
 
 # ────────────────────────────────────────────────────────────
