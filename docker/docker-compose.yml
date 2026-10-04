@@ -261,9 +261,12 @@ services:
   # Needs MONGODB_URI / MONGODB_DB only.
   # ──────────────────────────────────────────────────────
   retention:
+    # Its own minimal image (one Go binary + ca-certificates), NOT test/Dockerfile.
+    # That file is the Hermes runtime, and this job used to depend on it for a
+    # single binary — the last thing keeping the Hermes image alive.
     build:
       context: ..
-      dockerfile: test/Dockerfile
+      dockerfile: docker/retention/Dockerfile
     user: "1000:1000"
     environment:
       MONGODB_URI: ${MONGODB_URI:-}
