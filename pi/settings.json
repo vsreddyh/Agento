@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Pi agent-dir settings. Mounted at /opt/pi (PI_CODING_AGENT_DIR).",
-    "Knobs only — profile personality lives in pi/profiles/<name>/AGENTS.md.",
+    "Knobs only - profile personality lives in pi/profiles/<name>/AGENTS.md.",
     "",
     "defaultTools is ADDITIVE (+name), never a replacement list. Passing --tools",
     "on the CLI REPLACES the selection and filters MCP tools out of the callable",
