@@ -433,6 +433,31 @@ into `gateway/profiles/*`, and reports "gateway (3 profiles)" and `:8642`. It st
 `init` and `start --build` still succeed, now building the pi image — which is why
 leaving it one layer behind is safe rather than broken.
 
+### The wire contract kept the Hermes name on purpose
+
+`X-Hermes-Session-Id` is still the header pi-gateway reads (`internal/gateway/server.go`,
+`r.Header.Get("X-Hermes-Session-Id")`) and the app still sends. It is not an oversight
+and it is not a comment to tidy: it is the contract that keeps every app thread mapped
+to one conversation. Renaming it means the app sends `X-Pi-Session-Id`, the server
+accepts both for a release, and the old name is eventually dropped — a coordinated
+app-plus-server change, and a MAJOR by the repo's own versioning rules. The same is
+true of the app's `X-Hermes-Session-Id` KDoc: corrected to say "conversation" where it
+meant a session, but the header name stays.
+
+### Two capabilities the app still expects that pi-gateway does not serve
+
+Found while correcting the app's KDoc, and worth stating rather than leaving in a
+comment:
+
+1. **`GET api/sessions/{id}`** — the Hermes route behind the app's multi-device token
+   reconciliation (#121). pi-gateway has no equivalent; usage arrives on the chat
+   response's own `usage` object instead, which is per-device. The reconciliation has
+   no server side on Pi.
+2. **Tool-progress frames have no `label`.** pi-gateway sends `{"tool":…,"status":…}`
+   and deliberately omits a label, because Pi reports no per-call label to forward.
+   The app reads it optionally, so this is already handled — but a "label" that can
+   never be present is wire surface that will read as a bug to the next person.
+
 Two parity questions the cutover does not answer, both of which need deciding
 rather than code:
 
