@@ -82,11 +82,19 @@ type updateNoteInput struct {
 	ID string `json:"id"`
 	// Patch semantics throughout: "Absent args are left alone", per the description.
 	// So a change to one line of a list means sending the WHOLE new body — absent and
-	// empty mean the same thing, and sending body="" clears the note on purpose.
-	Title  string   `json:"title,omitempty"`
-	Body   string   `json:"body,omitempty"`
-	Tags   []string `json:"tags,omitempty"`
-	Pinned *bool    `json:"pinned,omitempty"`
+	// empty mean DIFFERENT things, and only a pointer can say which:
+	//
+	//   - absent  → leave the field alone
+	//   - "" / []  → clear it, on purpose (emptying a list is a real edit)
+	//
+	// A plain `string` + omitempty collapses those two into one: `body=""` is dropped
+	// before the store ever sees it, so "clear this note" is silently a no-op and the
+	// agent reports success on an edit that never happened. `*string`/`*[]string` are
+	// the only way to publish that contract honestly.
+	Title  *string   `json:"title,omitempty"`
+	Body   *string   `json:"body,omitempty"`
+	Tags   *[]string `json:"tags,omitempty"`
+	Pinned *bool     `json:"pinned,omitempty"`
 }
 
 type deleteNoteInput struct {
@@ -149,17 +157,20 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_note",
-		Description: "Patch a note. Absent args are left alone, so a list edit means sending the FULL new body — the body replaces, it does not append. Confirm with the user before overwriting a body you did not write."},
+		Description: "Patch a note. An arg you omit is left alone; an arg you send as empty CLEARS that field, so body=\"\" empties the note and tags=[] removes every tag. The body replaces, it does not append — editing one line means sending the whole new body. Confirm with the user before overwriting a body you did not write."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateNoteInput) (*mcp.CallToolResult, map[string]any, error) {
+			// Pointers, so absent (leave alone) and empty (clear) stay distinct — see
+			// updateNoteInput. Anything that reaches this block is an edit the caller
+			// asked for by name, including the zero value.
 			patch := map[string]any{}
-			if in.Title != "" {
-				patch["title"] = in.Title
+			if in.Title != nil {
+				patch["title"] = *in.Title
 			}
-			if in.Body != "" {
-				patch["body"] = in.Body
+			if in.Body != nil {
+				patch["body"] = *in.Body
 			}
-			if len(in.Tags) > 0 {
-				patch["tags"] = in.Tags
+			if in.Tags != nil {
+				patch["tags"] = *in.Tags
 			}
 			if in.Pinned != nil {
 				patch["pinned"] = *in.Pinned

@@ -17,10 +17,12 @@ package notes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"agento/internal/mongo"
 
@@ -40,8 +42,14 @@ const (
 	maxTags = 20
 	// maxTagLen keeps a tag one word-ish.
 	maxTagLen = 40
-	// listCap is the ceiling when a caller asks for no limit. Matches cookbook.
+	// listCap is the ceiling for list_notes, which returns summaries. Matches cookbook.
 	listCap = 200
+	// searchCap is much lower than listCap on purpose: search returns FULL notes, so
+	// the ceiling is 50 bodies rather than 50 summaries. At maxBody the worst case is
+	// 1 MB of text in one tool result, which defeats the same context-window care
+	// ListNotes is built around. A search that matches more than this wants
+	// list_notes (summaries) plus a narrower query, not more bodies.
+	searchCap = 50
 )
 
 // StoreError is the domain error.
@@ -61,11 +69,21 @@ func oid(s string) (primitive.ObjectID, error) {
 	return o, nil
 }
 
+// trunc caps a string at n BYTES without splitting a rune. `s[:n]` on a multi-byte
+// character produces invalid UTF-8, and a note is exactly the place a user writes an
+// emoji or a non-Latin script ("🥑", "café", "दूध") — the note would be silently
+// corrupted at the cap, and the corruption is invisible until something downstream
+// tries to render it. Cut on a rune boundary instead, backing off up to utf8.UTFMax-1
+// bytes.
 func trunc(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	if len(s) <= n {
+		return s
 	}
-	return s
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func cleanTags(tags []string) []string {
@@ -136,6 +154,12 @@ func (s *Store) AddNote(ctx context.Context, title, body string, tags []string, 
 // GetNote resolves by id only. Unlike cookbook, there is no title lookup: titles
 // are not unique, so resolving one would silently pick a winner among notes the
 // user considers distinct. get_note takes the id that list_notes returned.
+//
+// ErrNoDocuments is the ONLY outcome reported as "not found" (nil, nil). Every
+// other FindOne error is propagated, because a flat (nil, nil) here turns a
+// timeout, a dropped connection or an auth failure into "unknown note '<id>'" —
+// the agent then tells the user their list does not exist when MongoDB is simply
+// down. A missing note is a fact; an unreachable database is a fault.
 func (s *Store) GetNote(ctx context.Context, id string) (bson.M, error) {
 	o, err := oid(id)
 	if err != nil {
@@ -143,7 +167,10 @@ func (s *Store) GetNote(ctx context.Context, id string) (bson.M, error) {
 	}
 	var n bson.M
 	if err := s.notes.FindOne(ctx, bson.M{"_id": o}).Decode(&n); err != nil {
-		return nil, nil
+		if errors.Is(err, mongoDrv.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	return docOut(n), nil
 }
@@ -151,6 +178,13 @@ func (s *Store) GetNote(ctx context.Context, id string) (bson.M, error) {
 // ListNotes returns summaries, not bodies: a filter query over 200 notes must not
 // return 200 grocery lists into the context window. The first non-empty body line
 // is included as `preview` so the agent can pick the right note to open.
+//
+// The body IS fetched, then previewed and dropped — `SetProjection(bson.M{"body":0})`
+// would be cheaper but also strips the text `preview` is derived from, so the
+// projection version of this function returned summaries with no preview at all and
+// the agent had nothing to choose between. One extra field off the wire per row buys
+// back the ability to identify a note by its first item, which is the entire job of
+// a summary. summaries() does the stripping, so the rule lives in one place.
 func (s *Store) ListNotes(ctx context.Context, tag string, pinnedOnly bool, limit int) ([]bson.M, error) {
 	filt := bson.M{}
 	if t := strings.TrimSpace(tag); t != "" {
@@ -168,20 +202,27 @@ func (s *Store) ListNotes(ctx context.Context, tag string, pinnedOnly bool, limi
 	cur, err := s.notes.Find(ctx, filt,
 		options.Find().
 			SetSort(bson.D{{Key: "pinned", Value: -1}, {Key: "updatedAt", Value: -1}}).
-			SetProjection(bson.M{"body": 0}).
 			SetLimit(int64(limit)))
 	if err != nil {
 		return nil, err
 	}
-	var rows []bson.M
-	if err := cur.All(ctx, &rows); err != nil {
+	rows, err := allOut(ctx, cur)
+	if err != nil {
 		return nil, err
 	}
-	out := make([]bson.M, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, docOut(r))
+		summarize(r)
 	}
-	return out, nil
+	return rows, nil
+}
+
+// summarize turns a full note into a summary: body replaced by the preview of it.
+// Applied after docOut so `preview` is computed from the text while it is still
+// present, and idempotent, so a caller that already summarized may call it again.
+func summarize(n bson.M) {
+	body, _ := n["body"].(string)
+	n["preview"] = preview(body)
+	delete(n, "body")
 }
 
 // SearchNotes matches body text too, which is the point of a grocery list: the
@@ -195,8 +236,8 @@ func (s *Store) SearchNotes(ctx context.Context, q string, limit int) ([]bson.M,
 	if limit <= 0 {
 		limit = 20
 	}
-	if limit > listCap {
-		limit = listCap
+	if limit > searchCap {
+		limit = searchCap
 	}
 	re := bson.M{"$regex": regexp.QuoteMeta(q), "$options": "i"}
 	cur, err := s.notes.Find(ctx, bson.M{"$or": []bson.M{{"title": re}, {"body": re}}},

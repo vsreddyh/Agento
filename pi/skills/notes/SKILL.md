@@ -35,7 +35,7 @@ the list", it is a note. Do not create a task with no due date to hold a list.
 | `get_note` | `id` | — |
 | `list_notes` | — | `tag`, `pinned_only`, `limit` (0 → 50) |
 | `search_notes` | `text` | `limit` (0 → 20) |
-| `update_note` | `id` | `title`, `body`, `tags`, `pinned` — **absent args are left alone** |
+| `update_note` | `id` | `title`, `body`, `tags`, `pinned` — **omitted args are left alone; an empty arg clears the field** |
 | `delete_note` | `id` | — |
 
 Notes are addressed by **id only**. Titles are not unique — two notes called
@@ -58,7 +58,8 @@ Two consequences the tool descriptions cannot enforce for you:
 - `update_note` **replaces** the body. Adding one item means `get_note`, append
   the line, and send the whole body back. Sending a partial body silently deletes
   every line you left out. Never reconstruct a body from a `list_notes` summary —
-  that is how a list gets wiped.
+  that is how a list gets wiped. To empty a note on purpose, send `body=""`; to
+  leave the body untouched, omit the arg entirely.
 
 ## Editing a list the user is talking about
 
