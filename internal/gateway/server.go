@@ -394,6 +394,22 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The two session routes, matched by prefix rather than as switch cases because the
+	// conversation id is a path segment. Handled before the switch so the two routes share
+	// one place, and so a malformed id is reported by the same code that parses it.
+	//
+	// Reachable two ways: /{profile}/api/sessions/{id} from a tab configured with a
+	// profile path, and /api/sessions/{id} unprefixed — splitProfile reserves "api", so
+	// the second resolves to the default profile with the whole path as `rest`. One case
+	// serves both, which is the same reason /api/model/options needs no profile.
+	if strings.HasPrefix(rest, "api/sessions/") {
+		if !requireMethod(w, r, http.MethodGet, "/api/sessions/{id}") {
+			return
+		}
+		s.handleSession(w, handler, rest)
+		return
+	}
+
 	switch rest {
 	case "v1/chat/completions":
 		// A known endpoint reached with the wrong verb is 405, not 404: the

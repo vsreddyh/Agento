@@ -257,7 +257,12 @@ type piUsage struct {
 	Output     int64 `json:"output"`
 	CacheRead  int64 `json:"cacheRead"`
 	CacheWrite int64 `json:"cacheWrite"`
-	Total      int64 `json:"totalTokens"`
+	// Reasoning is decoded but not sent on the streaming path: toWire below deliberately
+	// omits it, because a turn's reasoning tokens are already inside Output for every
+	// provider that reports them separately, and publishing both would double-count. The
+	// session-totals route reads it, where the app wants the split.
+	Reasoning int64 `json:"reasoning"`
+	Total     int64 `json:"totalTokens"`
 }
 
 func (u piUsage) toWire() *usage {
