@@ -9,20 +9,25 @@ store, same validation — see `cmd/health-api/main.go`).
 
 | Tool | Purpose |
 |---|---|
-| `create_task` | Create an open task (name required; due/estimate/repeat optional) |
-| `list_tasks` | List by state open/done/all, overdue-only, or search |
+| `create_task` | Create an open task. Required: name, description, due_date, due_time, estimated_minutes, parallelable. Optional: the four repeat keys (absent = one-shot) |
+| `list_tasks` | List by state open/done/all, overdue-only, or search. Every argument is optional (state=open, limit=200) |
 | `get_task` | Fetch one task by id |
-| `update_task` | Edit fields (nil-safe; empty repeat_rule clears the rule) |
+| `update_task` | Edit fields. Only `id` is required — every other field is nil-safe, and empty repeat_rule clears the rule |
 | `complete_task` | Mark done (3-day retention starts); echoes repeat_rule + follow-up nudge |
 | `reopen_task` | Reopen a completed task (cancels expiry) |
 | `delete_task` | Permanently delete |
 
 ## Schema (MongoDB `hermes` DB)
 
-**`tasks`** — `name` (required), `description`, `due_date` (YYYY-MM-DD),
-`due_time` (HH:MM, requires a date), `estimated_minutes`, `repeat_rule`
-(free-form, verbatim), `completedAt` (null = open), `createdAt`,
-`expiresAt` (completed only = completedAt + 3d, TTL target).
+**`tasks`** — `name`, `description`, `due_date` (YYYY-MM-DD), `due_time` (HH:MM,
+requires a date), `estimated_minutes`, `parallelable`, `repeat_rule` (free-form,
+verbatim), `completedAt` (null = open), `createdAt`, `expiresAt` (completed only =
+completedAt + 3d, TTL target).
+
+Note the distinction between *required on create* and *required in the document*: the six
+fields `store.Create` rejects when absent are marked required in the tool schema, and are
+plain stored values. Optionality is a property of the tool contract, not of the schema's
+data model — `cmd/task-manager/schema_test.go` asserts the two agree per tool.
 
 ### Key invariants
 
