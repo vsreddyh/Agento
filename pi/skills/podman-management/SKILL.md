@@ -3,9 +3,7 @@ name: podman-management
 description: "The project's Podman stack: what the agent can check from inside its own container, and the host-side commands for the human. Use when asked whether the stack is up, or what to run on the VPS."
 ---
 
-# Podman Management
-
-## Read this first: you are not on the host
+**Read this first: you are not on the host.**
 
 You run **inside the `pi` container**, not on the VPS. Verified in the running
 container:
@@ -24,6 +22,8 @@ So: every `podman` command below is for the **human**. If you are asked about th
 stack, check what you can actually check, report it, and quote the host command the
 user would run. Do not try to run them — they will fail with "command not found", and
 reporting that as a stack problem is worse than saying where the command belongs.
+
+# Podman Management
 
 ## What you can check from in here
 

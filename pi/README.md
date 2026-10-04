@@ -493,6 +493,31 @@ confirmed live: all three profiles list it with `scope: "user"`, while story's o
 `--skill`). One copy, three profiles, and no duplicated file to drift — the layout
 Hermes could not use because it did not know its agent directory was searched.
 
+## Skill files are checked, because nothing else checks them
+
+Three defects in this migration shared one shape: a `SKILL.md` that was correct when
+written and wrong later, with **nothing failing**. A skill pointing at a moved path, or
+telling the agent to run a binary its container does not have, is invisible in review
+and invisible at runtime — the agent simply cannot do what the file says. Two of the
+three were found only by a human happening to read them carefully.
+
+`internal/skills` asserts the mechanical rules in CI (`go test ./...`), across every
+skill Pi can load — `pi/skills/*/SKILL.md` and `pi/profiles/*/skills/*/SKILL.md`:
+
+| rule | the defect it exists for |
+|---|---|
+| frontmatter has `name:` and `description:` | a skill listed as blank on the Skills screen rather than refused |
+| every backticked repo-relative path resolves | a skill pointing at a tree this migration moved. `./x` resolves from the repo root; `../x` from the skill's own directory, with the **checkout** as the boundary — so a sibling skill (`../podman-management/SKILL.md`) is fine and `../../../etc/nginx.conf` is not |
+| every `/opt/…` or `/workspace/…` path is a real bind mount **and the file under it exists** | a leftover container path from the old image (`/opt/data/state.db`), or a path wearing a valid prefix (`/opt/pi/skills/nope/SKILL.md`) |
+| host-only tooling is labelled as host-only, per section | `podman`, `podman-compose`, `docker`, `compose`, `systemctl` — none exist in the pi image |
+| no bare `skills/<name>/SKILL.md` reference | the repo-root tree nothing discovers |
+| the file ends with a newline | the next diff touching the last line shows two changes, which trains people to skim diffs |
+
+Each rule was verified by reintroducing its defect and watching it fail — a check that
+passes on the broken tree is worse than no check. The container facts (which binaries
+exist, which paths are mounted) are constants beside the tests with the evidence
+recorded, so a change to the image fails a test rather than silently invalidating prose.
+
 ## Subagent spawning is a separate process, and that is the whole point
 
 `extensions/subagent.ts` registers `spawn_subagent`: run an independent agent to
