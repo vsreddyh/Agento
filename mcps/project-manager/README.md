@@ -9,10 +9,10 @@ same validation — see `cmd/health-api/main.go`).
 
 | Tool | Purpose |
 |---|---|
-| `create_project` | Create a project (name required; status defaults to Todo) |
-| `list_projects` | List by status Todo/Ongoing/Paused/Done/all, or search name/note (limit caps rows, default 200) |
+| `create_project` | Create a project. Required: name. Optional: status (defaults to Todo), note |
+| `list_projects` | List by status Todo/Ongoing/Paused/Done/all, or search name/note (limit caps rows, default 200). Every argument is optional |
 | `get_project` | Fetch one project by id |
-| `update_project` | Edit name/status/note (only sent keys change; empty update returns `noop: true`) |
+| `update_project` | Edit name/status/note. Only `id` is required — every other field is nil-safe, and an empty update returns `noop: true` |
 | `delete_project` | Permanently delete |
 
 ## Schema (MongoDB `hermes` DB)
