@@ -76,6 +76,13 @@ func oid(s string) (primitive.ObjectID, error) {
 // tries to render it. Cut on a rune boundary instead, backing off up to utf8.UTFMax-1
 // bytes.
 func trunc(s string, n int) string {
+	// A negative n would make the loop below index before the string and panic. Every
+	// caller passes a positive constant today, which is exactly why a guard belongs
+	// here rather than at the call sites: the next `trunc(x, computedLimit)` is the
+	// one that panics, and it will be in a code path with a user in it.
+	if n <= 0 {
+		return ""
+	}
 	if len(s) <= n {
 		return s
 	}
@@ -265,7 +272,7 @@ func (s *Store) UpdateNote(ctx context.Context, id string, patch map[string]any)
 	if err != nil {
 		return nil, err
 	}
-	upd := bson.M{"updatedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
+	upd := bson.M{}
 	if v, ok := patch["title"].(string); ok {
 		t := strings.TrimSpace(v)
 		if t == "" {
@@ -293,12 +300,27 @@ func (s *Store) UpdateNote(ctx context.Context, id string, patch map[string]any)
 	if v, ok := patch["pinned"].(bool); ok {
 		upd["pinned"] = v
 	}
+	// Nothing to change means nothing to write. `updatedAt` is added here, AFTER the
+	// patch is assembled, precisely so that a patch with no recognised field issues no
+	// UPDATE at all: `updatedAt` is what sorts a note to the top of every list, so a
+	// no-op edit that bumped it would reorder the user's notes and imply a change that
+	// never happened. The MCP layer can legitimately send an empty patch — an agent
+	// that decided it had nothing to say should leave no trace.
+	if len(upd) == 0 {
+		return raw, nil
+	}
+	upd["updatedAt"] = primitive.NewDateTimeFromTime(time.Now().UTC())
 	if _, err := s.notes.UpdateOne(ctx, bson.M{"_id": o}, bson.M{"$set": upd}); err != nil {
 		return nil, err
 	}
 	return s.GetNote(ctx, id)
 }
 
+// DeleteNote reports whether a note was actually deleted. A missing id is NOT an
+// error here — deletion is idempotent by nature, and "it was already gone" is a
+// result the caller can act on. The MCP layer turns `false` into `ok:false` with an
+// explanatory message, so every tool in this server reports a missing note the same
+// way instead of one of them answering `ok:true`.
 func (s *Store) DeleteNote(ctx context.Context, id string) (bool, error) {
 	o, err := oid(id)
 	if err != nil {
@@ -328,12 +350,18 @@ func docOut(d bson.M) bson.M {
 	return out
 }
 
-// preview is the first non-blank, non-heading body line, capped. A grocery list
-// previews as its first item, which is the whole point of previewing.
+// preview is the first line of the body that says something: blanks and ATX
+// headings ("# Groceries") are skipped, because `title` already carries the heading
+// and repeating it wastes the one field a summary has. A grocery list previews as
+// its first item — "- milk" — which is what lets the agent tell two similar notes
+// apart without fetching either body.
+//
+// Returns "" for a body with no such line (empty, whitespace, or headings only),
+// which is the honest answer: there is nothing to preview.
 func preview(body string) string {
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		return trunc(line, 80)

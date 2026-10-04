@@ -25,11 +25,22 @@ these are not guessable from the argument names.
 Notes are addressed by **id only**. Titles are not unique, so a title does not
 resolve and the store refuses to pick a winner.
 
+`search_notes` matches with an unindexed `$regex` (correctly `QuoteMeta`d) over title
+and body. That is a collection scan — irrelevant at the size this runs at, and the
+first thing to change if notes ever grows into thousands of rows, which is what an
+Atlas text index would be for.
+
 Two behaviours worth knowing before calling anything:
 
 - `list_notes` returns summaries: the body is replaced by a `preview` (the first
-  non-blank line), so a 200-note filter cannot flood the context window.
-  `get_note` and `search_notes` return the body.
+  line that is not blank and not a `#` heading — the title already carries the
+  heading), so a 200-note filter cannot flood the context window. `get_note` and
+  `search_notes` return the body.
+- `update_note` with nothing to change writes nothing, so `updatedAt` is not bumped
+  and the note does not jump to the top of every list.
+- `delete_note` of an unknown id returns `ok:false`, like `get_note` and
+  `update_note`. Deletion itself is idempotent — the store reports
+  "nothing was deleted" rather than treating it as a fault.
 - `update_note` is patch-shaped and `body` **replaces**. Adding a line to a list
   means read-modify-write of the whole body; a partial body deletes the lines it
   omits. `title`, `body` and `tags` are pointers in the input struct, so *omitted*

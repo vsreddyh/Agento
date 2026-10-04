@@ -36,7 +36,7 @@ the list", it is a note. Do not create a task with no due date to hold a list.
 | `list_notes` | — | `tag`, `pinned_only`, `limit` (0 → 50) |
 | `search_notes` | `text` | `limit` (0 → 20) |
 | `update_note` | `id` | `title`, `body`, `tags`, `pinned` — **omitted args are left alone; an empty arg clears the field** |
-| `delete_note` | `id` | — |
+| `delete_note` | `id` | — (unknown id returns an error, not a silent no-op) |
 
 Notes are addressed by **id only**. Titles are not unique — two notes called
 "list" is normal — so a title will not resolve and the store refuses to guess.
@@ -68,6 +68,10 @@ verbatim. If more than one note could be the list, `search_notes` for the item a
 ask which one rather than guessing.
 
 Deleting a note is irreversible — confirm first, and never as a way to "tidy".
+
+`list_notes` shows a note by its `preview` (first line that is not blank or a
+`#` heading), so a list usually previews as its first item. Read it before
+asking which note the user means.
 
 Run: `go run ./cmd/notes` (stdio) for a local check. In the running stack the
 server is `/usr/local/bin/notes`, started by Pi from the agent config; do not

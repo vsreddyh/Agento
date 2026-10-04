@@ -186,13 +186,20 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_note",
-		Description: "Delete a note by id. Irreversible — confirm with the user first."},
+		Description: "Delete a note by id. Irreversible — confirm with the user first. An unknown id returns ok:false, the same as get_note and update_note."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteNoteInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.DeleteNote(ctx, in.ID)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "deleted": done})
+			// Same shape as get_note and update_note for a missing id: ok:false with a
+			// reason. `ok:true, deleted:false` was accurate and inconsistent — an agent
+			// checking one flag rather than two would read it as success.
+			if !done {
+				return result(map[string]any{"ok": false,
+					"error": fmt.Sprintf("unknown note '%s' — nothing was deleted", in.ID)})
+			}
+			return result(map[string]any{"ok": true, "deleted": true})
 		})
 
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

@@ -130,6 +130,30 @@ func TestNoteRoundTrip(t *testing.T) {
 		t.Errorf("body = %v, want cleared with the title untouched", cleared["body"])
 	}
 
+	// An empty patch must not write. `updatedAt` sorts a note to the top of every
+	// list, so a no-op edit that bumped it would reorder the user's notes and imply a
+	// change that never happened. The MCP layer can send an empty patch legitimately.
+	// Read after the last real write, so the comparison below is against the current
+	// value rather than one already superseded by the clearing edit above.
+	before := cleared["updatedAt"]
+	if _, err := s.UpdateNote(ctx, id, map[string]any{}); err != nil {
+		t.Fatalf("empty patch: %v", err)
+	}
+	unchanged, err := s.GetNote(ctx, id)
+	if err != nil || unchanged == nil {
+		t.Fatalf("get after empty patch: %v %v", unchanged, err)
+	}
+	if unchanged["updatedAt"] != before {
+		t.Errorf("empty patch bumped updatedAt: %v -> %v", before, unchanged["updatedAt"])
+	}
+	// An unknown key is not a silent write either.
+	if _, err := s.UpdateNote(ctx, id, map[string]any{"not_a_field": "x"}); err != nil {
+		t.Fatalf("unknown-key patch: %v", err)
+	}
+	if again, _ := s.GetNote(ctx, id); again["updatedAt"] != before {
+		t.Errorf("a patch with no recognised field bumped updatedAt: %v", again["updatedAt"])
+	}
+
 	// A bad id is a domain error, and an id that simply does not exist is (nil, nil) —
 	// but a DATABASE failure must never be reported as "unknown note". That is what
 	// the ErrNoDocuments-only branch in GetNote exists for, and it is asserted here
@@ -160,6 +184,11 @@ func TestNoteRoundTrip(t *testing.T) {
 	}
 	if got, _ := s.GetNote(ctx, id); got != nil {
 		t.Error("note survived delete")
+	}
+	// Deleting it again is not an error — deletion is idempotent — but it must report
+	// "nothing was deleted" so the MCP layer can answer ok:false, matching get_note.
+	if again, err := s.DeleteNote(ctx, id); err != nil || again {
+		t.Errorf("second delete = (%v, %v), want (false, nil)", again, err)
 	}
 }
 
@@ -225,10 +254,25 @@ func TestPreviewSkipsBlanksAndHeadings(t *testing.T) {
 	for _, tc := range []struct{ body, want string }{
 		{"", ""},
 		{"\n\n  \n- milk", "- milk"},
-		{"# Groceries\n\n- milk", "# Groceries"},
+		// A heading repeats the title, which the summary already carries, so it is
+		// skipped and the preview is the first thing that adds information.
+		{"# Groceries\n\n- milk", "- milk"},
+		{"# Groceries\n## Friday", ""}, // nothing but headings: nothing to preview
+		{"  # indented heading\n- eggs", "- eggs"},
 	} {
 		if got := preview(tc.body); got != tc.want {
 			t.Errorf("preview(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
+func TestTruncRejectsNonPositiveLimits(t *testing.T) {
+	// The rune-boundary loop indexes s[cut] while decrementing; a negative n walks it
+	// off the front of the string. Every caller passes a positive constant today, which
+	// is precisely why the guard belongs in trunc and not in the call sites.
+	for _, n := range []int{0, -1, -80} {
+		if got := trunc("milk", n); got != "" {
+			t.Errorf("trunc(%q, %d) = %q, want \"\"", "milk", n, got)
 		}
 	}
 }
