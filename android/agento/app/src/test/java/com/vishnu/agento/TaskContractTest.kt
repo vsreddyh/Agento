@@ -5,6 +5,7 @@ import org.junit.Assert.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -174,13 +175,13 @@ class TaskContractTest {
  */
 class ContractWarningsTest {
 
-    private fun reset() {
+    @Before
+    fun reset() {
         ContractWarnings.mismatched.value?.let { ContractWarnings.consume(it.generation) }
     }
 
     @Test
     fun `an empty mismatch list is never reported`() {
-        reset()
         ContractWarnings.report(emptyList())
         assertEquals(null, ContractWarnings.mismatched.value)
     }
@@ -189,7 +190,6 @@ class ContractWarningsTest {
     fun `the newest mismatch replaces the previous one`() {
         // A burst of editor autosaves would otherwise queue a stack of stale
         // warnings the user never dismisses; only the newest describes reality.
-        reset()
         ContractWarnings.report(listOf("due_time"))
         ContractWarnings.report(listOf("repeat_every", "repeat_unit"))
         assertEquals(listOf("repeat_every", "repeat_unit"), ContractWarnings.mismatched.value?.fields)
@@ -199,7 +199,6 @@ class ContractWarningsTest {
     fun `generation advances even for an identical repeat`() {
         // Otherwise "the same warning twice in a row" is indistinguishable from the
         // app being stuck, and a genuine second failure looks like a duplicate.
-        reset()
         val before = ContractWarnings.generation
         ContractWarnings.report(listOf("due_date"))
         ContractWarnings.report(listOf("due_date"))
@@ -226,7 +225,6 @@ class ContractWarningsTest {
 
     @Test
     fun `consume clears the warning without touching the generation`() {
-        reset()
         ContractWarnings.report(listOf("due_date"))
         val gen = ContractWarnings.generation
         ContractWarnings.consume(ContractWarnings.generation)
@@ -240,7 +238,6 @@ class ContractWarningsTest {
         // the first is still on screen, and an unconditional clear wipes the second one
         // before it is ever shown. Two saves in quick succession is exactly when a
         // contract mismatch is most likely — both are hitting the same broken server.
-        reset()
         ContractWarnings.report(listOf("due_time"))
         val shownGen = ContractWarnings.mismatched.value!!.generation
         // ... snackbar is up, and a second write disagrees about something else ...
@@ -263,7 +260,6 @@ class ContractWarningsTest {
         //
         // This is the common case, not the exotic one — one broken server answers both
         // writes with the same disagreement, so same-fields is what actually happens.
-        reset()
         ContractWarnings.report(listOf("due_time"))
         val firstGen = ContractWarnings.mismatched.value!!.generation
         ContractWarnings.report(listOf("due_time"))
@@ -298,7 +294,6 @@ class ContractWarningsTest {
      */
     @Test
     fun `two identical reports both reach a collector`() = runBlocking {
-        reset()
         val seen = mutableListOf<List<String>>()
         val job = launch(Dispatchers.Unconfined) {
             ContractWarnings.mismatched.collect { m -> if (m != null) seen += m.fields }
@@ -322,7 +317,6 @@ class ContractWarningsTest {
     @Test
     fun `consume of the current generation does clear it`() {
         // The fix must not turn into a warning that never goes away.
-        reset()
         ContractWarnings.report(listOf("due_time"))
         ContractWarnings.consume(ContractWarnings.generation)
         assertEquals(null, ContractWarnings.mismatched.value)
@@ -333,7 +327,6 @@ class ContractWarningsTest {
         // report() runs on Dispatchers.IO and the screen collects on the main thread.
         // With plain `var`s there is no happens-before edge between them, so the UI
         // could miss the write entirely — which is the failure this sink had.
-        reset()
         val fields = listOf("repeat_every", "repeat_unit")
         val writer = Thread { ContractWarnings.report(fields) }
         writer.start()
@@ -356,7 +349,18 @@ class ContractWarningsTest {
  */
 class UpdateContractWiringTest {
 
-    /** Mirrors the construction in `TasksApi.update` for the given arguments. */
+    /**
+     * The REAL construction, not a copy of it.
+     *
+     * This class originally hand-wrote its own version of `TasksApi.update`'s
+     * `TaskContractSent(...)` call. That tested a COPY: if production drifted — an
+     * untrimmed value, a field left null that should be asserted — every test here stayed
+     * green while the wiring rotted. It is the fixture-duplication trap one level up from
+     * the one this PR already fixed for `TaskContractSent` itself.
+     *
+     * Both `create` and `update` now build through `TasksApi.buildTaskContractSent`, so
+     * the tests call the same function production does and a change to it fails here.
+     */
     private fun updateSent(
         name: String? = null,
         description: String? = null,
@@ -368,16 +372,16 @@ class UpdateContractWiringTest {
         repeatCustom: Boolean? = null,
         repeatRule: String? = null,
         parallelable: Boolean? = null,
-    ) = TaskContractSent(
-        name = name?.trim(),
-        description = description?.trim(),
-        dueDate = dueDate?.trim(),
-        dueTime = dueTime?.trim(),
+    ) = TasksApi.buildTaskContractSent(
+        name = name,
+        description = description,
+        dueDate = dueDate,
+        dueTime = dueTime,
         estimatedMinutes = estimatedMinutes,
         repeatEvery = repeatEvery,
-        repeatUnit = repeatUnit?.trim(),
+        repeatUnit = repeatUnit,
         repeatCustom = repeatCustom,
-        repeatRule = repeatRule?.trim(),
+        repeatRule = repeatRule,
         parallelable = parallelable,
     )
 
@@ -435,6 +439,41 @@ class UpdateContractWiringTest {
             listOf("repeat_unit"),
             contractMismatches(updateSent(repeatUnit = "days"), drifted),
         )
+    }
+
+    @Test
+    fun `the create path asserts every field it sends`() {
+        // create validates every field as non-blank, so nothing is null and everything
+        // is asserted. If the builder ever stopped trimming, or create started passing a
+        // null, this is the test that notices.
+        val created = TasksApi.buildTaskContractSent(
+            name = "  Take meds  ",
+            description = "  with water  ",
+            dueDate = " 2026-10-06 ",
+            dueTime = " 09:00 ",
+            estimatedMinutes = 5,
+            repeatEvery = 1,
+            repeatUnit = "  days ",
+            repeatCustom = false,
+            repeatRule = "",
+            parallelable = false,
+        )
+        assertEquals(
+            emptyList<String>(),
+            contractMismatches(created, agreed.copy(description = "with water")),
+        )
+        // Nothing was left null by the create path.
+        assertTrue(
+            "create must assert every field it sends",
+            listOf(
+                created.name, created.description, created.dueDate, created.dueTime,
+                created.repeatUnit, created.repeatRule,
+            ).all { it != null },
+        )
+        assertEquals(5, created.estimatedMinutes)
+        assertEquals(1, created.repeatEvery)
+        assertEquals(false, created.repeatCustom)
+        assertEquals(false, created.parallelable)
     }
 
     @Test

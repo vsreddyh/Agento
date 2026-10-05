@@ -42,6 +42,8 @@ see GitHub Releases for older notes.
   check would report it missing on every one-shot task.
   A partial edit asserts only the fields it actually sent — a field the app
   never sent is unknown, not unchanged, so it is skipped rather than compared.
+  Both write paths build that record through one shared, testable constructor,
+  so what is asserted is literally the same code that builds what is sent.
   `description` is asserted too, and every string is trimmed at the send site so
   the app sends exactly what it asserts. The warning reaches the user as a
   snackbar naming the fields; it is a `StateFlow` so the IO-thread write and the

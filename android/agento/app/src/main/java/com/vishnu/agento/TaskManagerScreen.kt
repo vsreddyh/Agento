@@ -96,6 +96,11 @@ internal fun TaskManagerScreen(
         ContractWarnings.mismatched.collect { mismatch ->
             if (mismatch == null) return@collect
             snackbar.showSnackbar(ContractWarnings.message(mismatch.fields))
+            // The message says the list is being refreshed, so it must be. The task
+            // list is cached state and the detail sheet reads from it, so without this
+            // the user follows the instruction, sees the same stale row, and concludes
+            // the app is ignoring them.
+            refreshTick++
             // Clear by GENERATION, not by the field list: showSnackbar suspends, so
             // another report can land while it is up. Matching on the list would still
             // wipe that one whenever the fields happen to be the same — which, against
