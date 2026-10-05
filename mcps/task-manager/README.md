@@ -91,6 +91,10 @@ ambiguous, I should ask"* and then guessed, because there was nothing else to ca
 not to done.
 
 Over HTTP: `POST /api/tasks/{id}/skip` with an optional `{"reason": "..."}`. The
+body accepts **only** `reason`; an unknown key is a `422` naming the offending field.
+A misspelt `{"reson": ...}` used to decode into an empty reason, leaving the user
+believing they had recorded why with nothing recorded — the quiet disappearance a
+skip exists to be distinguishable from. An empty body is still valid.
 response keeps the task at the top level (so an old app still parses it) and adds
 `skipReason`, `next` and `rollover`. `skipped` is not among them: it is derived
 from `skippedAt` on **every** task response, so it reads `false` on anything
