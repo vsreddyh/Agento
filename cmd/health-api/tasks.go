@@ -12,6 +12,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	syncpkg "sync"
@@ -109,13 +110,60 @@ func writeTaskErr(w http.ResponseWriter, err error) {
 
 // decodeTaskBody reads a small JSON object body into a field map.
 func decodeTaskBody(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
+	return decodeTaskBodyOpts(w, r, bodyOpts{})
+}
+
+// bodyOpts are the ways a task body differs between routes. They exist as options
+// rather than as separate decoders because the skip route had its own inline copy of
+// this function — a second place for the 64KB bound, the error shape and the
+// type-check rules to drift apart, which is exactly how it ended up unable to reject
+// a typo'd field without duplicating that too.
+type bodyOpts struct {
+	// allowEmpty accepts an absent or empty body. Only skip, where the reason is
+	// optional and the action is unambiguous without it; create and update have
+	// required fields, so an empty body there is a malformed request.
+	allowEmpty bool
+	// known, when non-nil, is the complete set of accepted keys and anything else is
+	// a 422. Only skip sets it.
+	known map[string]bool
+}
+
+func decodeTaskBodyOpts(w http.ResponseWriter, r *http.Request, opts bodyOpts) (map[string]any, bool) {
 	var fields map[string]any
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&fields); err != nil {
+		if opts.allowEmpty && errors.Is(err, io.EOF) {
+			return map[string]any{}, true
+		}
 		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + err.Error()})
 		return nil, false
 	}
 	if fields == nil {
 		fields = map[string]any{}
+	}
+	if opts.known != nil {
+		// Checked by hand rather than with json.Decoder.DisallowUnknownFields, which
+		// is a NO-OP against a map[string]any target: it only rejects unknown fields
+		// when decoding into a STRUCT. Relying on it here would have looked like the
+		// typo check and silently accepted every typo.
+		var unknown []string
+		for k := range fields {
+			if !opts.known[k] {
+				unknown = append(unknown, k)
+			}
+		}
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
+			accepted := make([]string, 0, len(opts.known))
+			for k := range opts.known {
+				accepted = append(accepted, k)
+			}
+			sort.Strings(accepted)
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{
+				"detail": "unknown field(s): " + strings.Join(unknown, ", ") +
+					"; this endpoint accepts only " + strings.Join(accepted, ", "),
+			})
+			return nil, false
+		}
 	}
 	return fields, true
 }
@@ -426,15 +474,23 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 // SENDS (`due_date`, `repeat_every`). An earlier version of this comment called
 // both fields "added" and spelled the second one `skip_reason` — both wrong.
 func skipTask(w http.ResponseWriter, r *http.Request, id string) {
-	var fields map[string]any
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&fields); err != nil {
-		// An absent or empty body is fine: the reason is optional and the whole
-		// action is still unambiguous without it.
-		if err != io.EOF {
-			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + err.Error()})
-			return
-		}
-		fields = map[string]any{}
+	// Only `reason` is accepted, and a typo is a 422 rather than a silent empty
+	// reason. The reason is the entire point of a skip — "out of time", "doing it
+	// tomorrow" — and it is the part a human reads weeks later. A misspelt key that
+	// decoded to an empty reason would leave the user believing they had recorded
+	// why, with nothing recorded, which is the quiet disappearance #209 exists to
+	// distinguish from a skip.
+	//
+	// Strictness is cheap HERE and expensive later, and this is the only moment it is
+	// cheap: the route is new in #209 and has never shipped, so there is no client to
+	// break. Once an app version is in the wild, adding a field here becomes a
+	// breaking change, and the next reader should reopen that deliberately.
+	fields, ok := decodeTaskBodyOpts(w, r, bodyOpts{
+		allowEmpty: true,
+		known:      map[string]bool{"reason": true},
+	})
+	if !ok {
+		return
 	}
 	if raw, ok := fields["reason"]; ok && raw != nil {
 		if _, isStr := raw.(string); !isStr {
