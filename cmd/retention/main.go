@@ -118,12 +118,12 @@ func run() int {
 //
 // Two deliberate choices, both about not letting a *report* break a job:
 //
-//   - Its OWN timeout, not the caller's. Retention's 60s context has already been
-//     eaten into by the money and health deletes, and this pass runs up to 501
-//     indexed queries. Sharing the budget meant one slow night produced
-//     "context deadline exceeded" and failed the whole retention job — so a
-//     problem REPORT would have stopped tasks being pruned. Own context, own
-//     budget.
+//   - Its OWN timeout, not the caller's — genuinely own, see the WithoutCancel note
+//     below. Retention's 60s context is already eaten into by the money and health
+//     deletes, and this pass walks up to ReconcileLimit candidates. Inheriting the
+//     remainder meant a slow night produced "context deadline exceeded", so a problem
+//     REPORT would have stopped tasks being pruned — and, since the reconciler was
+//     read-only by design, it reported nothing at all rather than something partial.
 //   - A failure here returns 0. Retention's contract is "prune what is due"; the
 //     reconciliation is a diagnostic on top. If it cannot run, say so loudly on
 //     stdout and let the prunes stand. Failing the job would suggest retention
@@ -131,9 +131,40 @@ func run() int {
 //
 // Needs no new scheduler: retention is already the recurring job that owns data
 // lifecycle, and a rollover failure is a lifecycle problem.
+// reconcileBudget is the reconciler's context, extracted so the property that
+// matters can be asserted without a database: it survives a parent that is ALREADY
+// dead, because inheriting the caller's remainder is the bug it exists to prevent.
+func reconcileBudget(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), reconcileBudgetFor)
+}
+
+// reconcileBudgetFor is the reconciler's own ceiling, independent of retention's.
+const reconcileBudgetFor = 45 * time.Second
+
 func reconcileTasks(parent context.Context) int {
-	ctx, cancel := context.WithTimeout(parent, 45*time.Second)
+	// WithoutCancel drops the parent's DEADLINE and cancellation but keeps its values,
+	// so this really is an independent 45s rather than "45s, or whatever the caller
+	// has left".
+	//
+	// It was WithTimeout(parent, 45s), which sounds like an own budget and is not:
+	// the parent is retention's 60s, already partly spent on the money and health
+	// deletes. On a slow night the reconciler inherited whatever was left — possibly
+	// a second or nothing — and produced "context deadline exceeded", i.e. the exact
+	// silent night this job exists to prevent, after the comment above already
+	// claimed the opposite.
+	//
+	// The trade is deliberate: a cancelled retention run (an operator killing the
+	// container) can now take up to 45s longer to exit, because this pass no longer
+	// observes the cancellation. For a once-daily batch job that is much cheaper than
+	// a repeat that silently stopped recurring.
+	ctx, cancel := reconcileBudget(parent)
 	defer cancel()
+
+	if dl, ok := parent.Deadline(); ok && time.Until(dl) < reconcileBudgetFor {
+		// Say so, rather than letting a starved report look like a healthy night.
+		fmt.Printf("[retention] tasks: WARNING the job's own budget had %s left; "+
+			"reconciliation runs on an independent 45s\n", time.Until(dl).Round(time.Second))
+	}
 
 	store, err := tasks.FromEnv()
 	if err != nil {
