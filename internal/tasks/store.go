@@ -549,11 +549,15 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 // "every 3rd Friday" and "end of every month" need the user or the agent,
 // and the server will not guess. One-shot tasks roll over to nothing.
 //
-// Returns the completed doc and, when one was created, the new task.
-func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[string]any, error) {
+// Returns the completed doc, the new task when one was created, and WHY one was
+// not. That third value is the point of #180: the caller used to see `next == nil`
+// and could not distinguish "one-shot, nothing to do" from "repeats, but the
+// rollover failed", so a task that had silently stopped recurring was reported as
+// an ordinary completion.
+func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, nil, fail("bad id '%s'", id)
+		return nil, nil, RolloverNone, fail("bad id '%s'", id)
 	}
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
@@ -566,30 +570,31 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 			"$inc": bson.M{"revision": 1},
 		})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, RolloverNone, err
 	}
 	if res.MatchedCount == 0 {
 		var doc bson.M
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); ferr != nil {
-			return nil, nil, fail("unknown task '%s'", id)
+			return nil, nil, RolloverNone, fail("unknown task '%s'", id)
 		}
-		return nil, nil, fail("task '%s' is already completed", id)
+		return nil, nil, RolloverNone, fail("task '%s' is already completed", id)
 	}
 	done, err := s.Get(ctx, id)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, RolloverNone, err
 	}
-	next, err := s.rollOver(ctx, done)
-	if err != nil {
+	next, reason, rerr := s.rollOver(ctx, done)
+	if rerr != nil {
 		// The task is already marked done, so a failed rollover must not
-		// make the completion look like it failed: report success with no
-		// next task and let the caller create one. Logged, because a
-		// swallowed failure here means a repeating task quietly stops
-		// recurring (e.g. a legacy row with no due_time to carry over).
-		log.Printf("task %s completed but rollover failed: %v", id, err)
-		return done, nil, nil
+		// make the completion look like it failed. It is reported as
+		// RolloverFailed rather than swallowed, because that reason is what
+		// tells the caller — and now the reconciler — that the repeat has
+		// stopped. Logged too, because the reconciler runs nightly and the
+		// user may act sooner.
+		log.Printf("task %s completed but rollover failed: %v", id, rerr)
+		return done, nil, RolloverFailed, nil
 	}
-	return done, next, nil
+	return done, next, reason, nil
 }
 
 // rollOver creates the next occurrence of a structured cadence, carrying

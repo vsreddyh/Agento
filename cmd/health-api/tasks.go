@@ -380,7 +380,7 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	doc, next, err := store.Complete(ctx, id)
+	doc, next, rollover, err := store.Complete(ctx, id)
 	if err != nil {
 		writeTaskErr(w, err)
 		return
@@ -395,6 +395,17 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	if next != nil {
 		out["next"] = next
+	}
+	// Additive, and the field the 4.7.0 review should have added (#180). An app
+	// that does not know this key ignores it; an app that does can tell "one-shot"
+	// from "repeats, and the rollover failed" instead of inferring from an absent
+	// `next` — which is how a repeat that had stopped recurring still looked like a
+	// successful completion.
+	out["rollover"] = string(rollover)
+	if rollover.NeedsAttention() && rollover != tasks.RolloverCustom {
+		// Custom is not a fault: the app's own repeat UI owns it. Only a broken or
+		// exhausted cadence is something the user must act on.
+		out["needs_attention"] = rollover.UserFacing()
 	}
 	writeJSON(w, http.StatusOK, out)
 }

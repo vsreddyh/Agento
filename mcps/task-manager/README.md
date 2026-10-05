@@ -13,7 +13,7 @@ store, same validation — see `cmd/health-api/main.go`).
 | `list_tasks` | List by state open/done/all, overdue-only, or search. Every argument is optional (state=open, limit=200) |
 | `get_task` | Fetch one task by id |
 | `update_task` | Edit fields. Only `id` is required — every other field is nil-safe, and empty repeat_rule clears the rule |
-| `complete_task` | Mark done (3-day retention starts); echoes repeat_rule + follow-up nudge |
+| `complete_task` | Mark done (3-day retention starts); echoes repeat_rule + follow-up nudge; always reports `rollover` |
 | `reopen_task` | Reopen a completed task (cancels expiry) |
 | `delete_task` | Permanently delete |
 
@@ -36,6 +36,29 @@ data model — `cmd/task-manager/schema_test.go` asserts the two agree per tool.
   The agent interprets it and creates the next occurrence (see
   `pi/skills/task-manager/SKILL.md`); `complete_task` only echoes the rule
   back with a `follow_up` nudge.
+
+## `complete_task` and the `rollover` field (#180)
+
+Every completion reports WHY a next occurrence did or did not get created:
+
+| `rollover` | Meaning | What the caller does |
+|---|---|---|
+| `created` | Structured cadence; `next` holds the new task | nothing |
+| `none` | One-shot; there was never a next to make | nothing |
+| `custom` | The condition is the caller's to interpret | create it (the `follow_up` says so) |
+| `exhausted` | Structured, but no future date is computable | tell the user; the repeat stopped |
+| `failed` | Minting errored — the repeat has stopped | tell the user, loudly |
+
+This field exists because the outcome used to be inferred from `next == nil`,
+which made `none`, `exhausted` and `failed` indistinguishable. A repeat that had
+silently stopped recurring was reported as an ordinary completion, and the failure
+existed only in a log line — which is how four legacy tasks stopped scheduling
+before anyone noticed. `exhausted` and `failed` also carry `needs_attention`.
+
+The nightly `retention` job runs `ReconcileRollover` for the same reason: rollover
+is a side effect of `Complete`, so any writer that does not go through it stops a
+task recurring with nothing to show for it. It reports, and does not repair —
+a task that failed to roll over usually failed because its stored data is wrong.
 - **Retention:** done tasks auto-delete 3 days after completion via TTL.
   Open tasks never expire. `reopen_task` clears the expiry.
 

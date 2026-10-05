@@ -38,13 +38,15 @@ rejects the mix:
    weekdays, "end of month"). Never flatten a rule that carries an
    exception into a plain cadence: "daily, skip Wednesdays" is a custom
    condition, not "every day". A count above 28 is a custom condition too.
-2. When you call `complete_task`, read what comes back:
-   - `rolled_over: true` (with the new task in `next`) — the repeat was
-     STRUCTURED, the server already created the next occurrence, and you
-     must NOT create another. (Month ends clamp and then keep that day: a
-     task due on the 31st that rolls into February comes back on the 28th,
-     and stays there — that is intended, not drift to correct.)
-   - `follow_up` — the repeat is a CUSTOM condition, so you MUST call
+2. When you call `complete_task`, read what comes back. Every completion reports
+   `rollover`, so you never have to infer the outcome from a missing field:
+   - `created` (with the new task in `next`) — the repeat was STRUCTURED, the
+     server already created the next occurrence, and you must NOT create
+     another. (Month ends clamp and then keep that day: a task due on the 31st
+     that rolls into February comes back on the 28th, and stays there — that
+     is intended, not drift to correct.)
+   - `none` — a one-shot. Nothing further.
+   - `custom` — the repeat is a CUSTOM condition, so you MUST call
      `create_task` for the next occurrence, reusing the exact repeat keys
      the response gave you (`repeat_custom: true` + `repeat_rule`). Copy
      every field verbatim — name/description/`due_time`/
@@ -54,11 +56,17 @@ rejects the mix:
      between occurrences is a bug, not a recomputation. Change `due_time`
      only when the rule itself names a different time ("mornings at 6",
      "9am then 7pm").
+   - `exhausted` or `failed` — **the task repeats but its next occurrence was
+     NOT created, so it has stopped recurring.** The response carries
+     `needs_attention`. TELL THE USER in your reply, with the task name and
+     what went wrong. Do not report this as a plain completion, and do not
+     silently create the next task yourself unless the user asks — the
+     stored data is usually why it failed, so it needs a human to look at.
 3. If the rule is ambiguous ("regularly"), ask the user for the next due
    date instead of guessing. Same for an empty `due_time`: tasks created
    before times were required come back with `due_time: ""`, and
    `create_task` rejects that — ask the user for a time, never invent one.
-4. One-shot tasks (empty rule) need nothing after completion.
+4. One-shot tasks (empty rule) need nothing after completion — `rollover: none`.
 
 ## Everyday use
 

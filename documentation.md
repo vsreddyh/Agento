@@ -144,6 +144,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `hc_weight` | Permanent | **Never pruned** |
 | `cookbook_*` | Permanent | **Never pruned** |
 | `notes` | Permanent | **Never pruned** |
+| `tasks` (repeats) | n/a | **Reconciled, not pruned**: completed structured repeats with no successor are reported (#180) |
 | `story` / `resumes` | Git history | No database retention operations |
 
 Run manual dry-runs via:

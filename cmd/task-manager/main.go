@@ -236,11 +236,16 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
 		Description: "Mark a task done (retained 3 days, then auto-deleted). A STRUCTURED repeat (repeat_every + repeat_unit) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, map[string]any, error) {
-			doc, next, err := store.Complete(ctx, in.ID)
+			doc, next, rollover, err := store.Complete(ctx, in.ID)
 			if err != nil {
 				return fail(err)
 			}
 			out := map[string]any{"ok": true, "task": doc}
+			// Always name the rollover outcome, including the ones where there was
+			// nothing to do (#180). `rolled_over` alone cannot distinguish a one-shot
+			// from a repeat that silently stopped — and the silent stop is the one
+			// that cost four tasks their schedule before anyone noticed.
+			out["rollover"] = string(rollover)
 			rep := repeatOf(doc)
 			switch {
 			case next != nil:
@@ -248,13 +253,17 @@ func main() {
 				// must not create a second occurrence.
 				out["rolled_over"] = true
 				out["next"] = next
-			case !rep.IsZero():
+			case rollover == tasks.RolloverCustom:
 				// Custom: only the caller can compute the next date.
 				out["repeat_every"] = rep.Every
 				out["repeat_unit"] = rep.Unit
 				out["repeat_custom"] = rep.Custom
 				out["repeat_rule"] = rep.Text
 				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required."
+			case rollover.NeedsAttention():
+				// Say it in the response instead of leaving it in a log line: the
+				// repeat has stopped, and only the user can restart it.
+				out["needs_attention"] = rollover.UserFacing()
 			}
 			return result(out)
 		})

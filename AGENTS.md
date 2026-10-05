@@ -60,7 +60,10 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   (`podman-compose run --rm retention` → `cmd/retention` Go binary); cron daily 03:00
    installed by `init`, also runs on every `start`. money wipes transactions >90d;
    health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
-   permanent; story/resumes (git repos) are no-ops.
+   permanent; story/resumes (git repos) are no-ops. It also **reconciles** tasks:
+   completed structured repeats with no successor are REPORTED (#180), never
+   repaired — rollover is a side effect of `Complete`, so a repeat can stop
+   recurring with nothing else noticing.
 - `cmd/mongo` = shared MongoDB CLI; `cmd/retention` = data lifecycle (both Go).
   `MONGODB_URI`/`MONGODB_DB` in root `.env` (Atlas, all environments).
 - Podman: `docker/docker-compose.yml` = the whole stack (health-api
