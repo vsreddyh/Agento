@@ -743,3 +743,139 @@ func TestPaddedCustomRuleStoresTheSameAsPlain(t *testing.T) {
 			"depend on which caller wrote it", pg["repeat_rule"], cg["repeat_rule"])
 	}
 }
+
+// A drifted due_date used to be reported as `exhausted` with an empty Detail — the
+// wrong remedy twice over. Nothing "ran out": the field is unreadable, and telling the
+// operator to re-enter a repeat that is perfectly intact sends them to change the one
+// thing that was never broken.
+func TestDriftedDueDateIsReportedAsFailedNotExhausted(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{"number", 20261005},
+		{"null", nil},
+		{"bool", true},
+	} {
+		doc := map[string]any{
+			"name": "Drifted date", "description": "d",
+			"due_date": "2026-10-05", "due_time": "08:00",
+			"estimated_minutes": 5, "parallelable": false,
+			"completedAt":  primitive.NewDateTimeFromTime(time.Now().UTC()),
+			"revision":     0,
+			"repeat_every": 1, "repeat_unit": "days",
+		}
+		// Assigned unconditionally, including nil: in a Go map that stores a BSON null,
+		// which is what a JSON null decodes to. Skipping it would leave a perfectly
+		// good due_date and the row would pass through as a healthy repeat, testing
+		// nothing.
+		doc["due_date"] = tc.value
+		if _, err := s.tasks.InsertOne(ctx, doc); err != nil {
+			t.Fatalf("insert %s: %v", tc.name, err)
+		}
+	}
+
+	res, err := s.ReconcileRollover(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRollover: %v", err)
+	}
+	if len(res.Gaps) == 0 {
+		t.Fatal("drifted due_date rows were not reported at all")
+	}
+	for _, g := range res.Gaps {
+		if g.Why == RolloverExhausted {
+			t.Errorf("a drifted due_date reported as %q — the remedy points at the "+
+				"cadence instead of the unreadable field", g.Why)
+		}
+		if g.Why != RolloverFailed {
+			continue
+		}
+		if !strings.Contains(g.Detail, "due_date") {
+			t.Errorf("Detail = %q, want it to name due_date", g.Detail)
+		}
+	}
+}
+
+// A corrupt back-link must not be able to take down the whole pass — and the reason it
+// cannot is the QUERY, not defensive decoding.
+//
+// The rows decode into a struct with a `string` field, which would normally make
+// cur.All fail the entire batch on one bad document. For a read-only report that means
+// a night where nothing at all is reported, which is the failure this job exists to
+// prevent. But the lookup is `$in: [<hex string>, ...]`, and MongoDB brackets
+// comparison operators by BSON type, so only documents whose rolled_from IS one of
+// those strings come back. A mistyped back-link never matches, so it never reaches the
+// decode.
+//
+// So this pins the REASON rather than the symptom: it asserts the invariant that makes
+// the strict decode safe. If someone loosens the query — say to a regex or an
+// unbracketed comparison — this fails, which is the moment the decode would start
+// mattering.
+func TestCorruptBackLinkCannotAbortThePass(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	parent := mustCreate(t, s, "Healthy parent", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"repeat_every": 1, "repeat_unit": "days",
+	})
+	// Complete returns (doc, next, rollover, err) — the successor is the SECOND return.
+	// Taking the first corrupts the parent's own back-link and leaves the real
+	// successor intact, so the parent resolves normally and the test passes while
+	// testing nothing.
+	_, child, r, err := s.Complete(ctx, parent)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if r != RolloverCreated || child == nil {
+		t.Fatalf("setup: rollover = %q child = %v", r, child)
+	}
+	childOID, err := primitive.ObjectIDFromHex(child["id"].(string))
+	if err != nil {
+		t.Fatalf("child id: %v", err)
+	}
+	if _, err := s.tasks.UpdateOne(ctx, bson.M{"_id": childOID},
+		bson.M{"$set": bson.M{rolledFromField: int64(12345)}}); err != nil {
+		t.Fatalf("corrupt the back-link: %v", err)
+	}
+
+	// The invariant: the corrupt row does NOT match, so no bad value can reach the
+	// struct decode.
+	linked, err := s.parentsWithSuccessors(ctx, []bson.M{{"_id": childOID}})
+	if err != nil {
+		t.Fatalf("parentsWithSuccessors: %v — a mistyped back-link must not be able "+
+			"to abort the pass", err)
+	}
+	if len(linked) != 0 {
+		t.Errorf("linked = %v; a numeric rolled_from matched $in:[string], so the typed "+
+			"decode is no longer safe and one bad row could abort the whole report", linked)
+	}
+
+	// And the pass still runs to completion, reporting the genuinely broken sibling in
+	// the same batch.
+	broken := mustCreate(t, s, "Broken sibling", map[string]any{
+		"due_date": "2026-10-05", "due_time": "",
+		"repeat_every": 1, "repeat_unit": "days",
+	})
+	if _, _, _, err := s.Complete(ctx, broken); err != nil {
+		t.Fatalf("complete broken: %v", err)
+	}
+	res, err := s.ReconcileRollover(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRollover: %v", err)
+	}
+	seen := false
+	for _, g := range res.Gaps {
+		if g.TaskID == broken {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Error("the genuinely broken repeat was NOT reported")
+	}
+}
