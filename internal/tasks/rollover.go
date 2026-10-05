@@ -3,7 +3,6 @@ package tasks
 import (
 	"context"
 	"errors"
-	"log"
 	"strings"
 	"time"
 
@@ -146,32 +145,40 @@ func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]a
 	// and a default here would be a lie rather than a fallback.
 	mins, _ := mongostore.ToInt(done["estimated_minutes"])
 	parallel, _ := mongostore.ToBool(done["parallelable"])
-	next, err := s.Create(ctx, name, description, nextDate, dueTime, &mins, rep, &parallel)
-	if err != nil {
+	// The back-link is written in the SAME insert as the successor, not as a
+	// follow-up UpdateOne. That closes the crash window: with two writes, a crash
+	// in between leaves a successor that exists but is unlinked, so the reconciler
+	// reports a gap and sends a human to create a task that is already there.
+	//
+	// A missing parent id is a real problem and says so. It cannot happen through
+	// Complete (Get always renders `id`), but silently minting an unlinked successor
+	// is how the reconciler starts crying wolf, and a log line is the only trace.
+	parentHex, ok := done["id"].(string)
+	if !ok || parentHex == "" {
+		return nil, RolloverFailed, fail("cannot roll over: parent id is missing")
+	}
+	if _, err := primitive.ObjectIDFromHex(parentHex); err != nil {
+		return nil, RolloverFailed, fail("cannot roll over: parent id '%s' is not an id", parentHex)
+	}
+	now := primitive.NewDateTimeFromTime(time.Now().UTC())
+	doc := bson.M{
+		"name": name, "description": description,
+		"due_date": nextDate, "due_time": dueTime,
+		"estimated_minutes": mins,
+		"parallelable":      parallel,
+		"revision":          0,
+		"completedAt":       nil, "createdAt": now,
+		rolledFromField: parentHex,
+	}
+	for k, v := range rep.docs() {
+		doc[k] = v
+	}
+	if _, err := s.insert(ctx, doc); err != nil {
 		return nil, RolloverFailed, err
 	}
-	// Back-link the occurrence: mark the SUCCESSOR with the parent's id, so the
-	// reconciler can ask "did this completion produce anything?" exactly.
-	//
-	// The update targets next["id"] — the newly created task. Writing it onto the
-	// parent instead is the obvious first mistake and is invisible: the parent
-	// really does end up carrying a `rolled_from`, so a quick read of the parent
-	// looks correct, while every successor is unlinked and the reconciler reports
-	// healthy tasks as broken.
-	//
-	// Best-effort by design: a failure here means the reconciler cannot prove THIS
-	// rollover, but the next task exists and is correct, so it must not fail the
-	// completion.
-	if hex, ok := done["id"].(string); ok && hex != "" {
-		if child, ok := next["id"].(string); ok {
-			if childOID, err := primitive.ObjectIDFromHex(child); err == nil {
-				if _, err := s.tasks.UpdateOne(ctx,
-					bson.M{"_id": childOID},
-					bson.M{"$set": bson.M{rolledFromField: hex}}); err != nil {
-					log.Printf("task %s rolled over but the successor could not be back-linked: %v", hex, err)
-				}
-			}
-		}
+	next, err := s.Get(ctx, doc["_id"].(primitive.ObjectID).Hex())
+	if err != nil {
+		return nil, RolloverFailed, err
 	}
 	return next, RolloverCreated, nil
 }
@@ -194,7 +201,23 @@ type RolloverGap struct {
 // over usually failed because its stored data is wrong (no due_time, an
 // unparseable date), and inventing a successor would paper over the real problem.
 // It reports, and a human fixes it.
-func (s *Store) ReconcileRollover(ctx context.Context) ([]RolloverGap, error) {
+// ReconcileResult is a reconciliation pass's findings, plus whether it managed to
+// look at everything.
+type ReconcileResult struct {
+	Gaps []RolloverGap
+	// Scanned and Truncated: the query reads at most ReconcileLimit rows, newest
+	// first. If Truncated is true the oldest completions were NOT examined, so the
+	// absence of a gap in this result is not evidence there is none. Silently
+	// capping is how a busy day loses its oldest stopped repeats.
+	Scanned   int
+	Truncated bool
+}
+
+// ReconcileLimit caps one pass. 500 is generous for a personal task list; the
+// cap exists so one pathological day cannot make the pass unbounded.
+const ReconcileLimit = 500
+
+func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) {
 	// No lower time bound. The TTL index already deletes completed tasks RetentionDays
 	// after completion, so "still in the collection" IS the window — and an earlier
 	// version used a 1-day cutoff, which quietly skipped any repeat that stopped two
@@ -207,13 +230,21 @@ func (s *Store) ReconcileRollover(ctx context.Context) ([]RolloverGap, error) {
 		"repeat_custom": bson.M{"$ne": true},
 	}, options.Find().
 		SetSort(bson.D{{Key: "completedAt", Value: -1}}).
-		SetLimit(500))
+		// +1 so hitting the cap is DETECTABLE: a query returning exactly the limit
+		// might have more rows behind it, and silently dropping the oldest gaps is
+		// how a busy day loses the repeat that stopped earliest.
+		SetLimit(ReconcileLimit+1))
 	if err != nil {
-		return nil, err
+		return ReconcileResult{}, err
 	}
 	var done []bson.M
 	if err := cur.All(ctx, &done); err != nil {
-		return nil, err
+		return ReconcileResult{}, err
+	}
+	res := ReconcileResult{Scanned: len(done)}
+	if len(done) > ReconcileLimit {
+		done = done[:ReconcileLimit]
+		res.Truncated = true
 	}
 	now := time.Now().UTC()
 	var gaps []RolloverGap
@@ -225,17 +256,23 @@ func (s *Store) ReconcileRollover(ctx context.Context) ([]RolloverGap, error) {
 			// it as a gap, which is a phantom task the user cannot act on.
 			continue
 		}
-		// The successor, if there is one, carries the back-link.
+		// Was a successor EVER minted? The question is existence, not liveness:
+		// filtering on `completedAt: nil` false-positives on a CHAIN — a daily task
+		// done three days running has a successor that was itself completed and rolled
+		// again, so the parent looks unlinked and every chained task is reported as a
+		// gap. A back-link is write-once and never cleared, so any doc carrying it is
+		// proof the rollover happened.
+		//
+		// The successor outlives the parent by construction: both get expiresAt =
+		// completedAt + RetentionDays, and the successor is completed no earlier than
+		// the parent, so if the parent is still here the back-link is too.
 		var successor bson.M
-		err := s.tasks.FindOne(ctx, bson.M{
-			rolledFromField: id.Hex(),
-			"completedAt":   nil,
-		}).Decode(&successor)
+		err := s.tasks.FindOne(ctx, bson.M{rolledFromField: id.Hex()}).Decode(&successor)
 		if err == nil {
 			continue // rolled over fine
 		}
 		if !errors.Is(err, mongoDrv.ErrNoDocuments) {
-			return nil, err
+			return ReconcileResult{}, err
 		}
 		// The SAME classification rollOver would have produced, not a second guess.
 		// The old heuristic here only knew about a blank due_time and called
@@ -255,5 +292,6 @@ func (s *Store) ReconcileRollover(ctx context.Context) ([]RolloverGap, error) {
 			Why:    why,
 		})
 	}
-	return gaps, nil
+	res.Gaps = gaps
+	return res, nil
 }
