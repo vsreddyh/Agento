@@ -373,23 +373,32 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 			// as a failure rather than reporting a gap with no explanation.
 			why = RolloverFailed
 		}
-		if why == RolloverNone {
-			// A contradiction, and deliberately NOT skipped.
+		if why == RolloverNone || why == RolloverCustom {
+			// A contradiction between the query filter and the classifier, and
+			// deliberately NOT skipped.
 			//
-			// The query above already selected only structured repeats
-			// (repeat_every > 0, a unit, repeat_custom != true), so the classifier
-			// agreeing is guaranteed unless the two disagree about what "structured"
-			// means. Skipping here would drop the row on the strength of that
-			// contradiction — which is precisely the silent-disappearance failure this
-			// whole job exists to prevent, arrived at through a defensive-looking `continue`.
+			// The query selected only rows that LOOK structured (repeat_every > 0, a
+			// unit, repeat_custom != true), so the classifier disagreeing means a field
+			// has drifted to a type the store cannot read. Measured, not assumed: a
+			// `repeat_every` stored as a string does NOT pass `$gt: 0` (MongoDB brackets
+			// comparison operators by BSON type), but a `repeat_unit` stored as a NUMBER
+			// passes `$nin: ["", nil]` and then reads back as an empty string — so the
+			// row is selected, classified as non-structured, and is genuinely a broken
+			// repeat.
 			//
-			// So it is reported, with a detail that says what disagreed. RolloverNone
-			// also has an empty UserFacing(), which would print a line ending in a
-			// dangling dash and no explanation at all; RolloverFailed at least promises
-			// the reader something, and NeedsAttention() then includes it.
+			// Skipping here would drop exactly that row: a task that really did stop
+			// recurring, silently omitted from the report. That is the failure this whole
+			// job exists to prevent, reached through a defensive-looking `continue`.
+			//
+			// Nor is the classifier's own answer useful to hand over. Left as `custom` it
+			// tells the operator to go and create the next occurrence themselves against
+			// a custom condition — advice about a condition the task does not have,
+			// because the real fault is an unreadable field. RolloverFailed at least
+			// promises something, and NeedsAttention() then includes it.
 			why = RolloverFailed
-			detail = "the stored repeat no longer parses as structured, so no next " +
-				"occurrence could be planned; re-enter the repeat on this task"
+			detail = "the stored repeat does not parse as a structured cadence — a field " +
+				"has the wrong type — so no next occurrence could be planned; " +
+				"re-enter the repeat on this task"
 		}
 		name, _ := d["name"].(string)
 		gaps = append(gaps, RolloverGap{

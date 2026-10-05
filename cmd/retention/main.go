@@ -165,8 +165,18 @@ func reconcileTasks(parent context.Context) {
 
 	if dl, ok := parent.Deadline(); ok && time.Until(dl) < reconcileBudgetFor {
 		// Say so, rather than letting a starved report look like a healthy night.
+		//
+		// Clamped at zero: when the parent's budget is ALREADY gone, time.Until is
+		// negative and the line read "had -5s left", which is not a thing and reads like
+		// a clock bug in the job's own warning. The distinction that matters is only
+		// "some left" versus "none left", so "0s left" says it.
+		left := time.Until(dl)
+		if left < 0 {
+			left = 0
+		}
 		fmt.Printf("[retention] tasks: WARNING the job's own budget had %s left; "+
-			"reconciliation runs on an independent 45s\n", time.Until(dl).Round(time.Second))
+			"reconciliation runs on an independent %s\n",
+			left.Round(time.Second), reconcileBudgetFor)
 	}
 
 	store, err := tasks.FromEnv()
