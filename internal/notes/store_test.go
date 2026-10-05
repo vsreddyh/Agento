@@ -452,6 +452,43 @@ func TestUpdateTruncatedFlagMatchesWhatWasStored(t *testing.T) {
 	}
 }
 
+// The cap is rune-aware, because the id is echoed into JSON and invalid UTF-8 in
+// an MCP result is a broken payload, not a cosmetic problem. A raw byte slice here
+// is exactly the bug trunc exists to prevent, and this function is shared with the
+// MCP handlers precisely so there is only one copy of the rule.
+func TestShortIDNeverSplitsARune(t *testing.T) {
+	for _, in := range []string{
+		"abc123",
+		strings.Repeat("a", 80),  // exactly at the cap
+		strings.Repeat("a", 200), // long ascii
+		strings.Repeat("🥑", 40),  // 4-byte runes
+		strings.Repeat("दू", 40), // 3-byte runes, two codepoints each
+		strings.Repeat("日", 60),  // one codepoint per 3 bytes
+	} {
+		got := ShortID(in)
+		if !utf8.ValidString(got) {
+			t.Errorf("ShortID produced invalid UTF-8: %q", got)
+		}
+		if !strings.HasPrefix(in, strings.TrimSuffix(got, "…")) {
+			t.Errorf("ShortID(%q) = %q, which is not a prefix of the input", in, got)
+		}
+		// The cap bounds the CONTENT; the ellipsis is a marker added on top, and
+		// "…" is 3 bytes, so the total can exceed 80 by exactly that much.
+		if len(got) > 80+len("…") {
+			t.Errorf("ShortID(%d bytes in) = %d bytes, over the cap", len(in), len(got))
+		}
+	}
+	// The two behaviours worth pinning exactly, rather than leaving to arithmetic:
+	// short input is untouched, long input is marked.
+	if got := ShortID("abc123"); got != "abc123" {
+		t.Errorf("ShortID(short) = %q, want it unchanged", got)
+	}
+	long := strings.Repeat("a", 200)
+	if got := ShortID(long); got != strings.Repeat("a", 80)+"…" {
+		t.Errorf("ShortID(long ascii) = %q, want 80 a's plus an ellipsis", got)
+	}
+}
+
 // A junk id must not be reflected back whole: the caller controls that string and
 // it lands in the agent's context.
 func TestBadIdIsCapped(t *testing.T) {

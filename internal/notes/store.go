@@ -61,15 +61,31 @@ func fail(format string, args ...any) *StoreError {
 	return &StoreError{Msg: fmt.Sprintf(format, args...)}
 }
 
+// ShortID renders a caller-supplied id for an error message: capped, and cut on a
+// rune boundary so a non-ASCII id cannot put invalid UTF-8 into the JSON result.
+//
+// This exists as ONE exported function because the cap was needed in two places
+// (the store's bad-id error, and the MCP handlers that format `unknown note '%s'`
+// themselves because GetNote reports a missing note as (nil, nil)). The first
+// version of the second copy was a raw `id[:cap]` byte slice — reintroducing the
+// exact mid-rune cut trunc exists to prevent, one file over. Two copies of a rule
+// is two rules.
+func ShortID(s string) string {
+	const cap = 80
+	if len(s) <= cap {
+		return s
+	}
+	return trunc(s, cap) + "…"
+}
+
 func oid(s string) (primitive.ObjectID, error) {
 	o, err := primitive.ObjectIDFromHex(strings.TrimSpace(s))
 	if err != nil {
 		// Cap what goes into the message. `s` is whatever the caller sent, so a
 		// junk 1 MB id becomes a 1 MB error string — reflected straight back out
 		// through the MCP result and into the agent's context, where it costs more
-		// than the entire rest of the reply. An ObjectID is 24 hex chars, so 80
-		// shows any plausible near-miss without echoing a payload.
-		return primitive.NilObjectID, fail("bad id '%s'", trunc(s, 80))
+		// than the entire rest of the reply. ShortID keeps it readable and valid.
+		return primitive.NilObjectID, fail("bad id '%s'", ShortID(s))
 	}
 	return o, nil
 }

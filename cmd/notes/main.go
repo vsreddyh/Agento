@@ -24,20 +24,9 @@ import (
 
 var store *notes.Store
 
-// idForMessage caps the caller-supplied id before it goes into an error string.
-// GetNote returns (nil, nil) for a missing note by design, so these three handlers
-// format the id themselves — and `in.ID` is unbounded caller input, which would
-// otherwise be reflected straight back into the MCP result and the agent's context.
-// An ObjectID is 24 hex chars; 80 shows any plausible near-miss without echoing a
-// payload.
-func idForMessage(id string) string {
-	const cap = 80
-	if len(id) > cap {
-		return id[:cap] + "…"
-	}
-	return id
-}
-
+// GetNote returns (nil, nil) for a missing note, so the handlers below format the
+// id into their own messages — capped, rune-safe and identical to the store's,
+// by notes.ShortID rather than a second local copy.
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
 	return nil, map[string]any{"ok": false, "error": err.Error()}, nil
 }
@@ -86,7 +75,8 @@ type listNotesInput struct {
 }
 
 type searchNotesInput struct {
-	// Substring matched against title AND body.
+	// Substring matched against title, body AND tags (tags are lowercased on
+	// write, so the query is lowercased to match).
 	Text string `json:"text"`
 	// The handler defaults 0 to 20.
 	Limit int `json:"limit,omitempty"`
@@ -141,7 +131,7 @@ func main() {
 				return fail(err)
 			}
 			if n == nil {
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown note '%s'", idForMessage(in.ID))})
+				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown note '%s'", notes.ShortID(in.ID))})
 			}
 			return result(map[string]any{"ok": true, "note": n})
 		})
@@ -194,7 +184,7 @@ func main() {
 				return fail(err)
 			}
 			if n == nil {
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown note '%s'", idForMessage(in.ID))})
+				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown note '%s'", notes.ShortID(in.ID))})
 			}
 			return result(map[string]any{"ok": true, "note": n})
 		})
@@ -211,7 +201,7 @@ func main() {
 			// checking one flag rather than two would read it as success.
 			if !done {
 				return result(map[string]any{"ok": false,
-					"error": fmt.Sprintf("unknown note '%s' — nothing was deleted", idForMessage(in.ID))})
+					"error": fmt.Sprintf("unknown note '%s' — nothing was deleted", notes.ShortID(in.ID))})
 			}
 			return result(map[string]any{"ok": true, "deleted": true})
 		})
