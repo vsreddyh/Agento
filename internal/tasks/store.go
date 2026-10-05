@@ -89,6 +89,11 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		{Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetName("ttl_expiresAt").SetExpireAfterSeconds(0)},
 		{Keys: bson.D{{Key: "completedAt", Value: 1}}, Options: options.Index().SetName("completedAt_1")},
 		{Keys: bson.D{{Key: "due_date", Value: 1}}, Options: options.Index().SetName("due_date_1")},
+		// Read by ReconcileRollover once per completed structured repeat (up to 500
+		// per run). Without this it is a collection scan per task, which is the
+		// difference between the nightly job being free and being the slowest thing
+		// in the stack.
+		{Keys: bson.D{{Key: "rolled_from", Value: 1}}, Options: options.Index().SetName("rolled_from_1")},
 	})
 	return err
 }
@@ -557,7 +562,7 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, nil, RolloverNone, fail("bad id '%s'", id)
+		return nil, nil, "", fail("bad id '%s'", id)
 	}
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
@@ -570,18 +575,18 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 			"$inc": bson.M{"revision": 1},
 		})
 	if err != nil {
-		return nil, nil, RolloverNone, err
+		return nil, nil, "", err
 	}
 	if res.MatchedCount == 0 {
 		var doc bson.M
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); ferr != nil {
-			return nil, nil, RolloverNone, fail("unknown task '%s'", id)
+			return nil, nil, "", fail("unknown task '%s'", id)
 		}
-		return nil, nil, RolloverNone, fail("task '%s' is already completed", id)
+		return nil, nil, "", fail("task '%s' is already completed", id)
 	}
 	done, err := s.Get(ctx, id)
 	if err != nil {
-		return nil, nil, RolloverNone, err
+		return nil, nil, "", err
 	}
 	next, reason, rerr := s.rollOver(ctx, done)
 	if rerr != nil {
@@ -597,9 +602,6 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 	return done, next, reason, nil
 }
 
-// rollOver creates the next occurrence of a structured cadence, carrying
-// every other field over. (nil, nil) for a one-shot or custom task, which
-// leaves the next occurrence to the caller.
 // Reopen clears completion (completedAt + expiresAt), making it open again.
 // Errors on unknown ids and on tasks that are already open.
 func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {

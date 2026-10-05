@@ -3,7 +3,6 @@ package tasks
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -38,7 +37,8 @@ const (
 	// RolloverNone: the task is a one-shot. There was never a next to make.
 	RolloverNone Rollover = "none"
 	// RolloverCustom: the repeat is a condition only the caller can interpret
-	// ("every 3rd friday"). The caller owns creating the next occurrence.
+	// ("every 3rd friday"). The caller owns creating the next occurrence. This is a
+	// normal outcome, not a fault — see NeedsAttention.
 	RolloverCustom Rollover = "custom"
 	// RolloverExhausted: structured, but no future date is computable — the
 	// cadence has run past MaxRollovers, or the stored due_date will not parse.
@@ -63,10 +63,16 @@ func (r Rollover) UserFacing() string {
 	}
 }
 
-// NeedsAttention reports whether a caller should tell the user something. A
-// one-shot and a successful rollover are both fine; the other three are not.
+// NeedsAttention reports whether the recurrence STOPPED and only a human can
+// restart it — `exhausted` and `failed`.
+//
+// Deliberately NOT `custom`. A custom repeat is the caller's ordinary job: the MCP
+// path handles it in an earlier branch (with `follow_up`), and the HTTP path
+// excludes it. Both already exclude it, so a `NeedsAttention` that includes it
+// describes a state no transport can ever report — a contract that reads as
+// "something is wrong" and can never fire. See RolloverCustom's own note.
 func (r Rollover) NeedsAttention() bool {
-	return r == RolloverCustom || r == RolloverExhausted || r == RolloverFailed
+	return r == RolloverExhausted || r == RolloverFailed
 }
 
 // rolledFromField links a minted occurrence back to the completion that produced
@@ -76,38 +82,70 @@ func (r Rollover) NeedsAttention() bool {
 // collide with an unrelated task the user created by hand).
 const rolledFromField = "rolled_from"
 
+// rolloverPlan decides what a completed task's recurrence REQUIRES, without
+// writing anything. Returns the next due date (only when the reason is
+// RolloverCreated), the reason, and an error when the data is unusable.
+//
+// ONE rule, two callers: rollOver acts on the plan, ReconcileRollover reports the
+// reason. That is the whole point. The reconciler originally carried its own
+// classification — "failed if due_time is blank, exhausted otherwise" — and so
+// mislabelled every other failure (an unparseable due_date, a MaxRollovers
+// ceiling, untyped estimated_minutes) as `exhausted`, which is the wrong remedy
+// for each. Two copies of a rule are two rules.
+func rolloverPlan(done map[string]any, now time.Time) (string, Rollover, error) {
+	rep := repeatFromDoc(bson.M(done))
+	if !rep.IsStructured() {
+		if rep.IsZero() {
+			return "", RolloverNone, nil
+		}
+		return "", RolloverCustom, nil
+	}
+	if err := rep.Validate(); err != nil {
+		return "", RolloverFailed, err
+	}
+	// The stored shape has to be carryable before a successor is even possible.
+	// These are the checks rollOver used to make inline, and they are checks on the
+	// PLAN, not on Create's behaviour — so the reconciler sees the same verdict.
+	if dueTime, _ := done["due_time"].(string); strings.TrimSpace(dueTime) == "" {
+		// The exact shape of the legacy rows that stopped recurring: a structured
+		// repeat with no time to carry forward. Create would reject it, but the
+		// reason belongs to the recurrence, not to the create.
+		return "", RolloverFailed, fail("cannot roll over: due_time is required (HH:MM)")
+	}
+	if _, ok := mongostore.ToInt(done["estimated_minutes"]); !ok {
+		return "", RolloverFailed, fail("cannot roll over: estimated_minutes is not a number")
+	}
+	if _, ok := mongostore.ToBool(done["parallelable"]); !ok {
+		return "", RolloverFailed, fail("cannot roll over: parallelable is not a boolean")
+	}
+	dueDate, _ := done["due_date"].(string)
+	nextDate, ok := rep.NextDueDate(dueDate, now)
+	if !ok {
+		// Unparseable due_date, or the cadence has run past MaxRollovers.
+		return "", RolloverExhausted, nil
+	}
+	return nextDate, RolloverCreated, nil
+}
+
 // rollOver mints the next occurrence for a STRUCTURED cadence, or explains why it
 // did not. Every non-error path names itself, so no caller has to infer intent
 // from an absence.
 func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]any, Rollover, error) {
+	nextDate, reason, err := rolloverPlan(done, time.Now().UTC())
+	if err != nil {
+		return nil, reason, err
+	}
+	if reason != RolloverCreated {
+		return nil, reason, nil
+	}
 	rep := repeatFromDoc(bson.M(done))
-	if !rep.IsStructured() {
-		if rep.IsZero() {
-			return nil, RolloverNone, nil
-		}
-		return nil, RolloverCustom, nil
-	}
-	if err := rep.Validate(); err != nil {
-		return nil, RolloverFailed, err
-	}
-	dueDate, _ := done["due_date"].(string)
 	dueTime, _ := done["due_time"].(string)
-	nextDate, ok := rep.NextDueDate(dueDate, time.Now().UTC())
-	if !ok {
-		return nil, RolloverExhausted, nil
-	}
 	name, _ := done["name"].(string)
 	description, _ := done["description"].(string)
-	// Typed reads, not defaults: a legacy row with an unparseable field must
-	// fail the rollover (logged) rather than roll over with reset values.
-	mins, ok := mongostore.ToInt(done["estimated_minutes"])
-	if !ok {
-		return nil, RolloverFailed, fail("cannot roll over: estimated_minutes is not a number")
-	}
-	parallel, ok := mongostore.ToBool(done["parallelable"])
-	if !ok {
-		return nil, RolloverFailed, fail("cannot roll over: parallelable is not a boolean")
-	}
+	// Typed reads, already proven carryable by the plan above; these cannot fail,
+	// and a default here would be a lie rather than a fallback.
+	mins, _ := mongostore.ToInt(done["estimated_minutes"])
+	parallel, _ := mongostore.ToBool(done["parallelable"])
 	next, err := s.Create(ctx, name, description, nextDate, dueTime, &mins, rep, &parallel)
 	if err != nil {
 		return nil, RolloverFailed, err
@@ -125,11 +163,13 @@ func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]a
 	// rollover, but the next task exists and is correct, so it must not fail the
 	// completion.
 	if hex, ok := done["id"].(string); ok && hex != "" {
-		if child, err := primitive.ObjectIDFromHex(fmt.Sprint(next["id"])); err == nil {
-			if _, err := s.tasks.UpdateOne(ctx,
-				bson.M{"_id": child},
-				bson.M{"$set": bson.M{rolledFromField: hex}}); err != nil {
-				log.Printf("task %s rolled over but the successor could not be back-linked: %v", hex, err)
+		if child, ok := next["id"].(string); ok {
+			if childOID, err := primitive.ObjectIDFromHex(child); err == nil {
+				if _, err := s.tasks.UpdateOne(ctx,
+					bson.M{"_id": childOID},
+					bson.M{"$set": bson.M{rolledFromField: hex}}); err != nil {
+					log.Printf("task %s rolled over but the successor could not be back-linked: %v", hex, err)
+				}
 			}
 		}
 	}
@@ -155,17 +195,13 @@ type RolloverGap struct {
 // unparseable date), and inventing a successor would paper over the real problem.
 // It reports, and a human fixes it.
 func (s *Store) ReconcileRollover(ctx context.Context) ([]RolloverGap, error) {
-	// Completed, structured repeat, completed recently enough that a successor
-	// should already exist. The window is generous: a task completed a minute ago
-	// has not had time to be missed, and an old one is noise by now.
-	cutoff := time.Now().UTC().AddDate(0, 0, -1)
+	// No lower time bound. The TTL index already deletes completed tasks RetentionDays
+	// after completion, so "still in the collection" IS the window — and an earlier
+	// version used a 1-day cutoff, which quietly skipped any repeat that stopped two
+	// days ago and was still sitting there in plain sight. Duplicating the retention
+	// constant here would be a third place for it to drift.
 	cur, err := s.tasks.Find(ctx, bson.M{
-		"completedAt": bson.M{
-			"$ne":     nil,
-			"$exists": true,
-			"$gte":    primitive.NewDateTimeFromTime(cutoff),
-			"$lte":    primitive.NewDateTimeFromTime(time.Now().UTC()),
-		},
+		"completedAt":   bson.M{"$ne": nil, "$exists": true},
 		"repeat_every":  bson.M{"$gt": 0},
 		"repeat_unit":   bson.M{"$nin": bson.A{"", nil}},
 		"repeat_custom": bson.M{"$ne": true},
@@ -179,9 +215,16 @@ func (s *Store) ReconcileRollover(ctx context.Context) ([]RolloverGap, error) {
 	if err := cur.All(ctx, &done); err != nil {
 		return nil, err
 	}
+	now := time.Now().UTC()
 	var gaps []RolloverGap
 	for _, d := range done {
-		id, _ := d["_id"].(primitive.ObjectID)
+		id, ok := d["_id"].(primitive.ObjectID)
+		if !ok {
+			// A non-ObjectID _id cannot be back-linked or reported. Ignoring the
+			// failed assertion would silently produce the zero ObjectID and report
+			// it as a gap, which is a phantom task the user cannot act on.
+			continue
+		}
 		// The successor, if there is one, carries the back-link.
 		var successor bson.M
 		err := s.tasks.FindOne(ctx, bson.M{
@@ -194,13 +237,18 @@ func (s *Store) ReconcileRollover(ctx context.Context) ([]RolloverGap, error) {
 		if !errors.Is(err, mongoDrv.ErrNoDocuments) {
 			return nil, err
 		}
-		name, _ := d["name"].(string)
-		why := RolloverExhausted
-		if dueTime, _ := d["due_time"].(string); strings.TrimSpace(dueTime) == "" {
-			// The exact shape of the legacy rows that stopped recurring: a
-			// structured repeat with no time to carry forward.
+		// The SAME classification rollOver would have produced, not a second guess.
+		// The old heuristic here only knew about a blank due_time and called
+		// everything else `exhausted`, which is the wrong remedy for an unparseable
+		// date, a MaxRollovers ceiling or untyped fields.
+		_, why, _ := rolloverPlan(map[string]any(d), now)
+		if why == RolloverCreated {
+			// The plan says it should have rolled and it did not — a write that
+			// failed after planning, or a back-link that never landed. Name it
+			// as a failure rather than reporting a gap with no explanation.
 			why = RolloverFailed
 		}
+		name, _ := d["name"].(string)
 		gaps = append(gaps, RolloverGap{
 			TaskID: id.Hex(),
 			Name:   name,

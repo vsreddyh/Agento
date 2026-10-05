@@ -56,8 +56,13 @@ func TestRolloverOutcomeIsNamed(t *testing.T) {
 		if r != RolloverCustom {
 			t.Errorf("rollover = %q, want %q", r, RolloverCustom)
 		}
-		if !r.NeedsAttention() {
-			t.Error("a custom repeat needs the caller's attention")
+		// Custom is NORMAL: the caller owns the next occurrence, which is the whole
+		// point of naming it. It must not read as a fault.
+		if r.NeedsAttention() {
+			t.Error("a custom repeat must not demand the user's attention")
+		}
+		if r.UserFacing() == "" {
+			t.Error("a custom repeat must still tell the caller it owns the next date")
 		}
 	})
 
@@ -184,16 +189,20 @@ func TestReconcileRolloverIgnoresCustomAndOneShot(t *testing.T) {
 
 // The reasons are shown to the user verbatim, so they must say nothing when there
 // is nothing to say, and be unmissable when the repeat has actually stopped.
+//
+// `custom` is deliberately NOT in the attention set: it is the caller's ordinary
+// job, both transports handle it in an earlier branch, and a NeedsAttention that
+// includes it describes a state nothing can ever report.
 func TestRolloverUserFacingOnlyWhenSomethingIsWrong(t *testing.T) {
-	for _, r := range []Rollover{RolloverCreated, RolloverNone} {
-		if r.UserFacing() != "" {
-			t.Errorf("%q must not explain itself, got %q", r, r.UserFacing())
-		}
+	for _, r := range []Rollover{RolloverCreated, RolloverNone, RolloverCustom} {
 		if r.NeedsAttention() {
-			t.Errorf("%q must not demand attention", r)
+			t.Errorf("%q must not demand attention — it is a normal outcome", r)
 		}
 	}
-	for _, r := range []Rollover{RolloverCustom, RolloverExhausted, RolloverFailed} {
+	if RolloverCustom.UserFacing() == "" {
+		t.Error("custom still has to explain itself to the caller; it just is not a FAULT")
+	}
+	for _, r := range []Rollover{RolloverExhausted, RolloverFailed} {
 		if r.UserFacing() == "" {
 			t.Errorf("%q must explain itself to the user", r)
 		}
@@ -205,6 +214,86 @@ func TestRolloverUserFacingOnlyWhenSomethingIsWrong(t *testing.T) {
 	// that must not be missable.
 	if f := RolloverFailed.UserFacing(); !strings.Contains(f, "FAILED") {
 		t.Errorf("the failure message must be unmissable, got %q", f)
+	}
+}
+
+// The reconciler must classify a gap with the SAME rule rollOver would have used.
+// The old heuristic knew only about a blank due_time and called everything else
+// `exhausted`, which is the wrong remedy for an unparseable date or a MaxRollovers
+// ceiling. Each case below asserts the classification a plan actually produces.
+func TestRolloverPlanClassifiesEachFailure(t *testing.T) {
+	now := time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)
+	base := func(mutate func(map[string]any)) map[string]any {
+		doc := map[string]any{
+			"id": "6ac32c0000000000000000aa", "name": "x",
+			"due_date": "2026-08-10", "due_time": "08:00",
+			"estimated_minutes": 5, "parallelable": false,
+			"repeat_every": 1, "repeat_unit": "days",
+		}
+		mutate(doc)
+		return doc
+	}
+	for _, tc := range []struct {
+		name   string
+		doc    map[string]any
+		reason Rollover
+	}{
+		{"structured plans a date", base(func(d map[string]any) {}), RolloverCreated},
+		{
+			"a blank due_time is failed, not exhausted",
+			base(func(d map[string]any) { d["due_time"] = "" }),
+			RolloverFailed,
+		},
+		{
+			// The distinction matters: "exhausted" says the cadence ran out,
+			// "failed" says the stored data is broken, and the remedy differs.
+			"an unparseable due_date is exhausted, not failed",
+			base(func(d map[string]any) { d["due_date"] = "not-a-date" }),
+			RolloverExhausted,
+		},
+		{
+			"untyped estimated_minutes is failed",
+			base(func(d map[string]any) { d["estimated_minutes"] = "soon" }),
+			RolloverFailed,
+		},
+		{
+			"untyped parallelable is failed",
+			base(func(d map[string]any) { d["parallelable"] = "yes" }),
+			RolloverFailed,
+		},
+		{
+			"an unknown unit is failed (Validate rejects it)",
+			base(func(d map[string]any) { d["repeat_unit"] = "fortnights" }),
+			RolloverFailed,
+		},
+		{
+			"a one-shot plans nothing",
+			base(func(d map[string]any) {
+				delete(d, "repeat_every")
+				delete(d, "repeat_unit")
+			}),
+			RolloverNone,
+		},
+		{
+			"a custom condition is the caller's",
+			base(func(d map[string]any) {
+				d["repeat_custom"] = true
+				d["repeat_rule"] = "every sunday"
+			}),
+			RolloverCustom,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			date, reason, _ := rolloverPlan(tc.doc, now)
+			if reason != tc.reason {
+				t.Errorf("rolloverPlan = %q, want %q", reason, tc.reason)
+			}
+			// A date is offered if and only if the plan says created. Returning a
+			// date alongside any other reason is a contradiction a caller could act on.
+			if (date != "") != (tc.reason == RolloverCreated) {
+				t.Errorf("date = %q with reason %q; a date belongs only with created", date, reason)
+			}
+		})
 	}
 }
 

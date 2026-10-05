@@ -402,9 +402,7 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	// `next` — which is how a repeat that had stopped recurring still looked like a
 	// successful completion.
 	out["rollover"] = string(rollover)
-	if rollover.NeedsAttention() && rollover != tasks.RolloverCustom {
-		// Custom is not a fault: the app's own repeat UI owns it. Only a broken or
-		// exhausted cadence is something the user must act on.
+	if rollover.NeedsAttention() {
 		out["needs_attention"] = rollover.UserFacing()
 	}
 	writeJSON(w, http.StatusOK, out)
