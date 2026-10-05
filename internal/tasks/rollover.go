@@ -115,7 +115,17 @@ func rolloverPlan(done map[string]any, now time.Time) (string, Rollover, error) 
 	if _, ok := mongostore.ToBool(done["parallelable"]); !ok {
 		return "", RolloverFailed, fail("cannot roll over: parallelable is not a boolean")
 	}
-	dueDate, _ := done["due_date"].(string)
+	// Checked like its three siblings above. This one used to discard the assertion, so
+	// a due_date that had drifted to a number or null became "" and fell through to
+	// NextDueDate, which failed — and a failed date computation is reported as
+	// `exhausted`. That is the wrong remedy twice over: nothing "ran out", the field is
+	// unreadable, and `exhausted` tells the operator to re-enter a repeat that is
+	// perfectly intact. It also carried an empty Detail, so the nightly line said
+	// nothing more specific than the outcome.
+	dueDate, ok := done["due_date"].(string)
+	if !ok {
+		return "", RolloverFailed, fail("cannot roll over: due_date is not a string")
+	}
 	nextDate, ok := rep.NextDueDate(dueDate, now)
 	if !ok {
 		// Unparseable due_date, or the cadence has run past MaxRollovers.
@@ -211,6 +221,19 @@ func (s *Store) parentsWithSuccessors(ctx context.Context, candidates []bson.M) 
 		return nil, err
 	}
 	defer func() { _ = cur.Close(ctx) }()
+	// Decoding into a typed struct is safe here, and that is not obvious — a `string`
+	// field would normally make cur.All fail the WHOLE batch on one bad document, which
+	// for a read-only report means a night where nothing at all is reported.
+	//
+	// It cannot happen because of the query above: MongoDB brackets comparison
+	// operators by BSON type, so `$in: [<hex string>, ...]` returns ONLY documents
+	// whose rolled_from is one of those exact strings. A doc with a numeric or
+	// otherwise mistyped back-link does not match and is never decoded. Measured — the
+	// alternative was a defensive per-row decode guarding a case that cannot occur,
+	// which is the kind of complexity that reads as robustness and is untestable.
+	//
+	// TestCorruptBackLinkCannotAbortThePass pins the reason rather than the symptom, so
+	// a future change that makes the query less specific fails loudly here.
 	var rows []struct {
 		RolledFrom string `bson:"rolled_from"`
 	}
