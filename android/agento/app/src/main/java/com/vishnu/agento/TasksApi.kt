@@ -389,9 +389,24 @@ class TasksApi(context: Context) {
             .also { r -> r.getOrNull()?.let { checkContract(it, sent) } }
     }
 
-    /** Partial edit: only non-null keys are sent. The repeat keys are sent
-     * together or not at all, so the server can validate the recurrence as
-     * a whole instead of merging half of it. */
+    /**
+     * Partial edit: only non-null keys are sent.
+     *
+     * The four repeat keys are CONVENTIONALLY sent together or not at all, so the server
+     * validates the recurrence as a whole rather than merging half of it. That is a
+     * convention, not an invariant of this signature: each key is an independent nullable
+     * parameter and each is written to the body independently, so a caller CAN send
+     * `repeat_every` alone and the server will merge it into the stored recurrence.
+     *
+     * The comment used to say "sent together or not at all" as though the method
+     * guaranteed it. It never did, and a comment asserting a guarantee the code does not
+     * make is worse than no comment — it is the stale-prose shape that ships wrong advice,
+     * the same defect as the `exhausted` sentence in #180 that told users to re-enter an
+     * intact repeat.
+     *
+     * Enforcing it would mean rejecting a half-repeat update outright, which changes the
+     * API contract and belongs with the other deferred parts of #185, not in a KDoc fix.
+     */
     suspend fun update(
         id: String,
         name: String? = null,
