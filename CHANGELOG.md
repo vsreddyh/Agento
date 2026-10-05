@@ -36,12 +36,17 @@ see GitHub Releases for older notes.
   the ones that came back, and names every field that differs.
   It **warns rather than throws**: the write did succeed, so failing it would
   tell the user their task was not saved when it was — the same class of lie as
-  #214 below, and reporting an outcome that did not happen is worse than a
+  #214, and reporting an outcome that did not happen is worse than a
   missing feature. Text is compared trimmed, and zeros are compared as real
   values, because `estimated_minutes: 0` is a legal answer and a falsy-default
   check would report it missing on every one-shot task.
-  A partial edit asserts only the fields it actually sent; the rest are carried
-  through from the response rather than compared.
+  A partial edit asserts only the fields it actually sent — a field the app
+  never sent is unknown, not unchanged, so it is skipped rather than compared.
+  `description` is asserted too, and every string is trimmed at the send site so
+  the app sends exactly what it asserts. The warning reaches the user as a
+  snackbar naming the fields; it is a `StateFlow` so the IO-thread write and the
+  main-thread read are ordered correctly, and so there is exactly one obvious
+  collector.
 
 ## [4.14.3]
 

@@ -250,21 +250,34 @@ internal fun ServerTaskDraft.repeatOrNull(): Triple<Int, String, String>? {
 /**
  * The task fields the app asserts after a write (#185).
  *
- * Deliberately not [ServerTaskDraft]: a draft is what the editor holds and is full of
- * "not being changed right now" defaults, whereas this is "what I just asked the server
- * to store", where every field has a definite value. Reusing the draft type is how a
- * partial edit would start being validated as if it were a full one.
+ * Every field is **nullable, and null means "not asserted"** — not "absent from the
+ * server" and not "zero". That distinction is the whole design:
+ *
+ * - A `create` asserts every field, so nothing is null.
+ * - A partial `update` asserts only what it sent. A field the app never sent is
+ *   UNKNOWN, not unchanged, and asserting it would report a mismatch on every edit.
+ *
+ * The earlier shape of this built the expected value from the response and then copied
+ * the sent fields over it. That compares trivially for the unsent fields, which is
+ * correct but fragile: a field added to one side and not the other is silently
+ * "asserted" as whatever the server said. Nulls make the assertion explicit at the
+ * call site instead of implied by a merge.
+ *
+ * Zero and empty string are REAL values and are compared as such —
+ * `estimated_minutes: 0` means "no estimate", and a check written on falsy defaults
+ * reports it missing on every one-shot task, so it fires constantly and gets ignored.
  */
 internal data class TaskContractSent(
-    val name: String = "",
-    val dueDate: String = "",
-    val dueTime: String = "",
-    val estimatedMinutes: Int = 0,
-    val repeatEvery: Int = 0,
-    val repeatUnit: String = "",
-    val repeatCustom: Boolean = false,
-    val repeatRule: String = "",
-    val parallelable: Boolean = false,
+    val name: String? = null,
+    val description: String? = null,
+    val dueDate: String? = null,
+    val dueTime: String? = null,
+    val estimatedMinutes: Int? = null,
+    val repeatEvery: Int? = null,
+    val repeatUnit: String? = null,
+    val repeatCustom: Boolean? = null,
+    val repeatRule: String? = null,
+    val parallelable: Boolean? = null,
 )
 
 /**
@@ -280,27 +293,40 @@ internal data class TaskContractSent(
  * a recreate draft asking for a date that already existed. Silent, and plausible enough
  * to look like a bug in the rollover rather than a disagreement between versions.
  *
- * Comparison is on trimmed text, because the app trims before sending and the server
- * trims before storing: a padded value that agrees after trimming IS agreement, and
- * flagging it would teach people to ignore this.
+ * Text is compared TRIMMED, because the app trims before sending and the server trims
+ * before storing: a padded value that agrees after trimming IS agreement, and flagging
+ * it would teach people to ignore this warning, defeating the mechanism.
  *
- * Zeros and empties are compared as real values, not as "absent" — `estimated_minutes: 0`
- * is a legal answer meaning "no estimate", and a check written on falsy defaults would
- * report it missing on every one-shot task.
+ * A null in [sent] skips that field — see [TaskContractSent].
  */
 internal fun contractMismatches(sent: TaskContractSent, got: ServerTask): List<String> {
     val out = mutableListOf<String>()
     // An id is the one field with no sensible default: without it there is no record
-    // to point at, so a write cannot be reported as successful.
+    // to point at, so a write cannot be reported as successful. Always asserted.
     if (got.id.isBlank()) out += "id"
-    if (sent.name.trim() != got.name.trim()) out += "name"
-    if (sent.dueDate.trim() != got.dueDate.trim()) out += "due_date"
-    if (sent.dueTime.trim() != got.dueTime.trim()) out += "due_time"
-    if (sent.estimatedMinutes != got.estimatedMinutes) out += "estimated_minutes"
-    if (sent.repeatEvery != got.repeatEvery) out += "repeat_every"
-    if (sent.repeatUnit.trim() != got.repeatUnit.trim()) out += "repeat_unit"
-    if (sent.repeatCustom != got.repeatCustom) out += "repeat_custom"
-    if (sent.repeatRule.trim() != got.repeatRule.trim()) out += "repeat_rule"
-    if (sent.parallelable != got.parallelable) out += "parallelable"
+    if (sent.name != null && sent.name.trim() != got.name.trim()) out += "name"
+    if (sent.description != null &&
+        sent.description.trim() != got.description.trim()
+    ) out += "description"
+    if (sent.dueDate != null && sent.dueDate.trim() != got.dueDate.trim()) out += "due_date"
+    if (sent.dueTime != null && sent.dueTime.trim() != got.dueTime.trim()) out += "due_time"
+    if (sent.estimatedMinutes != null && sent.estimatedMinutes != got.estimatedMinutes) {
+        out += "estimated_minutes"
+    }
+    if (sent.repeatEvery != null && sent.repeatEvery != got.repeatEvery) {
+        out += "repeat_every"
+    }
+    if (sent.repeatUnit != null && sent.repeatUnit.trim() != got.repeatUnit.trim()) {
+        out += "repeat_unit"
+    }
+    if (sent.repeatCustom != null && sent.repeatCustom != got.repeatCustom) {
+        out += "repeat_custom"
+    }
+    if (sent.repeatRule != null && sent.repeatRule.trim() != got.repeatRule.trim()) {
+        out += "repeat_rule"
+    }
+    if (sent.parallelable != null && sent.parallelable != got.parallelable) {
+        out += "parallelable"
+    }
     return out
 }

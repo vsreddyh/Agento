@@ -31,6 +31,7 @@ class TaskContractTest {
     /** The canonical "daily chore" every fixture below starts from. */
     private fun daily() = TaskContractSent(
         name = "Take meds",
+        description = "with water",
         dueDate = "2026-10-06",
         dueTime = "09:00",
         estimatedMinutes = 5,
@@ -45,6 +46,7 @@ class TaskContractTest {
     private fun stored(s: TaskContractSent) = ServerTask(
         id = "6abf0000000000000000abcd",
         name = s.name,
+        description = s.description ?: "",
         dueDate = s.dueDate,
         dueTime = s.dueTime,
         estimatedMinutes = s.estimatedMinutes,
@@ -125,6 +127,34 @@ class TaskContractTest {
     }
 
     @Test
+    fun `a null field is not asserted at all`() {
+        // A partial update knows nothing about the fields it did not send. Reporting
+        // them would fail every single edit, so null must mean "skip", not "empty".
+        val got = daily().let {
+            ServerTask(
+                id = "6abf0000000000000000abcd", name = it.name!!,
+                description = it.description!!, dueDate = it.dueDate!!,
+                dueTime = it.dueTime!!, estimatedMinutes = it.estimatedMinutes!!,
+                repeatEvery = it.repeatEvery!!, repeatUnit = it.repeatUnit!!,
+                repeatCustom = it.repeatCustom!!, repeatRule = it.repeatRule!!,
+                parallelable = it.parallelable!!,
+            )
+        }.copy(dueTime = "23:59", repeatUnit = "fortnights")
+        // Assert only the name; everything else is unknown and must be skipped.
+        assertEquals(emptyList<String>(), contractMismatches(TaskContractSent(name = "Take meds"), got))
+    }
+
+    @Test
+    fun `a dropped description is reported`() {
+        // create() sends description, so a server that dropped it is a real break. It
+        // was silently unasserted in the first cut of this PR.
+        val got = daily().let { stored(it) }.copy(description = "")
+        assertTrue(
+            contractMismatches(daily(), got).contains("description"),
+        )
+    }
+
+    @Test
     fun `zero is a real value and must not be reported as absent`() {
         // estimated_minutes 0 is legal and means "no estimate". A check written with
         // falsy defaults would call it missing on every one-shot task.
@@ -134,7 +164,7 @@ class TaskContractTest {
 }
 
 /**
- * The warning sink must survive a report that nobody is listening for yet.
+ * The warning sink, and the guarantee that a report actually becomes visible.
  *
  * A mismatch raised while no screen is collecting it used to be the shape of the bug:
  * the app had the information and there was nowhere for it to go, so the user saw a
@@ -142,13 +172,13 @@ class TaskContractTest {
  */
 class ContractWarningsTest {
 
-    private fun reset() = ContractWarnings.clear()
+    private fun reset() = ContractWarnings.consume()
 
     @Test
     fun `an empty mismatch list is never reported`() {
         reset()
         ContractWarnings.report(emptyList())
-        assertEquals(emptyList<String>(), ContractWarnings.last)
+        assertEquals(emptyList<String>(), ContractWarnings.mismatched.value)
     }
 
     @Test
@@ -158,7 +188,7 @@ class ContractWarningsTest {
         reset()
         ContractWarnings.report(listOf("due_time"))
         ContractWarnings.report(listOf("repeat_every", "repeat_unit"))
-        assertEquals(listOf("repeat_every", "repeat_unit"), ContractWarnings.last)
+        assertEquals(listOf("repeat_every", "repeat_unit"), ContractWarnings.mismatched.value)
     }
 
     @Test
@@ -191,12 +221,25 @@ class ContractWarningsTest {
     }
 
     @Test
-    fun `clear resets the warning without touching the generation`() {
+    fun `consume clears the warning without touching the generation`() {
         reset()
         ContractWarnings.report(listOf("due_date"))
         val gen = ContractWarnings.generation
-        ContractWarnings.clear()
-        assertEquals(emptyList<String>(), ContractWarnings.last)
+        ContractWarnings.consume()
+        assertEquals(emptyList<String>(), ContractWarnings.mismatched.value)
         assertEquals(gen, ContractWarnings.generation)
+    }
+
+    @Test
+    fun `the warning survives being read from another thread`() {
+        // report() runs on Dispatchers.IO and the screen collects on the main thread.
+        // With plain `var`s there is no happens-before edge between them, so the UI
+        // could miss the write entirely — which is the failure this sink had.
+        reset()
+        val fields = listOf("repeat_every", "repeat_unit")
+        val writer = Thread { ContractWarnings.report(fields) }
+        writer.start()
+        writer.join()
+        assertEquals(fields, ContractWarnings.mismatched.value)
     }
 }

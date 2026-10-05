@@ -85,6 +85,20 @@ internal fun TaskManagerScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+
+    // #185: surface a task-response contract mismatch. Without this collector the
+    // warning was recorded and shown to nobody, which is the bug the check exists to
+    // fix — the user needs to know the app and the server disagree while the task is
+    // still on screen. consume() inside the collector clears the value, so a
+    // recomposition does not re-show the same warning.
+    LaunchedEffect(Unit) {
+        ContractWarnings.mismatched.collect { fields ->
+            if (fields.isEmpty()) return@collect
+            snackbar.showSnackbar(ContractWarnings.message(fields))
+            ContractWarnings.consume()
+        }
+    }
+
     // One client for the screen (its OkHttpClient is shared process-wide).
     val api = remember(context) { TasksApi(context) }
     var tasks by remember { mutableStateOf<List<ServerTask>>(emptyList()) }

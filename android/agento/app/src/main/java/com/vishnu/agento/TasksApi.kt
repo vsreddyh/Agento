@@ -2,6 +2,9 @@ package com.vishnu.agento
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -306,30 +309,43 @@ class TasksApi(context: Context) {
         if (estimatedMinutes < 0) {
             return@withContext Result.failure(IllegalArgumentException("Estimated minutes must be 0 or above"))
         }
-        // #185: what the app is about to assert the server stored. Built here, from
-        // the same values the body carries, so the two cannot drift apart.
+        // #185: trimmed once, and the SAME values are asserted and sent. Trimming only
+        // in the comparison would leave the two able to disagree on padding, which the
+        // trim-insensitive compare then hides — so the app would depend on the server
+        // cleaning up before they agree.
+        val tName = name.trim()
+        val tDescription = description.trim()
+        val tDueDate = dueDate.trim()
+        val tDueTime = dueTime.trim()
+        val tRepeatUnit = repeatUnit.trim()
+        val tRepeatRule = repeatRule.trim()
         val sent = TaskContractSent(
-            name = name.trim(),
-            dueDate = dueDate.trim(),
-            dueTime = dueTime.trim(),
+            name = tName,
+            description = tDescription,
+            dueDate = tDueDate,
+            dueTime = tDueTime,
             estimatedMinutes = estimatedMinutes,
             repeatEvery = repeatEvery,
-            repeatUnit = repeatUnit.trim(),
+            repeatUnit = tRepeatUnit,
             repeatCustom = repeatCustom,
-            repeatRule = repeatRule.trim(),
+            repeatRule = tRepeatRule,
             parallelable = parallelable,
         )
+        // Every string is trimmed HERE, at the send site, rather than only in `sent`.
+        // The comparison is trim-insensitive so a mismatch is never hidden by padding,
+        // but sending exactly what is asserted is the honest direction: the app should
+        // not depend on the server to clean up before the two agree.
         val body = JSONObject()
-            .put("name", name.trim())
-            .put("description", description.trim())
-            .put("due_date", dueDate.trim())
-            .put("due_time", dueTime.trim())
+            .put("name", tName)
+            .put("description", tDescription)
+            .put("due_date", tDueDate)
+            .put("due_time", tDueTime)
             .put("estimated_minutes", estimatedMinutes)
             .put("parallelable", parallelable)
             .put("repeat_every", repeatEvery)
-            .put("repeat_unit", repeatUnit)
+            .put("repeat_unit", tRepeatUnit)
             .put("repeat_custom", repeatCustom)
-            .put("repeat_rule", repeatRule.trim())
+            .put("repeat_rule", tRepeatRule)
         call("POST", "/api/tasks", body).map { parseOne(it) }
             .also { r -> r.getOrNull()?.let { checkContract(it, sent) } }
     }
@@ -357,50 +373,43 @@ class TasksApi(context: Context) {
         if (clean.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Missing task id"))
         }
+        // Trimmed at the SEND site, matching what the contract check asserts below.
+        // These went out raw while the assertion compared trimmed, so the two could
+        // disagree on padding — invisible only because the compare ignores it.
         val body = JSONObject()
-        if (name != null) body.put("name", name)
-        if (description != null) body.put("description", description)
-        if (dueDate != null) body.put("due_date", dueDate)
-        if (dueTime != null) body.put("due_time", dueTime)
+        if (name != null) body.put("name", name.trim())
+        if (description != null) body.put("description", description.trim())
+        if (dueDate != null) body.put("due_date", dueDate.trim())
+        if (dueTime != null) body.put("due_time", dueTime.trim())
         if (estimatedMinutes != null) body.put("estimated_minutes", estimatedMinutes)
         if (repeatEvery != null) body.put("repeat_every", repeatEvery)
-        if (repeatUnit != null) body.put("repeat_unit", repeatUnit)
+        if (repeatUnit != null) body.put("repeat_unit", repeatUnit.trim())
         if (repeatCustom != null) body.put("repeat_custom", repeatCustom)
-        if (repeatRule != null) body.put("repeat_rule", repeatRule)
+        if (repeatRule != null) body.put("repeat_rule", repeatRule.trim())
         if (parallelable != null) body.put("parallelable", parallelable)
         if (expectedRevision != null) body.put("expected_revision", expectedRevision)
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
             .also { r ->
                 r.getOrNull()?.let { task ->
-                    // A partial edit leaves the untouched fields UNKNOWN, not
-                    // unchanged, so they are carried through from the response rather
-                    // than asserted: comparing a field the app never sent would
-                    // report it as a mismatch on every single edit.
+                    // Only the fields this call actually sent are asserted; the rest stay
+                    // null, which contractMismatches skips. The previous version built
+                    // the expected value FROM the response and copied the sent fields
+                    // over it — correct, because the unsent fields then matched
+                    // themselves, but fragile: a field added to one side and not the
+                    // other becomes silently "asserted" as whatever the server said.
+                    // Nulls put the decision at this call site, where it is visible.
                     checkContract(task, TaskContractSent(
-                        name = task.name,
-                        dueDate = task.dueDate,
-                        dueTime = task.dueTime,
-                        estimatedMinutes = task.estimatedMinutes,
-                        repeatEvery = task.repeatEvery,
-                        repeatUnit = task.repeatUnit,
-                        repeatCustom = task.repeatCustom,
-                        repeatRule = task.repeatRule,
-                        parallelable = task.parallelable,
-                    ).let { base ->
-                        // ...except the ones this call actually set, which is what
-                        // gets asserted.
-                        var out = base
-                        if (name != null) out = out.copy(name = name.trim())
-                        if (dueDate != null) out = out.copy(dueDate = dueDate.trim())
-                        if (dueTime != null) out = out.copy(dueTime = dueTime.trim())
-                        if (estimatedMinutes != null) out = out.copy(estimatedMinutes = estimatedMinutes)
-                        if (repeatEvery != null) out = out.copy(repeatEvery = repeatEvery)
-                        if (repeatUnit != null) out = out.copy(repeatUnit = repeatUnit.trim())
-                        if (repeatCustom != null) out = out.copy(repeatCustom = repeatCustom)
-                        if (repeatRule != null) out = out.copy(repeatRule = repeatRule.trim())
-                        if (parallelable != null) out = out.copy(parallelable = parallelable)
-                        out
-                    })
+                        name = name?.trim(),
+                        description = description?.trim(),
+                        dueDate = dueDate?.trim(),
+                        dueTime = dueTime?.trim(),
+                        estimatedMinutes = estimatedMinutes,
+                        repeatEvery = repeatEvery,
+                        repeatUnit = repeatUnit?.trim(),
+                        repeatCustom = repeatCustom,
+                        repeatRule = repeatRule?.trim(),
+                        parallelable = parallelable,
+                    ))
                 }
             }
     }
@@ -422,6 +431,10 @@ class TasksApi(context: Context) {
     private fun checkContract(task: ServerTask, sent: TaskContractSent) {
         val mismatched = contractMismatches(sent, task)
         if (mismatched.isEmpty()) return
+        // Not thrown. The write succeeded — the task IS stored — so failing it would
+        // tell the user their work was lost when it was not, and they would enter it
+        // again. Reporting an outcome that did not happen is the exact class of lie
+        // #214 is about, so this warns and leaves the stored task authoritative.
         ContractWarnings.report(mismatched)
     }
 
@@ -531,37 +544,50 @@ fun serverDetail(message: String): String {
 /**
  * Where a task-response contract mismatch goes (#185).
  *
- * A `var` sink rather than a callback so the API layer does not have to know about the
- * UI, and so a mismatch raised outside a running screen is still recorded rather than
- * dropped. Tests read [last] directly.
+ * A [StateFlow] rather than a plain `var` for two reasons, and the second is the one
+ * that matters:
  *
- * `last` deliberately holds only the most recent mismatch: a burst of writes during
- * editor autosave would otherwise queue a stack of stale warnings the user never
- * dismisses, and the newest one is the only one that describes the current state.
+ * 1. **Correctness.** `report()` runs on `Dispatchers.IO` and the screen reads on the
+ *    main thread. Plain `var`s have no happens-before edge between those, so a UI read
+ *    could miss the write — or see a half-published value. A `StateFlow` carries the
+ *    value across the boundary correctly.
+ * 2. **Reachability.** A sink nothing collects records the mismatch and shows nobody,
+ *    which is the bug this whole PR exists to fix. A `StateFlow` has one obvious
+ *    collector and the compiler-visible type says where the value goes.
+ *
+ * Only the NEWEST mismatch is held: a burst of editor autosaves would otherwise queue a
+ * stack of stale warnings the user never dismisses, and only the newest describes the
+ * current state. [consume] clears it once shown, so it is not re-displayed on
+ * recomposition.
  */
 internal object ContractWarnings {
-    /** Newest set of mismatched field names; empty when the last write agreed. */
-    var last: List<String> = emptyList()
-        private set
+    private val _mismatched = MutableStateFlow<List<String>>(emptyList())
 
-    /** Bumped on every report, so a repeat of the same fields is still observable. */
+    /** Newest set of mismatched field names; empty when the last write agreed. */
+    val mismatched: StateFlow<List<String>> = _mismatched.asStateFlow()
+
+    /**
+     * Advances on every report, so a repeat of the same fields is still observable as a
+     * new event. Without it, "the same warning twice running" is indistinguishable from
+     * the collector being stuck, and a genuine second failure looks like a duplicate.
+     */
     var generation: Int = 0
         private set
 
-    fun report(mismatched: List<String>) {
-        if (mismatched.isEmpty()) return
-        last = mismatched
+    fun report(fields: List<String>) {
+        if (fields.isEmpty()) return
+        _mismatched.value = fields
         generation++
     }
 
-    /** Called after the user is told, so the warning is not re-shown on recomposition. */
-    fun clear() {
-        last = emptyList()
+    /** Called once the user has been told, so it is not shown again on recomposition. */
+    fun consume() {
+        _mismatched.value = emptyList()
     }
 
     /** The user-facing text. Names the fields: "something differs" sends them hunting. */
-    fun message(mismatched: List<String> = last): String =
+    fun message(fields: List<String>): String =
         "Saved, but the server stored different values for " +
-            mismatched.joinToString(", ") +
+            fields.joinToString(", ") +
             ". Your app and the server may be on different versions — reopen the task to resync."
 }
