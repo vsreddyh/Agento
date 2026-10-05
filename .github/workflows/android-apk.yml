@@ -121,6 +121,9 @@ jobs:
           name: unit-test-report
           path: android/agento/app/build/reports/tests/testDebugUnitTest/
           retention-days: 7
+          # Mirrors the lint report: a missing report means the tests did not run,
+          # and silently uploading nothing would hide that behind a green step.
+          if-no-files-found: error
 
       # Android lint (Compose checks, accessibility, unused resources).
       # Errors fail the job; the report uploads unconditionally so warnings

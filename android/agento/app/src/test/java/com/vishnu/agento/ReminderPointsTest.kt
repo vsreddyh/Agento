@@ -71,13 +71,26 @@ class ReminderPointsTest {
     }
 
     @Test
-    fun `points already in the past are dropped`() {
-        // Two hours out, with a two-hour estimate: the start moment is NOW, so the
-        // 5-minute warning is behind us and must not be armed retroactively.
-        val now = at(today, 7)
+    fun `a point landing exactly on now is dropped`() {
+        // The boundary: `now` IS the start moment, and addIfFuture keeps a point only
+        // when it is STRICTLY in the future. So Start is dropped and only Due survives.
+        // This is the case my first version got wrong twice — it asserted Start was
+        // present AND compared it to the due time.
+        val now = at(today, 7) // 2h before a 09:00 due with a 2h estimate
         val pts = reminderPoints(today.toString(), "09:00", 120, now)
+        assertEquals(setOf(ReminderKind.Due), pts.keys)
+        assertEquals(nineAm, pts[ReminderKind.Due])
+    }
+
+    @Test
+    fun `points already in the past are dropped`() {
+        // One hour out with a two-hour estimate: the start moment is 08:00, already
+        // past, so neither Start nor the 5-minute warning may be armed retroactively.
+        val now = at(today, 8)
+        val pts = reminderPoints(today.toString(), "09:00", 120, now)
+        assertEquals(setOf(ReminderKind.Due), pts.keys)
+        assertFalse(pts.containsKey(ReminderKind.Start))
         assertFalse(pts.containsKey(ReminderKind.BeforeStart))
-        assertEquals(nineAm, pts[ReminderKind.Start])
     }
 
     @Test

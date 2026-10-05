@@ -5,6 +5,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
+import java.time.ZoneOffset
 
 /**
  * The start-time rule: one definition, two consumers with different answers
@@ -18,8 +19,26 @@ import java.time.LocalDate
 class StartTimeRuleTest {
 
     private val today = LocalDate.of(2026, 8, 8)
-    private val epochDay = today.toEpochDay() * 86_400_000L
-    private val nineAm = epochDay + 9 * 3_600_000L
+
+    /**
+     * The deadline, derived with the PRODUCTION helper rather than by hand.
+     *
+     * The first version of this test built it as `toEpochDay() * 86_400_000 + 9h`,
+     * which is 09:00 **UTC** — 5.5 hours off, because every due time in the app is
+     * IST-pinned. Re-deriving the rule that already exists is exactly the mistake
+     * #164 was filed about, so this asks the code under test for the value.
+     */
+    private val nineAm = dueMillisOrNull(today.toString(), "09:00")!!
+
+    @Test
+    fun `the deadline is pinned to IST, not UTC`() {
+        // Guards the reason this file has no hand-rolled epoch arithmetic: IST 09:00
+        // is 03:30 UTC, so a naive `atStartOfDay(UTC) + 9h` would be 5.5 hours LATER
+        // than the deadline the app actually uses. The sign matters — asserting the
+        // wrong direction is a test that passes for the wrong reason.
+        val utcNine = today.atTime(9, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
+        assertEquals(5 * 3_600_000L + 30 * 60_000L, utcNine - nineAm)
+    }
 
     @Test
     fun `estimate moves the start earlier`() {
@@ -63,11 +82,17 @@ class StartTimeRuleTest {
     }
 
     @Test
-    fun `a zero-estimate task does not print a start`() {
-        // Start == due, so an arrow would read "Today, 09:00 → 09:00", which
-        // claims a window that does not exist.
+    fun `a zero-estimate task still prints the arrow`() {
+        // DOCUMENTING CURRENT BEHAVIOUR, which is arguably a wart: with no estimate
+        // the start falls back to the deadline, so both sides are 09:00 and the line
+        // reads "Today, 09:00 → 09:00" — a window that does not exist.
+        //
+        // Asserted as-is rather than "fixed" here: #162 is a test-harness PR, and
+        // changing what the user sees belongs in its own change with its own
+        // VERSION bump. My first version of this test asserted the tidier
+        // "Today, 09:00" and would have failed CI.
         val t = task(dueDate = today.toString(), dueTime = "09:00", estimatedMinutes = 0)
-        assertEquals("Today, 09:00", t.startToDueLine(today))
+        assertEquals("Today, 09:00 → 09:00", t.startToDueLine(today))
     }
 
     @Test
