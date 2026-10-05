@@ -2,6 +2,7 @@ package com.vishnu.agento
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.yield
@@ -315,11 +316,23 @@ class ContractWarningsTest {
      */
     @Test
     fun `two identical reports both reach a collector`() = runBlocking {
-        val seen = mutableListOf<List<String>>()
+        // CopyOnWriteArrayList, not mutableListOf: the collector appends from its own
+        // coroutine while the test thread reads `seen` in awaitEmissions. Safe today
+        // under Dispatchers.Unconfined, which runs the collector on the caller's thread,
+        // and silently unsafe the day the dispatcher changes — which is exactly the kind
+        // of latent test failure that gets blamed on the code under test.
+        val seen = CopyOnWriteArrayList<List<String>>()
         val started = CompletableDeferred<Unit>()
         val job = launch(Dispatchers.Unconfined) {
-            started.complete(Unit)
-            ContractWarnings.mismatched.collect { m -> if (m != null) seen += m.fields }
+            ContractWarnings.mismatched.collect { m ->
+                if (m != null) seen += m.fields
+                // Signalled from INSIDE collect, not before it. Completing beforehand
+                // only proves the coroutine started, not that collection is live — and
+                // the awaitEmissions rendezvous below is what actually guarantees
+                // delivery, since StateFlow replays its current value to a collector
+                // that subscribes late.
+                started.complete(Unit)
+            }
         }
         try {
             started.await()
