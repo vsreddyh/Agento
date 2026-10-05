@@ -105,6 +105,23 @@ jobs:
       # main builds release ONLY; branches/PRs build debug ONLY (faster CI,
       # and release signing stays on main). The verify step below enforces
       # that the built APK filename matches the resolved version.
+
+      # Unit tests (#162). A test that exists but is never run gates nothing, which is
+      # why this step is here rather than left to a developer running it locally. It
+      # runs before lint and the build so a failing rule fails fast, and on the debug
+      # variant because tests are variant-independent — the point is to gate the merge,
+      # not to gate the release artifact.
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: android/agento/app/build/reports/tests/testDebugUnitTest/
+          retention-days: 7
+
       # Android lint (Compose checks, accessibility, unused resources).
       # Errors fail the job; the report uploads unconditionally so warnings
       # are read, not buried (#177). Runs before the build to fail fast, on

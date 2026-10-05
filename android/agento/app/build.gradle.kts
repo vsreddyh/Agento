@@ -123,4 +123,9 @@ dependencies {
 
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
+
+    // Unit tests (#162). Plain JUnit4 on the JVM: every rule these cover is a
+    // pure function, so nothing here needs Robolectric, an emulator, or a
+    // device — which is the only reason the suite can gate a merge cheaply.
+    testImplementation("junit:junit:4.13.2")
 }
