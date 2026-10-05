@@ -205,7 +205,26 @@ Two additions beside it:
 
   A replayed create is **not** recorded: it changed nothing, so there is nothing to
   audit, and logging one would make the log claim a task was created once per retry —
-  which defeats counting creates to answer "how many tasks exist". Writes are best-effort: a failed audit write
+  which defeats counting creates to answer "how many tasks exist". An update that wrote
+  nothing (`PATCH` with no field the store will set) is likewise not recorded.
+
+### What the nightly reconciliation cannot see
+
+It scans for completed **structured** repeats, so a row whose repeat fields have
+drifted to an unreadable type can be invisible to it. The case to know about:
+
+- `repeat_unit` stored as a **number** (e.g. `7`) passes the query and IS reported, as a
+  failure naming the wrong type — because `$nin: ["", null]` matches a number, which then
+  reads back as an empty unit.
+- `repeat_every` stored as a **string** (e.g. `"5"`) is **silently missed**. MongoDB
+  brackets comparison operators by BSON type, so `$gt: 0` does not match a string and the
+  row never becomes a candidate. A repeat in this state has stopped recurring and this
+  job will not say so.
+
+That asymmetry is a property of the query, not an oversight in it: widening the filter
+to match drifted types would also pull in rows that are not repeats at all. If a repeat
+you expect to be recurring is not in the nightly report, check its stored types first —
+that is the failure this caveat is here to prevent. Writes are best-effort: a failed audit write
   never fails the mutation it was recording. Pruned at 90 days by `retention`.
   Indexed by `at` and `task_id`, declared in the same `EnsureSchema` as the task
   indexes — an earlier `EnsureAuditIndex` that nothing called meant both readers were

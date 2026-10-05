@@ -839,9 +839,28 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 // rollover failed", so a task that had silently stopped recurring was reported as
 // an ordinary completion.
 func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, error) {
+	doc, next, reason, _, err := s.CompleteDetail(ctx, id)
+	return doc, next, reason, err
+}
+
+// CompleteDetail is Complete plus the FIELD-SPECIFIC reason a rollover failed, e.g.
+// "cannot roll over: due_time is required (HH:MM)".
+//
+// It exists because the detail was being thrown away on the live path: Complete logged
+// the error and returned only RolloverFailed, so `needs_attention` reached the user as
+// the generic "this task was marked done or skipped, but creating its next occurrence
+// FAILED" — with no indication of which field to open. The nightly reconciler already
+// carried the detail (it is what made its gaps actionable), so the person who fixed it
+// in the morning had to wait for the next run to learn what the error already knew.
+//
+// A separate method rather than a fifth return value: four production callers want the
+// detail, but roughly twenty test call sites discard three of the four values already,
+// and widening the signature would churn every one of them to serve a need only the
+// transports have.
+func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, string, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, nil, "", fail("bad id '%s'", id)
+		return nil, nil, "", "", fail("bad id '%s'", id)
 	}
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
@@ -854,18 +873,18 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 			"$inc": bson.M{"revision": 1},
 		})
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", "", err
 	}
 	if res.MatchedCount == 0 {
 		doc, serr := s.stateOnMiss(ctx, oid, id)
 		if serr != nil {
-			return nil, nil, "", serr
+			return nil, nil, "", "", serr
 		}
-		return nil, nil, "", resolvedStateErr(doc, id)
+		return nil, nil, "", "", resolvedStateErr(doc, id)
 	}
 	done, err := s.Get(ctx, id)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", "", err
 	}
 	next, reason, rerr := s.rollOver(ctx, done)
 	if rerr != nil {
@@ -876,9 +895,9 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 		// stopped. Logged too, because the reconciler runs nightly and the
 		// user may act sooner.
 		log.Printf("task %s completed but rollover failed: %v", id, rerr)
-		return done, nil, RolloverFailed, nil
+		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
-	return done, next, reason, nil
+	return done, next, reason, "", nil
 }
 
 // stateOnMiss fetches a task that a resolve verb could not claim, because the
@@ -947,9 +966,17 @@ func resolvedStateErr(doc bson.M, id string) *StoreError {
 // skipped-without-reason task indistinguishable from a completed one in that field
 // alone.
 func (s *Store) Skip(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, error) {
+	doc, next, r, _, err := s.SkipDetail(ctx, id, reason)
+	return doc, next, r, err
+}
+
+// SkipDetail is Skip plus the field-specific reason a rollover failed. Same rationale as
+// CompleteDetail: the detail was logged and discarded, so a skip that stopped a repeat
+// reached the agent as a generic "FAILED" with no field named.
+func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, string, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, nil, "", fail("bad id '%s'", id)
+		return nil, nil, "", "", fail("bad id '%s'", id)
 	}
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
@@ -964,27 +991,27 @@ func (s *Store) Skip(ctx context.Context, id, reason string) (map[string]any, ma
 			"$inc": bson.M{"revision": 1},
 		})
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", "", err
 	}
 	if res.MatchedCount == 0 {
 		doc, serr := s.stateOnMiss(ctx, oid, id)
 		if serr != nil {
-			return nil, nil, "", serr
+			return nil, nil, "", "", serr
 		}
-		return nil, nil, "", resolvedStateErr(doc, id)
+		return nil, nil, "", "", resolvedStateErr(doc, id)
 	}
 	skipped, err := s.Get(ctx, id)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", "", err
 	}
 	// The cadence advances exactly as on Complete. Skipping an occurrence is not
 	// abandoning the series — that is what delete_task is for.
 	next, rollover, rerr := s.rollOver(ctx, skipped)
 	if rerr != nil {
 		log.Printf("task %s skipped but rollover failed: %v", id, rerr)
-		return skipped, nil, RolloverFailed, nil
+		return skipped, nil, RolloverFailed, rerr.Error(), nil
 	}
-	return skipped, next, rollover, nil
+	return skipped, next, rollover, "", nil
 }
 
 // truncSkipReason caps the user's own words, rune-safely: this is free text typed

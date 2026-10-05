@@ -291,7 +291,7 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
 		Description: "Mark a task done (retained 3 days, then auto-deleted). A STRUCTURED repeat (repeat_every + repeat_unit) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, map[string]any, error) {
-			doc, next, rollover, err := store.Complete(ctx, in.ID)
+			doc, next, rollover, rolloverDetail, err := store.CompleteDetail(ctx, in.ID)
 			if err != nil {
 				return fail(err)
 			}
@@ -319,7 +319,7 @@ func main() {
 			case rollover.NeedsAttention():
 				// Say it in the response instead of leaving it in a log line: the
 				// repeat has stopped, and only the user can restart it.
-				out["needs_attention"] = rollover.UserFacing()
+				out["needs_attention"] = rollover.Attention(rolloverDetail)
 			}
 			return result(out)
 		})
@@ -327,7 +327,7 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "skip_task",
 		Description: "Skip ONE occurrence of a task — for 'not doing this tonight', 'out of time', 'doing it tomorrow'. Use this instead of complete_task whenever the work did NOT happen: complete_task records it as DONE, which is a false record, and completed rows are auto-deleted after 3 days so a false one is erased rather than corrected. A STRUCTURED repeat still rolls over (the habit continues); a CUSTOM one is yours, same contract as complete_task. Leaves the task out of the open list either way, so the user is not asked again tonight."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in skipTaskInput) (*mcp.CallToolResult, map[string]any, error) {
-			doc, next, rollover, err := store.Skip(ctx, in.ID, in.Reason)
+			doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, in.ID, in.Reason)
 			if err != nil {
 				return fail(err)
 			}
@@ -354,7 +354,7 @@ func main() {
 				out["repeat_rule"] = rep.Text
 				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys, advancing only due_date"
 			case rollover.NeedsAttention():
-				out["needs_attention"] = rollover.UserFacing()
+				out["needs_attention"] = rollover.Attention(rolloverDetail)
 			}
 			return result(out)
 		})
