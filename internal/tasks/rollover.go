@@ -314,9 +314,16 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 	// chunked because ReconcileLimit bounds the $in at 500 values, well inside what
 	// the server accepts, so there is nothing to chunk.
 	//
-	// The successor outlives the parent by construction: both get expiresAt =
-	// completedAt + RetentionDays, and the successor is completed no earlier than the
-	// parent, so if the parent is still here the back-link is too.
+	// The successor outlives the parent, which is why a missing back-link means
+	// "the rollover never happened" rather than "the successor was reaped".
+	//
+	// An earlier version of this comment justified that with "both get expiresAt =
+	// completedAt + RetentionDays", which is only half true: a successor that is
+	// still OPEN carries no expiresAt at all until it is completed. The conclusion
+	// held anyway, by a different route — an open successor has no TTL to reap it,
+	// and a completed one is completed no earlier than its parent, so its expiry is
+	// no earlier either. Same answer, correct reason; the wrong reason would have
+	// led the next reader to look for a bug in the TTL instead of in the query.
 	linked, err := s.parentsWithSuccessors(ctx, done)
 	if err != nil {
 		return ReconcileResult{}, err
