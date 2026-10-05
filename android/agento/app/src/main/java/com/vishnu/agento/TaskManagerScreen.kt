@@ -90,12 +90,16 @@ internal fun TaskManagerScreen(
     // warning was recorded and shown to nobody, which is the bug the check exists to
     // fix — the user needs to know the app and the server disagree while the task is
     // still on screen. consume() inside the collector clears the value, so a
-    // recomposition does not re-show the same warning.
+    // recomposition does not re-show the same warning — but only if it is still the one
+    // that was shown, or a warning that arrived meanwhile would be lost.
     LaunchedEffect(Unit) {
         ContractWarnings.mismatched.collect { fields ->
             if (fields.isEmpty()) return@collect
             snackbar.showSnackbar(ContractWarnings.message(fields))
-            ContractWarnings.consume()
+            // Pass back what was SHOWN, not a bare clear: showSnackbar suspends, so
+            // another report can land while it is up, and an unconditional clear would
+            // wipe that one before it was ever displayed.
+            ContractWarnings.consume(fields)
         }
     }
 

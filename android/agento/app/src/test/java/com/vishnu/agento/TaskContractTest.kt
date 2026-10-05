@@ -171,7 +171,7 @@ class TaskContractTest {
  */
 class ContractWarningsTest {
 
-    private fun reset() = ContractWarnings.consume()
+    private fun reset() = ContractWarnings.consume(ContractWarnings.mismatched.value)
 
     @Test
     fun `an empty mismatch list is never reported`() {
@@ -224,9 +224,39 @@ class ContractWarningsTest {
         reset()
         ContractWarnings.report(listOf("due_date"))
         val gen = ContractWarnings.generation
-        ContractWarnings.consume()
+        ContractWarnings.consume(listOf("due_date"))
         assertEquals(emptyList<String>(), ContractWarnings.mismatched.value)
         assertEquals(gen, ContractWarnings.generation)
+    }
+
+    @Test
+    fun `consume does not wipe a report that arrived while the snackbar was up`() {
+        // The lost-warning bug: showSnackbar SUSPENDS, so a second report can land while
+        // the first is still on screen, and an unconditional clear wipes the second one
+        // before it is ever shown. Two saves in quick succession is exactly when a
+        // contract mismatch is most likely — both are hitting the same broken server.
+        reset()
+        ContractWarnings.report(listOf("due_time"))
+        val shown = ContractWarnings.mismatched.value
+        // ... snackbar is up, and a second write disagrees about something else ...
+        ContractWarnings.report(listOf("repeat_every"))
+        assertEquals(listOf("repeat_every"), ContractWarnings.mismatched.value)
+        // ... the first snackbar finishes and the collector clears what it showed.
+        ContractWarnings.consume(shown)
+        assertEquals(
+            "the second warning was wiped by the first one's cleanup",
+            listOf("repeat_every"),
+            ContractWarnings.mismatched.value,
+        )
+    }
+
+    @Test
+    fun `consume of the current value does clear it`() {
+        // The fix must not turn into a warning that never goes away.
+        reset()
+        ContractWarnings.report(listOf("due_time"))
+        ContractWarnings.consume(ContractWarnings.mismatched.value)
+        assertEquals(emptyList<String>(), ContractWarnings.mismatched.value)
     }
 
     @Test

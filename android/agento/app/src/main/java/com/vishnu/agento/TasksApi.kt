@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -417,27 +418,6 @@ class TasksApi(context: Context) {
     /** Marks a task done (server starts the 3-day retention clock). The
      * response carries the rolled-over occurrence in `next` when a
      * structured cadence produced one. */
-    /**
-     * Compares a write's response against what was asked for, and surfaces any field
-     * the server stored differently.
-     *
-     * A snackbar, not an exception: the write genuinely succeeded, so failing it would
-     * tell the user their task was not saved when it was. That is the same class of lie
-     * as #214 — reporting an outcome that did not happen — and it is the reason this
-     * warns instead of throws. The user needs to know the app and the server disagree
-     * while the task is still on screen; silently keeping the app's belief is what made
-     * the 4.6.0 and 4.7.0 response-shape changes look like bugs in the app.
-     */
-    private fun checkContract(task: ServerTask, sent: TaskContractSent) {
-        val mismatched = contractMismatches(sent, task)
-        if (mismatched.isEmpty()) return
-        // Not thrown. The write succeeded — the task IS stored — so failing it would
-        // tell the user their work was lost when it was not, and they would enter it
-        // again. Reporting an outcome that did not happen is the exact class of lie
-        // #214 is about, so this warns and leaves the stored task authoritative.
-        ContractWarnings.report(mismatched)
-    }
-
     suspend fun complete(id: String): Result<ServerTask> =
         withContext(Dispatchers.IO) {
             val clean = encodeId(id)
@@ -479,6 +459,26 @@ class TasksApi(context: Context) {
             call("DELETE", "/api/tasks/$clean").map { }
         }
 
+    /**
+     * Compares a write's response against what was asked for, and surfaces any field
+     * the server stored differently.
+     *
+     * A snackbar, not an exception: the write genuinely succeeded, so failing it would
+     * tell the user their task was not saved when it was. That is the same class of lie
+     * as #214 — reporting an outcome that did not happen — and it is the reason this
+     * warns instead of throws. The user needs to know the app and the server disagree
+     * while the task is still on screen; silently keeping the app's belief is what made
+     * the 4.6.0 and 4.7.0 response-shape changes look like bugs in the app.
+     */
+    private fun checkContract(task: ServerTask, sent: TaskContractSent) {
+        val mismatched = contractMismatches(sent, task)
+        if (mismatched.isEmpty()) return
+        // Not thrown. The write succeeded — the task IS stored — so failing it would
+        // tell the user their work was lost when it was not, and they would enter it
+        // again. Reporting an outcome that did not happen is the exact class of lie
+        // #214 is about, so this warns and leaves the stored task authoritative.
+        ContractWarnings.report(mismatched)
+    }
     private fun parseOne(body: String): ServerTask =
         parseTask(JSONObject(body))
             ?: throw RuntimeException("Unexpected response shape")
@@ -568,26 +568,54 @@ internal object ContractWarnings {
 
     /**
      * Advances on every report, so a repeat of the same fields is still observable as a
-     * new event. Without it, "the same warning twice running" is indistinguishable from
-     * the collector being stuck, and a genuine second failure looks like a duplicate.
+     * new event rather than a duplicate of the last one.
+     *
+     * An [AtomicInteger] rather than a plain counter: `report()` runs on
+     * `Dispatchers.IO`, and `generation++` is a read-modify-write, so two concurrent
+     * autosaves could each read the same value and one increment would vanish. That is
+     * observability-only today, so the impact is a skipped number rather than a lost
+     * warning — but a counter that silently loses counts is the kind of thing that is
+     * load-bearing the day someone wires it to something real.
      */
-    var generation: Int = 0
-        private set
+    private val _generation = AtomicInteger(0)
+    val generation: Int get() = _generation.get()
 
     fun report(fields: List<String>) {
         if (fields.isEmpty()) return
+        _generation.incrementAndGet()
         _mismatched.value = fields
-        generation++
     }
 
-    /** Called once the user has been told, so it is not shown again on recomposition. */
-    fun consume() {
-        _mismatched.value = emptyList()
+    /**
+     * Clears the warning **only if it is still the one that was shown**.
+     *
+     * [shown] is the exact list the collector passed to [message]. A plain
+     * `_mismatched.value = emptyList()` was a lost-warning bug:
+     *
+     *     collect[A] -> showSnackbar(A)   // suspends for as long as the snackbar shows
+     *     report(B)   -> value = [B]      // a second write lands meanwhile
+     *     consume()   -> value = []       // B is wiped before it was ever shown
+     *
+     * `showSnackbar` suspends, so that interleaving is ordinary rather than exotic — two
+     * saves in quick succession is exactly when a contract mismatch is most likely, since
+     * both would be hitting the same broken server.
+     *
+     * `compareAndSet` makes the clear conditional on the value still being [shown], so a
+     * report that arrived while the snackbar was up survives and is collected next.
+     */
+    fun consume(shown: List<String>) {
+        _mismatched.compareAndSet(shown, emptyList())
     }
 
-    /** The user-facing text. Names the fields: "something differs" sends them hunting. */
+    /**
+     * The user-facing text. Names the fields: "something differs" sends them hunting.
+     *
+     * Deliberately does not say "reopen the task" — `reopen` is a real verb in this API
+     * meaning the opposite (it un-completes a task), so telling a user to reopen a task
+     * that is already saved reads as an instruction to undo it.
+     */
     fun message(fields: List<String>): String =
         "Saved, but the server stored different values for " +
             fields.joinToString(", ") +
-            ". Your app and the server may be on different versions — reopen the task to resync."
+            ". Your app and the server may be on different versions — open the task again to resync."
 }
