@@ -314,9 +314,20 @@ func TestRolloverPlanClassifiesEachFailure(t *testing.T) {
 		{
 			// The distinction matters: "exhausted" says the cadence ran out,
 			// "failed" says the stored data is broken, and the remedy differs.
-			"an unparseable due_date is exhausted, not failed",
+			//
+			// This case asserted `exhausted` while stating that rule directly above it —
+			// the comment and the expectation contradicted each other in the same literal.
+			// An unparseable due_date is broken stored data, not a spent cadence, so it is
+			// `failed`. That is what the sentence always argued for.
+			//
+			// It also matters practically: rolloverPlan returned these two conditions
+			// through ONE `NextDueDate` bool, so an unreadable date and a genuine
+			// MaxRollovers ceiling were indistinguishable and both arrived with an empty
+			// Detail. The date is now parsed before NextDueDate is called, so `exhausted`
+			// means only the ceiling.
+			"an unparseable due_date is failed, not exhausted",
 			base(func(d map[string]any) { d["due_date"] = "not-a-date" }),
-			RolloverExhausted,
+			RolloverFailed,
 		},
 		{
 			"untyped estimated_minutes is failed",
@@ -823,5 +834,71 @@ func TestCorruptBackLinkCannotAbortThePass(t *testing.T) {
 	}
 	if !seen {
 		t.Error("the genuinely broken repeat was NOT reported")
+	}
+}
+
+// The `created` → `failed` promotion is the one gap that is a STORAGE fault rather than
+// bad data, and it was reporting with the least information of any: the plan succeeded,
+// so planErr was nil and Detail came back empty.
+//
+// Carrying the expected date turns "FAILED" into something a human can go and look for.
+func TestPromotedGapSaysWhatShouldHaveExisted(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	id := mustCreate(t, s, "Orphaned parent", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"repeat_every": 1, "repeat_unit": "days",
+	})
+	// Complete returns (doc, next, rollover, err) — the SUCCESSOR is the second return.
+	// Taking the first deletes the PARENT, which makes the reconciler find zero
+	// candidates and the test fail with "not reported" for a reason that has nothing
+	// to do with the detail it is checking. Third time on this branch; commented so the
+	// next reader does not repeat it.
+	_, next, r, err := s.Complete(ctx, id)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if r != RolloverCreated || next == nil {
+		t.Fatalf("setup: rollover = %q next = %v", r, next)
+	}
+	// Break the back-link the same way a lost write would: the successor no longer
+	// claims this parent.
+	oid, err := primitive.ObjectIDFromHex(next["id"].(string))
+	if err != nil {
+		t.Fatalf("successor id: %v", err)
+	}
+	if _, err := s.tasks.DeleteOne(ctx, bson.M{"_id": oid}); err != nil {
+		t.Fatalf("remove successor: %v", err)
+	}
+
+	res, err := s.ReconcileRollover(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRollover: %v", err)
+	}
+	var gap *RolloverGap
+	for i := range res.Gaps {
+		if res.Gaps[i].TaskID == id {
+			gap = &res.Gaps[i]
+		}
+	}
+	if gap == nil {
+		t.Fatalf("an orphaned repeat was not reported; gaps = %+v", res.Gaps)
+	}
+	if gap.Why != RolloverFailed {
+		t.Errorf("Why = %q, want %q", gap.Why, RolloverFailed)
+	}
+	if gap.Detail == "" {
+		t.Fatal("Detail is empty for the storage-fault case, which is the one gap that " +
+			"most needs to say what was expected")
+	}
+	// It must name the date that should have been minted, not just that something was
+	// missing — that is what makes it actionable rather than a restatement.
+	if !strings.Contains(gap.Detail, "2026-10-06") {
+		t.Errorf("Detail = %q, want it to name the expected next date 2026-10-06", gap.Detail)
+	}
+	if !strings.Contains(gap.Detail, "no successor") {
+		t.Errorf("Detail = %q, want it to say the successor is missing", gap.Detail)
 	}
 }
