@@ -58,8 +58,10 @@ see GitHub Releases for older notes.
   against one broken server. The clear is a compare-and-set, so a warning that
   lands mid-cleanup is still shown; when several arrive at once only the newest
   is kept, on purpose. Reporting increments and stores under one lock, so two
-  concurrent writes cannot land out of order and drop the newer warning. The list is refreshed BEFORE the warning is shown, so
-  the instruction to resync is never sitting over a stale row.
+  concurrent writes cannot land out of order and drop the newer warning.
+  The list is refreshed BEFORE the warning is shown, and the message asks the user to
+  reload rather than claiming a reload — that load is async and can fail, and a claim is
+  not something to make about it.
 
 ## [4.14.3]
 

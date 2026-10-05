@@ -387,26 +387,51 @@ class TasksApi(context: Context) {
         // These make the invariant FAIL LOUDLY at the point it breaks. They are not
         // defensive noise: each one pins "create asserts every field it sends", which is
         // exactly what the wiring test asserts.
+        // Fail loud AND stay in-channel.
+        //
+        // These ten cannot be null — `create` takes non-null parameters and validates the
+        // four required strings as non-blank above — so this is a guard against a future
+        // relaxation, not a runtime path. `JSONObject.put(String, Object?)` given a null
+        // silently REMOVES the key, so a relaxed validation would become a create missing
+        // `name` and a server-side "field required" instead of a local failure.
+        //
+        // It returns `Result.failure` rather than throwing. Callers do
+        // `api.create(...).fold(onSuccess = …, onFailure = ::fail)` inside `scope.launch`
+        // with no try/catch, so an exception thrown out of this suspend would escape the
+        // coroutine and NO SNACKBAR WOULD APPEAR — the exact silent-failure shape this
+        // whole PR exists to remove. An earlier version used `requireNotNull` and
+        // reintroduced it.
+        val missing = buildList {
+            if (sent.name == null) add("name")
+            if (sent.description == null) add("description")
+            if (sent.dueDate == null) add("due_date")
+            if (sent.dueTime == null) add("due_time")
+            if (sent.estimatedMinutes == null) add("estimated_minutes")
+            if (sent.parallelable == null) add("parallelable")
+            if (sent.repeatEvery == null) add("repeat_every")
+            if (sent.repeatUnit == null) add("repeat_unit")
+            if (sent.repeatCustom == null) add("repeat_custom")
+            if (sent.repeatRule == null) add("repeat_rule")
+        }
+        if (missing.isNotEmpty()) {
+            return@withContext Result.failure(
+                IllegalStateException(
+                    "create: builder dropped ${missing.joinToString()}; " +
+                        "create asserts every field it sends",
+                ),
+            )
+        }
         val body = JSONObject()
-            .put("name", requireNotNull(sent.name) { "create: name must be present" })
-            .put(
-                "description",
-                requireNotNull(sent.description) { "create: description must be present" },
-            )
-            .put("due_date", requireNotNull(sent.dueDate) { "create: due_date required" })
-            .put("due_time", requireNotNull(sent.dueTime) { "create: due_time required" })
-            .put(
-                "estimated_minutes",
-                requireNotNull(sent.estimatedMinutes) { "create: estimated_minutes" },
-            )
-            .put("parallelable", requireNotNull(sent.parallelable) { "create: parallelable" })
-            .put("repeat_every", requireNotNull(sent.repeatEvery) { "create: repeat_every" })
-            .put("repeat_unit", requireNotNull(sent.repeatUnit) { "create: repeat_unit" })
-            .put(
-                "repeat_custom",
-                requireNotNull(sent.repeatCustom) { "create: repeat_custom" },
-            )
-            .put("repeat_rule", requireNotNull(sent.repeatRule) { "create: repeat_rule" })
+            .put("name", sent.name)
+            .put("description", sent.description)
+            .put("due_date", sent.dueDate)
+            .put("due_time", sent.dueTime)
+            .put("estimated_minutes", sent.estimatedMinutes)
+            .put("parallelable", sent.parallelable)
+            .put("repeat_every", sent.repeatEvery)
+            .put("repeat_unit", sent.repeatUnit)
+            .put("repeat_custom", sent.repeatCustom)
+            .put("repeat_rule", sent.repeatRule)
         call("POST", "/api/tasks", body).map { parseOne(it) }
             .also { r -> r.getOrNull()?.let { checkContract(it, sent) } }
     }
@@ -741,11 +766,18 @@ internal object ContractWarnings {
      * Deliberately does not say "reopen the task" — `reopen` is a real verb in this API
      * meaning the opposite (it un-completes a task), so telling a user to reopen a task
      * that is already saved reads as an instruction to undo it.
+     *
+     * It asks the user to RELOAD rather than claiming a reload happened. The collector
+     * does bump `refreshTick`, which starts an async `api.list` — and that load can fail,
+     * offline being the obvious case. "The list is refreshing" would be a claim about
+     * something that may not have occurred, sitting on top of the stale row the user was
+     * trying to fix. Asking keeps the sentence true either way.
      */
     fun message(fields: List<String>): String =
         "Saved, but the server stored different values for " +
             fields.joinToString(", ") +
-            ". Your app and the server may be on different versions — the list is refreshing."
+            ". Your app and the server may be on different versions — reload the " +
+            "list to see what was actually stored."
 }
 
 /**
