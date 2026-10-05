@@ -8,6 +8,19 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## Unreleased
+
+- **Read-back rule for writes** (#210). An agent closed a 33-write task
+  reporting "verified against a fresh list (39 open = 33 + 6 clones)". The count
+  was right and the claim was false: three of the six records were dated the
+  current day rather than the next iteration, so three chores were double-booked
+  for one evening and three expected occurrences did not exist. A count cannot
+  detect a wrong field — the `list_tasks` call that "verified" it was checking
+  that the right *number* of rows existed, not that they held the right dates.
+  `pi/AGENTS.md` now carries a hard rule: read the specific records back by id,
+  compare the field that was supposed to change, and report the fields verified
+  rather than the calls made. No app code, no VERSION bump.
+
 ## [4.14.3]
 
 - **Unit tests, and a CI step that runs them** (#162). The app had no tests at
