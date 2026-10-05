@@ -221,6 +221,19 @@ func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime 
 	for k, v := range rep.docs() {
 		doc[k] = v
 	}
+	return s.insert(ctx, doc)
+}
+
+// insert writes a prepared document and renders it. Split out of Create so that
+// fields which must land ATOMICALLY with the insert can be added by callers that
+// need them — specifically rollOver's `rolled_from` back-link (#180), which as a
+// separate UpdateOne left a crash window where the successor existed but was
+// unlinked, so the next nightly reconciler reported a gap and sent a human to
+// create a task that already existed.
+//
+// An extra field added here is part of the same write. There is no second call to
+// lose, so nothing has to reconcile afterwards.
+func (s *Store) insert(ctx context.Context, doc bson.M) (map[string]any, error) {
 	res, err := s.tasks.InsertOne(ctx, doc)
 	if err != nil {
 		return nil, err

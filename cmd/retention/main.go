@@ -92,26 +92,47 @@ func run() int {
 
 // reconcileTasks reports completed structured repeats with no successor.
 //
-// Runs inside retention's existing 60s budget and needs no new scheduler: retention
-// is already the recurring job that owns data lifecycle, and a rollover failure is
-// a lifecycle problem — it is also what makes a task vanish three days later (#186).
-func reconcileTasks(ctx context.Context) int {
+// Two deliberate choices, both about not letting a *report* break a job:
+//
+//   - Its OWN timeout, not the caller's. Retention's 60s context has already been
+//     eaten into by the money and health deletes, and this pass runs up to 501
+//     indexed queries. Sharing the budget meant one slow night produced
+//     "context deadline exceeded" and failed the whole retention job — so a
+//     problem REPORT would have stopped tasks being pruned. Own context, own
+//     budget.
+//   - A failure here returns 0. Retention's contract is "prune what is due"; the
+//     reconciliation is a diagnostic on top. If it cannot run, say so loudly on
+//     stdout and let the prunes stand. Failing the job would suggest retention
+//     itself is broken when it is not.
+//
+// Needs no new scheduler: retention is already the recurring job that owns data
+// lifecycle, and a rollover failure is a lifecycle problem.
+func reconcileTasks(parent context.Context) int {
+	ctx, cancel := context.WithTimeout(parent, 45*time.Second)
+	defer cancel()
+
 	store, err := tasks.FromEnv()
 	if err != nil {
-		fmt.Printf("[retention] tasks: cannot connect: %v\n", err)
-		return 1
-	}
-	gaps, err := store.ReconcileRollover(ctx)
-	if err != nil {
-		fmt.Printf("[retention] tasks: rollover reconciliation failed: %v\n", err)
-		return 1
-	}
-	if len(gaps) == 0 {
-		fmt.Println("[retention] tasks: every repeating task rolled over correctly.")
+		fmt.Printf("[retention] tasks: cannot connect, rollover gaps NOT reported: %v\n", err)
 		return 0
 	}
-	fmt.Printf("[retention] tasks: %d repeating task(s) stopped recurring — each needs the next occurrence created by hand:\n", len(gaps))
-	for _, g := range gaps {
+	res, err := store.ReconcileRollover(ctx)
+	if err != nil {
+		fmt.Printf("[retention] tasks: rollover reconciliation FAILED (%v); pruning is unaffected, but any stopped repeats are NOT listed this run\n", err)
+		return 0
+	}
+	if res.Truncated {
+		// Say so rather than letting an incomplete pass read as a clean one.
+		fmt.Printf("[retention] tasks: WARNING only the %d most recent completions were checked; older ones are NOT covered this run.\n", tasks.ReconcileLimit)
+	}
+	if len(res.Gaps) == 0 {
+		if !res.Truncated {
+			fmt.Println("[retention] tasks: every repeating task rolled over correctly.")
+		}
+		return 0
+	}
+	fmt.Printf("[retention] tasks: %d repeating task(s) stopped recurring — each needs the next occurrence created by hand:\n", len(res.Gaps))
+	for _, g := range res.Gaps {
 		fmt.Printf("  - %s (%s) — %s\n", g.Name, g.TaskID, g.Why.UserFacing())
 	}
 	return 0

@@ -136,21 +136,66 @@ func TestReconcileRolloverFindsOnlyRealGaps(t *testing.T) {
 		t.Fatalf("setup: bad task rollover = %q, want %q", badReason, RolloverFailed)
 	}
 
-	gaps, err := s.ReconcileRollover(ctx)
+	res, err := s.ReconcileRollover(ctx)
 	if err != nil {
 		t.Fatalf("ReconcileRollover: %v", err)
 	}
+	if res.Truncated {
+		t.Fatal("two fixtures must not trip the scan cap")
+	}
 	seen := map[string]Rollover{}
-	for _, g := range gaps {
+	for _, g := range res.Gaps {
 		seen[g.TaskID] = g.Why
 	}
 	if _, ok := seen[goodID]; ok {
 		t.Error("a task that rolled over correctly must not be reported as a gap")
 	}
 	if got, ok := seen[badID]; !ok {
-		t.Errorf("the stopped repeat was NOT reported; gaps were %+v", gaps)
+		t.Errorf("the stopped repeat was NOT reported; gaps were %+v", res.Gaps)
 	} else if got != RolloverFailed {
 		t.Errorf("gap reason = %q, want %q", got, RolloverFailed)
+	}
+}
+
+// A custom repeat completed correctly is the CALLER's job, and a one-shot is not a
+// gap at all. Reporting either would make the nightly output noise.
+// A daily task done three days running produces a CHAIN: P1 -> S1 -> S2, where
+// S1 was itself completed. The successor check used to filter on
+// `completedAt: nil`, so it found no OPEN successor for P1 and reported a gap for a
+// rollover that worked perfectly. Every chained repeat in the collection was a
+// false alarm, and a reconciler that cries wolf gets ignored.
+//
+// The question is whether a successor was EVER minted, not whether it is still open.
+func TestReconcileRolloverAcceptsACompletedSuccessor(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	// Day 1.
+	day1 := mustCreate(t, s, "Chain", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"repeat_every": 1, "repeat_unit": "days",
+	})
+	_, s1, r1, err := s.Complete(ctx, day1)
+	if err != nil || r1 != RolloverCreated || s1 == nil {
+		t.Fatalf("complete day1: %v %v %v", s1, r1, err)
+	}
+	// Day 2: complete the successor, so P1's only back-linked doc is COMPLETED.
+	s1ID := s1["id"].(string)
+	_, s2, r2, err := s.Complete(ctx, s1ID)
+	if err != nil || r2 != RolloverCreated || s2 == nil {
+		t.Fatalf("complete day2: %v %v %v", s2, r2, err)
+	}
+
+	res, err := s.ReconcileRollover(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRollover: %v", err)
+	}
+	for _, g := range res.Gaps {
+		if g.TaskID == day1 || g.TaskID == s1ID {
+			t.Errorf("task %s (%s) is part of a chain that rolled over correctly, "+
+				"but was reported as a gap", g.TaskID, g.Name)
+		}
 	}
 }
 
@@ -173,11 +218,11 @@ func TestReconcileRolloverIgnoresCustomAndOneShot(t *testing.T) {
 			t.Fatalf("complete %s: %v", id, err)
 		}
 	}
-	gaps, err := s.ReconcileRollover(ctx)
+	res, err := s.ReconcileRollover(ctx)
 	if err != nil {
 		t.Fatalf("ReconcileRollover: %v", err)
 	}
-	for _, g := range gaps {
+	for _, g := range res.Gaps {
 		if g.TaskID == customID {
 			t.Error("a correctly completed custom repeat must not be a gap")
 		}
@@ -304,7 +349,7 @@ func TestRolloverPlanClassifiesEachFailure(t *testing.T) {
 // tests and must not delete their rows.
 var fixtureNames = []string{
 	"One shot", "Custom", "Structured", "Legacy broken",
-	"Good", "Bad", "Custom done", "One shot done",
+	"Good", "Bad", "Custom done", "One shot done", "Chain",
 }
 
 func mustCreate(t *testing.T, s *Store, name string, fields map[string]any) string {
