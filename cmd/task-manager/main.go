@@ -284,7 +284,15 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
-			out := map[string]any{"ok": true, "task": doc, "skipped": true}
+			// No top-level "skipped" here, deliberately. `task.skipped` is DERIVED from
+			// skippedAt in toDoc and is always present, so it cannot disagree with the
+			// record; a second `skipped` at the top level would be a hand-written literal
+			// for a fact the doc already carries, and the two are exactly the kind of pair
+			// that drifts the first time this verb grows a nuance. It would also be the
+			// only difference from complete_task, which returns {ok, task} and likewise
+			// states no top-level "completed". Read it off the task, like every other
+			// caller does.
+			out := map[string]any{"ok": true, "task": doc}
 			out["rollover"] = string(rollover)
 			rep := repeatOf(doc)
 			switch {

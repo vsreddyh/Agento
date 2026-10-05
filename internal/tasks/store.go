@@ -746,6 +746,15 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 // `reason` is the user's words, kept verbatim and capped — "out of time", "doing it
 // tomorrow". It is the difference between a skip and a quiet disappearance, and it
 // is the only part of this the user would miss.
+//
+// `skipReason` is set UNCONDITIONALLY, so a skip with no reason stores "" rather
+// than leaving the field out. That is the point: its presence alongside the
+// timestamp is what marks the occurrence as skipped, and it is `$set` in the SAME
+// atomic update as `skippedAt`, so the two can never disagree. A task that was
+// never skipped has no `skipReason` key at all, which is the other half of the
+// distinction. Omitting the empty case would save a few bytes per row and make a
+// skipped-without-reason task indistinguishable from a completed one in that field
+// alone.
 func (s *Store) Skip(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
