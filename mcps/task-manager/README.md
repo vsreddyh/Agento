@@ -112,9 +112,16 @@ use per distinct request, and this matters more than it looks: answering `200` w
 the original task would tell the caller it had created a task carrying the fields it
 just sent, when the task it receives has none of them. A silent wrong answer is worse
 than the duplicate the key exists to prevent. The mismatch is detected by a digest of
-the nine fields the create consumes, written in the same insert as the key — so a
+the **ten** fields the create reads, written in the same insert as the key — so a
 retry that differs only in JSON key order or indentation still replays, and adding an
 unrelated field to a newer client does not break an existing key.
+
+The digest covers all ten, not the nine it started as: `repeat_rule` is consumed,
+validated and **stored**, and omitting it from the digest meant two creates differing
+only in their custom repeat text ("3rd Friday" vs "end of month") hashed alike, so
+the second replayed the first's task. An absent key is normalised to its zero value
+rather than skipped — the store reads absent and zero identically, so a client that
+upgrades to sending `"repeat_rule": ""` must not 422 its own retry.
 
 The guarantee is enforced by a **unique sparse index**, not by a lookup before the
 insert — a read-then-write has a window between the two, and the failure it
