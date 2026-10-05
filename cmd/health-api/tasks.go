@@ -412,10 +412,19 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 // skipTask resolves ONE occurrence as skipped rather than done (#209). The route
-// is additive, so an app that has never heard of it is unaffected; the response
-// carries the same top-level shape as completeTask plus `skipped`/`skipReason`.
-// Camel case, matching the sibling server-set fields (`completedAt`, `skippedAt`);
-// snake_case is reserved for the fields the client SENDS.
+// is additive, so an app that has never heard of it is unaffected.
+//
+// The response is the same top-level shape as completeTask — the task, `next` and
+// `rollover` — and only ONE field is genuinely new: `skipReason`. The `skipped`
+// boolean is NOT added by this route; it is derived from `skippedAt` in toDoc and
+// so has been present on every task response since #209, as `false` on anything
+// completed or open. It reads as "added" only if you compare against a build from
+// before the derivation existed.
+//
+// `skipReason` is camel case, matching the sibling server-set fields
+// (`completedAt`, `skippedAt`); snake_case is reserved for the fields the client
+// SENDS (`due_date`, `repeat_every`). An earlier version of this comment called
+// both fields "added" and spelled the second one `skip_reason` — both wrong.
 func skipTask(w http.ResponseWriter, r *http.Request, id string) {
 	var fields map[string]any
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&fields); err != nil {
