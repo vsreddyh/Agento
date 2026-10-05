@@ -57,7 +57,8 @@ see GitHub Releases for older notes.
   including a second warning about the same fields, which is what happens
   against one broken server. The clear is a compare-and-set, so a warning that
   lands mid-cleanup is still shown; when several arrive at once only the newest
-  is kept, on purpose. The list is refreshed BEFORE the warning is shown, so
+  is kept, on purpose. Reporting increments and stores under one lock, so two
+  concurrent writes cannot land out of order and drop the newer warning. The list is refreshed BEFORE the warning is shown, so
   the instruction to resync is never sitting over a stale row.
 
 ## [4.14.3]

@@ -669,16 +669,36 @@ internal object ContractWarnings {
      * autosaves could each read the same value and one increment would vanish.
      *
      * This is LOAD-BEARING, not observability: [consume] matches on it, so a lost
-     * increment would let one warning clear another.
+     * increment would let one warning clear another — which is why [report] increments and
+     * stores under one lock rather than as two steps.
      */
     private val _generation = AtomicInteger(0)
 
     /** The current generation. Exposed for tests and diagnostics. */
     val generation: Int get() = _generation.get()
 
+    /**
+     * Guards the increment-and-set below. Private rather than locking on `this`, which is
+     * a public singleton, and rather than synchronising the object so nothing outside can
+     * lock it by accident.
+     */
+    private val reportLock = Any()
+
     fun report(fields: List<String>) {
         if (fields.isEmpty()) return
-        _mismatched.value = ContractMismatch(_generation.incrementAndGet(), fields)
+        // Increment and set together, under one lock.
+        //
+        // As two operations they can reorder across threads: A takes gen5, B takes gen6, B
+        // writes first, A writes last — so the stale gen5 lands last and the NEWER warning
+        // is the one that disappears. `report()` runs on Dispatchers.IO and two concurrent
+        // autosaves are ordinary, not exotic.
+        //
+        // The lock is uncontended in practice (one write per mismatch, not per frame), so
+        // it costs nothing; the alternative — a compare-and-set retry loop — is more code
+        // for the same guarantee and harder to read.
+        synchronized(reportLock) {
+            _mismatched.value = ContractMismatch(_generation.incrementAndGet(), fields)
+        }
     }
 
     /**
