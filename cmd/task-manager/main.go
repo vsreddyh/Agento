@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 
 	"agento/internal/mongostore"
@@ -148,6 +149,33 @@ type deleteTaskInput struct {
 	ID string `json:"id"`
 }
 
+// changedFieldNames names which fields an update touched, so the audit log can say
+// what changed rather than just that something did. Sorted for a stable string, and
+// expected_revision is dropped: it is concurrency plumbing, not a change to the task.
+func changedFieldNames(fields map[string]any) string {
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		if k == "expected_revision" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return "no fields"
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+// mcpSource labels every mutation made through this server in the audit log.
+//
+// It has to be a distinct value, not a copy of the HTTP one: the whole reason the
+// mutation log exists (#176) is that the agent and the app are indistinguishable at the
+// auth layer — one shared password, one collection — and `source` is the only record of
+// which caller wrote a row. Logging agent writes under "http" would make the field
+// actively misleading, which is worse than not having it.
+const mcpSource = "mcp"
+
 func main() {
 	var err error
 	store, err = tasks.FromEnv()
@@ -172,6 +200,7 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
+			store.RecordMutation(ctx, tasks.OpCreate, fmt.Sprint(doc["id"]), mcpSource, "mcp create_task")
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 
@@ -239,6 +268,7 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
+			store.RecordMutation(ctx, tasks.OpUpdate, in.ID, mcpSource, changedFieldNames(fields))
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 
@@ -249,6 +279,7 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
+			store.RecordMutation(ctx, tasks.OpComplete, in.ID, mcpSource, fmt.Sprint(rollover))
 			out := map[string]any{"ok": true, "task": doc}
 			// Always name the rollover outcome, including the ones where there was
 			// nothing to do (#180). `rolled_over` alone cannot distinguish a one-shot
@@ -284,6 +315,7 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
+			store.RecordMutation(ctx, tasks.OpSkip, in.ID, mcpSource, fmt.Sprint(rollover))
 			// No top-level "skipped" here, deliberately. `task.skipped` is DERIVED from
 			// skippedAt in toDoc and is always present, so it cannot disagree with the
 			// record; a second `skipped` at the top level would be a hand-written literal
@@ -318,6 +350,7 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
+			store.RecordMutation(ctx, tasks.OpReopen, in.ID, mcpSource, "mcp reopen_task")
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 
@@ -327,6 +360,10 @@ func main() {
 			done, err := store.Delete(ctx, in.ID)
 			if err != nil {
 				return fail(err)
+			}
+			if done {
+				// After the delete, so the log cannot claim one that then failed.
+				store.RecordMutation(ctx, tasks.OpDelete, in.ID, mcpSource, "mcp delete_task")
 			}
 			if !done {
 				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown task '%s'", in.ID)})

@@ -181,9 +181,13 @@ Two additions beside it:
   its **last** hop is read, since nginx uses `$proxy_add_x_forwarded_for`, which
   appends to a client-supplied list and so leaves every earlier entry attacker-chosen.
 - **A mutation log** (`task_mutations`) recording op, task, source and timestamp for
-  every create/update/complete/skip/reopen/delete. The agent and the app are the
-  same caller as far as the server is concerned, so nothing previously recorded
-  *who* changed a task. `X-Agento-Source` labels the caller — trusted only as a
+  every create/update/complete/skip/reopen/delete, from **both** callers: the HTTP API
+  (`source` = the `X-Agento-Source` header, or `http`) and the MCP server
+  (`source` = `mcp`). The agent and the app are the same caller as far as the server is
+  concerned — one shared password, one collection — so nothing previously recorded *who*
+  changed a task. Both paths are wired because the agent is a primary mutator: logging
+  only HTTP would answer the question for the app and stay silent for the agent, which
+  is exactly the case the log exists for. `X-Agento-Source` labels the caller — trusted only as a
   label, never for authorisation. Writes are best-effort: a failed audit write
   never fails the mutation it was recording. Pruned at 90 days by `retention`.
   Indexed by `at` and `task_id`, declared in the same `EnsureSchema` as the task
