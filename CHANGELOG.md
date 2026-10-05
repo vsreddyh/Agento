@@ -64,7 +64,10 @@ see GitHub Releases for older notes.
   cannot tell a user-initiated stop from a dropped stream and "Stopped" blames
   the user for a failure they did not cause. Queued text is handed back to the
   composer instead of auto-firing: a dropped turn is a fragment, and the
-  server-side turn may still be running with its tool calls half done.
+  server-side turn may still be running with its tool calls half done. A
+  connection that dies before a single frame no longer raises an empty
+  notification either — there is no reply to look at, so a blank ping on the
+  lock screen only reads as a bug.
 
 ## [4.14.3]
 

@@ -44,25 +44,33 @@ data class ChatMessage(
     /** True when streaming stopped mid-reply (explicit stopped state). */
     val interrupted: Boolean = false,
     /**
-     * WHY it was interrupted — [InterruptedBy.user] when the user pressed stop, or
-     * [InterruptedBy.drop] when the connection died mid-turn (#214).
+     * WHY it was interrupted — [InterruptedBy.USER] when the user pressed stop, or
+     * [InterruptedBy.DROP] when the connection died mid-turn (#214).
      *
      * A boolean cannot carry this. It has two producers and they mean opposite things to
      * the reader: "Stopped" blames the user for a network failure, so the one label that
-     * serves both is wrong for at least one of them. Defaulting to [InterruptedBy.user]
+     * serves both is wrong for at least one of them. Defaulting to [InterruptedBy.USER]
      * is right for every message recorded before #214 existed, because a user stop was
      * then the only thing that could set the flag.
      */
-    val interruptedBy: InterruptedBy = InterruptedBy.user,
+    val interruptedBy: InterruptedBy = InterruptedBy.USER,
 )
 
-/** What ended a reply before it finished. */
-enum class InterruptedBy {
+/**
+ * What ended a reply before it finished.
+ *
+ * SCREAMING_CASE to match Kotlin convention, but the WIRE FORMAT stays lowercase via
+ * [storageKey] — `"user"` / `"drop"` are what is written into saved threads, so renaming
+ * the constants without the explicit mapping would silently invalidate every stored
+ * record. The mapping is spelled out rather than derived from `.name` precisely so that
+ * a future rename of a constant cannot quietly change the on-disk format.
+ */
+enum class InterruptedBy(val storageKey: String) {
     /** The user pressed stop. Nothing went wrong. */
-    user,
+    USER("user"),
 
     /** The connection dropped mid-turn (#214). The server-side turn may still be running. */
-    drop,
+    DROP("drop"),
 }
 
 sealed interface ChatEvent {
@@ -540,12 +548,18 @@ class ChatApi(context: Context) {
                         onUsage = { seenUsage = it },
                         emit = { trySend(it) },
                     )) {
+                        // Exhaustive on purpose — no `else`. With `else`, adding an SseEnd
+                        // subtype would silently fall through to doneFor, which handles
+                        // only Terminal and EndOfStream, and a new end-state would be
+                        // reported as a finished turn. The compiler is the only thing
+                        // that notices, which is the point: #214 was a case that fell
+                        // through to the wrong branch.
                         is SseEnd.ErrorFrame -> {
                             trySend(ChatEvent.Error(end.message))
                             return@launch
                         }
-                        // Terminal and Eof both end the read; only the flag differs.
-                        else -> trySend(doneFor(end, full.toString(), seenUsage))
+                        is SseEnd.Terminal -> trySend(doneFor(end, full.toString(), seenUsage))
+                        is SseEnd.EndOfStream -> trySend(doneFor(end, full.toString(), seenUsage))
                     }
                 }
             } catch (e: Exception) {

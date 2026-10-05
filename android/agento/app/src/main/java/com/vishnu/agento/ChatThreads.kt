@@ -29,7 +29,7 @@ data class StoredMessage(
     // @Serializable class, and an unreadable thread would be worse than a missing cause.
     // Unknown or absent values fall back to `user`, which is correct for every record
     // that predates a dropped stream.
-    val interruptedBy: String = "user",
+    val interruptedBy: String = InterruptedBy.USER.storageKey,
 )
 
 /** One conversation thread inside a tab. */
@@ -98,11 +98,11 @@ object ChatThreads {
      * The stored value is a free string because a record written before #214 has no such
      * field and a typed enum field would fail to deserialise the whole thread — which is
      * a far worse outcome than a missing cause. The cost is that a value this build does
-     * not recognise is possible, so it resolves to [InterruptedBy.user] rather than
+     * not recognise is possible, so it resolves to [InterruptedBy.USER] rather than
      * throwing: a message with the wrong label is trivial, an unreadable thread is not.
      */
     private fun interruptedBy(raw: String): InterruptedBy =
-        runCatching { InterruptedBy.valueOf(raw) }.getOrDefault(InterruptedBy.user)
+        InterruptedBy.entries.firstOrNull { it.storageKey == raw } ?: InterruptedBy.USER
 
     // NAMED arguments, deliberately. These were 14 positional values into a 13-field
     // constructor, which compiles fine and then silently misassigns the day a field is
@@ -146,7 +146,7 @@ object ChatThreads {
                 model = it.model,
                 reasoning = it.reasoning,
                 interrupted = it.interrupted,
-                interruptedBy = it.interruptedBy.name,
+                interruptedBy = it.interruptedBy.storageKey,
             )
         }
 }

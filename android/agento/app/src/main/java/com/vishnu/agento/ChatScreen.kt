@@ -1326,9 +1326,9 @@ internal fun ChatScreen(
                                                     // network failure they did not
                                                     // cause and cannot act on.
                                                     when (msg.interruptedBy) {
-                                                        InterruptedBy.drop ->
+                                                        InterruptedBy.DROP ->
                                                             "Connection lost — reply may be incomplete."
-                                                        InterruptedBy.user ->
+                                                        InterruptedBy.USER ->
                                                             "Stopped — reply incomplete."
                                                     },
                                                     style = MaterialTheme.typography.labelSmall,

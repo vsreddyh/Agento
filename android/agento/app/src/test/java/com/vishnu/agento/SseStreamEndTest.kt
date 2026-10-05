@@ -304,3 +304,43 @@ class DoneMappingTest {
         assertEquals("EndOfStream", SseEnd.EndOfStream.toString())
     }
 }
+
+/**
+ * The `InterruptedBy` wire format must not move.
+ *
+ * The constants are SCREAMING_CASE for Kotlin convention, but saved threads carry the
+ * lowercase key. If the storage format ever changed, every existing thread would silently
+ * fall back to the default and a dropped turn would be labelled as a user stop — a
+ * wrong label on real history, with nothing to indicate it.
+ */
+class InterruptedByStorageTest {
+
+    @Test
+    fun `the wire keys are unchanged`() {
+        assertEquals("user", InterruptedBy.USER.storageKey)
+        assertEquals("drop", InterruptedBy.DROP.storageKey)
+    }
+
+    @Test
+    fun `every constant has a distinct key`() {
+        val keys = InterruptedBy.entries.map { it.storageKey }
+        assertEquals(keys.size, keys.toSet().size)
+    }
+
+    @Test
+    fun `a stored key round-trips to its constant and back`() {
+        for (by in InterruptedBy.entries) {
+            val stored = by.storageKey
+            val parsed = InterruptedBy.entries.firstOrNull { it.storageKey == stored }
+            assertEquals(by, parsed)
+            assertEquals(stored, parsed!!.storageKey)
+        }
+    }
+
+    @Test
+    fun `an unrecognised stored key is not silently accepted as a real value`() {
+        // Any key outside the known set has no constant, which is what makes the
+        // defensive fallback in ChatThreads reachable at all.
+        assertEquals(null, InterruptedBy.entries.firstOrNull { it.storageKey == "cancelled" })
+    }
+}
