@@ -60,6 +60,30 @@ func (r Rollover) UserFacing() string {
 	}
 }
 
+// Attention is the user-facing text for a stopped recurrence, combining the outcome
+// sentence with the field-specific reason when one exists.
+//
+// It lives here, beside UserFacing, rather than in each transport: both HTTP and MCP
+// render this string, and two copies of one formatting rule is how `Complete` and `Skip`
+// came to disagree about a skipped task in the first place.
+//
+// The detail LEADS, because it is the part that tells the reader what to open. Without
+// it the message named a category — "creating its next occurrence FAILED" — and left the
+// user to work out which field; the nightly reconciler already produced the specific
+// text, so the same failure was actionable when noticed in the morning and not when
+// noticed live.
+func (r Rollover) Attention(detail string) string {
+	outcome := r.UserFacing()
+	switch {
+	case detail == "":
+		return outcome
+	case outcome == "":
+		return detail
+	default:
+		return detail + " — " + outcome
+	}
+}
+
 // NeedsAttention reports whether the recurrence STOPPED and only a human can
 // restart it — `exhausted` and `failed`.
 //
@@ -103,7 +127,17 @@ func rolloverPlan(done map[string]any, now time.Time) (string, Rollover, error) 
 	// The stored shape has to be carryable before a successor is even possible.
 	// These are the checks rollOver used to make inline, and they are checks on the
 	// PLAN, not on Create's behaviour — so the reconciler sees the same verdict.
-	if dueTime, _ := done["due_time"].(string); strings.TrimSpace(dueTime) == "" {
+	// Asserted like its three siblings below. This one discarded the assertion and
+	// collapsed a mistyped due_time into "", so a due_time stored as a number was
+	// reported as "is required" — telling the operator to fill in a field that is
+	// already there, under the wrong type. Same defect as the due_date check two
+	// blocks down, and for the same reason: four checks written as four separate
+	// statements, three of which happened to check the assertion.
+	dueTime, ok := done["due_time"].(string)
+	if !ok {
+		return "", RolloverFailed, fail("cannot roll over: due_time is not a string")
+	}
+	if strings.TrimSpace(dueTime) == "" {
 		// The exact shape of the legacy rows that stopped recurring: a structured
 		// repeat with no time to carry forward. Create would reject it, but the
 		// reason belongs to the recurrence, not to the create.

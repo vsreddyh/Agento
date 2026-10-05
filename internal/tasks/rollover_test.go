@@ -899,3 +899,95 @@ func TestPromotedGapSaysWhatShouldHaveExisted(t *testing.T) {
 		t.Errorf("Detail = %q, want it to say the successor is missing", gap.Detail)
 	}
 }
+
+// `due_time` is asserted like its three siblings. It used to discard the type assertion
+// and collapse a mistyped value into "", so a due_time stored as a number was reported
+// as "is required" — telling the operator to fill in a field that is already there,
+// under the wrong type. Four checks written as four statements, three of which happened
+// to check the assertion.
+func TestDueTimeMistypedIsNotReportedAsMissing(t *testing.T) {
+	base := func(m map[string]any) map[string]any {
+		d := map[string]any{
+			"due_date": "2026-10-05", "due_time": "08:00",
+			"repeat_every": 1, "repeat_unit": "days",
+		}
+		for k, v := range m {
+			d[k] = v
+		}
+		return d
+	}
+	_, reason, err := rolloverPlan(base(map[string]any{"due_time": 900}), time.Now())
+	if reason != RolloverFailed {
+		t.Fatalf("reason = %q, want %q", reason, RolloverFailed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "not a string") {
+		t.Fatalf("err = %v, want it to name the wrong TYPE", err)
+	}
+	// The genuine missing-value case must keep its own distinct message, or fixing the
+	// type check would have swallowed it.
+	_, reason, err = rolloverPlan(base(map[string]any{"due_time": "  "}), time.Now())
+	if reason != RolloverFailed {
+		t.Fatalf("reason = %q, want %q", reason, RolloverFailed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "is required") {
+		t.Errorf("err = %v, want the missing-value message preserved", err)
+	}
+}
+
+// The live path must carry the field-specific reason, not just the outcome sentence.
+//
+// Complete logged the rollover error and returned only RolloverFailed, so
+// `needs_attention` reached the user as "this task was marked done, but creating its next
+// occurrence FAILED" — with no indication of WHICH field to open. The nightly reconciler
+// already produced the specific text, so the same failure was fixable-in-the-morning
+// when noticed at night and not at all when noticed live.
+func TestCompleteCarriesTheFieldSpecificReason(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	// A structured repeat with a blank due_time: the legacy shape that actually stopped
+	// recurring. The store accepts it on the doc; the ROLLOVER is what fails.
+	id := mustCreate(t, s, "Live detail", map[string]any{
+		"due_date": "2026-10-05", "due_time": "",
+		"repeat_every": 1, "repeat_unit": "days",
+	})
+	_, _, reason, detail, err := s.CompleteDetail(ctx, id)
+	if err != nil {
+		t.Fatalf("CompleteDetail: %v", err)
+	}
+	if reason != RolloverFailed {
+		t.Fatalf("reason = %q, want %q", reason, RolloverFailed)
+	}
+	if detail == "" {
+		t.Fatal("detail is empty on the live path — the user gets a category and no field")
+	}
+	if !strings.Contains(detail, "due_time") {
+		t.Errorf("detail = %q, want it to name due_time", detail)
+	}
+
+	// The rendered message leads with it, because that is the part that says what to open.
+	msg := reason.Attention(detail)
+	if !strings.HasPrefix(msg, "cannot roll over:") {
+		t.Errorf("message = %q, want the field-specific reason first", msg)
+	}
+	if !strings.Contains(msg, reason.UserFacing()) {
+		t.Errorf("message = %q, want the outcome sentence retained", msg)
+	}
+}
+
+// Attention must degrade sensibly: an outcome with no detail is unchanged, and a detail
+// with no outcome sentence stands alone rather than trailing a dash.
+func TestAttentionHandlesBothHalvesMissing(t *testing.T) {
+	if got := RolloverFailed.Attention(""); got != RolloverFailed.UserFacing() {
+		t.Errorf("no detail changed the message: %q", got)
+	}
+	// RolloverNone has no UserFacing(); the detail must still come through rather than
+	// rendering as an empty string or a dangling dash.
+	if got := RolloverNone.Attention("some detail"); got != "some detail" {
+		t.Errorf("got %q, want the detail alone", got)
+	}
+	if got := RolloverNone.Attention(""); got != "" {
+		t.Errorf("got %q, want empty when there is nothing to say", got)
+	}
+}

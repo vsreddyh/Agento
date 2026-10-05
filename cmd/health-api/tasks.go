@@ -380,7 +380,7 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	doc, next, rollover, err := store.Complete(ctx, id)
+	doc, next, rollover, rolloverDetail, err := store.CompleteDetail(ctx, id)
 	if err != nil {
 		writeTaskErr(w, err)
 		return
@@ -403,7 +403,7 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	// successful completion.
 	out["rollover"] = string(rollover)
 	if rollover.NeedsAttention() {
-		out["needs_attention"] = rollover.UserFacing()
+		out["needs_attention"] = rollover.Attention(rolloverDetail)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

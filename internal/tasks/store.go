@@ -587,9 +587,28 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 // rollover failed", so a task that had silently stopped recurring was reported as
 // an ordinary completion.
 func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, error) {
+	doc, next, reason, _, err := s.CompleteDetail(ctx, id)
+	return doc, next, reason, err
+}
+
+// CompleteDetail is Complete plus the FIELD-SPECIFIC reason a rollover failed, e.g.
+// "cannot roll over: due_time is required (HH:MM)".
+//
+// It exists because the detail was being thrown away: Complete logged the error and
+// returned only RolloverFailed, so `needs_attention` reached the user as the generic
+// "creating its next occurrence FAILED" — with no indication of which field to open.
+// The nightly reconciler already carried the detail (it is what made its gaps
+// actionable), so the same failure was fixable-in-the-morning when noticed at night
+// and not at all when noticed live.
+//
+// A separate method rather than a fifth return value: four production callers want the
+// detail, but roughly twenty test call sites already discard three of the four values,
+// and widening the signature would churn every one of them to serve a need only the
+// transports have.
+func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, string, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, nil, "", fail("bad id '%s'", id)
+		return nil, nil, "", "", fail("bad id '%s'", id)
 	}
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
@@ -602,18 +621,18 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 			"$inc": bson.M{"revision": 1},
 		})
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", "", err
 	}
 	if res.MatchedCount == 0 {
 		var doc bson.M
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); ferr != nil {
-			return nil, nil, "", fail("unknown task '%s'", id)
+			return nil, nil, "", "", fail("unknown task '%s'", id)
 		}
-		return nil, nil, "", fail("task '%s' is already completed", id)
+		return nil, nil, "", "", fail("task '%s' is already completed", id)
 	}
 	done, err := s.Get(ctx, id)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", "", err
 	}
 	next, reason, rerr := s.rollOver(ctx, done)
 	if rerr != nil {
@@ -624,9 +643,9 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 		// stopped. Logged too, because the reconciler runs nightly and the
 		// user may act sooner.
 		log.Printf("task %s completed but rollover failed: %v", id, rerr)
-		return done, nil, RolloverFailed, nil
+		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
-	return done, next, reason, nil
+	return done, next, reason, "", nil
 }
 
 // Reopen clears completion (completedAt + expiresAt), making it open again.
