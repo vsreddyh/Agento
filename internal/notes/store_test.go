@@ -384,7 +384,97 @@ func TestOverCapInputIsStoredAndReported(t *testing.T) {
 	_, _ = s.DeleteNote(ctx, small["_id"].(string))
 }
 
-// A cap that silently discards input is the same defect whichever field it hits.
+// The truncation flag must describe what was actually STORED. Both of these caught
+// the flag being computed somewhere other than the branch that did the write.
+func TestUpdateTruncatedFlagMatchesWhatWasStored(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cleanup(t, s, ctx)
+
+	n, err := s.AddNote(ctx, "gotest trunc", "- x", nil, false)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	id := n["_id"].(string)
+	defer func() { _, _ = s.DeleteNote(ctx, id) }()
+
+	// A padded title is trimmed before it is capped, so padding alone must not
+	// report a cut — measuring the untrimmed input calls it truncated when the
+	// stored value is short.
+	padded := "   " + strings.Repeat("a", 10) + "   "
+	out, err := s.UpdateNote(ctx, id, map[string]any{"title": padded})
+	if err != nil {
+		t.Fatalf("update title: %v", err)
+	}
+	if tr, _ := out["truncated"].(map[string]any); tr["title"] != false {
+		t.Errorf("a padded short title reported truncated: %v", tr["title"])
+	}
+	if out["title"] != strings.Repeat("a", 10) {
+		t.Errorf("title = %q, want the trimmed value", out["title"])
+	}
+
+	// A title that IS over the cap must report it.
+	long := strings.Repeat("b", maxTitle+20)
+	out, err = s.UpdateNote(ctx, id, map[string]any{"title": long})
+	if err != nil {
+		t.Fatalf("update long title: %v", err)
+	}
+	if tr, _ := out["truncated"].(map[string]any); tr["title"] != true {
+		t.Errorf("an over-cap title reported truncated=%v, want true", tr["title"])
+	}
+
+	// Tags arriving as []any — which is what a BSON-decoded patch looks like —
+	// must set the flag too. The earlier version only handled []string here, so
+	// this path cleaned the tags and reported nothing.
+	many := make([]any, maxTags+3)
+	for i := range many {
+		many[i] = fmt.Sprintf("k%02d", i)
+	}
+	out, err = s.UpdateNote(ctx, id, map[string]any{"tags": many})
+	if err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+	if tr, _ := out["truncated"].(map[string]any); tr["tags"] != true {
+		t.Errorf("[]any over-cap tags reported truncated=%v, want true", tr["tags"])
+	}
+	if got := len(out["tags"].([]string)); got != maxTags {
+		t.Errorf("stored %d tags, want the cap %d", got, maxTags)
+	}
+
+	// A []any patch under the cap reports nothing dropped.
+	out, err = s.UpdateNote(ctx, id, map[string]any{"tags": []any{"a", "b"}})
+	if err != nil {
+		t.Fatalf("update few tags: %v", err)
+	}
+	if tr, _ := out["truncated"].(map[string]any); tr["tags"] != false {
+		t.Errorf("under-cap []any tags reported truncated=%v, want false", tr["tags"])
+	}
+}
+
+// A junk id must not be reflected back whole: the caller controls that string and
+// it lands in the agent's context.
+func TestBadIdIsCapped(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	huge := strings.Repeat("z", 5000)
+	_, err := s.GetNote(ctx, huge)
+	if err == nil {
+		t.Fatal("expected a bad-id error")
+	}
+	if len(err.Error()) > 200 {
+		t.Errorf("error is %d chars, want the id capped: %.80q...", len(err.Error()), err.Error())
+	}
+	// A plausible near-miss is still shown in full, so the message stays useful.
+	near := strings.Repeat("a", 23)
+	_, err = s.GetNote(ctx, near)
+	if err == nil || !strings.Contains(err.Error(), near) {
+		t.Errorf("error %q should contain the near-miss id %q", err, near)
+	}
+}
+
 // Tags are the field most likely to be over-supplied (an agent enumerating a
 // vocabulary), so their caps report like title and body rather than vanishing.
 func TestTagCapsAreReported(t *testing.T) {

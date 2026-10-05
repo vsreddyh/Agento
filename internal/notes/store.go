@@ -64,7 +64,12 @@ func fail(format string, args ...any) *StoreError {
 func oid(s string) (primitive.ObjectID, error) {
 	o, err := primitive.ObjectIDFromHex(strings.TrimSpace(s))
 	if err != nil {
-		return primitive.NilObjectID, fail("bad id '%s'", s)
+		// Cap what goes into the message. `s` is whatever the caller sent, so a
+		// junk 1 MB id becomes a 1 MB error string — reflected straight back out
+		// through the MCP result and into the agent's context, where it costs more
+		// than the entire rest of the reply. An ObjectID is 24 hex chars, so 80
+		// shows any plausible near-miss without echoing a payload.
+		return primitive.NilObjectID, fail("bad id '%s'", trunc(s, 80))
 	}
 	return o, nil
 }
@@ -328,29 +333,39 @@ func (s *Store) UpdateNote(ctx context.Context, id string, patch map[string]any)
 		return nil, err
 	}
 	upd := bson.M{}
+	// What each cap dropped, collected HERE while the branch still holds the value it
+	// actually stored — not in a second pass that re-derives it. The two-pass version
+	// re-asserted the patch's dynamic type, so a `[]any` tags patch cleaned correctly
+	// and reported nothing, and it measured the untrimmed title while the store wrote
+	// the trimmed one. Any rule duplicated in two places is a rule that will drift;
+	// one place means the flag cannot disagree with what was written.
+	dropped := map[string]any{}
 	if v, ok := patch["title"].(string); ok {
 		t := strings.TrimSpace(v)
 		if t == "" {
 			return nil, fail("title cannot be empty")
 		}
 		upd["title"] = trunc(t, maxTitle)
+		dropped["title"] = truncated(t, maxTitle)
 	}
 	if v, ok := patch["body"].(string); ok {
 		upd["body"] = trunc(v, maxBody)
+		dropped["body"] = truncated(v, maxBody)
 	}
 	if v, ok := patch["tags"]; ok && v != nil {
-		var raw []string
+		var tags []string
 		switch t := v.(type) {
 		case []string:
-			raw = t
+			tags = t
 		case []any:
 			for _, x := range t {
-				raw = append(raw, fmt.Sprint(x))
+				tags = append(tags, fmt.Sprint(x))
 			}
 		default:
 			return nil, fail("tags must be a list of strings")
 		}
-		upd["tags"] = cleanTags(raw)
+		upd["tags"] = cleanTags(tags)
+		dropped["tags"] = tagsDropped(tags)
 	}
 	if v, ok := patch["pinned"].(bool); ok {
 		upd["pinned"] = v
@@ -372,27 +387,10 @@ func (s *Store) UpdateNote(ctx context.Context, id string, patch map[string]any)
 	if err != nil || out == nil {
 		return out, err
 	}
-	// Same honesty as AddNote: if the incoming title or body was longer than the cap,
-	// the stored note is shorter than what was sent, and the caller is told.
-	if v, ok := patch["title"].(string); ok {
-		out["truncated"] = map[string]any{"title": truncated(v, maxTitle)}
-	}
-	if v, ok := patch["body"].(string); ok {
-		t := map[string]any{"body": truncated(v, maxBody)}
-		if prev, _ := out["truncated"].(map[string]any); prev != nil {
-			for k, val := range prev {
-				t[k] = val
-			}
-		}
-		out["truncated"] = t
-	}
-	if v, ok := patch["tags"].([]string); ok {
-		t, _ := out["truncated"].(map[string]any)
-		if t == nil {
-			t = map[string]any{}
-		}
-		t["tags"] = tagsDropped(v)
-		out["truncated"] = t
+	// Same honesty as AddNote, and computed from the same branch that did the write,
+	// so a cap can never be reported inconsistently with what was stored.
+	if len(dropped) > 0 {
+		out["truncated"] = dropped
 	}
 	return out, nil
 }

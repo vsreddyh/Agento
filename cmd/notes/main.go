@@ -24,6 +24,20 @@ import (
 
 var store *notes.Store
 
+// idForMessage caps the caller-supplied id before it goes into an error string.
+// GetNote returns (nil, nil) for a missing note by design, so these three handlers
+// format the id themselves — and `in.ID` is unbounded caller input, which would
+// otherwise be reflected straight back into the MCP result and the agent's context.
+// An ObjectID is 24 hex chars; 80 shows any plausible near-miss without echoing a
+// payload.
+func idForMessage(id string) string {
+	const cap = 80
+	if len(id) > cap {
+		return id[:cap] + "…"
+	}
+	return id
+}
+
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
 	return nil, map[string]any{"ok": false, "error": err.Error()}, nil
 }
@@ -127,7 +141,7 @@ func main() {
 				return fail(err)
 			}
 			if n == nil {
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown note '%s'", in.ID)})
+				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown note '%s'", idForMessage(in.ID))})
 			}
 			return result(map[string]any{"ok": true, "note": n})
 		})
@@ -180,7 +194,7 @@ func main() {
 				return fail(err)
 			}
 			if n == nil {
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown note '%s'", in.ID)})
+				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown note '%s'", idForMessage(in.ID))})
 			}
 			return result(map[string]any{"ok": true, "note": n})
 		})
@@ -197,7 +211,7 @@ func main() {
 			// checking one flag rather than two would read it as success.
 			if !done {
 				return result(map[string]any{"ok": false,
-					"error": fmt.Sprintf("unknown note '%s' — nothing was deleted", in.ID)})
+					"error": fmt.Sprintf("unknown note '%s' — nothing was deleted", idForMessage(in.ID))})
 			}
 			return result(map[string]any{"ok": true, "deleted": true})
 		})
