@@ -191,7 +191,9 @@ func main() {
 				Every:  0,
 				Unit:   strings.TrimSpace(in.RepeatUnit),
 				Custom: in.RepeatCustom != nil && *in.RepeatCustom,
-				Text:   strings.TrimSpace(in.RepeatRule),
+				// Not trimmed here: Repeat.Normalize owns that, and it is the only
+				// place it needs to live now that both create paths go through it.
+				Text: in.RepeatRule,
 			}
 			if in.RepeatEvery != nil {
 				rep.Every = *in.RepeatEvery

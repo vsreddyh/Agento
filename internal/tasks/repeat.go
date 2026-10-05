@@ -64,7 +64,18 @@ func (r Repeat) IsZero() bool {
 // clients that predate Repeat.Custom (and the 4.6 migration, which only
 // knew the free-text rule) keep working unchanged: text with no
 // structured cadence means a custom condition.
+// Normalize canonicalises a Repeat so every caller stores the same thing for the same
+// logical input.
+//
+// Text is trimmed HERE, not by the callers. It used to be trimmed by the MCP create
+// path and by the update path but NOT by the HTTP create path, so the same custom
+// condition arrived stored two different ways depending on which door it came through
+// — and the idempotency digest, which mirrors what the store writes, then disagreed
+// with the store about whether two bodies were the same request. Every create path
+// already calls Normalize, so putting the rule here makes it the one place it can live
+// and makes it impossible for a future fourth caller to skip it.
 func (r Repeat) Normalize() Repeat {
+	r.Text = strings.TrimSpace(r.Text)
 	if r.Text != "" && !r.Custom && r.Every == 0 && r.Unit == "" {
 		r.Custom = true
 	}

@@ -436,6 +436,13 @@ var trimmedForFingerprint = map[string]bool{
 	"name": true, "description": true,
 	"due_date": true, "due_time": true,
 	"repeat_unit": true,
+	// repeat_rule is here because Repeat.Normalize now trims Text, and the digest
+	// mirrors what the store writes. It was deliberately EXCLUDED while create stored
+	// the text raw — and that exclusion was correct then. It became wrong the moment
+	// the store started trimming, which is the argument for deriving this list from the
+	// store rather than restating it here: the exclusion was right about the old
+	// behaviour and silently became a bug when the behaviour changed.
+	"repeat_rule": true,
 }
 
 // taskFingerprint digests a create body so a reused Idempotency-Key can be told

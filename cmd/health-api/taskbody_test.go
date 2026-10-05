@@ -291,21 +291,33 @@ func TestFingerprintAgreesWithWhatTheStoreTrims(t *testing.T) {
 		t.Error("whitespace-padded fields digest differently even though the store trims " +
 			"them, so a legitimate retry would 422 instead of replaying")
 	}
-	// The reverse direction must still hold: a field the store does NOT trim has to
-	// keep distinguishing, or two genuinely different requests would replay as one.
-	realRule := map[string]any{}
+	// repeat_rule is in the trimmed set too, because Repeat.Normalize now trims Text —
+	// so a padded rule and a plain one create the SAME task and must replay.
+	paddedRule := map[string]any{}
 	for k, v := range trimmed {
-		realRule[k] = v
+		paddedRule[k] = v
 	}
-	realRule["repeat_rule"] = " 3rd Friday "
+	paddedRule["repeat_rule"] = "   3rd Friday   "
 	plainRule := map[string]any{}
 	for k, v := range trimmed {
 		plainRule[k] = v
 	}
 	plainRule["repeat_rule"] = "3rd Friday"
-	if taskFingerprint(realRule) == taskFingerprint(plainRule) {
-		t.Error("padded repeat_rule digests the same as the plain one, but create stores " +
-			"it verbatim — two different stored tasks would replay as identical")
+	if taskFingerprint(paddedRule) != taskFingerprint(plainRule) {
+		t.Error("padded repeat_rule digests differently, but Normalize trims it — a " +
+			"legitimate retry would 422 instead of replaying")
+	}
+
+	// And a genuinely different rule must still distinguish, or trimming has gone too
+	// far and two different tasks would replay as one.
+	otherRule := map[string]any{}
+	for k, v := range plainRule {
+		otherRule[k] = v
+	}
+	otherRule["repeat_rule"] = "end of month"
+	if taskFingerprint(plainRule) == taskFingerprint(otherRule) {
+		t.Error("two DIFFERENT custom rules digest identically — two distinct tasks " +
+			"would replay as one")
 	}
 }
 

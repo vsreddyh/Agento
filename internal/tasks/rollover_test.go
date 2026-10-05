@@ -689,3 +689,57 @@ func TestReconcileStillIgnoresAGenuineCustomRepeat(t *testing.T) {
 		t.Errorf("%d rows matched the reconciler filter in a clean fixture set", n)
 	}
 }
+
+// Repeat.Normalize is the single place Text is trimmed, so every create path stores the
+// same thing for the same logical input. It used to be trimmed by the MCP create path
+// and by the update path but NOT by HTTP create — so the same custom condition arrived
+// stored two different ways depending on which door it came through.
+//
+// This asserts the outcome rather than the mechanism: both callers go through Normalize,
+// so what matters is that a padded rule and a plain one are the same stored task.
+func TestNormalizeTrimsCustomText(t *testing.T) {
+	padded := Repeat{Custom: true, Text: "   3rd Friday   "}
+	if got := padded.Normalize().Text; got != "3rd Friday" {
+		t.Errorf("Normalize did not trim Text: %q", got)
+	}
+	// Idempotent, because Normalize is called more than once on some paths.
+	twice := padded.Normalize().Normalize()
+	if twice.Text != "3rd Friday" {
+		t.Errorf("Normalize is not idempotent: %q", twice.Text)
+	}
+	// Whitespace-only text is NOT promoted to a custom repeat — it is still empty, and
+	// Validate must reject it rather than mint a rule with no words.
+	if got := (Repeat{Text: "   "}).Normalize(); got.Custom || got.Text != "" {
+		t.Errorf("whitespace-only text became a custom repeat: %+v", got)
+	}
+}
+
+// And the store agrees, end to end: a padded rule creates the same stored task as a
+// plain one, whichever door it came through. This is the cross-path agreement the
+// trimming rule exists to provide.
+func TestPaddedCustomRuleStoresTheSameAsPlain(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	// Through the real create path, NOT mustCreate: that helper inserts a document
+	// directly, so it bypasses Create and therefore Repeat.Normalize — which means a
+	// test written with it measures the FIXTURE rather than the store. An earlier
+	// version of this test did exactly that and "proved" the two callers disagreed,
+	// when what it actually showed was that it had skipped the code under test.
+	plain, _, err := s.CreateWithKey(ctx, "Plain rule", "d", "2026-10-05", "08:00",
+		intP(5), Repeat{Custom: true, Text: "3rd Friday"}, boolP(false), "", "", "")
+	if err != nil {
+		t.Fatalf("plain create: %v", err)
+	}
+	padded, _, err := s.CreateWithKey(ctx, "Padded rule", "d", "2026-10-05", "08:00",
+		intP(5), Repeat{Custom: true, Text: "   3rd Friday   "}, boolP(false), "", "", "")
+	if err != nil {
+		t.Fatalf("padded create: %v", err)
+	}
+	pg, cg := mustGet(t, s, plain["id"].(string)), mustGet(t, s, padded["id"].(string))
+	if pg["repeat_rule"] != cg["repeat_rule"] {
+		t.Errorf("the same rule stored two ways: %q vs %q — the same input must not "+
+			"depend on which caller wrote it", pg["repeat_rule"], cg["repeat_rule"])
+	}
+}
