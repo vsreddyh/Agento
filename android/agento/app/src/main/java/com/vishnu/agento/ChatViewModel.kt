@@ -601,6 +601,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         val finished = msgsDropLastPlusAssistant(
                             final, finishedAt, liveTools.toList(), event.usage,
                             racc.toString(), model,
+                            // #214: the stream ended without `[DONE]`, so this
+                            // reply is a fragment of a turn that is still
+                            // executing server-side. The text is kept — it is
+                            // real output — but flagged, because reporting a
+                            // dropped turn as a finished one is what made the
+                            // user resend and duplicate work that had already
+                            // been done by the agent's tool calls.
+                            interrupted = event.interrupted,
                         )
                         _state.value = _state.value.copy(
                             messages = finished,
@@ -684,6 +692,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         usage: TokenUsage?,
         reasoning: String,
         model: String,
+        /** Stream ended without `[DONE]` — see #214. */
+        interrupted: Boolean = false,
     ): List<ChatMessage> {
         val msgs = _state.value.messages
         return msgs.dropLast(1) + ChatMessage(
@@ -698,6 +708,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             unreported = usage == null,
             model = model.trim(),
             reasoning = reasoning,
+            interrupted = interrupted,
         )
     }
 

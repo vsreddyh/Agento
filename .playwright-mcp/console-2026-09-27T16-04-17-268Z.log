@@ -1,0 +1,3 @@
+[    2661ms] [WARNING] [webmcp-interceptor] document.modelContext is not available.
+To enable WebMCP, use Chrome M146+ and enable:
+chrome://flags/#enable-experimental-web-platform-features @ https://www.librechat.ai/.webmcp/bridge.js:1343

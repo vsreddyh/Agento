@@ -1,0 +1,648 @@
+- generic [active] [ref=e1]:
+  - link "Skip to main content" [ref=e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e3]:
+    - text: LibreChat is joining ClickHouse to power the open-source Agentic Data Stack 🎉
+    - link "Learn more" [ref=e4] [cursor=pointer]:
+      - /url: https://clickhouse.com/blog/librechat-open-source-agentic-data-stack
+    - button "Close Banner" [ref=e5]
+  - generic [ref=e9]:
+    - complementary [ref=e10]:
+      - generic [ref=e11]:
+        - generic [ref=e12]:
+          - link "LibreChat" [ref=e13] [cursor=pointer]:
+            - /url: /
+          - button "Collapse Sidebar" [ref=e15]
+        - button "Search ⌘ K" [ref=e18]:
+          - text: Search
+          - generic [ref=e22]:
+            - generic [ref=e23]: ⌘
+            - generic [ref=e24]: K
+        - button "Select documentation version" [ref=e25]:
+          - generic [ref=e26]:
+            - generic [ref=e27]: Version
+            - generic [ref=e28]: v0.8.x (latest)
+      - generic [ref=e34]:
+        - link "Docs" [ref=e35] [cursor=pointer]:
+          - /url: /docs
+        - link "Blog" [ref=e36] [cursor=pointer]:
+          - /url: /blog
+        - link "Changelog" [ref=e37] [cursor=pointer]:
+          - /url: /changelog
+        - link "Documentation" [ref=e38] [cursor=pointer]:
+          - /url: /docs
+        - paragraph [ref=e42]: Deploy
+        - link "Quick Start" [ref=e44] [cursor=pointer]:
+          - /url: /docs/quick_start
+        - link "Local Installation" [ref=e53] [cursor=pointer]:
+          - /url: /docs/local
+        - link "Remote Hosting" [ref=e59] [cursor=pointer]:
+          - /url: /docs/remote
+        - paragraph [ref=e64]: Configure
+        - generic [ref=e65]:
+          - link "Configuration" [ref=e66] [cursor=pointer]:
+            - /url: /docs/configuration
+          - generic [ref=e73]:
+            - paragraph [ref=e74]: Core
+            - link "Environment Variables" [ref=e75] [cursor=pointer]:
+              - /url: /docs/configuration/dotenv
+            - link "HTTP Security Headers" [ref=e81] [cursor=pointer]:
+              - /url: /docs/configuration/security_headers
+            - link "LibreChat YAML" [ref=e85] [cursor=pointer]:
+              - /url: /docs/configuration/librechat_yaml
+            - paragraph [ref=e93]: Services
+            - link "Authentication" [ref=e95] [cursor=pointer]:
+              - /url: /docs/configuration/authentication
+            - link "Pre-configured AI" [ref=e102] [cursor=pointer]:
+              - /url: /docs/configuration/pre_configured_ai
+            - link "Tools" [ref=e109] [cursor=pointer]:
+              - /url: /docs/configuration/tools
+            - link "Speech Settings" [ref=e114] [cursor=pointer]:
+              - /url: /docs/configuration/stt_tts
+            - paragraph [ref=e118]: Infrastructure
+            - button "MongoDB" [ref=e120]
+            - link "Redis" [ref=e125] [cursor=pointer]:
+              - /url: /docs/configuration/redis
+            - link "File Storage & CDN" [ref=e129] [cursor=pointer]:
+              - /url: /docs/configuration/cdn
+            - link "SharePoint Integration" [ref=e134] [cursor=pointer]:
+              - /url: /docs/configuration/sharepoint
+            - link "Docker Override" [ref=e137] [cursor=pointer]:
+              - /url: /docs/configuration/docker_override
+            - paragraph [ref=e140]: Monitoring & Moderation
+            - link "Automated Moderation" [ref=e141] [cursor=pointer]:
+              - /url: /docs/configuration/mod_system
+            - link "Langfuse Tracing" [ref=e144] [cursor=pointer]:
+              - /url: /docs/configuration/langfuse
+            - link "Logging System" [ref=e147] [cursor=pointer]:
+              - /url: /docs/configuration/logging
+            - link "Metrics" [ref=e151] [cursor=pointer]:
+              - /url: /docs/configuration/metrics
+            - link "Meilisearch" [ref=e154] [cursor=pointer]:
+              - /url: /docs/configuration/meilisearch
+            - paragraph [ref=e157]: UI
+            - link "Banner" [ref=e158] [cursor=pointer]:
+              - /url: /docs/configuration/banner
+            - link "Token Usage" [ref=e161] [cursor=pointer]:
+              - /url: /docs/configuration/token_usage
+            - link "RAG API" [ref=e167] [cursor=pointer]:
+              - /url: /docs/configuration/rag_api
+        - paragraph [ref=e178]: Use
+        - link "Features" [ref=e180] [cursor=pointer]:
+          - /url: /docs/features
+        - link "Compatibility Matrix" [ref=e185] [cursor=pointer]:
+          - /url: /docs/compatibility
+        - button "MCP Servers" [ref=e189]
+        - link "User Guides" [ref=e196] [cursor=pointer]:
+          - /url: /docs/user_guides
+        - paragraph [ref=e202]: Tools
+        - link "Toolkit" [ref=e204] [cursor=pointer]:
+          - /url: /docs/toolkit
+        - paragraph [ref=e209]: Contributing
+        - link "Translation" [ref=e210] [cursor=pointer]:
+          - /url: /docs/translation
+        - link "Development" [ref=e216] [cursor=pointer]:
+          - /url: /docs/development
+      - generic [ref=e223]:
+        - button "Choose a language" [ref=e224]:
+          - generic [ref=e229]: English
+        - generic [ref=e232]:
+          - link "Join Discord" [ref=e233] [cursor=pointer]:
+            - /url: https://discord.librechat.ai
+          - link "GitHub" [ref=e236] [cursor=pointer]:
+            - /url: https://github.com/LibreChat-AI/LibreChat
+          - button "Toggle Theme" [ref=e239]
+    - generic:
+      - button "Collapse Sidebar"
+      - button "Open Search"
+    - main [ref=e248]:
+      - article [ref=e249]:
+        - generic [ref=e250]:
+          - link "Configuration" [ref=e251] [cursor=pointer]:
+            - /url: /docs/configuration
+          - link "Token Usage" [ref=e254] [cursor=pointer]:
+            - /url: /docs/configuration/token_usage
+        - heading "Token Usage" [level=1] [ref=e255]
+        - paragraph [ref=e256]: This covers how to track and control token usage in LibreChat. You will learn how to view context and cost, configure transactions, enable user balances, and add credits to an account.
+        - generic [ref=e257]:
+          - button "Copy page as Markdown" [ref=e258]: Copy Markdown
+          - button "Open page in external tools" [ref=e262]: Open
+        - generic [ref=e265]:
+          - heading [level=2] [ref=e266]:
+            - link "Intro" [ref=e267] [cursor=pointer]:
+              - /url: "#intro"
+            - button "Copy Anchor Link" [ref=e268]
+          - paragraph [ref=e272]:
+            - text: As of
+            - code [ref=e273]: v0.6.0
+            - text: ", LibreChat accurately tracks token usage for supported endpoints. All token transactions are stored in the \"Transactions\" collection in your database. Current releases also show real-time context usage and cost in the conversation UI when enabled."
+          - paragraph [ref=e274]:
+            - text: Currently, you can limit user token usage by enabling user balances. Instead of configuring token credit limits via environment variables, you now set these options in your
+            - code [ref=e275]: librechat.yaml
+            - text: file under the
+            - strong [ref=e276]: balance
+            - text: section. Cost values are hidden by default and must be enabled with
+            - code [ref=e277]: interface.contextCost
+            - text: .
+          - heading [level=2] [ref=e278]:
+            - link "Viewing Context Usage and Cost" [ref=e279] [cursor=pointer]:
+              - /url: "#viewing-context-usage-and-cost"
+            - button "Copy Anchor Link" [ref=e280]
+          - paragraph [ref=e284]: "LibreChat shows a context gauge while a conversation is running. The gauge updates from usage events during streaming and can show:"
+          - list [ref=e285]:
+            - listitem [ref=e286]: Current prompt/context usage against the model's context window
+            - listitem [ref=e287]: A hover summary for quick token and cost details
+            - listitem [ref=e288]: A color-coded meter that separates the token categories currently using the context window
+            - listitem [ref=e289]: A click-through breakdown for dialogue, retained tool results, Agent instructions, cached input, completions, branch totals, and conversation totals
+            - listitem [ref=e290]: Per-tool disclosures and a runway estimate when compatible snapshots can project remaining context pressure
+            - listitem [ref=e291]: For authorized administrators, a direct Langfuse session link when the conversation has a sampled trace in the active in-app connection
+          - paragraph [ref=e292]: The detailed breakdown is collapsed by default so the categorized meter remains compact. Users can expand it when they need the totals and LibreChat remembers that choice for later conversations. Deferred tool definitions use the same category color with a hatched treatment, while estimates without a known category composition remain a single fill.
+          - paragraph [ref=e293]: Tool traffic, cache, and Agent instructions are subsets of their containing categories and do not increase the total a second time. The runway estimate appears only when consecutive snapshots share the same model, provider, Agent, context budget, and fixed overhead. Usage breakdowns are persisted with messages and conversations, including the final primary call's cache split and completed output. Reopened chats retain branch and total usage/cost details instead of relying only on the active streaming session; Subagent totals are explicitly labeled as covering all branches.
+          - paragraph [ref=e294]: When summarization compacts a long conversation, LibreChat records the compacted summary baseline and counts only post-summary turns on top of it for the context gauge. Usage and cost totals still include the full branch spend.
+          - paragraph [ref=e295]:
+            - text: Admins can control these displays in
+            - code [ref=e296]: librechat.yaml
+            - text: ":"
+          - figure [ref=e297]:
+            - button "Copy Text" [ref=e299]
+            - region [ref=e303]:
+              - code [ref=e305]:
+                - generic [ref=e306]: "interface:"
+                - generic [ref=e307]: "contextUsage: true"
+                - generic [ref=e308]: "contextCost: true"
+                - generic [ref=e309]: "currency:"
+                - generic [ref=e310]: "code: EUR"
+                - generic [ref=e311]: "rate: 0.92"
+          - list [ref=e312]:
+            - listitem [ref=e313]:
+              - code [ref=e314]: contextUsage
+              - text: controls whether users see the context window and token usage gauge.
+            - listitem [ref=e315]:
+              - code [ref=e316]: contextCost
+              - text: controls whether users see cost values in the usage details. It defaults to
+              - code [ref=e317]: "false"
+              - text: ; set it to
+              - code [ref=e318]: "true"
+              - text: to show costs.
+            - listitem [ref=e319]:
+              - code [ref=e320]: currency
+              - text: converts displayed USD costs using a static multiplier when cost display is enabled. Transactions are still recorded using LibreChat's token credit accounting.
+          - heading [level=2] [ref=e321]:
+            - link "Custom Endpoint Token Config" [ref=e322] [cursor=pointer]:
+              - /url: "#custom-endpoint-token-config"
+            - button "Copy Anchor Link" [ref=e323]
+          - paragraph [ref=e327]:
+            - text: For custom endpoints, define model-specific context windows and per-million-token rates with
+            - code [ref=e328]: endpoints.custom[].tokenConfig
+            - text: ":"
+          - figure [ref=e329]:
+            - button "Copy Text" [ref=e331]
+            - region [ref=e335]:
+              - code [ref=e337]:
+                - generic [ref=e338]: "endpoints:"
+                - generic [ref=e339]: "custom:"
+                - generic [ref=e340]: "- name: 'Mistral'"
+                - generic [ref=e341]: "apiKey: '${MISTRAL_API_KEY}'"
+                - generic [ref=e342]: "baseURL: 'https://api.mistral.ai/v1'"
+                - generic [ref=e343]: "models:"
+                - generic [ref=e344]: "default: ['mistral-large-latest']"
+                - generic [ref=e345]: "tokenConfig:"
+                - generic [ref=e346]: "mistral-large-latest:"
+                - generic [ref=e347]: "prompt: 2"
+                - generic [ref=e348]: "completion: 6"
+                - generic [ref=e349]: "context: 128000"
+          - paragraph [ref=e350]:
+            - code [ref=e351]: prompt
+            - text: ","
+            - code [ref=e352]: completion
+            - text: ", and"
+            - code [ref=e353]: context
+            - text: are required for each model entry.
+            - code [ref=e354]: cacheRead
+            - text: and
+            - code [ref=e355]: cacheWrite
+            - text: can be added for providers that report cached input usage. For Agents that use multiple endpoints, LibreChat uses the matching endpoint/model token config when recording usage and cost.
+          - paragraph [ref=e356]: Fetched token config is cached with user scope when endpoint models, keys, URLs, or headers can vary by request context, so isolated custom endpoint pricing and context windows stay separated.
+          - heading [level=2] [ref=e357]:
+            - link "Transaction Configuration" [ref=e358] [cursor=pointer]:
+              - /url: "#transaction-configuration"
+            - button "Copy Anchor Link" [ref=e359]
+          - paragraph [ref=e363]: The transaction system controls whether token usage records are saved to the database. This can be configured separately from the balance system.
+          - heading [level=3] [ref=e364]:
+            - link "Transaction Settings" [ref=e365] [cursor=pointer]:
+              - /url: "#transaction-settings"
+            - button "Copy Anchor Link" [ref=e366]
+          - figure [ref=e370]:
+            - button "Copy Text" [ref=e372]
+            - region [ref=e376]:
+              - code [ref=e378]:
+                - generic [ref=e379]: "version: 1.2.9"
+                - generic [ref=e381]: "# Transaction settings"
+                - generic [ref=e382]: "# Controls whether to save transaction records to the database"
+                - generic [ref=e383]: "# Default is true (enabled)"
+                - generic [ref=e384]: "transactions:"
+                - generic [ref=e385]: "enabled: false"
+          - paragraph [ref=e386]:
+            - strong [ref=e387]: "Important:"
+            - text: When
+            - code [ref=e388]: balance.enabled
+            - text: is set to
+            - code [ref=e389]: "true"
+            - text: ", transaction recording is automatically enabled regardless of the"
+            - code [ref=e390]: transactions.enabled
+            - text: setting. This ensures that balance tracking functions correctly by maintaining a complete record of all token usage.
+          - paragraph [ref=e391]:
+            - text: Check out the
+            - link "Transactions Configuration" [ref=e392] [cursor=pointer]:
+              - /url: /docs/configuration/librechat_yaml/object_structure/transactions
+            - text: page for more details.
+          - heading [level=2] [ref=e393]:
+            - link "Balance Configuration" [ref=e394] [cursor=pointer]:
+              - /url: "#balance-configuration"
+            - button "Copy Anchor Link" [ref=e395]
+          - paragraph [ref=e399]:
+            - text: The balance system in LibreChat allows administrators to configure how token credit balances are managed for users. All balance settings are now managed in your YAML configuration under the
+            - code [ref=e400]: balance
+            - text: object.
+          - paragraph [ref=e401]:
+            - strong [ref=e402]: "Note:"
+            - text: This replaces the previous environment variables (
+            - code [ref=e403]: CHECK_BALANCE
+            - text: and
+            - code [ref=e404]: START_BALANCE
+            - text: ) and provides a more structured way to manage user balances.
+          - heading [level=3] [ref=e405]:
+            - link "Complete Balance Settings" [ref=e406] [cursor=pointer]:
+              - /url: "#complete-balance-settings"
+            - button "Copy Anchor Link" [ref=e407]
+          - figure [ref=e411]:
+            - button "Copy Text" [ref=e413]
+            - region [ref=e417]:
+              - code [ref=e419]:
+                - generic [ref=e420]: "version: 1.3.5"
+                - generic [ref=e422]: "# Balance settings"
+                - generic [ref=e423]: "balance:"
+                - generic [ref=e424]: "enabled: true # Enable token credit balances for users"
+                - generic [ref=e425]: "startBalance: 20000 # Initial tokens credited upon registration"
+                - generic [ref=e426]: "autoRefillEnabled: false # Enable automatic token refills"
+                - generic [ref=e427]: "refillIntervalValue: 30 # Numerical value for refill interval"
+                - generic [ref=e428]: "refillIntervalUnit: 'days' # Time unit for refill interval (days, hours, etc.)"
+                - generic [ref=e429]: "refillAmount: 10000 # Tokens added during each refill"
+          - heading [level=3] [ref=e430]:
+            - link "Balance Settings Explained" [ref=e431] [cursor=pointer]:
+              - /url: "#balance-settings-explained"
+            - button "Copy Anchor Link" [ref=e432]
+          - list [ref=e436]:
+            - listitem [ref=e437]:
+              - paragraph [ref=e438]:
+                - strong [ref=e439]: enabled
+                - text: ": Activates token credit tracking and balance management for users. When set to"
+                - code [ref=e440]: "true"
+                - text: ", the system will track token usage and enforce balance limits."
+            - listitem [ref=e441]:
+              - paragraph [ref=e442]:
+                - strong [ref=e443]: startBalance
+                - text: ": Specifies the initial number of tokens credited to a user upon registration. This is the starting balance for all new users."
+            - listitem [ref=e444]:
+              - paragraph [ref=e445]:
+                - strong [ref=e446]: autoRefillEnabled
+                - text: ": Determines whether automatic refilling of token credits is enabled. When set to"
+                - code [ref=e447]: "true"
+                - text: ", the system will automatically add credits to user balances based on the refill interval."
+            - listitem [ref=e448]:
+              - paragraph [ref=e449]:
+                - strong [ref=e450]: refillIntervalValue
+                - text: ": Specifies the numerical value for the interval at which token credits are automatically refilled. Works in conjunction with"
+                - code [ref=e451]: refillIntervalUnit
+                - text: .
+            - listitem [ref=e452]:
+              - paragraph [ref=e453]:
+                - strong [ref=e454]: refillIntervalUnit
+                - text: ": Specifies the time unit for the refill interval. Supported values include \"seconds\", \"minutes\", \"hours\", \"days\", \"weeks\", and \"months\"."
+            - listitem [ref=e455]:
+              - paragraph [ref=e456]:
+                - strong [ref=e457]: refillAmount
+                - text: ": Specifies the number of tokens to be added to the user's balance during each automatic refill."
+          - paragraph [ref=e458]:
+            - text: Check out the
+            - link "Balance Configuration" [ref=e459] [cursor=pointer]:
+              - /url: /docs/configuration/librechat_yaml/object_structure/balance
+            - text: page for more details.
+          - heading [level=2] [ref=e460]:
+            - link "How Auto-Refill Works" [ref=e461] [cursor=pointer]:
+              - /url: "#how-auto-refill-works"
+            - button "Copy Anchor Link" [ref=e462]
+          - paragraph [ref=e466]:
+            - text: When a user's balance is tracked and
+            - strong [ref=e467]: autoRefill
+            - text: is enabled, the system will automatically add credits to the balance only when the specified time interval has passed since the last refill. This is achieved by comparing the current date with the
+            - code [ref=e468]: lastRefill
+            - text: date plus the specified interval.
+          - heading [level=3] [ref=e469]:
+            - link "Auto-Refill Process" [ref=e470] [cursor=pointer]:
+              - /url: "#auto-refill-process"
+            - button "Copy Anchor Link" [ref=e471]
+          - list [ref=e475]:
+            - listitem [ref=e476]: When a user attempts to spend tokens, the system checks if the current balance is sufficient
+            - listitem [ref=e477]: If the balance would drop to zero or below after the transaction, the system checks if auto-refill is enabled
+            - listitem [ref=e478]:
+              - text: "If auto-refill is enabled, the system checks if the time interval since the last refill has passed:"
+              - list [ref=e479]:
+                - listitem [ref=e480]:
+                  - text: The system compares the current date with
+                  - code [ref=e481]: lastRefill + refillInterval
+                - listitem [ref=e482]: If the interval has passed, tokens are added to the user's balance
+                - listitem [ref=e483]:
+                  - text: The
+                  - code [ref=e484]: lastRefill
+                  - text: date is updated to the current date
+            - listitem [ref=e485]: The transaction proceeds if the balance is sufficient (either originally or after refill)
+          - heading [level=3] [ref=e486]:
+            - link "Supported Time Units" [ref=e487] [cursor=pointer]:
+              - /url: "#supported-time-units"
+            - button "Copy Anchor Link" [ref=e488]
+          - paragraph [ref=e492]:
+            - text: The
+            - code [ref=e493]: refillIntervalUnit
+            - text: "can be set to any of the following values:"
+          - list [ref=e494]:
+            - listitem [ref=e495]: "\"seconds\""
+            - listitem [ref=e496]: "\"minutes\""
+            - listitem [ref=e497]: "\"hours\""
+            - listitem [ref=e498]: "\"days\""
+            - listitem [ref=e499]: "\"weeks\""
+            - listitem [ref=e500]: "\"months\""
+          - paragraph [ref=e501]:
+            - text: For example, if
+            - code [ref=e502]: refillIntervalValue
+            - text: is set to 30 and
+            - code [ref=e503]: refillIntervalUnit
+            - text: is
+            - code [ref=e504]: days
+            - text: ", the system will add"
+            - code [ref=e505]: refillAmount
+            - text: tokens to the user's balance only if 30 days have passed since the last refill.
+          - heading [level=3] [ref=e506]:
+            - link "Balance Synchronization" [ref=e507] [cursor=pointer]:
+              - /url: "#balance-synchronization"
+            - button "Copy Anchor Link" [ref=e508]
+          - paragraph [ref=e512]: When a user logs in, the system automatically synchronizes their balance settings with the current global balance configuration. This ensures that any changes to the balance configuration are applied to all users.
+          - paragraph [ref=e513]: "The synchronization process:"
+          - list [ref=e514]:
+            - listitem [ref=e515]: Checks if the user has a balance record
+            - listitem [ref=e516]:
+              - text: If no record exists, creates one with the current
+              - code [ref=e517]: startBalance
+            - listitem [ref=e518]: Updates the user's auto-refill settings to match the global configuration
+            - listitem [ref=e519]: Ensures the user's refill interval and amount match the global settings
+          - heading [level=2] [ref=e520]:
+            - link "Managing Token Balances" [ref=e521] [cursor=pointer]:
+              - /url: "#managing-token-balances"
+            - button "Copy Anchor Link" [ref=e522]
+          - paragraph [ref=e526]: You can manually add or set user balances. This is especially useful during development or if you plan to build out a full balance-accruing system in the future (for example, via an admin dashboard).
+          - heading [level=3] [ref=e527]:
+            - link "Adding Balances" [ref=e528] [cursor=pointer]:
+              - /url: "#adding-balances"
+            - button "Copy Anchor Link" [ref=e529]
+          - figure [ref=e533]:
+            - button "Copy Text" [ref=e535]
+            - region [ref=e539]:
+              - code [ref=e541]:
+                - generic [ref=e542]: "# Local Development"
+                - generic [ref=e543]: npm run add-balance
+                - generic [ref=e545]: "# Docker (default setup)"
+                - generic [ref=e546]: docker compose exec api npm run add-balance
+                - generic [ref=e548]: "# Docker (deployment setup)"
+                - generic [ref=e549]: docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance"
+          - figure [ref=e550]:
+            - button "Copy Text" [ref=e552]
+            - region [ref=e556]:
+              - code [ref=e558]:
+                - generic [ref=e559]: "# Local Development"
+                - generic [ref=e560]:
+                  - text: npm run add-balance
+                  - generic [ref=e561]: danny@librechat.ai
+                  - text: "1000"
+                - generic [ref=e563]: "# Docker (default setup)"
+                - generic [ref=e564]:
+                  - text: docker compose exec api npm run add-balance
+                  - generic [ref=e565]: danny@librechat.ai
+                  - text: "1000"
+                - generic [ref=e567]: "# Docker (deployment setup)"
+                - generic [ref=e568]:
+                  - text: docker exec -it LibreChat-API /bin/sh -c
+                  - generic [ref=e569]: "\"cd .. && npm run add-balance danny@librechat.ai 1000\""
+          - heading [level=3] [ref=e570]:
+            - link "Setting Balances" [ref=e571] [cursor=pointer]:
+              - /url: "#setting-balances"
+            - button "Copy Anchor Link" [ref=e572]
+          - paragraph [ref=e576]: Additionally, you can set a balance for a user. An existing balance will be overwritten by the new balance.
+          - figure [ref=e577]:
+            - button "Copy Text" [ref=e579]
+            - region [ref=e583]:
+              - code [ref=e585]:
+                - generic [ref=e586]: "# Local Development"
+                - generic [ref=e587]: npm run set-balance
+                - generic [ref=e589]: "# Docker (default setup)"
+                - generic [ref=e590]: docker compose exec api npm run set-balance
+                - generic [ref=e592]: "# Docker (deployment setup)"
+                - generic [ref=e593]: docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance"
+          - figure [ref=e594]:
+            - button "Copy Text" [ref=e596]
+            - region [ref=e600]:
+              - code [ref=e602]:
+                - generic [ref=e603]: "# Local Development"
+                - generic [ref=e604]:
+                  - text: npm run set-balance
+                  - generic [ref=e605]: danny@librechat.ai
+                  - text: "1000"
+                - generic [ref=e607]: "# Docker (default setup)"
+                - generic [ref=e608]:
+                  - text: docker compose exec api npm run set-balance
+                  - generic [ref=e609]: danny@librechat.ai
+                  - text: "1000"
+                - generic [ref=e611]: "# Docker (deployment setup)"
+                - generic [ref=e612]:
+                  - text: docker exec -it LibreChat-API /bin/sh -c
+                  - generic [ref=e613]: "\"cd .. && npm run set-balance danny@librechat.ai 1000\""
+          - heading [level=3] [ref=e614]:
+            - link "Listing of balances" [ref=e615] [cursor=pointer]:
+              - /url: "#listing-of-balances"
+            - button "Copy Anchor Link" [ref=e616]
+          - figure [ref=e620]:
+            - button "Copy Text" [ref=e622]
+            - region [ref=e626]:
+              - code [ref=e628]:
+                - generic [ref=e629]: "# Local Development"
+                - generic [ref=e630]: npm run list-balances
+                - generic [ref=e632]: "# Docker (default setup)"
+                - generic [ref=e633]: docker compose exec api npm run list-balances
+                - generic [ref=e635]: "# Docker (deployment setup)"
+                - generic [ref=e636]: docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run list-balances"
+          - paragraph [ref=e637]: This works well to track your own usage for personal use; 1000 credits = $0.001 (1 mill USD)
+          - heading [level=2] [ref=e638]:
+            - link "Notes on Token Usage and Balance" [ref=e639] [cursor=pointer]:
+              - /url: "#notes-on-token-usage-and-balance"
+            - button "Copy Anchor Link" [ref=e640]
+          - list [ref=e644]:
+            - listitem [ref=e645]: With summarization enabled, you will be blocked from making an API request if the cost of the content that you need to summarize + your messages payload exceeds the current balance
+            - listitem [ref=e646]: Subagent child-run model usage is recorded against the parent transaction so parent agent runs include delegated usage in their totals.
+            - listitem [ref=e647]: Counting Prompt tokens is really accurate for OpenAI calls, but not 100% for plugins (due to function calling). It is really close and conservative, meaning its count may be higher by 2-5 tokens.
+            - listitem [ref=e648]: The system allows deficits incurred by the completion tokens. It only checks if you have enough for the prompt Tokens, and is pretty lenient with the completion. The graph below details the logic
+            - listitem [ref=e649]: The above said, plugins are checked at each generation step, since the process works with multiple API calls. Anything the LLM has generated since the initial user prompt is shared to the user in the error message as seen below.
+            - listitem [ref=e650]: There is a 150 token buffer for titling since this is a 2 step process, that averages around 200 total tokens. In the case of insufficient funds, the titling is cancelled before any spend happens and no error is thrown.
+          - paragraph:
+            - generic:
+              - generic:
+                - img "image"
+          - heading [level=2] [ref=e651]:
+            - link "More details" [ref=e652] [cursor=pointer]:
+              - /url: "#more-details"
+            - button "Copy Anchor Link" [ref=e653]
+          - paragraph [ref=e657]:
+            - text: "source:"
+            - link "LibreChat/discussions/1640" [ref=e658] [cursor=pointer]:
+              - /url: https://github.com/LibreChat-AI/LibreChat/discussions/1640#discussioncomment-8251970
+          - blockquote [ref=e659]:
+            - paragraph [ref=e660]: "\"rawAmount\": -000, // what's this?"
+          - paragraph [ref=e661]: Raw amount of tokens as counted per the tokenizer algorithm.
+          - blockquote [ref=e662]:
+            - paragraph [ref=e663]: "\"tokenValue\": -00000, // what's this?"
+          - paragraph [ref=e664]: Token credits value. 1000 credits = $0.001 (1 mill USD)
+          - blockquote [ref=e665]:
+            - paragraph [ref=e666]: "\"rate\": 00, // what's this?"
+          - paragraph [ref=e667]: The rate at which tokens are charged as credits.
+          - paragraph [ref=e668]: For example, gpt-3.5-turbo-1106 has a rate of 1 for user prompt (input) and 2 for completion (output)
+          - table [ref=e670]:
+            - rowgroup [ref=e671]:
+              - row [ref=e672]:
+                - columnheader "Model" [ref=e673]
+                - columnheader "Input" [ref=e674]
+                - columnheader "Output" [ref=e675]
+            - rowgroup [ref=e676]:
+              - row [ref=e677]:
+                - cell "gpt-3.5-turbo-1106" [ref=e678]
+                - cell "$0.0010 / 1K tokens" [ref=e679]
+                - cell "$0.0020 / 1K tokens" [ref=e680]
+          - paragraph [ref=e681]: "Given the provided example:"
+          - figure [ref=e682]:
+            - button "Copy Text" [ref=e684]
+            - region [ref=e688]:
+              - code [ref=e690]:
+                - generic [ref=e691]: "\"rawAmount\": -137"
+                - generic [ref=e692]: "\"tokenValue\": -205.5"
+                - generic [ref=e693]: "\"rate\": 1.5"
+          - figure [ref=e694]:
+            - button "Copy Text" [ref=e696]
+            - region [ref=e700]:
+              - code [ref=e702]:
+                - generic [ref=e703]: "\\text{Token Value} = (\\text{Raw Amount of Tokens}) \\times (\\text{Rate})"
+          - figure [ref=e704]:
+            - button "Copy Text" [ref=e706]
+            - region [ref=e710]:
+              - code [ref=e712]:
+                - generic [ref=e713]: 137 \times 1.5 = 205.5
+          - paragraph [ref=e714]:
+            - text: And to get the real amount of USD spend based on
+            - strong [ref=e715]: Token Value
+            - text: ":"
+          - figure [ref=e716]:
+            - button "Copy Text" [ref=e718]
+            - region [ref=e722]:
+              - code [ref=e724]:
+                - generic [ref=e725]: "\\frac{\\text{Token Value}}{1,000,000} = \\left(\\frac{\\text{Raw Amount of Tokens} \\times \\text{Rate}}{1,000,000}\\right)"
+          - figure [ref=e726]:
+            - button "Copy Text" [ref=e728]
+            - region [ref=e732]:
+              - code [ref=e734]:
+                - generic [ref=e735]: "\\frac{205.5}{1,000,000} = \\$0.0002055 \\text{ USD}"
+          - paragraph [ref=e736]:
+            - text: For custom endpoints, prefer
+            - code [ref=e737]: endpoints.custom[].tokenConfig
+            - text: in
+            - code [ref=e738]: librechat.yaml
+            - text: for per-model rates and context windows.
+          - heading [level=2] [ref=e739]:
+            - link "Preview" [ref=e740] [cursor=pointer]:
+              - /url: "#preview"
+            - button "Copy Anchor Link" [ref=e741]
+          - paragraph:
+            - generic:
+              - generic:
+                - img "image"
+          - paragraph:
+            - generic:
+              - generic:
+                - img "image"
+          - heading [level=2] [ref=e745]:
+            - link "Additional Notes" [ref=e746] [cursor=pointer]:
+              - /url: "#additional-notes"
+            - button "Copy Anchor Link" [ref=e747]
+          - list [ref=e751]:
+            - listitem [ref=e752]: With summarization enabled, API requests are blocked if the cost of the content plus the messages payload exceeds the current balance.
+            - listitem [ref=e753]: The system is lenient with completion tokens, focusing primarily on prompt tokens for balance checks.
+            - listitem [ref=e754]: A buffer is added for titling (approximately 150 tokens) to account for the two-step process.
+            - listitem [ref=e755]: Token credits translate to monetary value (e.g., 1000 credits = $0.001 USD).
+          - paragraph [ref=e756]:
+            - text: For more details and customizations, please refer to the
+            - link "LibreChat Documentation" [ref=e757] [cursor=pointer]:
+              - /url: https://www.librechat.ai/docs/configuration/librechat_yaml
+            - text: .
+        - generic [ref=e759]:
+          - paragraph [ref=e760]: How is this guide?
+          - button "Good" [ref=e761]
+          - button "Bad" [ref=e764]
+        - link "Edit on GitHub" [ref=e768] [cursor=pointer]:
+          - /url: https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/configuration/token_usage.mdx
+        - generic [ref=e772]:
+          - link [ref=e773] [cursor=pointer]:
+            - /url: /docs/configuration/banner
+            - paragraph [ref=e777]: Banner
+            - paragraph [ref=e778]: Display announcements and notices to your users
+          - link [ref=e779] [cursor=pointer]:
+            - /url: /docs/configuration/rag_api
+            - paragraph [ref=e783]: RAG API
+            - paragraph [ref=e784]: Configure Retrieval-Augmented Generation (RAG) API for document indexing and retrieval using Langchain and FastAPI. This API integrates with LibreChat to provide context-aware responses based on user-uploaded files.
+      - generic [ref=e785]:
+        - heading "On this page" [level=3] [ref=e786]
+        - generic [ref=e789]:
+          - link "Intro" [ref=e790] [cursor=pointer]:
+            - /url: "#intro"
+          - link "Viewing Context Usage and Cost" [ref=e792] [cursor=pointer]:
+            - /url: "#viewing-context-usage-and-cost"
+          - link "Custom Endpoint Token Config" [ref=e794] [cursor=pointer]:
+            - /url: "#custom-endpoint-token-config"
+          - link "Transaction Configuration" [ref=e796] [cursor=pointer]:
+            - /url: "#transaction-configuration"
+          - link "Transaction Settings" [ref=e798] [cursor=pointer]:
+            - /url: "#transaction-settings"
+          - link "Balance Configuration" [ref=e801] [cursor=pointer]:
+            - /url: "#balance-configuration"
+          - link "Complete Balance Settings" [ref=e804] [cursor=pointer]:
+            - /url: "#complete-balance-settings"
+          - link "Balance Settings Explained" [ref=e807] [cursor=pointer]:
+            - /url: "#balance-settings-explained"
+          - link "How Auto-Refill Works" [ref=e809] [cursor=pointer]:
+            - /url: "#how-auto-refill-works"
+          - link "Auto-Refill Process" [ref=e812] [cursor=pointer]:
+            - /url: "#auto-refill-process"
+          - link "Supported Time Units" [ref=e815] [cursor=pointer]:
+            - /url: "#supported-time-units"
+          - link "Balance Synchronization" [ref=e817] [cursor=pointer]:
+            - /url: "#balance-synchronization"
+          - link "Managing Token Balances" [ref=e819] [cursor=pointer]:
+            - /url: "#managing-token-balances"
+          - link "Adding Balances" [ref=e822] [cursor=pointer]:
+            - /url: "#adding-balances"
+          - link "Setting Balances" [ref=e825] [cursor=pointer]:
+            - /url: "#setting-balances"
+          - link "Listing of balances" [ref=e827] [cursor=pointer]:
+            - /url: "#listing-of-balances"
+          - link "Notes on Token Usage and Balance" [ref=e829] [cursor=pointer]:
+            - /url: "#notes-on-token-usage-and-balance"
+          - link "More details" [ref=e832] [cursor=pointer]:
+            - /url: "#more-details"
+          - link "Preview" [ref=e834] [cursor=pointer]:
+            - /url: "#preview"
+          - link "Additional Notes" [ref=e836] [cursor=pointer]:
+            - /url: "#additional-notes"

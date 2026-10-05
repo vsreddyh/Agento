@@ -15,6 +15,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSource
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -50,7 +51,25 @@ sealed interface ChatEvent {
     data class Reasoning(val text: String) : ChatEvent
     /** [usage] is the server-reported token count for the turn (null when
      * the stream carried no usable `usage` object — e.g. a failed turn). */
-    data class Done(val fullText: String, val usage: TokenUsage? = null) : ChatEvent
+    data class Done(
+        val fullText: String,
+        val usage: TokenUsage? = null,
+        /**
+         * True when the stream ended WITHOUT the `[DONE]` terminal frame.
+         *
+         * This is the whole point of #214. A dropped connection and a finished
+         * turn used to be the same event: the read loop exited on EOF exactly
+         * as it did on `[DONE]`, and both fell through to one `Done`. So a turn
+         * cut off mid-flight — after its tool calls had already run — was
+         * reported as a completed reply with no indication anything was wrong,
+         * and the user resent it, duplicating work that had already happened.
+         *
+         * The text is still returned either way. Losing the partial reply would
+         * discard real output; the flag is what tells the consumer to label it
+         * as cut short instead of complete.
+         */
+        val interrupted: Boolean = false,
+    ) : ChatEvent
     data class Error(val message: String) : ChatEvent
     /**
      * Live tool-start signal, from the unlabelled progress frames pi-gateway writes to
@@ -496,90 +515,23 @@ class ChatApi(context: Context) {
                     var seenUsage: TokenUsage? = null
                     // OkHttp in this project has no sse module; parse SSE lines manually.
                     // `: keepalive` comments and `event:` lines carry no payload.
-                    while (!source.exhausted()) {
-                        val line = source.readUtf8Line() ?: break
-                        if (line.startsWith(":") || line.startsWith("event:")) continue
-                        if (!line.startsWith("data:")) continue
-                        val data = line.removePrefix("data:").trim()
-                        if (data.isEmpty()) continue
-                        if (data == "[DONE]") break
-                        // Server-reported token counts (final chunk). Parsed
-                        // off every JSON frame so placement never matters;
-                        // frames without counts leave the last-seen intact.
-                        runCatching { parseTokenUsage(JSONObject(data)) }
-                            .getOrNull()?.let { seenUsage = it }
-                        // Tool-progress frames carry {"tool","status",...} and no
-                        // choices array — surface them instead of dropping them.
-                        val progress = runCatching {
-                            val o = JSONObject(data)
-                            if (o.optJSONArray("choices") != null) return@runCatching null
-                            // A real tool name is required: label-only frames
-                            // can't be attributed, so they are skipped rather
-                            // than surfaced under a bogus name.
-                            val tool = o.optString("tool", "").trim()
-                            if (tool.isEmpty()) return@runCatching null
-                            ChatEvent.ToolProgress(
-                                tool = tool,
-                                label = o.optString("label", "").trim(),
-                                status = o.optString("status", "").trim(),
-                            )
-                        }.getOrNull()
-                        if (progress != null) {
-                            trySend(progress)
-                            continue
-                        }
-                        // Gateway error frames ({"error": "..."}) carry no
-                        // choices/tool payload — surface them instead of
-                        // dropping, so the user never sees a bogus
-                        // "empty reply" for a failed turn.
-                        val errMsg = runCatching {
-                            JSONObject(data).optString("error", "").trim()
-                        }.getOrDefault("")
-                        if (errMsg.isNotEmpty()) {
-                            // Terminal: no Done follows (same contract as the
-                            // HTTP-error path), so the consumer must not
-                            // expect further frames for this turn.
-                            trySend(ChatEvent.Error(errMsg))
+                    when (val end = readSseStream(
+                        source, full, reasoned,
+                        onUsage = { seenUsage = it },
+                        emit = { trySend(it) },
+                    )) {
+                        is SseEnd.ErrorFrame -> {
+                            trySend(ChatEvent.Error(end.message))
                             return@launch
                         }
-                        val delta = runCatching {
-                            val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
-                            val choice = choices.optJSONObject(0) ?: return@runCatching ""
-                            // chat completions: choices[0].delta.content;
-                            // responses API: choices[0].message.content
-                            // (fallback). optString never returns null, so
-                            // emptiness (not nullness) selects the fallback.
-                            choice.optJSONObject("delta")?.optString("content")
-                                .takeUnless { it.isNullOrEmpty() }
-                                ?: choice.optJSONObject("message")?.optString("content")
-                                    .takeUnless { it.isNullOrEmpty() }
-                                ?: ""
-                        }.getOrDefault("")
-                        if (delta.isNotEmpty()) {
-                            full.append(delta)
-                            trySend(ChatEvent.Delta(delta))
-                        }
-                        // Reasoning trace (Hermes emits delta.reasoning_content;
-                        // flash reports it on thinking turns). Same shape
-                        // probing as content above; empty for most turns.
-                        val reasoning = runCatching {
-                            val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
-                            val choice = choices.optJSONObject(0) ?: return@runCatching ""
-                            choice.optJSONObject("delta")?.optString("reasoning_content")
-                                .takeUnless { it.isNullOrEmpty() }
-                                ?: choice.optJSONObject("message")?.optString("reasoning_content")
-                                    .takeUnless { it.isNullOrEmpty() }
-                                ?: ""
-                        }.getOrDefault("")
-                        if (reasoning.isNotEmpty() && reasoned.length < REASONING_CAP) {
-                            // The event carries the truncated slice, so every
-                            // consumer stays under the shared cap.
-                            val slice = reasoning.take(REASONING_CAP - reasoned.length)
-                            reasoned.append(slice)
-                            trySend(ChatEvent.Reasoning(slice))
-                        }
+                        // Terminal and Eof both end the read; only the flag differs.
+                        else -> trySend(
+                            ChatEvent.Done(
+                                full.toString(), seenUsage,
+                                interrupted = end is SseEnd.EndOfStream,
+                            ),
+                        )
                     }
-                    trySend(ChatEvent.Done(full.toString(), seenUsage))
                 }
             } catch (e: Exception) {
                 trySend(ChatEvent.Error(e.message ?: e.javaClass.simpleName))
@@ -592,6 +544,130 @@ class ChatApi(context: Context) {
             call.cancel()
         }
     }.buffer(Channel.UNLIMITED)
+}
+
+/**
+ * How an SSE body ended.
+ *
+ * The distinction is the fix for #214 and it cannot be inferred by the caller: both
+ * a finished turn and a dropped connection arrive as "the source ran out of lines".
+ * Only the presence of the `[DONE]` frame tells them apart, and losing that bit is
+ * how a cut-off turn came back looking complete.
+ */
+internal sealed interface SseEnd {
+    /** The stream sent `[DONE]`. The turn finished. */
+    object Terminal : SseEnd
+    /** EOF with no `[DONE]`. The connection dropped mid-turn. */
+    object EndOfStream : SseEnd
+    /**
+     * A gateway `{"error": "..."}` frame. Terminal by contract — no `Done` follows,
+     * the same contract as the HTTP-error path.
+     */
+    data class ErrorFrame(val message: String) : SseEnd
+}
+
+/**
+ * Reads one SSE body, appending content to [full] and reasoning to [reasoned], and
+ * emitting [ChatEvent.Delta] / [ChatEvent.Reasoning] / [ChatEvent.ToolProgress] through
+ * [emit] as they arrive. Reports [onUsage] for every `usage` object seen; the last one
+ * wins, because the gateway attaches totals to the final chunk.
+ *
+ * Returns how the stream ended rather than emitting a terminal event, so the caller
+ * decides what that means. Emitting `Done` from in here is what made EOF and a
+ * completed turn indistinguishable.
+ */
+internal fun readSseStream(
+    source: BufferedSource,
+    full: StringBuilder,
+    reasoned: StringBuilder,
+    onUsage: (TokenUsage) -> Unit,
+    emit: (ChatEvent) -> Unit,
+): SseEnd {
+    while (!source.exhausted()) {
+        val line = source.readUtf8Line() ?: break
+        if (line.startsWith(":") || line.startsWith("event:")) continue
+        if (!line.startsWith("data:")) continue
+        val data = line.removePrefix("data:").trim()
+        if (data.isEmpty()) continue
+        if (data == "[DONE]") return SseEnd.Terminal
+        // Server-reported token counts (final chunk). Parsed
+        // off every JSON frame so placement never matters;
+        // frames without counts leave the last-seen intact.
+        runCatching { parseTokenUsage(JSONObject(data)) }
+            .getOrNull()?.let(onUsage)
+        // Tool-progress frames carry {"tool","status",...} and no
+        // choices array — surface them instead of dropping them.
+        val progress = runCatching {
+            val o = JSONObject(data)
+            if (o.optJSONArray("choices") != null) return@runCatching null
+            // A real tool name is required: label-only frames
+            // can't be attributed, so they are skipped rather
+            // than surfaced under a bogus name.
+            val tool = o.optString("tool", "").trim()
+            if (tool.isEmpty()) return@runCatching null
+            ChatEvent.ToolProgress(
+                tool = tool,
+                label = o.optString("label", "").trim(),
+                status = o.optString("status", "").trim(),
+            )
+        }.getOrNull()
+        if (progress != null) {
+            emit(progress)
+            continue
+        }
+        // Gateway error frames ({"error": "..."}) carry no
+        // choices/tool payload — surface them instead of
+        // dropping, so the user never sees a bogus
+        // "empty reply" for a failed turn.
+        val errMsg = runCatching {
+            JSONObject(data).optString("error", "").trim()
+        }.getOrDefault("")
+        if (errMsg.isNotEmpty()) {
+            // Terminal: no Done follows (same contract as the
+            // HTTP-error path), so the consumer must not
+            // expect further frames for this turn.
+            return SseEnd.ErrorFrame(errMsg)
+        }
+        val delta = runCatching {
+            val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
+            val choice = choices.optJSONObject(0) ?: return@runCatching ""
+            // chat completions: choices[0].delta.content;
+            // responses API: choices[0].message.content
+            // (fallback). optString never returns null, so
+            // emptiness (not nullness) selects the fallback.
+            choice.optJSONObject("delta")?.optString("content")
+                .takeUnless { it.isNullOrEmpty() }
+                ?: choice.optJSONObject("message")?.optString("content")
+                    .takeUnless { it.isNullOrEmpty() }
+                ?: ""
+        }.getOrDefault("")
+        if (delta.isNotEmpty()) {
+            full.append(delta)
+            emit(ChatEvent.Delta(delta))
+        }
+        // Reasoning trace (Hermes emits delta.reasoning_content;
+        // flash reports it on thinking turns). Same shape
+        // probing as content above; empty for most turns.
+        val reasoning = runCatching {
+            val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""
+            val choice = choices.optJSONObject(0) ?: return@runCatching ""
+            choice.optJSONObject("delta")?.optString("reasoning_content")
+                .takeUnless { it.isNullOrEmpty() }
+                ?: choice.optJSONObject("message")?.optString("reasoning_content")
+                    .takeUnless { it.isNullOrEmpty() }
+                ?: ""
+        }.getOrDefault("")
+        if (reasoning.isNotEmpty() && reasoned.length < REASONING_CAP) {
+            // The event carries the truncated slice, so every
+            // consumer stays under the shared cap.
+            val slice = reasoning.take(REASONING_CAP - reasoned.length)
+            reasoned.append(slice)
+            emit(ChatEvent.Reasoning(slice))
+        }
+    }
+    // Falling out of the loop is EOF with no `[DONE]`: the connection dropped
+    // mid-turn. Reported as such rather than as a completed reply (#214).
+    return SseEnd.EndOfStream
 }
 
 /** Profile dir name backing an app tab (tab keys differ from profile names). */

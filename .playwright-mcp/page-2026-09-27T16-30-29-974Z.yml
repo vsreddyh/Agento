@@ -1,0 +1,1077 @@
+- generic [active] [ref=f3e1]:
+  - generic [ref=f3e2]:
+    - text: For the complete documentation index, see
+    - link "llms.txt" [ref=f3e3] [cursor=pointer]:
+      - /url: /llms.txt
+    - text: . Markdown versions of documentation pages are available by appending
+    - code [ref=f3e4]: .md
+    - text: to the page URL.
+  - banner [ref=f3e5]:
+    - generic [ref=f3e6]:
+      - link [ref=f3e7] [cursor=pointer]:
+        - /url: /
+        - img "OpenAI Developers" [ref=f3e8]
+      - generic [ref=f3e9]:
+        - link "API Dashboard" [ref=f3e13] [cursor=pointer]:
+          - /url: https://platform.openai.com/login
+        - button "Toggle light and dark theme" [ref=f3e18] [cursor=pointer]
+        - button "Search the ChatGPT docs" [ref=f3e21] [cursor=pointer]
+      - navigation [ref=f3e25]:
+        - link "Home" [ref=f3e27] [cursor=pointer]:
+          - /url: /
+        - link "API" [ref=f3e29] [cursor=pointer]:
+          - /url: /api/docs
+        - link "Codex" [ref=f3e31] [cursor=pointer]:
+          - /url: https://learn.chatgpt.com/docs
+        - link "ChatGPT" [ref=f3e35] [cursor=pointer]:
+          - /url: /chatgpt
+        - link "Resources" [ref=f3e39] [cursor=pointer]:
+          - /url: /learn
+  - generic [ref=f3e43]:
+    - navigation [ref=f3e45]:
+      - list [ref=f3e47]:
+        - listitem [ref=f3e48]:
+          - link "Home" [ref=f3e49] [cursor=pointer]:
+            - /url: /plugins
+        - listitem [ref=f3e51]:
+          - link "Quickstart" [ref=f3e52] [cursor=pointer]:
+            - /url: /plugins/quickstart
+      - generic [ref=f3e54]:
+        - heading "Core concepts" [level=3] [ref=f3e55]
+        - list [ref=f3e56]:
+          - listitem [ref=f3e57]:
+            - link "Plugin architecture" [ref=f3e58] [cursor=pointer]:
+              - /url: /plugins/concepts/plugins
+          - listitem [ref=f3e60]:
+            - link "Skills" [ref=f3e61] [cursor=pointer]:
+              - /url: /plugins/concepts/skills
+          - listitem [ref=f3e63]:
+            - link "MCP server" [ref=f3e64] [cursor=pointer]:
+              - /url: /plugins/concepts/mcp-server
+      - generic [ref=f3e66]:
+        - heading "Plan" [level=3] [ref=f3e67]
+        - list [ref=f3e68]:
+          - listitem [ref=f3e69]:
+            - link "Brainstorm use cases" [ref=f3e70] [cursor=pointer]:
+              - /url: /plugins/plan/use-case
+          - listitem [ref=f3e72]:
+            - link "Define tools" [ref=f3e73] [cursor=pointer]:
+              - /url: /plugins/plan/tools
+      - generic [ref=f3e75]:
+        - heading "Build" [level=3] [ref=f3e76]
+        - list [ref=f3e77]:
+          - listitem [ref=f3e78]:
+            - link "Build an MCP server" [ref=f3e79] [cursor=pointer]:
+              - /url: /plugins/build/mcp-server
+          - listitem [ref=f3e81]:
+            - link "Add UI to your MCP server (optional)" [ref=f3e82] [cursor=pointer]:
+              - /url: /plugins/build/chatgpt-ui
+          - listitem [ref=f3e84]:
+            - link "Authenticate users" [ref=f3e85] [cursor=pointer]:
+              - /url: /plugins/build/auth
+          - listitem [ref=f3e87]:
+            - link "Build skills" [ref=f3e88] [cursor=pointer]:
+              - /url: /plugins/build/skills
+          - listitem [ref=f3e90]:
+            - link "Package your plugin" [ref=f3e91] [cursor=pointer]:
+              - /url: /plugins/build/plugins
+          - listitem [ref=f3e93]:
+            - link "Examples" [ref=f3e94] [cursor=pointer]:
+              - /url: /plugins/build/examples
+      - generic [ref=f3e96]:
+        - heading "Test and publish" [level=3] [ref=f3e97]
+        - list [ref=f3e98]:
+          - listitem [ref=f3e99]:
+            - link "Connect and test your plugin" [ref=f3e100] [cursor=pointer]:
+              - /url: /plugins/deploy/connect-chatgpt
+          - listitem [ref=f3e102]:
+            - link "Submit and publish" [ref=f3e103] [cursor=pointer]:
+              - /url: /plugins/deploy/submission
+          - listitem [ref=f3e105]:
+            - link "Submission error reference" [ref=f3e106] [cursor=pointer]:
+              - /url: /plugins/deploy/submission-errors
+      - generic [ref=f3e108]:
+        - heading "Conversion specs" [level=3] [ref=f3e109]
+        - list [ref=f3e110]:
+          - listitem [ref=f3e111]:
+            - link "Restaurant reservation spec" [ref=f3e112] [cursor=pointer]:
+              - /url: /plugins/guides/restaurant-reservation-conversion-spec
+          - listitem [ref=f3e114]:
+            - link "Get Quote spec" [ref=f3e115] [cursor=pointer]:
+              - /url: /plugins/guides/local-services-request-quote-conversion-spec
+          - listitem [ref=f3e117]:
+            - link "Product checkout spec" [ref=f3e118] [cursor=pointer]:
+              - /url: /plugins/guides/product-checkout-conversion-spec
+      - generic [ref=f3e120]:
+        - heading "Guides" [level=3] [ref=f3e121]
+        - list [ref=f3e122]:
+          - listitem [ref=f3e123]:
+            - link "UI guidelines" [ref=f3e124] [cursor=pointer]:
+              - /url: /plugins/concepts/ui-guidelines
+          - listitem [ref=f3e126]:
+            - link "Optimize Metadata" [ref=f3e127] [cursor=pointer]:
+              - /url: /plugins/guides/optimize-metadata
+          - listitem [ref=f3e129]:
+            - link "Submit a Claude Code plugin" [ref=f3e130] [cursor=pointer]:
+              - /url: /plugins/guides/submit-claude-plugin
+          - listitem [ref=f3e132]:
+            - link "Security & Privacy" [ref=f3e133] [cursor=pointer]:
+              - /url: /plugins/guides/security-privacy
+          - listitem [ref=f3e135]:
+            - link "Troubleshooting" [ref=f3e136] [cursor=pointer]:
+              - /url: /plugins/deploy/troubleshooting
+      - generic [ref=f3e138]:
+        - heading "Resources" [level=3] [ref=f3e139]
+        - list [ref=f3e140]:
+          - listitem [ref=f3e141]:
+            - link "Changelog" [ref=f3e142] [cursor=pointer]:
+              - /url: /plugins/changelog
+          - listitem [ref=f3e144]:
+            - link "Plugin guidelines" [ref=f3e145] [cursor=pointer]:
+              - /url: /plugins/app-guidelines
+          - listitem [ref=f3e147]:
+            - link "MCP server review requirements" [ref=f3e148] [cursor=pointer]:
+              - /url: /plugins/deploy/app-review
+          - listitem [ref=f3e150]:
+            - link "Plugin UI reference" [ref=f3e151] [cursor=pointer]:
+              - /url: /plugins/reference
+          - listitem [ref=f3e153]:
+            - link "Checkout API reference" [ref=f3e154] [cursor=pointer]:
+              - /url: /plugins/build/monetization
+    - main [ref=f3e156]:
+      - generic [ref=f3e158]:
+        - generic [ref=f3e159]:
+          - navigation [ref=f3e161]:
+            - list [ref=f3e165]:
+              - listitem [ref=f3e166]:
+                - link "Overview" [ref=f3e167] [cursor=pointer]:
+                  - /url: "#overview"
+              - listitem [ref=f3e168]:
+                - link "Start with MCP Apps" [ref=f3e169] [cursor=pointer]:
+                  - /url: "#start-with-mcp-apps"
+              - listitem [ref=f3e170]:
+                - link "Layer on ChatGPT extensions" [ref=f3e171] [cursor=pointer]:
+                  - /url: "#layer-on-chatgpt-extensions"
+              - listitem [ref=f3e172]:
+                - link "Choose a presentation" [ref=f3e173] [cursor=pointer]:
+                  - /url: "#choose-a-presentation"
+              - listitem [ref=f3e174]:
+                - link "Separate data processing from UI rendering" [ref=f3e175] [cursor=pointer]:
+                  - /url: "#separate-data-processing-from-ui-rendering"
+              - listitem [ref=f3e176]:
+                - link "Manage state" [ref=f3e177] [cursor=pointer]:
+                  - /url: "#manage-state"
+              - listitem [ref=f3e178]:
+                - link "Scaffold the component project" [ref=f3e179] [cursor=pointer]:
+                  - /url: "#scaffold-the-component-project"
+              - listitem [ref=f3e180]:
+                - link "Author the React component" [ref=f3e181] [cursor=pointer]:
+                  - /url: "#author-the-react-component"
+              - listitem [ref=f3e182]:
+                - link "Widget localization" [ref=f3e183] [cursor=pointer]:
+                  - /url: "#widget-localization"
+              - listitem [ref=f3e184]:
+                - link "Bundle for the iframe" [ref=f3e185] [cursor=pointer]:
+                  - /url: "#bundle-for-the-iframe"
+              - listitem [ref=f3e186]:
+                - link "Embed the component in the server response" [ref=f3e187] [cursor=pointer]:
+                  - /url: "#embed-the-component-in-the-server-response"
+              - listitem [ref=f3e188]:
+                - link "Offer checkout in your UI" [ref=f3e189] [cursor=pointer]:
+                  - /url: "#offer-checkout-in-your-ui"
+          - button "Copy Page" [ref=f3e191] [cursor=pointer]
+        - generic [ref=f3e196]:
+          - generic [ref=f3e198]:
+            - heading "Add UI to your MCP server" [level=1] [ref=f3e200]
+            - paragraph [ref=f3e201]: Return optional UI resources from selected MCP tools.
+          - article [ref=f3e202]:
+            - heading "Overview Copy link to Overview" [level=2] [ref=f3e203]:
+              - generic [ref=f3e204]: Overview
+              - button "Copy link to Overview" [ref=f3e205] [cursor=pointer]
+            - paragraph [ref=f3e208]: Custom UI is optional. Add it when a plugin use case requires people to inspect, compare, edit, confirm, or navigate structured information. Keep the MCP tools useful without a component so ChatGPT and Codex can complete the workflow without UI.
+            - paragraph [ref=f3e209]:
+              - text: The MCP server returns UI resources for selected tools. Components run inside an iframe in ChatGPT, communicate with the host through the MCP Apps bridge (JSON-RPC over
+              - code [ref=f3e210]: postMessage
+              - text: ), and render alongside the conversation. The open MCP Apps standard lets the UI run across compatible hosts.
+            - heading "Start with MCP Apps Copy link to Start with MCP Apps" [level=2] [ref=f3e211]:
+              - generic [ref=f3e212]: Start with MCP Apps
+              - button "Copy link to Start with MCP Apps" [ref=f3e213] [cursor=pointer]
+            - paragraph [ref=f3e216]:
+              - text: ChatGPT implements the open
+              - link "MCP Apps standard" [ref=f3e217] [cursor=pointer]:
+                - /url: https://modelcontextprotocol.io/docs/extensions/apps
+              - text: for UI returned by an MCP server. MCP Apps defines how your server associates tools with UI resources and how the iframe communicates with its host.
+            - paragraph [ref=f3e218]: "For new UI:"
+            - list [ref=f3e219]:
+              - listitem [ref=f3e220]:
+                - text: Declare the UI resource with
+                - code [ref=f3e221]: _meta.ui.resourceUri
+                - text: .
+              - listitem [ref=f3e222]:
+                - text: Use the
+                - code [ref=f3e223]: ui/*
+                - text: JSON-RPC bridge over
+                - code [ref=f3e224]: postMessage
+                - text: for initialization, notifications, tool calls, messages, and model-visible context.
+              - listitem [ref=f3e225]: Keep tools useful without UI so the model can complete the workflow in clients that do not render components.
+            - paragraph [ref=f3e226]: This standards-first foundation lets the same UI run in ChatGPT and other compatible MCP Apps hosts.
+            - paragraph [ref=f3e227]:
+              - text: When you’re ready to implement the standard, use the
+              - link "MCP Apps specification" [ref=f3e228] [cursor=pointer]:
+                - /url: https://modelcontextprotocol.io/docs/extensions/apps
+              - text: .
+            - heading "Layer on ChatGPT extensions Copy link to Layer on ChatGPT extensions" [level=2] [ref=f3e229]:
+              - generic [ref=f3e230]: Layer on ChatGPT extensions
+              - button "Copy link to Layer on ChatGPT extensions" [ref=f3e231] [cursor=pointer]
+            - paragraph [ref=f3e234]:
+              - text: After the MCP Apps flow works, use
+              - code [ref=f3e235]: window.openai
+              - text: only for capabilities that the shared specification does not cover. These optional extensions can improve the experience in ChatGPT without making them part of the portable UI foundation.
+            - heading "Prefer shared fields and methods Copy link to Prefer shared fields and methods" [level=3] [ref=f3e236]:
+              - generic [ref=f3e237]: Prefer shared fields and methods
+              - button "Copy link to Prefer shared fields and methods" [ref=f3e238] [cursor=pointer]
+            - paragraph [ref=f3e241]: "Use the MCP Apps field or method whenever the shared specification covers the capability:"
+            - table [ref=f3e242]:
+              - rowgroup [ref=f3e243]:
+                - row [ref=f3e244]:
+                  - columnheader "Goal" [ref=f3e245]
+                  - columnheader "MCP Apps standard" [ref=f3e246]
+                  - columnheader "ChatGPT compatibility alias" [ref=f3e247]
+              - rowgroup [ref=f3e248]:
+                - row [ref=f3e249]:
+                  - cell "Link a tool to a UI resource" [ref=f3e250]
+                  - cell [ref=f3e251]:
+                    - code [ref=f3e252]: _meta.ui.resourceUri
+                  - cell [ref=f3e253]:
+                    - code [ref=f3e254]: _meta["openai/outputTemplate"]
+                - row [ref=f3e255]:
+                  - cell "Receive tool input" [ref=f3e256]
+                  - cell [ref=f3e257]:
+                    - code [ref=f3e258]: ui/initialize
+                    - text: +
+                    - code [ref=f3e259]: ui/notifications/tool-input
+                  - cell [ref=f3e260]:
+                    - code [ref=f3e261]: window.openai.toolInput
+                - row [ref=f3e262]:
+                  - cell "Receive tool results" [ref=f3e263]
+                  - cell [ref=f3e264]:
+                    - code [ref=f3e265]: ui/notifications/tool-result
+                  - cell [ref=f3e266]:
+                    - code [ref=f3e267]: window.openai.toolOutput
+                - row [ref=f3e268]:
+                  - cell "Call a tool from the UI" [ref=f3e269]
+                  - cell [ref=f3e270]:
+                    - code [ref=f3e271]: tools/call
+                  - cell [ref=f3e272]:
+                    - code [ref=f3e273]: window.openai.callTool
+                - row [ref=f3e274]:
+                  - cell "Send a follow-up message" [ref=f3e275]
+                  - cell [ref=f3e276]:
+                    - code [ref=f3e277]: ui/message
+                  - cell [ref=f3e278]:
+                    - code [ref=f3e279]: window.openai.sendFollowUpMessage
+            - paragraph [ref=f3e280]: The compatibility aliases remain available for existing integrations. New UI should use the shared fields and bridge methods in the middle column.
+            - paragraph [ref=f3e281]: "Examples include:"
+            - list [ref=f3e282]:
+              - listitem [ref=f3e283]:
+                - text: Instant Checkout with
+                - code [ref=f3e284]: window.openai.requestCheckout
+                - text: .
+              - listitem [ref=f3e285]:
+                - text: ChatGPT file handling with
+                - code [ref=f3e286]: window.openai.uploadFile
+                - text: ","
+                - code [ref=f3e287]: window.openai.selectFiles
+                - text: ", and"
+                - code [ref=f3e288]: window.openai.getFileDownloadUrl
+                - text: .
+              - listitem [ref=f3e289]:
+                - text: Host-controlled modals with
+                - code [ref=f3e290]: window.openai.requestModal
+                - text: .
+              - listitem [ref=f3e291]:
+                - text: Widget-state persistence with
+                - code [ref=f3e292]: window.openai.widgetState
+                - text: and
+                - code [ref=f3e293]: window.openai.setWidgetState
+                - text: .
+            - paragraph [ref=f3e294]: "Feature-detect each extension and provide a fallback when practical:"
+            - generic [ref=f3e295]:
+              - code [ref=f3e296]:
+                - generic [ref=f3e297]: "const openai = typeof window !== \"undefined\" ? window.openai : undefined;"
+                - generic [ref=f3e298]: "if (openai?.requestModal) {"
+                - generic [ref=f3e299]: "await openai.requestModal({"
+                - generic [ref=f3e300]: /* ... */
+                - generic [ref=f3e301]: "});"
+                - generic [ref=f3e302]: "} else {"
+                - generic [ref=f3e303]: // Fallback behavior for hosts without this extension.
+                - generic [ref=f3e304]: "}"
+              - generic [ref=f3e305]:
+                - button "Copy code to clipboard" [ref=f3e306] [cursor=pointer]
+                - status [ref=f3e309]
+            - paragraph [ref=f3e310]: Avoid branching on a host or product name. Test for the capability your UI needs.
+            - paragraph [ref=f3e311]:
+              - text: For extension signatures and examples, see the
+              - link [ref=f3e312] [cursor=pointer]:
+                - /url: /plugins/reference#windowopenai-component-bridge
+                - code [ref=f3e313]: window.openai
+                - text: component bridge reference
+              - text: .
+            - heading "Optional OpenAI component library Copy link to Optional OpenAI component library" [level=3] [ref=f3e314]:
+              - generic [ref=f3e315]: Optional OpenAI component library
+              - button "Copy link to Optional OpenAI component library" [ref=f3e316] [cursor=pointer]
+            - paragraph [ref=f3e319]:
+              - text: The
+              - link [ref=f3e320] [cursor=pointer]:
+                - /url: https://openai.github.io/apps-sdk-ui/
+                - code [ref=f3e321]: "@openai/apps-sdk-ui"
+              - text: component library provides ready-made buttons, cards, input controls, and layout primitives that match ChatGPT’s container. Use it when you want consistent styling without rebuilding base components.
+            - paragraph [ref=f3e322]:
+              - text: You can also explore the
+              - link "UI examples repository on GitHub" [ref=f3e323] [cursor=pointer]:
+                - /url: https://github.com/openai/openai-apps-sdk-examples
+              - text: .
+            - heading "Choose a presentation Copy link to Choose a presentation" [level=2] [ref=f3e324]:
+              - generic [ref=f3e325]: Choose a presentation
+              - button "Copy link to Choose a presentation" [ref=f3e326] [cursor=pointer]
+            - paragraph [ref=f3e329]: Start with inline UI and request more space only when the workflow needs it. Choose the smallest presentation that lets people understand the result or complete the task.
+            - heading "Inline card Copy link to Inline card" [level=3] [ref=f3e330]:
+              - generic [ref=f3e331]: Inline card
+              - button "Copy link to Inline card" [ref=f3e332] [cursor=pointer]
+            - paragraph [ref=f3e335]: Use an inline card for a focused result, confirmation, or small set of actions. Keep it self-contained and avoid deep navigation.
+            - paragraph [ref=f3e336]:
+              - img "Examples of inline cards" [ref=f3e337]
+            - heading "Inline carousel Copy link to Inline carousel" [level=3] [ref=f3e338]:
+              - generic [ref=f3e339]: Inline carousel
+              - button "Copy link to Inline carousel" [ref=f3e340] [cursor=pointer]
+            - paragraph [ref=f3e343]: Use an inline carousel when people need to scan and choose from a small set of similar, visually rich options.
+            - paragraph [ref=f3e344]:
+              - img "Example of an inline carousel" [ref=f3e345]
+            - heading "fullscreen Copy link to fullscreen" [level=3] [ref=f3e346]:
+              - generic [ref=f3e347]: fullscreen
+              - button "Copy link to fullscreen" [ref=f3e348] [cursor=pointer]
+            - paragraph [ref=f3e351]: Use fullscreen for rich tasks that need more room, such as maps, editing canvases, or detailed browsing. Design the experience to work with ChatGPT’s composer, which remains available in fullscreen.
+            - paragraph [ref=f3e352]:
+              - img "Example of fullscreen UI" [ref=f3e353]
+            - heading "Picture-in-picture Copy link to Picture-in-picture" [level=3] [ref=f3e354]:
+              - generic [ref=f3e355]: Picture-in-picture
+              - button "Copy link to Picture-in-picture" [ref=f3e356] [cursor=pointer]
+            - paragraph [ref=f3e359]: Use picture-in-picture for an ongoing activity that should remain visible while the conversation continues, such as a live session, game, or video.
+            - paragraph [ref=f3e360]:
+              - img "Example of picture-in-picture UI" [ref=f3e361]
+            - paragraph [ref=f3e362]:
+              - text: For detailed layout, interaction, visual design, and accessibility guidance, see
+              - link "UI guidelines" [ref=f3e363] [cursor=pointer]:
+                - /url: /plugins/concepts/ui-guidelines
+              - text: .
+            - heading "Separate data processing from UI rendering Copy link to Separate data processing from UI rendering" [level=2] [ref=f3e364]:
+              - generic [ref=f3e365]: Separate data processing from UI rendering
+              - button "Copy link to Separate data processing from UI rendering" [ref=f3e366] [cursor=pointer]
+            - heading "Decoupled pattern Copy link to Decoupled pattern" [level=3] [ref=f3e369]:
+              - generic [ref=f3e370]: Decoupled pattern
+              - button "Copy link to Decoupled pattern" [ref=f3e371] [cursor=pointer]
+            - paragraph [ref=f3e374]: "If you attach a widget template to every tool call, ChatGPT can re-render your iframe too often. A better pattern is to separate data-processing tools from render tools:"
+            - list [ref=f3e375]:
+              - listitem [ref=f3e376]:
+                - strong [ref=f3e377]: Data tools
+                - text: fetch, compute, or mutate data and return only tool results.
+              - listitem [ref=f3e378]:
+                - strong [ref=f3e379]: Render tools
+                - text: take final data and return the widget template.
+            - paragraph [ref=f3e380]: This allows the model to apply its intelligence to data it fetched before choosing to render UI to the user, making it much more likely that it will accomplish the user’s specific expressed goal.
+            - paragraph [ref=f3e381]: This pattern is part of the MCP Apps architecture.
+            - paragraph [ref=f3e382]: "In practice, many UI integrations use this split:"
+            - list [ref=f3e383]:
+              - listitem [ref=f3e384]:
+                - strong [ref=f3e385]: "Search/fetch tools (data-first):"
+                - text: Return IDs plus metadata with no widget template attached.
+              - listitem [ref=f3e386]:
+                - strong [ref=f3e387]:
+                  - text: Render tools (for example,
+                  - code [ref=f3e388]: render_listings_widget
+                  - text: "):"
+                - text: Take a prepared list of IDs and render the widget.
+            - paragraph [ref=f3e389]:
+              - text: Only the render tool should include
+              - code [ref=f3e390]: _meta.ui.resourceUri
+              - text: .
+            - heading "Decoupled call flow Copy link to Decoupled call flow" [level=3] [ref=f3e391]:
+              - generic [ref=f3e392]: Decoupled call flow
+              - button "Copy link to Decoupled call flow" [ref=f3e393] [cursor=pointer]
+            - paragraph [ref=f3e396]: "Recommended call flow:"
+            - list [ref=f3e397]:
+              - listitem [ref=f3e398]:
+                - text: The model calls the data tool (for example,
+                - code [ref=f3e399]: roll_dice
+                - text: ).
+              - listitem [ref=f3e400]:
+                - text: The model receives
+                - code [ref=f3e401]: structuredContent
+                - text: from the data tool.
+              - listitem [ref=f3e402]: The model calls the render tool with that data.
+              - listitem [ref=f3e403]: The widget renders once with final, model-checked context.
+            - 'heading "Example: Real estate follow-up queries Copy link to Example: Real estate follow-up queries" [level=3] [ref=f3e404]':
+              - generic [ref=f3e405]: "Example: Real estate follow-up queries"
+              - 'button "Copy link to Example: Real estate follow-up queries" [ref=f3e406] [cursor=pointer]'
+            - paragraph [ref=f3e409]:
+              - text: Suppose your plugin shows listing cards and a map, but your server-side
+              - code [ref=f3e410]: search
+              - text: tool only supports broad filters (city, price, beds, baths) and cannot filter by school zone.
+            - paragraph [ref=f3e411]: "If a user asks, “Which of these are in the Richmond Primary School zone?” decoupling helps:"
+            - list [ref=f3e412]:
+              - listitem [ref=f3e413]:
+                - code [ref=f3e414]: search
+                - text: runs broadly and returns candidate listing IDs plus metadata.
+              - listitem [ref=f3e415]: The model refines that candidate set for the follow-up question.
+              - listitem [ref=f3e416]:
+                - text: The model calls
+                - code [ref=f3e417]: render_listings_widget
+                - text: with only the filtered IDs.
+              - listitem [ref=f3e418]: The widget renders the final filtered set.
+            - paragraph [ref=f3e419]: "Best practices:"
+            - list [ref=f3e420]:
+              - listitem [ref=f3e421]:
+                - text: Keep data tools reusable. Return complete
+                - code [ref=f3e422]: structuredContent
+                - text: for chaining.
+              - listitem [ref=f3e423]: Keep render tools focused on presentation. Don’t mix business logic into the render handler.
+              - listitem [ref=f3e424]:
+                - text: State the dependency in the render tool description (for example, “Always call
+                - code [ref=f3e425]: roll_dice
+                - text: first”).
+              - listitem [ref=f3e426]: Keep reruns intentional. Let the UI call data tools directly for local interactions like “Re-roll,” without remounting the widget.
+            - heading "Decoupled example Copy link to Decoupled example" [level=3] [ref=f3e427]:
+              - generic [ref=f3e428]: Decoupled example
+              - button "Copy link to Decoupled example" [ref=f3e429] [cursor=pointer]
+            - paragraph [ref=f3e432]: "Example (decoupled dice tools):"
+            - generic [ref=f3e433]:
+              - code [ref=f3e434]:
+                - generic [ref=f3e435]: "import { McpServer } from \"@modelcontextprotocol/sdk/server/mcp.js\";"
+                - generic [ref=f3e436]: "import { z } from \"zod/v3\";"
+                - generic [ref=f3e437]: const TEMPLATE_URI = "ui://widget/dice.html";
+                - generic [ref=f3e438]: const server = new McpServer(
+                - generic [ref=f3e439]: "{ name: \"Decoupled dice\", version: \"1.0.0\" },"
+                - generic [ref=f3e440]: "{ capabilities: { tools: {} } }"
+                - generic [ref=f3e441]: );
+                - generic [ref=f3e442]: // The widget only renders the latest tool result.
+                - generic [ref=f3e443]: // Re-roll calls the data tool directly to avoid remounting the widget.
+                - generic [ref=f3e444]: "const widgetHtml = `"
+                - generic [ref=f3e445]: "<div style=\"font-family: system-ui; padding: 8px;\">"
+                - generic [ref=f3e446]: "<div style=\"font-size: 20px; margin-bottom: 6px;\">"
+                - generic [ref=f3e447]: "Result: <span id=\"out\">—</span>"
+                - generic [ref=f3e448]: </div>
+                - generic [ref=f3e449]: <button id="reroll">Re-roll</button>
+                - generic [ref=f3e450]: </div>
+                - generic [ref=f3e451]: <script>
+                - generic [ref=f3e452]: const outputEl = document.getElementById("out");
+                - generic [ref=f3e453]: const rerollButton = document.getElementById("reroll");
+                - generic [ref=f3e454]: const pendingRequests = new Map();
+                - generic [ref=f3e455]: let nextRequestId = 1;
+                - generic [ref=f3e456]: let latestToolInput;
+                - generic [ref=f3e457]: let latestToolOutput;
+                - generic [ref=f3e458]: "function render(result) {"
+                - generic [ref=f3e459]: outputEl.textContent = String(result?.value ?? "—");
+                - generic [ref=f3e460]: "}"
+                - generic [ref=f3e461]: "function request(method, params) {"
+                - generic [ref=f3e462]: const id = nextRequestId++;
+                - generic [ref=f3e463]: "window.parent.postMessage({ jsonrpc: \"2.0\", id, method, params }, \"*\");"
+                - generic [ref=f3e464]: "return new Promise((resolve, reject) => {"
+                - generic [ref=f3e465]: "pendingRequests.set(id, { resolve, reject });"
+                - generic [ref=f3e466]: "});"
+                - generic [ref=f3e467]: "}"
+                - generic [ref=f3e468]: window.addEventListener(
+                - generic [ref=f3e469]: "\"message\","
+                - generic [ref=f3e470]: "(event) => {"
+                - generic [ref=f3e471]: if (event.source !== window.parent) return;
+                - generic [ref=f3e472]: const message = event.data;
+                - generic [ref=f3e473]: if (!message || message.jsonrpc !== "2.0") return;
+                - generic [ref=f3e474]: "if (message.id !== undefined && pendingRequests.has(message.id)) {"
+                - generic [ref=f3e475]: const pending = pendingRequests.get(message.id);
+                - generic [ref=f3e476]: pendingRequests.delete(message.id);
+                - generic [ref=f3e477]: if (message.error) pending.reject(message.error);
+                - generic [ref=f3e478]: else pending.resolve(message.result);
+                - generic [ref=f3e479]: return;
+                - generic [ref=f3e480]: "}"
+                - generic [ref=f3e481]: "if (message.method === \"ui/notifications/tool-input\") {"
+                - generic [ref=f3e482]: latestToolInput = message.params;
+                - generic [ref=f3e483]: "}"
+                - generic [ref=f3e484]: "if (message.method === \"ui/notifications/tool-result\") {"
+                - generic [ref=f3e485]: latestToolOutput = message.params?.structuredContent;
+                - generic [ref=f3e486]: render(latestToolOutput);
+                - generic [ref=f3e487]: "}"
+                - generic [ref=f3e488]: "},"
+                - generic [ref=f3e489]: "{ passive: true }"
+                - generic [ref=f3e490]: );
+                - generic [ref=f3e491]: "rerollButton.onclick = async () => {"
+                - generic [ref=f3e492]: const sides = latestToolOutput?.sides ?? latestToolInput?.sides ?? 6;
+                - generic [ref=f3e493]: "const next = await request(\"tools/call\", {"
+                - generic [ref=f3e494]: "name: \"roll_dice\","
+                - generic [ref=f3e495]: "arguments: { sides },"
+                - generic [ref=f3e496]: "});"
+                - generic [ref=f3e497]: "if (next?.structuredContent) {"
+                - generic [ref=f3e498]: render(next.structuredContent);
+                - generic [ref=f3e499]: "}"
+                - generic [ref=f3e500]: "};"
+                - generic [ref=f3e501]: </script>
+                - generic [ref=f3e502]: "`.trim();"
+                - generic [ref=f3e503]: "server.registerResource(\"dice-widget\", TEMPLATE_URI, {}, async () => ({"
+                - generic [ref=f3e504]: "contents: ["
+                - generic [ref=f3e505]: "{"
+                - generic [ref=f3e506]: "uri: TEMPLATE_URI,"
+                - generic [ref=f3e507]: "mimeType: \"text/html;profile=mcp-app\","
+                - generic [ref=f3e508]: "text: widgetHtml,"
+                - generic [ref=f3e509]: "_meta: { ui: { prefersBorder: true } },"
+                - generic [ref=f3e510]: "},"
+                - generic [ref=f3e511]: "],"
+                - generic [ref=f3e512]: "}));"
+                - generic [ref=f3e513]: "// 1) Data tool: no output template, returns chainable structuredContent."
+                - generic [ref=f3e514]: server.registerTool(
+                - generic [ref=f3e515]: "\"roll_dice\","
+                - generic [ref=f3e516]: "{"
+                - generic [ref=f3e517]: "title: \"Roll dice\","
+                - generic [ref=f3e518]: "description: \"Roll an N-sided die and return { sides, value }.\","
+                - generic [ref=f3e519]: "inputSchema: { sides: z.number().int().min(2) },"
+                - generic [ref=f3e520]: "outputSchema: {"
+                - generic [ref=f3e521]: "sides: z.number().int().min(2),"
+                - generic [ref=f3e522]: "value: z.number().int().min(1),"
+                - generic [ref=f3e523]: "},"
+                - generic [ref=f3e524]: "_meta: {"
+                - generic [ref=f3e525]: "\"openai/toolInvocation/invoking\": \"Rolling…\","
+                - generic [ref=f3e526]: "\"openai/toolInvocation/invoked\": \"Rolled.\","
+                - generic [ref=f3e527]: "},"
+                - generic [ref=f3e528]: "},"
+                - generic [ref=f3e529]: "async ({ sides }) => {"
+                - generic [ref=f3e530]: const value = 1 + Math.floor(Math.random() * sides);
+                - generic [ref=f3e531]: "return {"
+                - generic [ref=f3e532]: "structuredContent: { sides, value },"
+                - generic [ref=f3e533]: "content: [{ type: \"text\", text: `Rolled ${value} on ${sides} sides.` }],"
+                - generic [ref=f3e534]: "};"
+                - generic [ref=f3e535]: "}"
+                - generic [ref=f3e536]: );
+                - generic [ref=f3e537]: "// 2) Render tool: owns the template and requires data from roll_dice."
+                - generic [ref=f3e538]: server.registerTool(
+                - generic [ref=f3e539]: "\"render_dice_widget\","
+                - generic [ref=f3e540]: "{"
+                - generic [ref=f3e541]: "title: \"Render dice widget\","
+                - generic [ref=f3e542]: "description:"
+                - generic [ref=f3e543]: "\"Render the dice widget from roll data. First call roll_dice, then pass its sides and value to this tool.\","
+                - generic [ref=f3e544]: "inputSchema: {"
+                - generic [ref=f3e545]: "sides: z.number().int().min(2),"
+                - generic [ref=f3e546]: "value: z.number().int().min(1),"
+                - generic [ref=f3e547]: "},"
+                - generic [ref=f3e548]: "outputSchema: {"
+                - generic [ref=f3e549]: "sides: z.number().int().min(2),"
+                - generic [ref=f3e550]: "value: z.number().int().min(1),"
+                - generic [ref=f3e551]: "},"
+                - generic [ref=f3e552]: "_meta: {"
+                - generic [ref=f3e553]: "ui: { resourceUri: TEMPLATE_URI },"
+                - generic [ref=f3e554]: "\"openai/toolInvocation/invoking\": \"Rendering…\","
+                - generic [ref=f3e555]: "\"openai/toolInvocation/invoked\": \"Rendered.\","
+                - generic [ref=f3e556]: "},"
+                - generic [ref=f3e557]: "},"
+                - generic [ref=f3e558]: "async ({ sides, value }) => ({"
+                - generic [ref=f3e559]: "structuredContent: { sides, value },"
+                - generic [ref=f3e560]: "content: ["
+                - generic [ref=f3e561]: "{"
+                - generic [ref=f3e562]: "type: \"text\","
+                - generic [ref=f3e563]: "text: `Showing a ${sides}-sided roll: ${value}.`,"
+                - generic [ref=f3e564]: "},"
+                - generic [ref=f3e565]: "],"
+                - generic [ref=f3e566]: "})"
+                - generic [ref=f3e567]: );
+                - generic [ref=f3e568]: export default server;
+              - generic [ref=f3e569]:
+                - button "Copy code to clipboard" [ref=f3e570] [cursor=pointer]
+                - status [ref=f3e573]
+            - heading "Manage state Copy link to Manage state" [level=2] [ref=f3e574]:
+              - generic [ref=f3e575]: Manage state
+              - button "Copy link to Manage state" [ref=f3e576] [cursor=pointer]
+            - paragraph [ref=f3e579]: "UI from an MCP server works with three kinds of state:"
+            - table [ref=f3e580]:
+              - rowgroup [ref=f3e581]:
+                - row [ref=f3e582]:
+                  - columnheader "State type" [ref=f3e583]
+                  - columnheader "Owner" [ref=f3e584]
+                  - columnheader "Lifetime" [ref=f3e585]
+                  - columnheader "Examples" [ref=f3e586]
+              - rowgroup [ref=f3e587]:
+                - row [ref=f3e588]:
+                  - cell [ref=f3e589]:
+                    - strong [ref=f3e590]: Business data (authoritative)
+                  - cell "MCP server or external service" [ref=f3e591]
+                  - cell "Long-lived" [ref=f3e592]
+                  - cell "Tasks, tickets, documents" [ref=f3e593]
+                - row [ref=f3e594]:
+                  - cell [ref=f3e595]:
+                    - strong [ref=f3e596]: UI state (ephemeral)
+                  - cell "UI instance" [ref=f3e597]
+                  - cell "Active UI instance" [ref=f3e598]
+                  - cell "Selected row, expanded panel, sort order" [ref=f3e599]
+                - row [ref=f3e600]:
+                  - cell [ref=f3e601]:
+                    - strong [ref=f3e602]: Cross-session state (durable)
+                  - cell "Storage you control" [ref=f3e603]
+                  - cell "Cross-session and cross-conversation" [ref=f3e604]
+                  - cell "Saved filters, view mode, workspace" [ref=f3e605]
+            - paragraph [ref=f3e606]: Keep each value with the system that owns it. The UI should render authoritative data from tool results and layer temporary presentation state on top.
+            - generic [ref=f3e607]:
+              - code [ref=f3e608]:
+                - generic [ref=f3e609]: MCP server or external service
+                - generic [ref=f3e610]: │
+                - generic [ref=f3e611]: ├── Authoritative business data
+                - generic [ref=f3e612]: │
+                - generic [ref=f3e613]: ▼
+                - generic [ref=f3e614]: UI
+                - generic [ref=f3e615]: │
+                - generic [ref=f3e616]: ├── Ephemeral presentation state
+                - generic [ref=f3e617]: │
+                - generic [ref=f3e618]: └── Rendered view = business data + UI state
+              - generic [ref=f3e619]:
+                - button "Copy code to clipboard" [ref=f3e620] [cursor=pointer]
+                - status [ref=f3e623]
+            - heading "Keep business data on the server Copy link to Keep business data on the server" [level=3] [ref=f3e624]:
+              - generic [ref=f3e625]: Keep business data on the server
+              - button "Copy link to Keep business data on the server" [ref=f3e626] [cursor=pointer]
+            - paragraph [ref=f3e629]: "Business data is the source of truth. Do not store it only in the UI. When a user takes an action:"
+            - list [ref=f3e630]:
+              - listitem [ref=f3e631]: The UI calls an MCP tool.
+              - listitem [ref=f3e632]: The server validates the request and updates the data.
+              - listitem [ref=f3e633]: The server returns the updated authoritative snapshot.
+              - listitem [ref=f3e634]: The UI renders the snapshot while preserving compatible presentation state.
+            - paragraph [ref=f3e635]: Return enough structured content for both the model and UI to understand the new state. This also lets the conversation remain useful if the UI cannot load.
+            - heading "Keep temporary UI state in the UI Copy link to Keep temporary UI state in the UI" [level=3] [ref=f3e636]:
+              - generic [ref=f3e637]: Keep temporary UI state in the UI
+              - button "Copy link to Keep temporary UI state in the UI" [ref=f3e638] [cursor=pointer]
+            - paragraph [ref=f3e641]: Use framework state for values that only affect presentation, such as a selected item, open panel, or draft filter. Each rendered UI instance has its own state.
+            - paragraph [ref=f3e642]:
+              - text: When the model needs to know about a selection or staged edit, send that information through
+              - code [ref=f3e643]: ui/update-model-context
+              - text: . This is the portable MCP Apps mechanism for updating model-visible context.
+            - paragraph [ref=f3e644]: "ChatGPT also provides optional widget-scoped persistence:"
+            - list [ref=f3e645]:
+              - listitem [ref=f3e646]:
+                - text: Read the current snapshot from
+                - code [ref=f3e647]: window.openai.widgetState
+                - text: .
+              - listitem [ref=f3e648]:
+                - text: Write a new snapshot with
+                - code [ref=f3e649]: window.openai.setWidgetState(state)
+                - text: .
+            - paragraph [ref=f3e650]:
+              - code [ref=f3e651]: setWidgetState
+              - text: is synchronous. Call it after each meaningful UI-state change; there is nothing to
+              - code [ref=f3e652]: await
+              - text: .
+            - generic [ref=f3e653]:
+              - code [ref=f3e654]:
+                - generic [ref=f3e655]: "import { useState } from \"react\";"
+                - generic [ref=f3e656]: "export function TaskList({ tasks }) {"
+                - generic [ref=f3e657]: const [state, setState] = useState(
+                - generic [ref=f3e658]: "window.openai?.widgetState ?? { selectedId: null }"
+                - generic [ref=f3e659]: );
+                - generic [ref=f3e660]: "function selectTask(selectedId) {"
+                - generic [ref=f3e661]: "const nextState = { ...state, selectedId };"
+                - generic [ref=f3e662]: setState(nextState);
+                - generic [ref=f3e663]: window.openai?.setWidgetState?.(nextState);
+                - generic [ref=f3e664]: "}"
+                - generic [ref=f3e665]: return (
+                - generic [ref=f3e666]: <ul>
+                - generic [ref=f3e667]: "{tasks.map((task) => ("
+                - generic [ref=f3e668]: "<li key={task.id}>"
+                - generic [ref=f3e669]: <button
+                - generic [ref=f3e670]: type="button"
+                - generic [ref=f3e671]: "aria-pressed={state.selectedId === task.id}"
+                - generic [ref=f3e672]: "onClick={() => selectTask(task.id)}"
+                - generic [ref=f3e673]: ">"
+                - generic [ref=f3e674]: "{task.title}"
+                - generic [ref=f3e675]: </button>
+                - generic [ref=f3e676]: </li>
+                - generic [ref=f3e677]: "))}"
+                - generic [ref=f3e678]: </ul>
+                - generic [ref=f3e679]: );
+                - generic [ref=f3e680]: "}"
+              - generic [ref=f3e681]:
+                - button "Copy code to clipboard" [ref=f3e682] [cursor=pointer]
+                - status [ref=f3e685]
+            - paragraph [ref=f3e686]: Widget state belongs to one rendered UI instance. Do not use it as the source of truth for business data or as durable storage.
+            - heading "Make images visible to the model Copy link to Make images visible to the model" [level=4] [ref=f3e687]:
+              - generic [ref=f3e688]: Make images visible to the model
+              - button "Copy link to Make images visible to the model" [ref=f3e689] [cursor=pointer]
+            - paragraph [ref=f3e692]: "For UI that works with images, use the structured widget-state shape:"
+            - list [ref=f3e693]:
+              - listitem [ref=f3e694]:
+                - code [ref=f3e695]: modelContent
+                - text: ": Text or JSON the model should see."
+              - listitem [ref=f3e696]:
+                - code [ref=f3e697]: privateContent
+                - text: ": UI-only state the model should not see."
+              - listitem [ref=f3e698]:
+                - code [ref=f3e699]: imageIds
+                - text: ": File IDs the model should receive on later turns."
+            - generic [ref=f3e700]:
+              - code [ref=f3e701]:
+                - generic [ref=f3e702]: "window.openai.setWidgetState({"
+                - generic [ref=f3e703]: "modelContent: \"Review the currently selected images.\","
+                - generic [ref=f3e704]: "privateContent: {"
+                - generic [ref=f3e705]: "currentView: \"image-viewer\","
+                - generic [ref=f3e706]: "filters: [\"crop\", \"sharpen\"],"
+                - generic [ref=f3e707]: "},"
+                - generic [ref=f3e708]: "imageIds: [\"file_123\", \"file_456\"],"
+                - generic [ref=f3e709]: "});"
+              - generic [ref=f3e710]:
+                - button "Copy code to clipboard" [ref=f3e711] [cursor=pointer]
+                - status [ref=f3e714]
+            - paragraph [ref=f3e715]:
+              - text: Only include file IDs uploaded with
+              - code [ref=f3e716]: window.openai.uploadFile
+              - text: ", selected with"
+              - code [ref=f3e717]: window.openai.selectFiles
+              - text: ", received through tool input file parameters, or returned through tool result file references."
+            - heading "Store cross-session state on your server Copy link to Store cross-session state on your server" [level=3] [ref=f3e718]:
+              - generic [ref=f3e719]: Store cross-session state on your server
+              - button "Copy link to Store cross-session state on your server" [ref=f3e720] [cursor=pointer]
+            - paragraph [ref=f3e723]: Store preferences and data that must survive across conversations, devices, or sessions in storage you control. Authenticate the user so the MCP server can map each request to the correct account.
+            - paragraph [ref=f3e724]: "When you add durable storage:"
+            - list [ref=f3e725]:
+              - listitem [ref=f3e726]: Keep latency low enough for interactive UI.
+              - listitem [ref=f3e727]: Protect private data with server-side authorization.
+              - listitem [ref=f3e728]: Plan for data residency and compliance requirements.
+              - listitem [ref=f3e729]: Apply rate limits to traffic from retries or concurrent UI instances.
+              - listitem [ref=f3e730]: Version stored objects so you can migrate them without breaking existing conversations.
+            - paragraph [ref=f3e731]:
+              - text: Avoid
+              - code [ref=f3e732]: localStorage
+              - text: for core state. UI runs in an isolated iframe, and browser storage does not provide a reliable cross-device or cross-session data layer.
+            - heading "Scaffold the component project Copy link to Scaffold the component project" [level=2] [ref=f3e733]:
+              - generic [ref=f3e734]: Scaffold the component project
+              - button "Copy link to Scaffold the component project" [ref=f3e735] [cursor=pointer]
+            - paragraph [ref=f3e738]: Now that you understand the MCP Apps bridge (and optional ChatGPT extensions), it’s time to scaffold your component project.
+            - paragraph [ref=f3e739]: "As best practice, keep the component code separate from your server logic. A common layout is:"
+            - generic [ref=f3e740]:
+              - code [ref=f3e741]:
+                - generic [ref=f3e742]: plugin-ui/
+                - generic [ref=f3e743]: "server/ # MCP server (Python or Node)"
+                - generic [ref=f3e744]: "web/ # Component bundle source"
+                - generic [ref=f3e745]: package.json
+                - generic [ref=f3e746]: tsconfig.json
+                - generic [ref=f3e747]: src/component.tsx
+                - generic [ref=f3e748]: "dist/component.js # Build output"
+              - generic [ref=f3e749]:
+                - button "Copy code to clipboard" [ref=f3e750] [cursor=pointer]
+                - status [ref=f3e753]
+            - paragraph [ref=f3e754]: "Create the project and install dependencies (Node 18+ recommended):"
+            - generic [ref=f3e755]:
+              - code [ref=f3e756]:
+                - generic [ref=f3e757]: cd plugin-ui/web
+                - generic [ref=f3e758]: npm init -y
+                - generic [ref=f3e759]: npm install react@^18 react-dom@^18
+                - generic [ref=f3e760]: npm install -D typescript esbuild
+              - generic [ref=f3e761]:
+                - button "Copy code to clipboard" [ref=f3e762] [cursor=pointer]
+                - status [ref=f3e765]
+            - paragraph [ref=f3e766]: If your component requires drag-and-drop, charts, or other libraries, add them now. Keep the dependency set lean to reduce bundle size.
+            - heading "Author the React component Copy link to Author the React component" [level=2] [ref=f3e767]:
+              - generic [ref=f3e768]: Author the React component
+              - button "Copy link to Author the React component" [ref=f3e769] [cursor=pointer]
+            - paragraph [ref=f3e772]:
+              - text: Your entry file should mount a component into a
+              - code [ref=f3e773]: root
+              - text: element and render from the latest tool result delivered over the MCP Apps bridge (for example,
+              - code [ref=f3e774]: ui/notifications/tool-result
+              - text: ).
+            - paragraph [ref=f3e775]:
+              - text: The
+              - link "examples page" [ref=f3e776] [cursor=pointer]:
+                - /url: ./examples
+              - text: includes sample UI, such as the Pizzaz list of pizza restaurants.
+            - heading "Explore the Pizzaz component gallery Copy link to Explore the Pizzaz component gallery" [level=3] [ref=f3e777]:
+              - generic [ref=f3e778]: Explore the Pizzaz component gallery
+              - button "Copy link to Explore the Pizzaz component gallery" [ref=f3e779] [cursor=pointer]
+            - paragraph [ref=f3e782]:
+              - text: The
+              - link "UI examples" [ref=f3e783] [cursor=pointer]:
+                - /url: /plugins/build/examples
+              - text: "include example components. Treat them as blueprints when shaping your own UI:"
+            - list [ref=f3e784]:
+              - listitem [ref=f3e785]:
+                - strong [ref=f3e786]: "Pizzaz List:"
+                - text: Ranked card list with favorites and call-to-action buttons.
+                - img "Screenshot of the Pizzaz list component" [ref=f3e787]
+              - listitem [ref=f3e788]:
+                - strong [ref=f3e789]: "Pizzaz Carousel:"
+                - text: Embla-powered horizontal scroller that demonstrates media-heavy layouts.
+                - img "Screenshot of the Pizzaz carousel component" [ref=f3e790]
+              - listitem [ref=f3e791]:
+                - strong [ref=f3e792]: "Pizzaz Map:"
+                - text: Mapbox integration with fullscreen inspector and host state sync.
+                - img "Screenshot of the Pizzaz map component" [ref=f3e793]
+              - listitem [ref=f3e794]:
+                - strong [ref=f3e795]: "Pizzaz Album:"
+                - text: Stacked gallery view built for deep dives on a single place.
+                - img "Screenshot of the Pizzaz album component" [ref=f3e796]
+              - listitem [ref=f3e797]:
+                - strong [ref=f3e798]: "Pizzaz Video:"
+                - text: Scripted player with overlays and fullscreen controls.
+            - paragraph [ref=f3e799]: Each example shows how to bundle assets, wire host APIs, and structure state for real conversations. Copy the one closest to your use case and adapt the data layer for your tool responses.
+            - heading "React helper hooks Copy link to React helper hooks" [level=3] [ref=f3e800]:
+              - generic [ref=f3e801]: React helper hooks
+              - button "Copy link to React helper hooks" [ref=f3e802] [cursor=pointer]
+            - paragraph [ref=f3e805]:
+              - text: A small helper to subscribe to
+              - code [ref=f3e806]: ui/notifications/tool-result
+              - text: ":"
+            - generic [ref=f3e807]:
+              - code [ref=f3e808]:
+                - generic [ref=f3e809]: "type ToolResult = { structuredContent?: unknown } | null;"
+                - generic [ref=f3e810]: "export function useToolResult() {"
+                - generic [ref=f3e811]: const [toolResult, setToolResult] = useState<ToolResult>(null);
+                - generic [ref=f3e812]: "useEffect(() => {"
+                - generic [ref=f3e813]: "const onMessage = (event: MessageEvent) => {"
+                - generic [ref=f3e814]: if (event.source !== window.parent) return;
+                - generic [ref=f3e815]: const message = event.data;
+                - generic [ref=f3e816]: if (!message || message.jsonrpc !== "2.0") return;
+                - generic [ref=f3e817]: if (message.method !== "ui/notifications/tool-result") return;
+                - generic [ref=f3e818]: setToolResult(message.params ?? null);
+                - generic [ref=f3e819]: "};"
+                - generic [ref=f3e820]: "window.addEventListener(\"message\", onMessage, { passive: true });"
+                - generic [ref=f3e821]: return () => window.removeEventListener("message", onMessage);
+                - generic [ref=f3e822]: "}, []);"
+                - generic [ref=f3e823]: return toolResult;
+                - generic [ref=f3e824]: "}"
+              - generic [ref=f3e825]:
+                - button "Copy code to clipboard" [ref=f3e826] [cursor=pointer]
+                - status [ref=f3e829]
+            - paragraph [ref=f3e830]:
+              - text: Render from
+              - code [ref=f3e831]: toolResult?.structuredContent
+              - text: ", and treat it as untrusted input."
+            - heading "Widget localization Copy link to Widget localization" [level=2] [ref=f3e832]:
+              - generic [ref=f3e833]: Widget localization
+              - button "Copy link to Widget localization" [ref=f3e834] [cursor=pointer]
+            - paragraph [ref=f3e837]:
+              - text: The host mirrors the locale to
+              - code [ref=f3e838]: document.documentElement.lang
+              - text: . Use that locale to load translations and format dates/numbers. A common pattern with
+              - code [ref=f3e839]: react-intl
+              - text: ":"
+            - generic [ref=f3e840]:
+              - code [ref=f3e841]:
+                - generic [ref=f3e842]: "import { IntlProvider } from \"react-intl\";"
+                - generic [ref=f3e843]: import en from "./locales/en-US.json";
+                - generic [ref=f3e844]: import es from "./locales/es-ES.json";
+                - generic [ref=f3e845]: "const messages: Record<string, Record<string, string>> = {"
+                - generic [ref=f3e846]: "\"en-US\": en,"
+                - generic [ref=f3e847]: "\"es-ES\": es,"
+                - generic [ref=f3e848]: "};"
+                - generic [ref=f3e849]: "export function PluginUI() {"
+                - generic [ref=f3e850]: const locale = document.documentElement.lang || "en-US";
+                - generic [ref=f3e851]: return (
+                - generic [ref=f3e852]: <IntlProvider
+                - generic [ref=f3e853]: "locale={locale}"
+                - generic [ref=f3e854]: "messages={messages[locale] ?? messages[\"en-US\"]}"
+                - generic [ref=f3e855]: ">"
+                - generic [ref=f3e856]: "{/* Render UI with <FormattedMessage> or useIntl() */}"
+                - generic [ref=f3e857]: </IntlProvider>
+                - generic [ref=f3e858]: );
+                - generic [ref=f3e859]: "}"
+              - generic [ref=f3e860]:
+                - button "Copy code to clipboard" [ref=f3e861] [cursor=pointer]
+                - status [ref=f3e864]
+            - heading "Bundle for the iframe Copy link to Bundle for the iframe" [level=2] [ref=f3e865]:
+              - generic [ref=f3e866]: Bundle for the iframe
+              - button "Copy link to Bundle for the iframe" [ref=f3e867] [cursor=pointer]
+            - paragraph [ref=f3e870]: "Once you finish writing your React component, you can build it into a single JavaScript module that the server can inline:"
+            - generic [ref=f3e871]:
+              - code [ref=f3e872]:
+                - generic [ref=f3e873]: // package.json
+                - generic [ref=f3e874]: "{"
+                - generic [ref=f3e875]: "\"scripts\": {"
+                - generic [ref=f3e876]: "\"build\": \"esbuild src/component.tsx --bundle --format=esm --outfile=dist/component.js\""
+                - generic [ref=f3e877]: "}"
+                - generic [ref=f3e878]: "}"
+              - generic [ref=f3e879]:
+                - button "Copy code to clipboard" [ref=f3e880] [cursor=pointer]
+                - status [ref=f3e883]
+            - paragraph [ref=f3e884]:
+              - text: Run
+              - code [ref=f3e885]: npm run build
+              - text: to produce
+              - code [ref=f3e886]: dist/component.js
+              - text: . If esbuild complains about missing dependencies, confirm you ran
+              - code [ref=f3e887]: npm install
+              - text: in the
+              - code [ref=f3e888]: web/
+              - text: directory and that your imports match installed package names (for example,
+              - code [ref=f3e889]: "@react-dnd/html5-server-side"
+              - text: vs
+              - code [ref=f3e890]: react-dnd-html5-server-side
+              - text: ).
+            - heading "Embed the component in the server response Copy link to Embed the component in the server response" [level=2] [ref=f3e891]:
+              - generic [ref=f3e892]: Embed the component in the server response
+              - button "Copy link to Embed the component in the server response" [ref=f3e893] [cursor=pointer]
+            - paragraph [ref=f3e896]:
+              - text: Expose the component as an MCP resource with the MCP Apps UI MIME type (
+              - code [ref=f3e897]: text/html;profile=mcp-app
+              - text: ). If you use
+              - code [ref=f3e898]: "@modelcontextprotocol/ext-apps/server"
+              - text: ", prefer"
+              - code [ref=f3e899]: RESOURCE_MIME_TYPE
+              - text: "instead of embedding the string:"
+            - generic [ref=f3e900]:
+              - code [ref=f3e901]:
+                - generic [ref=f3e902]: "import {"
+                - generic [ref=f3e903]: registerAppResource,
+                - generic [ref=f3e904]: RESOURCE_MIME_TYPE,
+                - generic [ref=f3e905]: "} from \"@modelcontextprotocol/ext-apps/server\";"
+                - generic [ref=f3e906]: "import { readFileSync } from \"node:fs\";"
+                - generic [ref=f3e907]: const component = readFileSync("web/dist/component.js", "utf8");
+                - generic [ref=f3e908]: registerAppResource(
+                - generic [ref=f3e909]: server,
+                - generic [ref=f3e910]: "\"project-board\","
+                - generic [ref=f3e911]: "\"ui://project-board/v1.html\","
+                - generic [ref=f3e912]: "{},"
+                - generic [ref=f3e913]: "async () => ({"
+                - generic [ref=f3e914]: "contents: ["
+                - generic [ref=f3e915]: "{"
+                - generic [ref=f3e916]: "uri: \"ui://project-board/v1.html\","
+                - generic [ref=f3e917]: "mimeType: RESOURCE_MIME_TYPE,"
+                - generic [ref=f3e918]: "text: `<div id=\"root\"></div><script type=\"module\">${component}</script>`,"
+                - generic [ref=f3e919]: "_meta: {"
+                - generic [ref=f3e920]: "ui: {"
+                - generic [ref=f3e921]: "prefersBorder: true,"
+                - generic [ref=f3e922]: "domain: \"https://example.com\","
+                - generic [ref=f3e923]: "csp: {"
+                - generic [ref=f3e924]: "connectDomains: [\"https://api.example.com\"],"
+                - generic [ref=f3e925]: "resourceDomains: [\"https://static.example.com\"],"
+                - generic [ref=f3e926]: "},"
+                - generic [ref=f3e927]: "},"
+                - generic [ref=f3e928]: "},"
+                - generic [ref=f3e929]: "},"
+                - generic [ref=f3e930]: "],"
+                - generic [ref=f3e931]: "})"
+                - generic [ref=f3e932]: );
+              - generic [ref=f3e933]:
+                - button "Copy code to clipboard" [ref=f3e934] [cursor=pointer]
+                - status [ref=f3e937]
+            - paragraph [ref=f3e938]:
+              - text: Associate the resource URI with only the tools that should render the component. For broader MCP Apps compatibility, use
+              - code [ref=f3e939]: _meta.ui.resourceUri
+              - text: . ChatGPT also honors
+              - code [ref=f3e940]: _meta["openai/outputTemplate"]
+              - text: as a compatibility alias.
+            - paragraph [ref=f3e941]: Treat the resource URI as a cache key. When you make a breaking change to the HTML, JavaScript, or CSS, publish a new URI and update every tool that references it.
+            - heading "Content security policy (CSP) Copy link to Content security policy (CSP)" [level=3] [ref=f3e942]:
+              - generic [ref=f3e943]: Content security policy (CSP)
+              - button "Copy link to Content security policy (CSP)" [ref=f3e944] [cursor=pointer]
+            - paragraph [ref=f3e947]: "Declare the exact domains the component connects to or loads resources from:"
+            - list [ref=f3e948]:
+              - listitem [ref=f3e949]:
+                - code [ref=f3e950]: connectDomains
+                - text: for API requests.
+              - listitem [ref=f3e951]:
+                - code [ref=f3e952]: resourceDomains
+                - text: for scripts, styles, images, and other assets.
+              - listitem [ref=f3e953]:
+                - code [ref=f3e954]: frameDomains
+                - text: only when the component must embed specific iframe origins.
+            - paragraph [ref=f3e955]: Nested frames are blocked by default. Keep each allowlist as narrow as possible. The plugin review process checks the declared policy against the UI behavior.
+            - paragraph [ref=f3e956]:
+              - text: You can embed an existing editor or admin interface from your MCP server’s own registrable domain. For example, a server at
+              - code [ref=f3e957]: https://api.example.com/mcp
+              - text: can declare
+              - code [ref=f3e958]: https://app.example.com
+              - text: in
+              - code [ref=f3e959]: frameDomains
+              - text: . Provide the required justification at submission and follow the
+              - link "iframe policy" [ref=f3e960] [cursor=pointer]:
+                - /url: /plugins/app-guidelines#iframes-and-embedded-pages
+              - text: ", including its restrictions on shared hosting and its review requirements."
+            - paragraph [ref=f3e961]: Component UI templates are the recommended path for production.
+            - paragraph [ref=f3e962]: During development you can rebuild the component bundle whenever your React code changes and hot-reload the server.
+            - heading "Offer checkout in your UI Copy link to Offer checkout in your UI" [level=2] [ref=f3e963]:
+              - generic [ref=f3e964]: Offer checkout in your UI
+              - button "Copy link to Offer checkout in your UI" [ref=f3e965] [cursor=pointer]
+            - paragraph [ref=f3e968]: If you want to offer users the ability to check out through your plugin’s UI flows, use the component to present products, prices, terms, and payment choices before confirmation. Keep the underlying catalog and order tools useful without UI, then choose an external checkout flow or, when available, an embedded payment option.
+            - heading "Use external checkout by default Copy link to Use external checkout by default" [level=3] [ref=f3e969]:
+              - generic [ref=f3e970]: Use external checkout by default
+              - button "Copy link to Use external checkout by default" [ref=f3e971] [cursor=pointer]
+            - paragraph [ref=f3e974]: "External checkout is the recommended and generally available approach. Link from the component to a merchant-hosted checkout flow on your own domain, where you handle:"
+            - list [ref=f3e975]:
+              - listitem [ref=f3e976]: Pricing and payment collection.
+              - listitem [ref=f3e977]: Taxes, discounts, and fees.
+              - listitem [ref=f3e978]: Shipping and fulfillment.
+              - listitem [ref=f3e979]: Refunds, support, and compliance.
+            - paragraph [ref=f3e980]: Current approval is limited to plugins for physical-goods purchases. Do not offer other commerce categories unless OpenAI has explicitly enabled them for your plugin.
+            - heading "Use saved payment methods Copy link to Use saved payment methods" [level=3] [ref=f3e981]:
+              - generic [ref=f3e982]: Use saved payment methods
+              - button "Copy link to Use saved payment methods" [ref=f3e983] [cursor=pointer]
+            - paragraph [ref=f3e986]: For eligible physical-goods purchases, optional UI can let customers select a payment method they previously saved with your service. This flow can display eligible saved methods but cannot collect new payment credentials. Your MCP server processes the purchase and returns the authoritative order result.
+            - heading "Use the ChatGPT payment sheet Copy link to Use the ChatGPT payment sheet" [level=3] [ref=f3e987]:
+              - generic [ref=f3e988]: Use the ChatGPT payment sheet
+              - button "Copy link to Use the ChatGPT payment sheet" [ref=f3e989] [cursor=pointer]
+            - paragraph [ref=f3e1000]: Embedded checkout with the ChatGPT payment sheet is in private beta for select marketplaces and is not available to all developers or users.
+            - paragraph [ref=f3e1001]:
+              - text: For enabled integrations,
+              - code [ref=f3e1002]: window.openai.requestCheckout
+              - text: "opens the ChatGPT payment sheet:"
+            - generic [ref=f3e1003]:
+              - code [ref=f3e1004]:
+                - generic [ref=f3e1005]: const order = await window.openai.requestCheckout(checkoutSession);
+              - generic [ref=f3e1006]:
+                - button "Copy code to clipboard" [ref=f3e1007] [cursor=pointer]
+                - status [ref=f3e1010]
+            - paragraph [ref=f3e1011]: "The checkout flow has four parts:"
+            - list [ref=f3e1012]:
+              - listitem [ref=f3e1013]:
+                - text: An MCP tool returns a checkout session in
+                - code [ref=f3e1014]: structuredContent
+                - text: .
+              - listitem [ref=f3e1015]: The component displays the line items, totals, terms, and fulfillment choices.
+              - listitem [ref=f3e1016]:
+                - text: The component calls
+                - code [ref=f3e1017]: requestCheckout(checkoutSession)
+                - text: after the user chooses to pay.
+              - listitem [ref=f3e1018]:
+                - text: ChatGPT sends the selected payment token to the MCP server’s
+                - code [ref=f3e1019]: complete_checkout
+                - text: tool, which charges the payment method and returns the completed order.
+            - paragraph [ref=f3e1020]: "The checkout session must include:"
+            - list [ref=f3e1021]:
+              - listitem [ref=f3e1022]: A unique session ID.
+              - listitem [ref=f3e1023]: Line items and quantities.
+              - listitem [ref=f3e1024]: Totals in integer minor currency units.
+              - listitem [ref=f3e1025]: Payment-provider and merchant metadata.
+              - listitem [ref=f3e1026]: Required legal, privacy, refund, and support links.
+            - paragraph [ref=f3e1027]: Treat the server as the source of truth for prices and order status. Verify the payment token, make the operation idempotent, persist the order, and return an authoritative receipt. Never trust totals calculated only in the component.
+            - paragraph [ref=f3e1028]:
+              - text: Use
+              - code [ref=f3e1029]: "payment_mode: \"test\""
+              - text: to exercise the end-to-end flow without moving real funds. Handle cancellation, declined payments, and payment-provider errors in the component.
+            - paragraph [ref=f3e1030]:
+              - text: For complete checkout-session fields, payment-provider behavior, the
+              - code [ref=f3e1031]: complete_checkout
+              - text: result shape, and delegated-payment requirements, see the
+              - link "checkout API reference" [ref=f3e1032] [cursor=pointer]:
+                - /url: /plugins/build/monetization
+              - text: .
+      - navigation [ref=f3e1035]:
+        - generic [ref=f3e1036]:
+          - link "Previous Build an MCP server" [ref=f3e1037] [cursor=pointer]:
+            - /url: /plugins/build/mcp-server
+            - generic [ref=f3e1040]:
+              - generic [ref=f3e1041]: Previous
+              - generic [ref=f3e1042]: Build an MCP server
+          - link "Next Authenticate users" [ref=f3e1043] [cursor=pointer]:
+            - /url: /plugins/build/auth
+            - generic [ref=f3e1044]:
+              - generic [ref=f3e1045]: Next
+              - generic [ref=f3e1046]: Authenticate users
+  - generic:
+    - button "Ask AI" [ref=f3e1050] [cursor=pointer]
+    - dialog [ref=f3e1052]:
+      - banner [ref=f3e1053]:
+        - heading "Docs agent" [level=2] [ref=f3e1054]
+        - generic [ref=f3e1055]:
+          - button "Start a new docs agent chat" [ref=f3e1056] [cursor=pointer]
+          - button "Close docs agent" [ref=f3e1059] [cursor=pointer]
+      - paragraph [ref=f3e1064]: Loading docs agent...
