@@ -50,7 +50,30 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		"detail":  truncateRunes(detail, 300),
 		"at":      primitive.NewDateTimeFromTime(time.Now().UTC()),
 	}
-	if _, err := s.db.Collection(auditCollection).InsertOne(ctx, entry); err != nil {
+	// The audit write must NOT inherit the caller's cancellation.
+	//
+	// ctx here is the request context, which Go cancels the moment the client
+	// disconnects — and the interesting case is precisely a client that DID: it
+	// timed out or hung up, the mutation had already committed, and then the log
+	// entry for it was dropped because its context was dead. That inverts the point
+	// of the log. "What happened to this task?" is asked most often about the change
+	// nobody can explain, and a disconnected client is exactly the sort of change
+	// nobody saw happen.
+	//
+	// WithoutCancel keeps the context's values and drops the cancellation; the short
+	// timeout keeps the write bounded so it cannot outlive the process indefinitely.
+	// 5s is ample for one indexed insert and, being independent of the request, does
+	// not extend the response the client is no longer waiting for.
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditWriteBudget)
+	defer cancel()
+	if _, err := s.db.Collection(auditCollection).InsertOne(auditCtx, entry); err != nil {
+		// Still best-effort: the user's mutation succeeded, so a log gap is the lesser
+		// failure. But it is logged loudly rather than swallowed, because a silent gap
+		// is indistinguishable from "nothing happened".
 		log.Printf("tasks: mutation log write failed (op=%s task=%s): %v", op, taskID, err)
 	}
 }
+
+// auditWriteBudget bounds one audit insert, independently of the request that
+// triggered it. See RecordMutation.
+const auditWriteBudget = 5 * time.Second

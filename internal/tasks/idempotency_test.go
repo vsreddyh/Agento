@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -420,5 +421,59 @@ func TestTruncateRunesNeverSplitsARune(t *testing.T) {
 	// Under the cap, nothing is touched.
 	if got := truncateRunes("short", max); got != "short" {
 		t.Errorf("a short string was altered: %q", got)
+	}
+}
+
+// The audit write must survive the caller's cancellation. ctx here is the request
+// context, which Go cancels the moment the client disconnects — so the case that
+// matters is a client that DID disconnect: the mutation had already committed, and
+// the log entry for it was dropped because its context was dead. That inverts the
+// point of an audit log, and it happens precisely when the change is least
+// explainable.
+func TestRecordMutationSurvivesACancelledCaller(t *testing.T) {
+	s := testStore(t)
+	defer cleanupIdem(t, s, context.Background())
+
+	id := mustCreate(t, s, "disconnected", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the client hung up
+	if err := ctx.Err(); err == nil {
+		t.Fatal("test setup: the caller context should be cancelled")
+	}
+	s.RecordMutation(ctx, OpCreate, id, "test", "client disconnected mid-request")
+
+	var got bson.M
+	err := s.tasks.Database().Collection(auditCollection).
+		FindOne(context.Background(), bson.M{"task_id": id}).Decode(&got)
+	if err != nil {
+		t.Fatalf("the audit entry was dropped along with the cancelled request: %v", err)
+	}
+	if got["op"] != OpCreate {
+		t.Errorf("op = %v, want %q", got["op"], OpCreate)
+	}
+}
+
+// The write stays bounded even when nothing cancels it, so an audit insert cannot
+// keep the process alive indefinitely. WithoutCancel removes the caller's deadline,
+// which makes a bound here load-bearing rather than tidy.
+func TestAuditWriteIsBounded(t *testing.T) {
+	if auditWriteBudget <= 0 || auditWriteBudget > 30*time.Second {
+		t.Errorf("auditWriteBudget = %s, want a small positive bound", auditWriteBudget)
+	}
+	// And the derived context really does carry that deadline, with no earlier one
+	// inherited from a caller that had none to give.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	auditCtx, cancelAudit := context.WithTimeout(context.WithoutCancel(ctx), auditWriteBudget)
+	defer cancelAudit()
+	dl, ok := auditCtx.Deadline()
+	if !ok {
+		t.Fatal("the audit context has no deadline; the write is unbounded")
+	}
+	if remaining := time.Until(dl); remaining > auditWriteBudget+time.Second {
+		t.Errorf("audit deadline is %s away, want ~%s", remaining.Round(time.Second), auditWriteBudget)
 	}
 }
