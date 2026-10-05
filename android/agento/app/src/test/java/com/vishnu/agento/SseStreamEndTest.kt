@@ -20,8 +20,21 @@ import org.junit.Test
  */
 class SseStreamEndTest {
 
+    /**
+     * A content frame's JSON PAYLOAD, with no `data: ` prefix.
+     *
+     * Deliberately a bare payload: this originally returned the whole `data: {...}` line
+     * and `frame()` prepends `data: `, so every content line came out as
+     * `data: data: {...}`. The parser stripped one prefix, handed `data: {...}` to
+     * `JSONObject`, and `runCatching` swallowed the failure — so the text assertions
+     * read `expected:<Hello world> but was:<>` while the truncation tests, which assert
+     * only the SseEnd, passed happily.
+     *
+     * That is the same shape as the trimIndent bug: a malformed fixture that the
+     * assertions happened not to reach. `frame` is the ONLY place a prefix is added.
+     */
     private fun delta(content: String) =
-        """data: {"choices":[{"delta":{"content":"$content"}}]}"""
+        """{"choices":[{"delta":{"content":"$content"}}]}"""
 
     /**
      * The stream, as a list of lines.
@@ -43,6 +56,7 @@ class SseStreamEndTest {
         "data: [DONE]",
     )
 
+    /** Prefixes a JSON payload as one SSE data line. The only place this happens. */
     private fun frame(payload: String) = "data: $payload"
 
     private fun streamOf(lines: List<String>) = lines.joinToString("\n", postfix = "\n")
@@ -97,6 +111,29 @@ class SseStreamEndTest {
      * stripped only one of the two newlines — so the "truncated" stream still ended
      * with `[DONE]` and the regression test quietly tested nothing.
      */
+    /**
+     * Every data line must carry exactly ONE `data: ` prefix.
+     *
+     * The fixture was briefly emitting `data: data: {...}` — `delta()` returned the whole
+     * SSE line and `frame()` added the prefix again. The parser stripped one, handed
+     * `data: {...}` to `JSONObject`, and `runCatching` swallowed the throw, so the text
+     * assertions failed with an empty string while every test that asserts only the
+     * SseEnd passed. A malformed fixture that the assertions happen not to reach is the
+     * same failure twice in a row (the `trimIndent` one before it), so it gets its own
+     * assertion rather than being left to whichever test happens to notice.
+     */
+    @Test
+    fun `no fixture line has a doubled data prefix`() {
+        val lines = completeLines +
+            listOf(frame(delta("x")), frame("""{"tool":"bash"}"""), ": keepalive", "event: ping")
+        lines.forEach { line ->
+            assertTrue(
+                "doubled data: prefix in fixture line: $line",
+                !line.startsWith("data: data:"),
+            )
+        }
+    }
+
     @Test
     fun `the truncated fixture really is truncated`() {
         assertTrue(
@@ -191,7 +228,7 @@ class SseStreamEndTest {
 
     @Test
     fun `DONE after content is terminal regardless of trailing whitespace`() {
-        val r = read("${delta("hi")}\ndata: [DONE]\n\n\n")
+        val r = read(streamOf(listOf(frame(delta("hi")), "data: [DONE]")) + "\n\n")
         assertEquals(SseEnd.Terminal, r.end)
     }
 }
