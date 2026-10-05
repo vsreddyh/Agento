@@ -126,9 +126,21 @@ func rolloverPlan(done map[string]any, now time.Time) (string, Rollover, error) 
 	if !ok {
 		return "", RolloverFailed, fail("cannot roll over: due_date is not a string")
 	}
+	// The date is validated HERE rather than being left to NextDueDate, because
+	// NextDueDate returns a bare false for two unrelated things: a due_date it cannot
+	// parse, and a cadence that has genuinely run past MaxRollovers. Both used to arrive
+	// as `exhausted` with an empty Detail, so an unreadable date was reported as "the
+	// repeat ran out" — the same wrong-remedy problem as the type check just above, one
+	// line later.
+	if _, perr := time.Parse("2006-01-02", strings.TrimSpace(dueDate)); perr != nil {
+		return "", RolloverFailed, fail("cannot roll over: due_date %q is not a YYYY-MM-DD date",
+			dueDate)
+	}
 	nextDate, ok := rep.NextDueDate(dueDate, now)
 	if !ok {
-		// Unparseable due_date, or the cadence has run past MaxRollovers.
+		// Now genuinely only the MaxRollovers ceiling, which is what `exhausted` means.
+		// Detail stays empty because there is no field to name — the cadence really did
+		// run out, and "re-enter the repeat" is the whole remedy.
 		return "", RolloverExhausted, nil
 	}
 	return nextDate, RolloverCreated, nil
@@ -380,12 +392,18 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 		// The old heuristic here only knew about a blank due_time and called
 		// everything else `exhausted`, which is the wrong remedy for an unparseable
 		// date, a MaxRollovers ceiling or untyped fields.
-		_, why, planErr := rolloverPlan(map[string]any(d), now)
+		planned, why, planErr := rolloverPlan(map[string]any(d), now)
 		detail := ""
 		if planErr != nil {
 			detail = planErr.Error()
 		}
 		if why == RolloverCreated {
+			// This is the one gap that is a STORAGE fault rather than bad data, and it was
+			// reporting with the least information of any: the plan succeeded, so planErr
+			// was nil and Detail came back empty. Naming what should exist turns "FAILED"
+			// into something a human can go and look for.
+			detail = "planned the next occurrence (" + planned + ") but no successor " +
+				"was found — the write or the back-link did not land"
 			// The plan says it should have rolled and it did not — a write that
 			// failed after planning, or a back-link that never landed. Name it
 			// as a failure rather than reporting a gap with no explanation.

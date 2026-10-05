@@ -62,9 +62,28 @@ to roll over usually failed because its stored data is wrong.
 
 Each gap it prints leads with the field that caused it — "cannot roll over: due_time is
 required (HH:MM)" — rather than the bare outcome, because the whole point of the report
-is that a person has to go and fix something. A row whose repeat fields have drifted to
-an unreadable type is reported too, and named as such: skipping it would drop a task
-that genuinely stopped recurring.
+is that a person has to go and fix something. `exhausted` is reserved for the one case it
+means: the cadence has genuinely run past `MaxRollovers`. An unreadable `due_date` is
+`failed`, because the remedy is to fix the field, not to re-enter a repeat that is intact.
+
+#### What the reconciliation cannot see
+
+A row whose repeat fields have drifted to an unreadable type is usually reported and named
+as such, but **not always** — and the asymmetry is worth knowing before you rely on the
+report:
+
+- `repeat_unit` stored as a **number** (e.g. `7`) passes the query and IS reported, as a
+  failure naming the wrong type — `$nin: ["", null]` matches a number, which then reads
+  back as an empty unit.
+- `repeat_every` stored as a **string** (e.g. `"5"`) is **silently missed**. MongoDB
+  brackets comparison operators by BSON type, so `$gt: 0` does not match a string and the
+  row never becomes a candidate. A repeat in that state has stopped recurring and this job
+  will not say so.
+
+That asymmetry is a property of the query, not an oversight in it: widening the filter to
+match drifted types would also pull in rows that are not repeats at all. If a repeat you
+expect to be recurring is missing from the report, check its stored types first — that is
+the failure this caveat is here to prevent.
 
 - **Retention:** done tasks auto-delete 3 days after completion via TTL.
   Open tasks never expire. `reopen_task` clears the expiry.
