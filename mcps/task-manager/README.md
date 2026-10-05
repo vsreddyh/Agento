@@ -89,7 +89,10 @@ not to done.
 
 Over HTTP: `POST /api/tasks/{id}/skip` with an optional `{"reason": "..."}`. The
 response keeps the task at the top level (so an old app still parses it) and adds
-`skipped`, `skipReason`, `next` and `rollover`.
+`skipReason`, `next` and `rollover`. `skipped` is not among them: it is derived
+from `skippedAt` on **every** task response, so it reads `false` on anything
+completed or open and only flips here.
+
 
 ## HTTP hardening (#176)
 
