@@ -121,19 +121,23 @@ internal fun TaskManagerScreen(
             // the user has to act on (their app and the server disagree, and the stored
             // values differ from what they asked for). Four seconds is long enough to read
             // three field names; the default is not.
+            // Refresh FIRST, then show. The message says the list is refreshing, and the
+            // task list is cached state the detail sheet reads from — so the user must
+            // not be looking at the stale row for the whole time the snackbar is up.
+            //
+            // This ordering was wrong until now, and `SnackbarDuration.Long` made it
+            // worse: `showSnackbar` SUSPENDS for the full duration, so bumping afterwards
+            // meant the refresh happened ~10s after the warning appeared, with a
+            // present-tense message sitting over a stale list the whole time.
+            refreshTick++
             snackbar.showSnackbar(
                 message = ContractWarnings.message(mismatch.fields),
                 duration = SnackbarDuration.Long,
             )
-            // The message says the list is being refreshed, so it must be. The task
-            // list is cached state and the detail sheet reads from it, so without this
-            // the user follows the instruction, sees the same stale row, and concludes
-            // the app is ignoring them.
-            refreshTick++
-            // Clear by GENERATION, not by the field list: showSnackbar suspends, so
-            // another report can land while it is up. Matching on the list would still
-            // wipe that one whenever the fields happen to be the same — which, against
-            // one broken server, they usually are.
+            // Clear by GENERATION, not by the field list: showSnackbar suspends for its
+            // full duration, so another report can land while it is up. Matching on the
+            // list would still wipe that one whenever the fields happen to be the same —
+            // which, against one broken server, they usually are.
             ContractWarnings.consume(mismatch.generation)
         }
     }

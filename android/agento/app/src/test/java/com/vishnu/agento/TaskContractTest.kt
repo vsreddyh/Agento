@@ -282,37 +282,27 @@ class ContractWarningsTest {
     }
 
     /**
-     * Two back-to-back reports of the SAME fields must both reach a real collector.
-     *
-     * **No `consume` between them** — that is the whole point, and the previous version of
-     * this test got it wrong. It did `report -> consume -> report`, so the second report
-     * set against `null` rather than against `[X]`, and passed even with the buggy bare
-     * `List<String>` payload it was written to guard. It asserted a thing that was never
-     * at risk.
-     *
-     * The real failure is `StateFlow`'s distinct-until-changed: with a bare list,
-     * `report([X])` twice sets an EQUAL value the second time, the flow conflates it, and
-     * the collector never wakes. Nothing in the state changes to notice — the stored value
-     * looks exactly right while the user is never told.
-     *
-     * So: report twice, assert the collector was invoked twice, and only then consume.
-     */
-    /**
      * Two reports of the same fields must both reach a real collector.
      *
-     * **No `consume` between them** — that is the whole point, and an earlier version of
-     * this test got it wrong by doing `report -> consume -> report`, so the second report
-     * set against `null` rather than `[X]` and passed even with the buggy bare payload.
+     * **No `consume` between them** — that is the whole point, and it took three attempts
+     * to get a version of this test that could fail when the fix is absent.
      *
-     * A second version then got the conflation right but the TIMING wrong: it reported
-     * twice back to back and yielded once. `StateFlow` holds only the NEWEST value, so a
-     * collector suspended across both reports wakes once and sees only the second — the
-     * test would fail on a correct implementation. Passing depended on the dispatcher
-     * rather than on anything asserted.
+     * 1. `report -> consume -> report`: the second report set against `null` rather than
+     *    `[X]`, so it passed even with the buggy bare-`List<String>` payload it claimed to
+     *    guard. It asserted something that was never at risk.
+     * 2. Two back-to-back reports and one `yield()`: right about the conflation, wrong
+     *    about the timing. `StateFlow` holds only the NEWEST value, so a collector
+     *    suspended across both wakes once and sees only the second — the test would fail
+     *    on a CORRECT implementation. Passing depended on the dispatcher, not an assertion.
+     * 3. This one. Each emission is rendezvoused — report, wait for the collector to have
+     *    seen it, report again — so the result is independent of scheduling.
      *
-     * So each emission is rendezvoused: report, wait for the collector to have seen it,
-     * then report again. That makes the assertion independent of scheduling, which is the
-     * only version of this test that actually pins the fix.
+     * `StateFlow` replays its current value to a collector that subscribes late, so the
+     * pre-subscription side needs no yield: the rendezvous cannot return until a delivery
+     * has actually happened.
+     *
+     * All three failures shared one cause — asserting a property of the code without ever
+     * establishing that the test could distinguish the property from its absence.
      */
     @Test
     fun `two identical reports both reach a collector`() = runBlocking {

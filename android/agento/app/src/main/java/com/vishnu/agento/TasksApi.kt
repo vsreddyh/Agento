@@ -671,7 +671,7 @@ internal object ContractWarnings {
     fun message(fields: List<String>): String =
         "Saved, but the server stored different values for " +
             fields.joinToString(", ") +
-            ". Your app and the server may be on different versions — refreshing the list."
+            ". Your app and the server may be on different versions — the list is refreshing."
 }
 
 /**

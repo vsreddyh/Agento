@@ -55,8 +55,8 @@ see GitHub Releases for older notes.
   one obvious collector. Each mismatch carries a generation, so clearing one
   warning cannot eat a second one that arrived while the snackbar was still up —
   including a second warning about the same fields, which is what happens
-  against one broken server. The list is refreshed alongside the warning, so the
-  instruction to resync actually resyncs.
+  against one broken server. The list is refreshed BEFORE the warning is shown, so
+  the instruction to resync is never sitting over a stale row.
 
 ## [4.14.3]
 
