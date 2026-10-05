@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Before
 import org.junit.Test
 
@@ -295,24 +296,39 @@ class ContractWarningsTest {
      *
      * So: report twice, assert the collector was invoked twice, and only then consume.
      */
+    /**
+     * Two reports of the same fields must both reach a real collector.
+     *
+     * **No `consume` between them** — that is the whole point, and an earlier version of
+     * this test got it wrong by doing `report -> consume -> report`, so the second report
+     * set against `null` rather than `[X]` and passed even with the buggy bare payload.
+     *
+     * A second version then got the conflation right but the TIMING wrong: it reported
+     * twice back to back and yielded once. `StateFlow` holds only the NEWEST value, so a
+     * collector suspended across both reports wakes once and sees only the second — the
+     * test would fail on a correct implementation. Passing depended on the dispatcher
+     * rather than on anything asserted.
+     *
+     * So each emission is rendezvoused: report, wait for the collector to have seen it,
+     * then report again. That makes the assertion independent of scheduling, which is the
+     * only version of this test that actually pins the fix.
+     */
     @Test
-    fun `two back-to-back identical reports both reach a collector`() = runBlocking {
+    fun `two identical reports both reach a collector`() = runBlocking {
         val seen = mutableListOf<List<String>>()
         val started = CompletableDeferred<Unit>()
         val job = launch(Dispatchers.Unconfined) {
-            // Signal that the collector is SUBSCRIBED before any report, so the test
-            // cannot pass or fail depending on whether collection happened to start first.
             started.complete(Unit)
             ContractWarnings.mismatched.collect { m -> if (m != null) seen += m.fields }
         }
         try {
             started.await()
             ContractWarnings.report(listOf("due_time"))
+            awaitEmissions(seen, 1)
+            // Second report while the first is still the current value — the exact case
+            // distinct-until-changed would swallow.
             ContractWarnings.report(listOf("due_time"))
-            // Let the collector drain before reading. `Dispatchers.Unconfined` delivers
-            // synchronously, but relying on that is the flake: cancelling immediately
-            // after the second report could win the race and leave `seen` short.
-            yield()
+            awaitEmissions(seen, 2)
             assertEquals(
                 "the second identical report was conflated away — StateFlow suppresses an " +
                     "EQUAL value, so the payload must carry the generation to differ",
@@ -321,6 +337,19 @@ class ContractWarningsTest {
             )
         } finally {
             job.cancel()
+        }
+    }
+
+    /**
+     * Suspends until the collector has seen [want] emissions, or fails the test.
+     *
+     * Bounded so a genuine regression cannot hang the suite: the wait gives up and the
+     * assertion below reports the shortfall with the real count, which is a better
+     * failure message than a timeout.
+     */
+    private suspend fun awaitEmissions(seen: List<*>, want: Int) {
+        withTimeout(5_000) {
+            while (seen.size < want) yield()
         }
     }
 
