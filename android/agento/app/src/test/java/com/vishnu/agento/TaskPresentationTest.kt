@@ -38,6 +38,40 @@ class TaskPresentationTest {
         assertEquals("20 Aug, 09:00", friendlyDue(today.plusDays(12).toString(), "09:00", today))
     }
 
+    /**
+     * The week boundary is INCLUSIVE: exactly +7 days still reads as a weekday
+     * name, and +8 is the first day that falls back to a date. Both sides are
+     * asserted, because a change from `<=` to `<` moves that boundary by a day
+     * and only one of these two lines would fail — the symptom would be a task
+     * that quietly stopped naming the day exactly a week out.
+     *
+     * 2026-08-08 is a Saturday, so +7 is Saturday and +8 is Sunday.
+     */
+    @Test
+    fun `the weekday window ends inclusively at seven days`() {
+        assertEquals("Saturday, 09:00", friendlyDue(today.plusDays(7).toString(), "09:00", today))
+        assertEquals("16 Aug, 09:00", friendlyDue(today.plusDays(8).toString(), "09:00", today))
+    }
+
+    /**
+     * An overdue task reads as an ordinary short date — there is no "Overdue"
+     * marker, because the `when` has no branch for it and `due.isAfter(today)`
+     * excludes it from the weekday window.
+     *
+     * Pinned deliberately rather than as an endorsement. A task whose due date has
+     * passed is the case where a human most wants to be told so, and the current
+     * rendering says nothing; if that is a bug rather than a decision, this
+     * assertion is the thing to change, and having it written down makes the
+     * change a one-line diff instead of a redesign. A past date is also the branch
+     * most likely to be broken by a future edit to the weekday window, since it is
+     * the only input that reaches `short` while being in the past.
+     */
+    @Test
+    fun `an overdue task reads as a plain short date, not a weekday`() {
+        assertEquals("7 Aug, 09:00", friendlyDue(today.minusDays(1).toString(), "09:00", today))
+        assertEquals("1 Aug, 09:00", friendlyDue(today.minusDays(7).toString(), "09:00", today))
+    }
+
     @Test
     fun `a date in another year keeps the year`() {
         assertEquals("8 Aug 2027, 09:00", friendlyDue("2027-08-08", "09:00", today))

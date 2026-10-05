@@ -84,8 +84,14 @@ class ReminderPointsTest {
 
     @Test
     fun `points already in the past are dropped`() {
-        // One hour out with a two-hour estimate: the start moment is 08:00, already
-        // past, so neither Start nor the 5-minute warning may be armed retroactively.
+        // Due 09:00 with a two-hour estimate, so the start moment is 07:00
+        // (startMomentMillis subtracts the estimate from the due time). At 08:00 both
+        // Start and the 5-minute warning are already in the past, so neither may be
+        // armed retroactively. Only Due survives.
+        //
+        // The 07:00 is derived from prod, not asserted here: this test pins WHICH
+        // reminders survive a past start moment, not how the start moment is
+        // computed. StartTimeRuleTest covers the arithmetic.
         val now = at(today, 8)
         val pts = reminderPoints(today.toString(), "09:00", 120, now)
         assertEquals(setOf(ReminderKind.Due), pts.keys)
