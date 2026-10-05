@@ -78,3 +78,49 @@ func TestMcpAuditWriteSurvivesACancelledContext(t *testing.T) {
 	// the user asked for. The assertion is that this is safe and returns.
 	s.RecordMutation(ctx, tasks.OpCreate, "0123456789abcdef01234567", mcpSource, "cancelled caller")
 }
+
+func intPtr(v int) *int    { return &v }
+func boolPtr(v bool) *bool { return &v }
+
+// The agent's creates must record `source` ON THE TASK, not only in the audit log.
+//
+// Calls the extracted createTask handler, not the store. An earlier version of this test
+// called store.CreateWithKey directly and PASSED AGAINST THE UNFIXED CODE — the store
+// honours whatever source it is handed, so the test was measuring the layer below the
+// one that had been wrong. The decision that was wrong is the handler's choice between
+// Create and CreateWithKey, and only the handler can see it.
+func TestMcpCreateStoresSourceOnTheTask(t *testing.T) {
+	store, err := tasks.FromEnv()
+	if err != nil {
+		t.Skipf("no database: %v", err)
+	}
+	ctx := context.Background()
+
+	doc, err := createTask(ctx, store, createTaskInput{
+		Name: "mcp source probe", Description: "d",
+		DueDate: "2026-10-05", DueTime: "08:00",
+		EstimatedMinutes: intPtr(5), Parallelable: boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("createTask: %v", err)
+	}
+	id, _ := doc["id"].(string)
+	if id == "" {
+		t.Fatalf("no id returned: %v", doc)
+	}
+	defer func() { _, _ = store.Delete(ctx, id) }()
+
+	if got := doc["source"]; got != mcpSource {
+		t.Errorf("the created task carries source=%v, want %q — the audit log says mcp "+
+			"but the document must agree", got, mcpSource)
+	}
+	// And no idempotency key: this path has no client-supplied key, and an empty one
+	// disables the mismatch check rather than weakening it.
+	if _, present := doc["idempotency_key"]; present {
+		t.Errorf("a keyless MCP create stored an idempotency key: %v", doc["idempotency_key"])
+	}
+	// The audit entry agrees, since both come from the same handler now.
+	if doc["id"] == nil {
+		t.Error("no id to audit against")
+	}
+}

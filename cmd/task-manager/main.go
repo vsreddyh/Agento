@@ -148,6 +148,45 @@ type deleteTaskInput struct {
 	ID string `json:"id"`
 }
 
+// createTask is the create_task handler's body, named so it can be called directly.
+//
+// It is extracted for testability, not style: a handler closed over `mcp.AddTool` cannot
+// be reached from a test, and the obvious alternative — calling the store directly —
+// tests the layer BELOW the one that matters. An earlier version of the source-on-doc
+// test did exactly that and passed against the unfixed code, because the store honours
+// whatever source it is handed; the decision that had been wrong was the handler's
+// choice between Create and CreateWithKey, and only a test of the handler can see it.
+func createTask(ctx context.Context, store *tasks.Store, in createTaskInput) (map[string]any, error) {
+	rep := tasks.Repeat{
+		Every:  0,
+		Unit:   strings.TrimSpace(in.RepeatUnit),
+		Custom: in.RepeatCustom != nil && *in.RepeatCustom,
+		// Not trimmed here: Repeat.Normalize owns that, and it is the only place it needs
+		// to live now that both create paths go through it.
+		Text: in.RepeatRule,
+	}
+	if in.RepeatEvery != nil {
+		rep.Every = *in.RepeatEvery
+	}
+	// CreateWithKey, not Create, so the DOC carries `source` and not just the audit
+	// entry. Wiring the audit log for the agent was half the job: a task the agent created
+	// recorded `mcp` in task_mutations and nothing on the task itself, so the field that
+	// exists to answer "which caller wrote this row" was blank for exactly the caller that
+	// writes most rows. The two records are the same fact and they disagreed.
+	//
+	// No idempotency key here: this path has no client-supplied key to replay, and an
+	// empty one disables the payload-mismatch check rather than weakening it — there is
+	// nothing to compare a retry against.
+	doc, _, err := store.CreateWithKey(ctx, in.Name, in.Description, in.DueDate,
+		in.DueTime, in.EstimatedMinutes, rep.Normalize(), in.Parallelable,
+		"", mcpSource, "")
+	if err != nil {
+		return nil, err
+	}
+	store.RecordMutation(ctx, tasks.OpCreate, fmt.Sprint(doc["id"]), mcpSource, "mcp create_task")
+	return doc, nil
+}
+
 // mcpSource labels every mutation made through this server in the audit log.
 //
 // It has to be a distinct value, not a copy of the HTTP one: the whole reason the
@@ -168,22 +207,10 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_task",
 		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). The repeat is EITHER structured (repeat_every 1-28 with repeat_unit days|weeks|months|years) OR a custom condition (repeat_custom true with repeat_rule = the user's words verbatim) — never both, and all of them empty/0 = one-shot (never interpreted server-side)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskInput) (*mcp.CallToolResult, map[string]any, error) {
-			rep := tasks.Repeat{
-				Every:  0,
-				Unit:   strings.TrimSpace(in.RepeatUnit),
-				Custom: in.RepeatCustom != nil && *in.RepeatCustom,
-				// Not trimmed here: Repeat.Normalize owns that, and it is the only
-				// place it needs to live now that both create paths go through it.
-				Text: in.RepeatRule,
-			}
-			if in.RepeatEvery != nil {
-				rep.Every = *in.RepeatEvery
-			}
-			doc, err := store.Create(ctx, in.Name, in.Description, in.DueDate, in.DueTime, in.EstimatedMinutes, rep.Normalize(), in.Parallelable)
+			doc, err := createTask(ctx, store, in)
 			if err != nil {
 				return fail(err)
 			}
-			store.RecordMutation(ctx, tasks.OpCreate, fmt.Sprint(doc["id"]), mcpSource, "mcp create_task")
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 
