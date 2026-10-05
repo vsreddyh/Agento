@@ -42,19 +42,27 @@ class TaskContractTest {
         parallelable = false,
     )
 
-    /** A server that agreed with everything. */
+    /**
+     * A server that agreed with everything.
+     *
+     * `TaskContractSent` fields are nullable (null = "not asserted"), `ServerTask`'s are
+     * not, so each is unwrapped here. `?: ""` and `?: 0` are FINE in this direction —
+     * the server always stores a value — and they are not the falsy-default trap the
+     * production code avoids, because a null reaching this function means the test asked
+     * for a comparison of a field it never set.
+     */
     private fun stored(s: TaskContractSent) = ServerTask(
         id = "6abf0000000000000000abcd",
-        name = s.name,
+        name = s.name ?: "",
         description = s.description ?: "",
-        dueDate = s.dueDate,
-        dueTime = s.dueTime,
-        estimatedMinutes = s.estimatedMinutes,
-        repeatEvery = s.repeatEvery,
-        repeatUnit = s.repeatUnit,
-        repeatCustom = s.repeatCustom,
-        repeatRule = s.repeatRule,
-        parallelable = s.parallelable,
+        dueDate = s.dueDate ?: "",
+        dueTime = s.dueTime ?: "",
+        estimatedMinutes = s.estimatedMinutes ?: 0,
+        repeatEvery = s.repeatEvery ?: 0,
+        repeatUnit = s.repeatUnit ?: "",
+        repeatCustom = s.repeatCustom ?: false,
+        repeatRule = s.repeatRule ?: "",
+        parallelable = s.parallelable ?: false,
     )
 
     @Test
@@ -130,16 +138,7 @@ class TaskContractTest {
     fun `a null field is not asserted at all`() {
         // A partial update knows nothing about the fields it did not send. Reporting
         // them would fail every single edit, so null must mean "skip", not "empty".
-        val got = daily().let {
-            ServerTask(
-                id = "6abf0000000000000000abcd", name = it.name!!,
-                description = it.description!!, dueDate = it.dueDate!!,
-                dueTime = it.dueTime!!, estimatedMinutes = it.estimatedMinutes!!,
-                repeatEvery = it.repeatEvery!!, repeatUnit = it.repeatUnit!!,
-                repeatCustom = it.repeatCustom!!, repeatRule = it.repeatRule!!,
-                parallelable = it.parallelable!!,
-            )
-        }.copy(dueTime = "23:59", repeatUnit = "fortnights")
+        val got = stored(daily()).copy(dueTime = "23:59", repeatUnit = "fortnights")
         // Assert only the name; everything else is unknown and must be skipped.
         assertEquals(emptyList<String>(), contractMismatches(TaskContractSent(name = "Take meds"), got))
     }
