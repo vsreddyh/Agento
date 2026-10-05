@@ -620,3 +620,44 @@ func TestMismatchCheckSurvivesTheFingerprintBeingStripped(t *testing.T) {
 		t.Errorf("replay returned %v, want the original task", doc["name"])
 	}
 }
+
+// A replay must not be audited as a create. The audit entry used to be written before
+// the replay branch, so every retry appended another `create` for the same task_id —
+// the log claimed a task was created N times when it was created once.
+//
+// That defeats the log's own purpose for exactly the retries idempotency exists to
+// absorb: counting creates no longer tells you how many tasks exist.
+func TestAReplayIsNotAuditedAsASecondCreate(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupIdem(t, s, ctx)
+
+	first, replayed, err := s.CreateWithKey(ctx, "audited once", "d", "2026-10-05", "08:00",
+		intP(5), Repeat{}, boolP(false), "audit-key", "app", "fp-1")
+	if err != nil || replayed {
+		t.Fatalf("first create: replayed=%v err=%v", replayed, err)
+	}
+	// The store writes one entry; the HTTP layer's decision not to write a second is
+	// asserted in cmd/health-api. Here we pin the property that makes it safe to skip:
+	// a replay returns the SAME id, so a second `create` entry would be a duplicate
+	// claim about one task rather than a record of a second task.
+	second, replayed, err := s.CreateWithKey(ctx, "audited once", "d", "2026-10-05", "08:00",
+		intP(5), Repeat{}, boolP(false), "audit-key", "app", "fp-1")
+	if err != nil || !replayed {
+		t.Fatalf("replay: replayed=%v err=%v", replayed, err)
+	}
+	if second["id"] != first["id"] {
+		t.Fatalf("replay returned a different task: %v vs %v", second["id"], first["id"])
+	}
+	n, err := s.tasks.Database().Collection(auditCollection).
+		CountDocuments(ctx, bson.M{"task_id": first["id"], "op": OpCreate})
+	if err != nil {
+		t.Skipf("audit collection unavailable: %v", err)
+	}
+	// Only the one the caller chose to write may ever exist for this id: the store must
+	// not record a create on the replay path either.
+	if n > 1 {
+		t.Errorf("%d `create` audit entries for a task created once — replaying is "+
+			"recorded as another creation", n)
+	}
+}

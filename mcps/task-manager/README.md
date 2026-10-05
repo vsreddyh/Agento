@@ -193,8 +193,19 @@ Two additions beside it:
   concerned — one shared password, one collection — so nothing previously recorded *who*
   changed a task. Both paths are wired because the agent is a primary mutator: logging
   only HTTP would answer the question for the app and stay silent for the agent, which
-  is exactly the case the log exists for. `X-Agento-Source` labels the caller — trusted only as a
-  label, never for authorisation. Writes are best-effort: a failed audit write
+  is exactly the case the log exists for. `X-Agento-Source` labels the caller — trusted
+  only as a label, never for authorisation.
+
+  **The log is not tamper-evident.** `source` is self-attested: anyone holding the shared
+  password can claim any label. So this answers "who changed this, and when" well enough
+  to explain an accident or a surprising change, and badly enough to be useless against
+  someone acting deliberately. Closing that gap needs per-caller credentials rather than
+  one shared password. Recorded here so the field is not later mistaken for an
+  authenticated identity.
+
+  A replayed create is **not** recorded: it changed nothing, so there is nothing to
+  audit, and logging one would make the log claim a task was created once per retry —
+  which defeats counting creates to answer "how many tasks exist". Writes are best-effort: a failed audit write
   never fails the mutation it was recording. Pruned at 90 days by `retention`.
   Indexed by `at` and `task_id`, declared in the same `EnsureSchema` as the task
   indexes — an earlier `EnsureAuditIndex` that nothing called meant both readers were

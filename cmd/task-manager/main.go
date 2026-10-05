@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sort"
 	"strings"
 
 	"agento/internal/mongostore"
@@ -149,24 +148,6 @@ type deleteTaskInput struct {
 	ID string `json:"id"`
 }
 
-// changedFieldNames names which fields an update touched, so the audit log can say
-// what changed rather than just that something did. Sorted for a stable string, and
-// expected_revision is dropped: it is concurrency plumbing, not a change to the task.
-func changedFieldNames(fields map[string]any) string {
-	keys := make([]string, 0, len(fields))
-	for k := range fields {
-		if k == "expected_revision" {
-			continue
-		}
-		keys = append(keys, k)
-	}
-	if len(keys) == 0 {
-		return "no fields"
-	}
-	sort.Strings(keys)
-	return strings.Join(keys, ",")
-}
-
 // mcpSource labels every mutation made through this server in the audit log.
 //
 // It has to be a distinct value, not a copy of the HTTP one: the whole reason the
@@ -270,7 +251,7 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
-			store.RecordMutation(ctx, tasks.OpUpdate, in.ID, mcpSource, changedFieldNames(fields))
+			store.RecordMutation(ctx, tasks.OpUpdate, in.ID, mcpSource, tasks.ChangedFieldNames(fields))
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 

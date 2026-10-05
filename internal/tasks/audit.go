@@ -16,6 +16,8 @@ package tasks
 import (
 	"context"
 	"log"
+	"sort"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -77,3 +79,31 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 // auditWriteBudget bounds one audit insert, independently of the request that
 // triggered it. See RecordMutation.
 const auditWriteBudget = 5 * time.Second
+
+// ChangedFieldNames names which fields an update touched, for the audit log's `detail`.
+//
+// It lives here, in the package that owns the log, because BOTH callers had their own
+// copy — cmd/health-api had `changedKeys` and cmd/task-manager had
+// `changedFieldNames`, identical apart from a comment and the order of two lines. Two
+// copies of one rule is the defect shape this stack has produced repeatedly, and it
+// matters more here than usual: the two callers are the HTTP API and the agent, so a
+// divergence would show up as the app and the agent describing the same edit differently
+// in the one log meant to reconcile them.
+//
+// `expected_revision` is excluded on purpose: it is optimistic-concurrency plumbing, not
+// a change to the task. Sorted so the string is stable — Go randomises map iteration, and
+// an unstable detail would make two identical updates look different in the log.
+func ChangedFieldNames(fields map[string]any) string {
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		if k == "expected_revision" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return "no fields"
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}

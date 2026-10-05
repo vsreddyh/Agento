@@ -26,7 +26,7 @@ func TestMcpSourceIsDistinctFromHttp(t *testing.T) {
 }
 
 // An update's detail must name the fields, or the log says only that something changed.
-func TestChangedFieldNames(t *testing.T) {
+func TestChangedFieldNamesSharedByBothCallers(t *testing.T) {
 	cases := []struct {
 		name   string
 		fields map[string]any
@@ -39,7 +39,7 @@ func TestChangedFieldNames(t *testing.T) {
 		{"empty", map[string]any{}, "no fields"},
 	}
 	for _, c := range cases {
-		if got := changedFieldNames(c.fields); got != c.want {
+		if got := tasks.ChangedFieldNames(c.fields); got != c.want {
 			t.Errorf("%s: changedFieldNames = %q, want %q", c.name, got, c.want)
 		}
 	}

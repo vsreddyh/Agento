@@ -338,16 +338,25 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		writeTaskErr(w, err)
 		return
 	}
-	store.RecordMutation(ctx, tasks.OpCreate, fmt.Sprint(doc["id"]), source, "http POST /api/tasks")
 	if replayed {
 		// 200, not 201: nothing was created this time. A client counting 201s to
 		// learn what it created would otherwise be told it made a new task.
+		//
+		// Deliberately NOT audited. The entry used to be written before this branch, so
+		// every retry appended another `create` for the same task_id — the log claimed
+		// a task was created N times when it was created once. That defeats the log's
+		// own purpose for exactly the retries this mechanism exists to absorb: counting
+		// creates would no longer tell you how many tasks exist.
+		//
+		// A replay changes no state, so there is nothing to record. The client is told
+		// it replayed via the header below, which is where that fact belongs.
 		if idemKey != "" {
 			w.Header().Set("Idempotent-Replay", "true")
 		}
 		writeJSON(w, http.StatusOK, doc)
 		return
 	}
+	store.RecordMutation(ctx, tasks.OpCreate, fmt.Sprint(doc["id"]), source, "http POST /api/tasks")
 	writeJSON(w, http.StatusCreated, doc)
 }
 
@@ -355,21 +364,7 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 // /api/tasks" alone does not say whether the user moved a due date or fixed a
 // typo, and that is the whole reason the log exists.
 func changedKeys(fields map[string]any) string {
-	if len(fields) == 0 {
-		return "no fields"
-	}
-	keys := make([]string, 0, len(fields))
-	for k := range fields {
-		if k == "expected_revision" {
-			continue // concurrency plumbing, not a change to the task
-		}
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	if len(keys) == 0 {
-		return "no fields"
-	}
-	return strings.Join(keys, ",")
+	return tasks.ChangedFieldNames(fields)
 }
 
 // zeroLike returns the zero value of whatever type this field takes elsewhere, so an
