@@ -14,8 +14,8 @@ store, same validation — see `cmd/health-api/main.go`).
 | `get_task` | Fetch one task by id |
 | `update_task` | Edit fields. Only `id` is required — every other field is nil-safe, and empty repeat_rule clears the rule |
 | `complete_task` | Mark done (3-day retention starts); echoes repeat_rule + follow-up nudge; always reports `rollover` |
+| `skip_task` | Skip ONE occurrence without claiming it was done; 3-day retention starts too; advances a structured repeat |
 | `reopen_task` | Reopen a completed **or skipped** task (cancels expiry; a skip returns to open, not to done) |
-| `skip_task` | Skip ONE occurrence without claiming it was done; advances a structured repeat |
 | `delete_task` | Permanently delete |
 
 ## Schema (MongoDB `hermes` DB)
@@ -89,8 +89,11 @@ not to done.
 
 Over HTTP: `POST /api/tasks/{id}/skip` with an optional `{"reason": "..."}`. The
 response keeps the task at the top level (so an old app still parses it) and adds
-`skipped`, `skip_reason`, `next` and `rollover`.
-- **Retention:** done tasks auto-delete 3 days after completion via TTL.
+`skipped`, `skipReason`, `next` and `rollover`.
+- **Retention:** done tasks auto-delete 3 days after completion via TTL. **Skipped
+  occurrences expire the same way** — `skip_task` resolves the occurrence, so it
+  sets `expiresAt` exactly as `complete_task` does. A skip is not permanent
+  history, and that is worth knowing before relying on it as a record.
   Open tasks never expire. `reopen_task` clears the expiry.
 
 ## Run

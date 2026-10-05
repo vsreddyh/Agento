@@ -413,7 +413,9 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 
 // skipTask resolves ONE occurrence as skipped rather than done (#209). The route
 // is additive, so an app that has never heard of it is unaffected; the response
-// carries the same top-level shape as completeTask plus `skipped`/`skip_reason`.
+// carries the same top-level shape as completeTask plus `skipped`/`skipReason`.
+// Camel case, matching the sibling server-set fields (`completedAt`, `skippedAt`);
+// snake_case is reserved for the fields the client SENDS.
 func skipTask(w http.ResponseWriter, r *http.Request, id string) {
 	var fields map[string]any
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&fields); err != nil {
