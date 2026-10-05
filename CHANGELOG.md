@@ -47,7 +47,6 @@ see GitHub Releases for older notes.
 
 ## [4.14.6]
 
-## [4.14.4]
 - **A dropped stream is no longer reported as a finished reply** (#214). The SSE
   read loop exited on EOF exactly as it did on the `[DONE]` terminal frame, and
   both paths fell through to a single `ChatEvent.Done`. So a turn cut off
