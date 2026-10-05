@@ -104,21 +104,49 @@ object ChatThreads {
     private fun interruptedBy(raw: String): InterruptedBy =
         runCatching { InterruptedBy.valueOf(raw) }.getOrDefault(InterruptedBy.user)
 
+    // NAMED arguments, deliberately. These were 14 positional values into a 13-field
+    // constructor, which compiles fine and then silently misassigns the day a field is
+    // inserted or reordered — a swap of two same-typed fields (`it.ts` for `it.tools`)
+    // is invisible to the compiler and produces wrong history rather than an error.
+    // `interruptedBy` is the 14th field and the newest, so it is exactly the kind of
+    // addition that triggers this.
     fun toUi(messages: List<StoredMessage>): List<ChatMessage> =
         messages.map {
             ChatMessage(
-                it.role, it.content, it.ts, it.tools, it.skills,
-                it.prompt, it.completion, it.total, it.cached, it.unreported,
-                it.model, it.reasoning, it.interrupted, interruptedBy(it.interruptedBy),
+                role = it.role,
+                content = it.content,
+                ts = it.ts,
+                tools = it.tools,
+                skills = it.skills,
+                prompt = it.prompt,
+                completion = it.completion,
+                total = it.total,
+                cached = it.cached,
+                unreported = it.unreported,
+                model = it.model,
+                reasoning = it.reasoning,
+                interrupted = it.interrupted,
+                interruptedBy = interruptedBy(it.interruptedBy),
             )
         }
 
     fun toStored(messages: List<ChatMessage>): List<StoredMessage> =
         messages.map {
             StoredMessage(
-                it.role, it.content, it.ts, it.tools, it.skills,
-                it.prompt, it.completion, it.total, it.cached, it.unreported,
-                it.model, it.reasoning, it.interrupted, it.interruptedBy.name,
+                role = it.role,
+                content = it.content,
+                ts = it.ts,
+                tools = it.tools,
+                skills = it.skills,
+                prompt = it.prompt,
+                completion = it.completion,
+                total = it.total,
+                cached = it.cached,
+                unreported = it.unreported,
+                model = it.model,
+                reasoning = it.reasoning,
+                interrupted = it.interrupted,
+                interruptedBy = it.interruptedBy.name,
             )
         }
 }

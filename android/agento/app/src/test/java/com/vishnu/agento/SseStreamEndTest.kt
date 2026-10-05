@@ -248,13 +248,13 @@ class DoneMappingTest {
 
     @Test
     fun `end of stream maps to an interrupted Done`() {
-        val e = doneFor(SseEnd.EndOfStream, "partial", usage) as ChatEvent.Done
+        val e = doneFor(SseEnd.EndOfStream, "partial", usage)
         assertTrue("a dropped stream must not report a finished turn", e.interrupted)
     }
 
     @Test
     fun `terminal maps to a non-interrupted Done`() {
-        val e = doneFor(SseEnd.Terminal, "complete", usage) as ChatEvent.Done
+        val e = doneFor(SseEnd.Terminal, "complete", usage)
         assertTrue("a finished turn must not be flagged interrupted", !e.interrupted)
     }
 
@@ -262,9 +262,29 @@ class DoneMappingTest {
     fun `the text and usage survive the mapping`() {
         // The flag must not cost the user anything: the partial reply and the reported
         // counts are still real, and dropping them here would discard the turn.
-        val e = doneFor(SseEnd.EndOfStream, "partial", usage) as ChatEvent.Done
+        val e = doneFor(SseEnd.EndOfStream, "partial", usage)
         assertEquals("partial", e.fullText)
         assertEquals(usage, e.usage)
+    }
+
+    /**
+     * An empty body is still an interrupted turn, not a completed empty one.
+     *
+     * pi-gateway sends `[DONE]` for every turn that completes, so a body with no `[DONE]`
+     * is one that never finished — including the empty-body case, where the connection
+     * died before a single frame arrived. Reporting that as a completed empty turn gives
+     * a silent blank reply with no indication anything went wrong, which is the exact
+     * failure #214 is about. "Connection lost" with no text is more honest than silence.
+     *
+     * Pinned deliberately: it is a judgement call, and a judgement call that is not
+     * pinned becomes an accident the first time someone tidies the EOF path.
+     */
+    @Test
+    fun `an empty body maps to interrupted, not to a completed empty turn`() {
+        val e = doneFor(SseEnd.EndOfStream, "", null)
+        assertTrue("an unfinished turn must not read as finished", e.interrupted)
+        assertEquals("", e.fullText)
+        assertEquals(null, e.usage)
     }
 
     @Test

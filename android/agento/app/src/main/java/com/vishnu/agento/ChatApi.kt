@@ -573,12 +573,19 @@ class ChatApi(context: Context) {
  * `ErrorFrame` deliberately has no mapping: it produces `ChatEvent.Error` at the call
  * site, because an error frame is terminal by contract and no `Done` follows it.
  */
-internal fun doneFor(end: SseEnd, text: String, usage: TokenUsage?): ChatEvent = when (end) {
-    is SseEnd.ErrorFrame ->
-        throw IllegalArgumentException("an error frame yields ChatEvent.Error, not Done")
-    SseEnd.Terminal -> ChatEvent.Done(text, usage, interrupted = false)
-    SseEnd.EndOfStream -> ChatEvent.Done(text, usage, interrupted = true)
-}
+internal fun doneFor(end: SseEnd, text: String, usage: TokenUsage?): ChatEvent.Done =
+    when (end) {
+        // Unreachable by construction: the caller handles ErrorFrame before this is
+        // reached. Narrowing the return type to ChatEvent.Done turns "an error frame has
+        // no Done mapping" from a runtime throw into something the compiler enforces at
+        // every call site — previously `doneFor(...) as ChatEvent.Done` in the tests was
+        // a cast that could not fail, which is exactly the kind of unchecked assumption
+        // that hides a future refactor's mistake.
+        is SseEnd.ErrorFrame ->
+            throw IllegalArgumentException("an error frame yields ChatEvent.Error, not Done")
+        SseEnd.Terminal -> ChatEvent.Done(text, usage, interrupted = false)
+        SseEnd.EndOfStream -> ChatEvent.Done(text, usage, interrupted = true)
+    }
 
 /**
  * How an SSE body ended.
