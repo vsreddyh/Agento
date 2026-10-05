@@ -14,7 +14,15 @@ func testStore(t *testing.T) *Store {
 	}
 	// Point at the throwaway test database like the Python suite does.
 	t.Setenv("MONGODB_URI", os.Getenv("MONGODB_URI"))
-	t.Setenv("MONGODB_DB", "miser_test")
+	// Its OWN throwaway database, not the shared `miser_test`. `go test ./...` runs
+	// packages in parallel and internal/money calls db.Drop(ctx) on `miser_test` — a
+	// wholesale drop, not a scoped delete. Sharing it made this suite fail whenever it
+	// happened to run alongside money: the collection was dropped between a write and
+	// the read that asserted it, and the test reported empty results with no error
+	// anywhere. A test that fails based on which package the scheduler paired it with is
+	// not a test. internal/tasks, internal/projects and internal/notes already have
+	// their own; this closes the last two.
+	t.Setenv("MONGODB_DB", "cookbook_test")
 	s, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)

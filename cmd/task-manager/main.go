@@ -135,9 +135,66 @@ type reopenTaskInput struct {
 	ID string `json:"id"`
 }
 
+type skipTaskInput struct {
+	ID string `json:"id"`
+	// The user's own words for skipping this occurrence, kept verbatim and capped.
+	// Optional — the action is unambiguous without it — but it is the difference
+	// between a skip and a quiet disappearance, so pass it when the user gave a
+	// reason ("out of time", "doing it tomorrow").
+	Reason string `json:"reason,omitempty"`
+}
+
 type deleteTaskInput struct {
 	ID string `json:"id"`
 }
+
+// createTask is the create_task handler's body, named so it can be called directly.
+//
+// It is extracted for testability, not style: a handler closed over `mcp.AddTool` cannot
+// be reached from a test, and the obvious alternative — calling the store directly —
+// tests the layer BELOW the one that matters. An earlier version of the source-on-doc
+// test did exactly that and passed against the unfixed code, because the store honours
+// whatever source it is handed; the decision that had been wrong was the handler's
+// choice between Create and CreateWithKey, and only a test of the handler can see it.
+func createTask(ctx context.Context, store *tasks.Store, in createTaskInput) (map[string]any, error) {
+	rep := tasks.Repeat{
+		Every:  0,
+		Unit:   strings.TrimSpace(in.RepeatUnit),
+		Custom: in.RepeatCustom != nil && *in.RepeatCustom,
+		// Not trimmed here: Repeat.Normalize owns that, and it is the only place it needs
+		// to live now that both create paths go through it.
+		Text: in.RepeatRule,
+	}
+	if in.RepeatEvery != nil {
+		rep.Every = *in.RepeatEvery
+	}
+	// CreateWithKey, not Create, so the DOC carries `source` and not just the audit
+	// entry. Wiring the audit log for the agent was half the job: a task the agent created
+	// recorded `mcp` in task_mutations and nothing on the task itself, so the field that
+	// exists to answer "which caller wrote this row" was blank for exactly the caller that
+	// writes most rows. The two records are the same fact and they disagreed.
+	//
+	// No idempotency key here: this path has no client-supplied key to replay, and an
+	// empty one disables the payload-mismatch check rather than weakening it — there is
+	// nothing to compare a retry against.
+	doc, _, err := store.CreateWithKey(ctx, in.Name, in.Description, in.DueDate,
+		in.DueTime, in.EstimatedMinutes, rep.Normalize(), in.Parallelable,
+		"", mcpSource, "")
+	if err != nil {
+		return nil, err
+	}
+	store.RecordMutation(ctx, tasks.OpCreate, fmt.Sprint(doc["id"]), mcpSource, "mcp create_task")
+	return doc, nil
+}
+
+// mcpSource labels every mutation made through this server in the audit log.
+//
+// It has to be a distinct value, not a copy of the HTTP one: the whole reason the
+// mutation log exists (#176) is that the agent and the app are indistinguishable at the
+// auth layer — one shared password, one collection — and `source` is the only record of
+// which caller wrote a row. Logging agent writes under "http" would make the field
+// actively misleading, which is worse than not having it.
+const mcpSource = "mcp"
 
 func main() {
 	var err error
@@ -150,16 +207,7 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_task",
 		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). The repeat is EITHER structured (repeat_every 1-28 with repeat_unit days|weeks|months|years) OR a custom condition (repeat_custom true with repeat_rule = the user's words verbatim) — never both, and all of them empty/0 = one-shot (never interpreted server-side)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskInput) (*mcp.CallToolResult, map[string]any, error) {
-			rep := tasks.Repeat{
-				Every:  0,
-				Unit:   strings.TrimSpace(in.RepeatUnit),
-				Custom: in.RepeatCustom != nil && *in.RepeatCustom,
-				Text:   strings.TrimSpace(in.RepeatRule),
-			}
-			if in.RepeatEvery != nil {
-				rep.Every = *in.RepeatEvery
-			}
-			doc, err := store.Create(ctx, in.Name, in.Description, in.DueDate, in.DueTime, in.EstimatedMinutes, rep.Normalize(), in.Parallelable)
+			doc, err := createTask(ctx, store, in)
 			if err != nil {
 				return fail(err)
 			}
@@ -230,17 +278,30 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
+			// Only when something was actually written — see the same guard in
+			// health-api's updateTask: a PATCH carrying no field the store will set takes
+			// the no-op path, and an audit entry for it would claim a change that did not
+			// happen.
+			if names := tasks.ChangedFieldNames(fields); names != "no fields" {
+				store.RecordMutation(ctx, tasks.OpUpdate, in.ID, mcpSource, names)
+			}
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
 		Description: "Mark a task done (retained 3 days, then auto-deleted). A STRUCTURED repeat (repeat_every + repeat_unit) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, map[string]any, error) {
-			doc, next, err := store.Complete(ctx, in.ID)
+			doc, next, rollover, rolloverDetail, err := store.CompleteDetail(ctx, in.ID)
 			if err != nil {
 				return fail(err)
 			}
+			store.RecordMutation(ctx, tasks.OpComplete, in.ID, mcpSource, fmt.Sprint(rollover))
 			out := map[string]any{"ok": true, "task": doc}
+			// Always name the rollover outcome, including the ones where there was
+			// nothing to do (#180). `rolled_over` alone cannot distinguish a one-shot
+			// from a repeat that silently stopped — and the silent stop is the one
+			// that cost four tasks their schedule before anyone noticed.
+			out["rollover"] = string(rollover)
 			rep := repeatOf(doc)
 			switch {
 			case next != nil:
@@ -248,24 +309,64 @@ func main() {
 				// must not create a second occurrence.
 				out["rolled_over"] = true
 				out["next"] = next
-			case !rep.IsZero():
+			case rollover == tasks.RolloverCustom:
 				// Custom: only the caller can compute the next date.
 				out["repeat_every"] = rep.Every
 				out["repeat_unit"] = rep.Unit
 				out["repeat_custom"] = rep.Custom
 				out["repeat_rule"] = rep.Text
 				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required."
+			case rollover.NeedsAttention():
+				// Say it in the response instead of leaving it in a log line: the
+				// repeat has stopped, and only the user can restart it.
+				out["needs_attention"] = rollover.Attention(rolloverDetail)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "skip_task",
+		Description: "Skip ONE occurrence of a task — for 'not doing this tonight', 'out of time', 'doing it tomorrow'. Use this instead of complete_task whenever the work did NOT happen: complete_task records it as DONE, which is a false record, and completed rows are auto-deleted after 3 days so a false one is erased rather than corrected. A STRUCTURED repeat still rolls over (the habit continues); a CUSTOM one is yours, same contract as complete_task. Leaves the task out of the open list either way, so the user is not asked again tonight."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in skipTaskInput) (*mcp.CallToolResult, map[string]any, error) {
+			doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, in.ID, in.Reason)
+			if err != nil {
+				return fail(err)
+			}
+			store.RecordMutation(ctx, tasks.OpSkip, in.ID, mcpSource, fmt.Sprint(rollover))
+			// No top-level "skipped" here, deliberately. `task.skipped` is DERIVED from
+			// skippedAt in toDoc and is always present, so it cannot disagree with the
+			// record; a second `skipped` at the top level would be a hand-written literal
+			// for a fact the doc already carries, and the two are exactly the kind of pair
+			// that drifts the first time this verb grows a nuance. It would also be the
+			// only difference from complete_task, which returns {ok, task} and likewise
+			// states no top-level "completed". Read it off the task, like every other
+			// caller does.
+			out := map[string]any{"ok": true, "task": doc}
+			out["rollover"] = string(rollover)
+			rep := repeatOf(doc)
+			switch {
+			case next != nil:
+				out["rolled_over"] = true
+				out["next"] = next
+			case rollover == tasks.RolloverCustom:
+				out["repeat_every"] = rep.Every
+				out["repeat_unit"] = rep.Unit
+				out["repeat_custom"] = rep.Custom
+				out["repeat_rule"] = rep.Text
+				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys, advancing only due_date"
+			case rollover.NeedsAttention():
+				out["needs_attention"] = rollover.Attention(rolloverDetail)
 			}
 			return result(out)
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "reopen_task",
-		Description: "Reopen a completed task (clears completion, cancels the 3-day expiry)."},
+		Description: "Reopen a completed OR skipped task (clears completion and the skip marker, cancels the 3-day expiry). Reopening a skipped task puts it back on the open list — it does not mark it done."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in reopenTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Reopen(ctx, in.ID)
 			if err != nil {
 				return fail(err)
 			}
+			store.RecordMutation(ctx, tasks.OpReopen, in.ID, mcpSource, "mcp reopen_task")
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 
@@ -275,6 +376,10 @@ func main() {
 			done, err := store.Delete(ctx, in.ID)
 			if err != nil {
 				return fail(err)
+			}
+			if done {
+				// After the delete, so the log cannot claim one that then failed.
+				store.RecordMutation(ctx, tasks.OpDelete, in.ID, mcpSource, "mcp delete_task")
 			}
 			if !done {
 				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown task '%s'", in.ID)})

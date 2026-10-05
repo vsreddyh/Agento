@@ -159,7 +159,7 @@ func TestCompleteReopenDelete(t *testing.T) {
 	doc, _ := s.Create(ctx, "Water plants", "balcony pots", "2026-10-05", "08:00", intP(5), customRep("every Sunday"), boolP(false))
 	id := doc["id"].(string)
 
-	done, next, err := s.Complete(ctx, id)
+	done, next, rollover, err := s.Complete(ctx, id)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -174,7 +174,13 @@ func TestCompleteReopenDelete(t *testing.T) {
 	if next != nil {
 		t.Fatalf("custom repeat must not roll over server-side: %v", next)
 	}
-	if _, _, err := s.Complete(ctx, id); err == nil {
+	// And it must SAY so, rather than reporting the same absence a one-shot would
+	// produce — that indistinguishability is what let a stopped repeat pass for a
+	// normal completion (#180).
+	if rollover != RolloverCustom {
+		t.Errorf("rollover = %q, want %q for a custom condition", rollover, RolloverCustom)
+	}
+	if _, _, _, err := s.Complete(ctx, id); err == nil {
 		t.Fatal("double complete must fail")
 	}
 	rows, _, _ := s.List(ctx, "open", false, "", 0)
@@ -211,7 +217,7 @@ func TestReopenedExcludedFromDone(t *testing.T) {
 	ctx := context.Background()
 	doc, _ := s.Create(ctx, "reopen me", "test task", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false))
 	id := doc["id"].(string)
-	if _, _, err := s.Complete(ctx, id); err != nil {
+	if _, _, _, err := s.Complete(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Reopen(ctx, id); err != nil {
@@ -631,7 +637,7 @@ func TestUpdateRevision(t *testing.T) {
 		t.Fatal("negative revision must fail")
 	}
 	// Complete and reopen join the same chain.
-	if _, _, err := s.Complete(ctx, id); err != nil {
+	if _, _, _, err := s.Complete(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	if rev() != 3 {

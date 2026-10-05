@@ -38,13 +38,15 @@ rejects the mix:
    weekdays, "end of month"). Never flatten a rule that carries an
    exception into a plain cadence: "daily, skip Wednesdays" is a custom
    condition, not "every day". A count above 28 is a custom condition too.
-2. When you call `complete_task`, read what comes back:
-   - `rolled_over: true` (with the new task in `next`) — the repeat was
-     STRUCTURED, the server already created the next occurrence, and you
-     must NOT create another. (Month ends clamp and then keep that day: a
-     task due on the 31st that rolls into February comes back on the 28th,
-     and stays there — that is intended, not drift to correct.)
-   - `follow_up` — the repeat is a CUSTOM condition, so you MUST call
+2. When you call `complete_task`, read what comes back. Every completion reports
+   `rollover`, so you never have to infer the outcome from a missing field:
+   - `created` (with the new task in `next`) — the repeat was STRUCTURED, the
+     server already created the next occurrence, and you must NOT create
+     another. (Month ends clamp and then keep that day: a task due on the 31st
+     that rolls into February comes back on the 28th, and stays there — that
+     is intended, not drift to correct.)
+   - `none` — a one-shot. Nothing further.
+   - `custom` — the repeat is a CUSTOM condition, so you MUST call
      `create_task` for the next occurrence, reusing the exact repeat keys
      the response gave you (`repeat_custom: true` + `repeat_rule`). Copy
      every field verbatim — name/description/`due_time`/
@@ -54,11 +56,17 @@ rejects the mix:
      between occurrences is a bug, not a recomputation. Change `due_time`
      only when the rule itself names a different time ("mornings at 6",
      "9am then 7pm").
+   - `exhausted` or `failed` — **the task repeats but its next occurrence was
+     NOT created, so it has stopped recurring.** The response carries
+     `needs_attention`. TELL THE USER in your reply, with the task name and
+     what went wrong. Do not report this as a plain completion, and do not
+     silently create the next task yourself unless the user asks — the
+     stored data is usually why it failed, so it needs a human to look at.
 3. If the rule is ambiguous ("regularly"), ask the user for the next due
    date instead of guessing. Same for an empty `due_time`: tasks created
    before times were required come back with `due_time: ""`, and
    `create_task` rejects that — ask the user for a time, never invent one.
-4. One-shot tasks (empty rule) need nothing after completion.
+4. One-shot tasks (empty rule) need nothing after completion — `rollover: none`.
 
 ## Everyday use
 
@@ -67,5 +75,39 @@ rejects the mix:
   ("takes about an hour" → `estimated_minutes: 60`; "I can do it alongside
   X" → `parallelable: true`; no repeat mentioned → send no repeat keys.)
 - Morning check: `list_tasks` with `overdue: true`, then state=open.
-- Done for now but not finished: leave open. Only `complete_task` finishes.
-- Mistake: `reopen_task`. Never `delete_task` to "undo" a completion.
+- Done for now but not finished: leave open. Only `complete_task` finishes, and
+  `skip_task` skips. See the skip rule below.
+
+## Skip is a verb, not a completion
+
+**`complete_task` records that work HAPPENED. If it did not happen, use
+`skip_task`** — "not doing this tonight", "out of time", "doing it tomorrow",
+"skipping the skippable ones".
+
+Why this matters enough to have its own tool: a completion is a claim that the
+work is done. Recording a skip as a completion writes a false record — and
+completed tasks are deleted after 3 days, so the false history is **erased rather
+than corrected**, and the user never finds out. This has already happened: five
+chores were marked complete for an evening in which none of them was done.
+
+| The user says | Call |
+|---|---|
+| "done", "finished it", "did it" | `complete_task` |
+| "skip it", "not tonight", "doing it tomorrow", "no time" | `skip_task` |
+| "still need to do it" | nothing — leave it open |
+
+`skip_task` does three things, all of which `complete_task` does not:
+
+- marks the record **skipped**, not done (`skipped: true`), so the history is
+  honest;
+- still takes it off tonight's open list, so the user is not asked again;
+- still advances a **structured** repeat — skipping tonight is not skipping the
+  habit. `delete_task` is what abandons a series.
+
+If you are ever unsure whether the work happened, **ask**. A wrong completion is
+worse than an extra question, and it disappears in three days.
+
+## Mistake
+
+`reopen_task` — for both a mistaken completion and a mistaken skip. Never
+`delete_task` to "undo" either.

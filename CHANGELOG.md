@@ -8,6 +8,20 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.14.3]
+
+- **Unit tests, and a CI step that runs them** (#162). The app had no tests at
+  all and the workflow never invoked a test task, so even a test that existed
+  would not have gated a merge. Added `testDebugUnitTest` to the APK workflow
+  (before lint and the build, so a broken rule fails fast) plus a report
+  artifact.
+- First three suites cover the rules that had each been the subject of a real
+  bug caught only by reading a diff, never by a failing test: the reminder
+  ladder (`reminderPoints` — the zero-estimate case that must *not* fire
+  "Start now", and the collapse that must keep the later reminder), the
+  start-time rule shared by the reminder engine and the task list, and the
+  repeat validation whose bounds must match the server's.
+
 ## [4.14.2]
 
 - **Documentation that outlived the Hermes migration** (no behaviour change).

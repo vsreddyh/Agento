@@ -117,7 +117,7 @@ Domain data for `money`, `health-check`, `cookbook`, `task-manager`, `project-ma
 | `cookbook_ingredients` | Cookbook | `name` (unique), `note`, `createdAt` — **permanent** |
 | `cookbook_recipes` | Cookbook | `name` (unique), `servings`, per-serving `kcal/protein_g/carbs_g/fat_g/fiber_g`, `quantities[{ingredient_id, name, qty}]` — **permanent** |
 | `cookbook_cook_log` | Cookbook | `recipe_id`, `date`, `cooking_note`, `aftertaste_note` — **permanent** |
-| `tasks` | Task-manager | `name`, `description`, `due_date`, `due_time`, `estimated_minutes`, `repeat_rule` (verbatim) — no status field; `completedAt` null = open, done tasks TTL 3d via `expiresAt` |
+| `tasks` | Task-manager | `idempotency_key` (client key, UNIQUE+SPARSE — makes create idempotent, #176), `source` (app vs MCP), `name`, `description`, `due_date`, `due_time`, `estimated_minutes`, `repeat_rule` (verbatim) — no status field; `completedAt` null = open, done tasks TTL 3d via `expiresAt`; `skippedAt` present + derived `skipped` = the occurrence was skipped, NOT done (#209) — `completedAt` is set either way so it leaves the open list |
 | `projects` | Project-manager | `name`, `status` (Todo\|Ongoing\|Paused\|Done), `note`, `createdAt`, `updatedAt` — **permanent**, shared with the app's Projects tab |
 | `notes` | Notes | `title` (NOT unique — notes are addressed by id), `body` (markdown, one list item per line), `tags[]` (lowercased), `pinned` (bool), `createdAt`, `updatedAt` — **permanent**, shared across profiles |
 
@@ -144,6 +144,8 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `hc_weight` | Permanent | **Never pruned** |
 | `cookbook_*` | Permanent | **Never pruned** |
 | `notes` | Permanent | **Never pruned** |
+| `task_mutations` | > 90 days | Pruned when `at < today - 90d` — the task audit log (#176) |
+| `tasks` (repeats) | n/a | **Reconciled, not pruned**: completed structured repeats with no successor are reported (#180) |
 | `story` / `resumes` | Git history | No database retention operations |
 
 Run manual dry-runs via:

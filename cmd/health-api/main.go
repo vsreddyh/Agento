@@ -61,8 +61,36 @@ func main() {
 	registerFiles(mux)
 	registerTasks(mux)
 	registerProjects(mux)
+	// Rate limiting wraps everything, and lives here because main is the only place
+	// that knows the whole handler set (#176). The API is network-reachable and
+	// authed by ONE shared password, so without a counter a stuck client retrying in
+	// a loop — or anyone holding that password — is an unbounded write load on a
+	// shared production MongoDB.
+	//
+	// Wrapping the mux rather than each handler is deliberate: a per-handler limit is
+	// a limit someone forgets to add to the next route.
+	h := rateLimit(newLimiter(defaultBurst, defaultRefill), mux)
+	// Timeouts, for the same "one choke point" reason. A slow client on a read must
+	// not hold a connection open indefinitely, and without these a handler that
+	// blocks keeps its goroutine forever.
+	srv := &http.Server{
+		Addr:              ":8000",
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		// Bounds the whole request READ, headers and body together, so a client that
+		// dribbles a slow body cannot pin a handler goroutine indefinitely. Bodies here
+		// are small JSON (MaxBytesReader caps them at 64KB), so this cannot cut off a
+		// legitimate write.
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 120 * time.Second,
+		// NO WriteTimeout, deliberately. /exports serves files of unbounded size from
+		// the host, and a global WriteTimeout would abort a large download partway
+		// through — turning a slow client into a corrupt file for every caller behind
+		// it. The per-handler read budget above covers the abuse case (a stalled
+		// request body) without touching the response.
+	}
 	log.Print("health-api listening on :8000")
-	if err := http.ListenAndServe(":8000", mux); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
