@@ -161,7 +161,7 @@ class TasksApi(context: Context) {
          * from the one this PR already fixed for `TaskContractSent` itself, and it was mine
          * to walk into immediately after fixing the original.
          *
-         * On the companion, not the instance: `TasksApi` needs a `Context`, so an instance
+         * On the companion, not the instance: `TasksApi` takes a `Context`, so an instance
          * member is not callable from a plain JVM unit test — which is exactly where this
          * has to be callable from to be worth anything.
          *
@@ -193,6 +193,321 @@ class TasksApi(context: Context) {
             parallelable = parallelable,
         )
 
+        // One shared client: each OkHttpClient owns a connection pool and
+        // dispatcher threads, so per-call instances would leak both.
+        private val sharedHttp: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .build()
+        }
+    }
+
+    private val appCtx = context.applicationContext
+    private val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+    private val http: OkHttpClient get() = sharedHttp
+
+    private fun base(): String {
+        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
+            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
+            if (v.isNotEmpty()) return v
+        }
+        return ""
+    }
+
+    private fun password(): String {
+        val v = (prefs.getString("app_password", "") ?: "").trim()
+        if (v.isNotEmpty()) return v
+        return (prefs.getString("auth_token", "") ?: "").trim()
+    }
+
+    /** Lenient string read: Android's `optString` coerces JSON null to
+     * the string "null", so every nullable/completedAt-style field must
+     * go through here (#130). */
+    private fun optStr(o: JSONObject, key: String): String =
+        if (o.isNull(key)) "" else o.optString(key, "").trim()
+
+    private fun parseTask(o: JSONObject): ServerTask? {
+        val id = optStr(o, "id")
+            .ifEmpty { optStr(o, "_id") }
+        if (id.isEmpty()) return null
+        val name = optStr(o, "name")
+        if (name.isEmpty()) return null
+        // estimated_minutes may encode as int, long, or double.
+        val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
+        return ServerTask(
+            id = id,
+            name = name,
+            description = optStr(o, "description"),
+            dueDate = optStr(o, "due_date"),
+            dueTime = optStr(o, "due_time"),
+            estimatedMinutes = mins.coerceAtLeast(0),
+            repeatEvery = (o.opt("repeat_every") as? Number)?.toInt() ?: 0,
+            repeatUnit = optStr(o, "repeat_unit"),
+            repeatCustom = o.optBoolean("repeat_custom", false),
+            repeatRule = optStr(o, "repeat_rule"),
+            parallelable = o.optBoolean("parallelable", false),
+            // Missing on pre-revision servers: 0 matches the backfill, so
+            // an old server and a new app still agree (#184).
+            revision = (o.opt("revision") as? Number)?.toInt() ?: 0,
+            completedAt = optStr(o, "completedAt"),
+            createdAt = optStr(o, "createdAt"),
+        )
+    }
+
+    /**
+     * Lists tasks by state (`open`, `done`, `all`); unknown states fail fast.
+     *
+     * One bounded page: [limit] <= 0 takes the server default (200, max
+     * 500), and [TaskList.truncated] says whether more rows exist, so the
+     * list never silently ends mid-collection (#168).
+     */
+    suspend fun list(state: String = "open", limit: Int = 0): Result<TaskList> =
+        withContext(Dispatchers.IO) {
+            val base = base()
+            if (base.isEmpty()) {
+                return@withContext Result.failure(IllegalStateException("Server URL not configured"))
+            }
+            val s = state.trim().lowercase(Locale.ROOT)
+            if (s != "open" && s != "done" && s != "all") {
+                return@withContext Result.failure(IllegalArgumentException("Unknown state: $state"))
+            }
+            val query = if (limit > 0) "/api/tasks?state=$s&limit=$limit" else "/api/tasks?state=$s"
+            call("GET", query).map { body ->
+                val out = mutableListOf<ServerTask>()
+                val root = JSONObject(body)
+                val arr = root.optJSONArray("tasks")
+                    ?: root.optJSONArray("data")
+                    ?: root.optJSONArray("items")
+                    ?: return@map TaskList(out)
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    parseTask(o)?.let { out.add(it) }
+                }
+                TaskList(out, root.optBoolean("truncated", false))
+            }
+        }
+
+    /**
+     * One task by id, or null when it is gone (#168).
+     *
+     * A 404 whose body names the unknown task means done/deleted after
+     * arming; anything else (transport, wrong server) stays a failure, so
+     * the caller can tell "finished" from "unknowable". The match lives
+     * here, next to the 404 handling, rather than in every caller.
+     */
+    suspend fun get(id: String): Result<ServerTask?> =
+        withContext(Dispatchers.IO) {
+            val clean = encodeId(id)
+            if (clean.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Missing task id"))
+            }
+            // mapCatching, not map: a malformed doc must come back as a
+            // failure (generic alert + rearm), never as a throw escaping
+            // the receiver's coroutine.
+            call("GET", "/api/tasks/$clean").mapCatching { body ->
+                parseOne(body)
+            }.fold(
+                onSuccess = { task ->
+                    Result.success(task)
+                },
+                onFailure = { e ->
+                    // Code and body: a gateway 404 (wrong server) must never
+                    // read as a finished task.
+                    val msg = e.message ?: ""
+                    if ("HTTP 404:" in msg && "unknown task" in msg) {
+                        Result.success(null)
+                    } else {
+                        Result.failure(e)
+                    }
+                },
+            )
+        }
+
+    /** Creates a task. Everything except the repeat is required — the
+     * server rejects missing keys (all-zero repeat = one-shot). The
+     * repeat is either structured or custom, never both. */
+    suspend fun create(
+        name: String,
+        description: String,
+        dueDate: String,
+        dueTime: String,
+        estimatedMinutes: Int,
+        repeatEvery: Int = 0,
+        repeatUnit: String = "",
+        repeatCustom: Boolean = false,
+        repeatRule: String = "",
+        parallelable: Boolean = false,
+    ): Result<ServerTask> = withContext(Dispatchers.IO) {
+        if (name.trim().isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("Name is required"))
+        }
+        if (description.trim().isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("Description is required"))
+        }
+        if (dueDate.trim().isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("Due date is required"))
+        }
+        if (dueTime.trim().isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("Due time is required"))
+        }
+        if (estimatedMinutes < 0) {
+            return@withContext Result.failure(IllegalArgumentException("Estimated minutes must be 0 or above"))
+        }
+        // #185: trimmed once, and the SAME values are asserted and sent. Trimming only
+        // in the comparison would leave the two able to disagree on padding, which the
+        // trim-insensitive compare then hides — so the app would depend on the server
+        // cleaning up before they agree.
+        val sent = buildTaskContractSent(
+            name = name,
+            description = description,
+            dueDate = dueDate,
+            dueTime = dueTime,
+            estimatedMinutes = estimatedMinutes,
+            repeatEvery = repeatEvery,
+            repeatUnit = repeatUnit,
+            repeatCustom = repeatCustom,
+            repeatRule = repeatRule,
+            parallelable = parallelable,
+        )
+        // The body reads its strings back OUT of `sent`: two trims are two rules, and the
+        // one that drifts is the one the trim-insensitive compare hides. `sent` is
+        // all-non-null here because create validates every field above.
+        val body = JSONObject()
+            .put("name", sent.name)
+            .put("description", sent.description)
+            .put("due_date", sent.dueDate)
+            .put("due_time", sent.dueTime)
+            .put("estimated_minutes", estimatedMinutes)
+            .put("parallelable", parallelable)
+            .put("repeat_every", repeatEvery)
+            .put("repeat_unit", sent.repeatUnit)
+            .put("repeat_custom", repeatCustom)
+            .put("repeat_rule", sent.repeatRule)
+        call("POST", "/api/tasks", body).map { parseOne(it) }
+            .also { r -> r.getOrNull()?.let { checkContract(it, sent) } }
+    }
+
+    /** Partial edit: only non-null keys are sent. The repeat keys are sent
+     * together or not at all, so the server can validate the recurrence as
+     * a whole instead of merging half of it. */
+    suspend fun update(
+        id: String,
+        name: String? = null,
+        description: String? = null,
+        dueDate: String? = null,
+        dueTime: String? = null,
+        estimatedMinutes: Int? = null,
+        repeatEvery: Int? = null,
+        repeatUnit: String? = null,
+        repeatCustom: Boolean? = null,
+        repeatRule: String? = null,
+        parallelable: Boolean? = null,
+        // The revision the editor read: when someone else wrote first the
+        // server answers 409 instead of overwriting (#184).
+        expectedRevision: Int? = null,
+    ): Result<ServerTask> = withContext(Dispatchers.IO) {
+        val clean = encodeId(id)
+        if (clean.isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("Missing task id"))
+        }
+        // Trimmed at the SEND site, matching what the contract check asserts below.
+        // These went out raw while the assertion compared trimmed, so the two could
+        // disagree on padding — invisible only because the compare ignores it.
+        val body = JSONObject()
+        if (name != null) body.put("name", name.trim())
+        if (description != null) body.put("description", description.trim())
+        if (dueDate != null) body.put("due_date", dueDate.trim())
+        if (dueTime != null) body.put("due_time", dueTime.trim())
+        if (estimatedMinutes != null) body.put("estimated_minutes", estimatedMinutes)
+        if (repeatEvery != null) body.put("repeat_every", repeatEvery)
+        if (repeatUnit != null) body.put("repeat_unit", repeatUnit.trim())
+        if (repeatCustom != null) body.put("repeat_custom", repeatCustom)
+        if (repeatRule != null) body.put("repeat_rule", repeatRule.trim())
+        if (parallelable != null) body.put("parallelable", parallelable)
+        if (expectedRevision != null) body.put("expected_revision", expectedRevision)
+        call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
+            .also { r ->
+                r.getOrNull()?.let { task ->
+                    // Only the fields this call actually sent are asserted; the rest stay
+                    // null, which contractMismatches skips. The previous version built
+                    // the expected value FROM the response and copied the sent fields
+                    // over it — correct, because the unsent fields then matched
+                    // themselves, but fragile: a field added to one side and not the
+                    // other becomes silently "asserted" as whatever the server said.
+                    // Nulls put the decision at this call site, where it is visible.
+                    checkContract(task, buildTaskContractSent(
+                        name = name,
+                        description = description,
+                        dueDate = dueDate,
+                        dueTime = dueTime,
+                        estimatedMinutes = estimatedMinutes,
+                        repeatEvery = repeatEvery,
+                        repeatUnit = repeatUnit,
+                        repeatCustom = repeatCustom,
+                        repeatRule = repeatRule,
+                        parallelable = parallelable,
+                    ))
+                }
+            }
+    }
+
+    /** Marks a task done (server starts the 3-day retention clock). The
+     * response carries the rolled-over occurrence in `next` when a
+     * structured cadence produced one. */
+    suspend fun complete(id: String): Result<ServerTask> =
+        withContext(Dispatchers.IO) {
+            val clean = encodeId(id)
+            if (clean.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Missing task id"))
+            }
+            call("POST", "/api/tasks/$clean/complete", JSONObject()).map { body ->
+                val root = JSONObject(body)
+                val task = parseTask(root.optJSONObject("task") ?: root)
+                    ?: throw RuntimeException("Unexpected response shape")
+                val next = root.optJSONObject("next")
+                if (next == null) {
+                    task
+                } else {
+                    // optStr, not optString: a JSON null would arrive as the
+                    // literal string "null" and reach the snackbar.
+                    task.copy(nextDueDate = optStr(next, "due_date"))
+                }
+            }
+        }
+
+    /** Reopens a done task. */
+    suspend fun reopen(id: String): Result<ServerTask> =
+        withContext(Dispatchers.IO) {
+            val clean = encodeId(id)
+            if (clean.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Missing task id"))
+            }
+            call("POST", "/api/tasks/$clean/reopen", JSONObject()).map { parseOne(it) }
+        }
+
+    /** Permanently deletes a task. */
+    suspend fun delete(id: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            val clean = encodeId(id)
+            if (clean.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Missing task id"))
+            }
+            call("DELETE", "/api/tasks/$clean").map { }
+        }
+
+    /**
+     * Compares a write's response against what was asked for, and surfaces any field
+     * the server stored differently.
+     *
+     * A snackbar, not an exception: the write genuinely succeeded, so failing it would
+     * tell the user their task was not saved when it was. That is the same class of lie
+     * as #214 — reporting an outcome that did not happen — and it is the reason this
+     * warns instead of throws. The user needs to know the app and the server disagree
+     * while the task is still on screen; silently keeping the app's belief is what made
+     * the 4.6.0 and 4.7.0 response-shape changes look like bugs in the app.
+     */
     private fun checkContract(task: ServerTask, sent: TaskContractSent) {
         val mismatched = contractMismatches(sent, task)
         if (mismatched.isEmpty()) return
@@ -344,11 +659,6 @@ internal object ContractWarnings {
      * Deliberately does not say "reopen the task" — `reopen` is a real verb in this API
      * meaning the opposite (it un-completes a task), so telling a user to reopen a task
      * that is already saved reads as an instruction to undo it.
-     *
-     * Says "refreshing the list" rather than "open the task again", and the collector
-     * makes that true by bumping `refreshTick`: the list is cached state the detail sheet
-     * reads from, so an instruction to reopen would show the same stale row and read as
-     * the app ignoring the user.
      */
     fun message(fields: List<String>): String =
         "Saved, but the server stored different values for " +
