@@ -374,17 +374,39 @@ class TasksApi(context: Context) {
         // The body reads its strings back OUT of `sent`: two trims are two rules, and the
         // one that drifts is the one the trim-insensitive compare hides. `sent` is
         // all-non-null here because create validates every field above.
+        // `requireNotNull` on every field, deliberately.
+        //
+        // `create` takes NON-NULL parameters and validates the four required strings as
+        // non-blank above, so `sent.*` cannot be null here — the builder is only nullable
+        // because `update` shares it. But `JSONObject.put(String, Object?)` given a null
+        // silently REMOVES the key rather than storing a null, so a future relaxation of
+        // those validations would turn a create into a request missing `name`, and the
+        // server's answer would be a confusing "field required" rather than a local
+        // failure naming the cause.
+        //
+        // These make the invariant FAIL LOUDLY at the point it breaks. They are not
+        // defensive noise: each one pins "create asserts every field it sends", which is
+        // exactly what the wiring test asserts.
         val body = JSONObject()
-            .put("name", sent.name)
-            .put("description", sent.description)
-            .put("due_date", sent.dueDate)
-            .put("due_time", sent.dueTime)
-            .put("estimated_minutes", sent.estimatedMinutes)
-            .put("parallelable", sent.parallelable)
-            .put("repeat_every", sent.repeatEvery)
-            .put("repeat_unit", sent.repeatUnit)
-            .put("repeat_custom", sent.repeatCustom)
-            .put("repeat_rule", sent.repeatRule)
+            .put("name", requireNotNull(sent.name) { "create: name must be present" })
+            .put(
+                "description",
+                requireNotNull(sent.description) { "create: description must be present" },
+            )
+            .put("due_date", requireNotNull(sent.dueDate) { "create: due_date required" })
+            .put("due_time", requireNotNull(sent.dueTime) { "create: due_time required" })
+            .put(
+                "estimated_minutes",
+                requireNotNull(sent.estimatedMinutes) { "create: estimated_minutes" },
+            )
+            .put("parallelable", requireNotNull(sent.parallelable) { "create: parallelable" })
+            .put("repeat_every", requireNotNull(sent.repeatEvery) { "create: repeat_every" })
+            .put("repeat_unit", requireNotNull(sent.repeatUnit) { "create: repeat_unit" })
+            .put(
+                "repeat_custom",
+                requireNotNull(sent.repeatCustom) { "create: repeat_custom" },
+            )
+            .put("repeat_rule", requireNotNull(sent.repeatRule) { "create: repeat_rule" })
         call("POST", "/api/tasks", body).map { parseOne(it) }
             .also { r -> r.getOrNull()?.let { checkContract(it, sent) } }
     }

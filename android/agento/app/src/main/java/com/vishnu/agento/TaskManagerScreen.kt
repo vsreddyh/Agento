@@ -69,6 +69,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import java.util.Locale
 import kotlinx.coroutines.delay
+// REQUIRED, do not remove as an unused import: `collect { }` on a Flow with a lambda is
+// the kotlinx.coroutines.flow EXTENSION, not the FlowCollector member. Removing it fails to
+// compile. Flagged as redundant in review twice; it is load-bearing.
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 /** Task Manager: the user's own tasks from the shared `tasks` collection
