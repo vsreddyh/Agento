@@ -44,6 +44,12 @@ var timeRE = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 type StoreError struct {
 	Msg      string
 	Conflict bool
+	// Mismatch means an idempotency key was REUSED with a different payload
+	// (#176). It is neither missing nor a lost revision race, so it gets its own
+	// flag rather than being smuggled in as a message prefix — a caller has to be
+	// able to distinguish "your key is wrong" from "your fields are wrong", and
+	// only one of those is fixed by changing the request.
+	Mismatch bool
 }
 
 func (e *StoreError) Error() string { return e.Msg }
@@ -57,6 +63,15 @@ func conflict(format string, args ...any) *StoreError {
 
 func fail(format string, args ...any) *StoreError {
 	return &StoreError{Msg: fmt.Sprintf(format, args...)}
+}
+
+// mismatch reports an idempotency key reused with a different payload.
+func mismatch(key string) *StoreError {
+	return &StoreError{
+		Msg: fmt.Sprintf("idempotency key %q was already used with a different request body; "+
+			"send a NEW key for a different task, or resend the original body to replay it", key),
+		Mismatch: true,
+	}
 }
 
 // Store is the MongoDB backend for tasks.
@@ -106,6 +121,20 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		//     duplicate this prevents.
 		{Keys: bson.D{{Key: idempotencyKeyField, Value: 1}},
 			Options: options.Index().SetName("idempotency_key_uniq").SetUnique(true).SetSparse(true)},
+	})
+	if err != nil {
+		return err
+	}
+	// The audit collection's indexes live here too, deliberately. They were a
+	// separate EnsureAuditIndex that New() never called — so `task_mutations` shipped
+	// with NO indexes at all, and the only two things that read it (the 90-day
+	// retention prune on `at`, and "what happened to this task" on `task_id`) were
+	// collection scans against a collection that only grows. A second function is a
+	// second place to forget the call, so there is now one place to add an index and
+	// one place that runs.
+	_, err = s.db.Collection(auditCollection).Indexes().CreateMany(ctx, []mongoDrv.IndexModel{
+		{Keys: bson.D{{Key: "at", Value: 1}}, Options: options.Index().SetName("at_1")},
+		{Keys: bson.D{{Key: "task_id", Value: 1}}, Options: options.Index().SetName("task_id_1")},
 	})
 	return err
 }
@@ -203,7 +232,7 @@ func toDoc(doc bson.M) map[string]any {
 // A non-empty key makes the insert idempotent (#176): a repeat of the same key
 // returns the ORIGINAL task instead of creating a second one.
 func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool) (map[string]any, error) {
-	doc, _, err := s.CreateWithKey(ctx, name, description, dueDate, dueTime, estimatedMinutes, rep, parallelable, "", "")
+	doc, _, err := s.CreateWithKey(ctx, name, description, dueDate, dueTime, estimatedMinutes, rep, parallelable, "", "", "")
 	return doc, err
 }
 
@@ -219,6 +248,11 @@ const (
 	// or a surprise is traceable. health-api and the agent are indistinguishable at
 	// the auth layer (one shared password), which is exactly why this was missing.
 	sourceField = "source"
+	// idempotencyFingerprintField is a digest of the request payload, written in the
+	// SAME insert as the key. A key alone cannot detect reuse-with-different-body:
+	// the store would hand back the original task with a 200 and no signal, so the
+	// caller would believe it created something it did not. See CreateWithKey.
+	idempotencyFingerprintField = "idempotency_fingerprint"
 )
 
 // CreateWithKey is Create plus a client-supplied idempotency key and the caller's
@@ -239,7 +273,7 @@ const (
 //
 // `replayed` is returned true only for that second-and-subsequent case, so a
 // caller can answer "already saved" rather than implying it created something.
-func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool, idemKey, source string) (map[string]any, bool, error) {
+func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool, idemKey, source, fingerprint string) (map[string]any, bool, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, false, fail("name is required")
@@ -286,15 +320,17 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 	}
 	idemKey = strings.TrimSpace(idemKey)
 	if idemKey != "" {
-		if len(idemKey) > 200 {
-			idemKey = idemKey[:200]
-		}
+		idemKey = truncateRunes(idemKey, 200)
 		doc[idempotencyKeyField] = idemKey
+		// Same insert as the key, so a task can never carry one without the other.
+		// An empty fingerprint disables the check rather than failing the write: a
+		// caller that has no body to digest (the MCP path) still gets idempotency.
+		if fingerprint = truncateRunes(fingerprint, 64); fingerprint != "" {
+			doc[idempotencyFingerprintField] = fingerprint
+		}
 	}
 	if source = strings.TrimSpace(source); source != "" {
-		if len(source) > 40 {
-			source = source[:40]
-		}
+		source = truncateRunes(source, 40)
 		doc[sourceField] = source
 	}
 	out, err := s.insert(ctx, doc)
@@ -312,6 +348,19 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 		// The insert reported a duplicate but the row cannot be read back. Returning
 		// the original error is more useful than a silent success.
 		return nil, false, err
+	}
+	// Reuse with a DIFFERENT body is not a replay, and answering 200 with the
+	// original task would be the worst possible reply: the caller would believe it
+	// created a task with the fields it just sent, and the task it gets back has
+	// none of them. Refuse instead, and say which of the two mistakes it is.
+	//
+	// Compared only when BOTH sides have a fingerprint. A row written before this
+	// field existed has none, and so does a caller that sent no body to digest;
+	// treating "unknown" as "different" would reject every legacy key on its first
+	// retry, which is the opposite of what an idempotency key is for.
+	stored, _ := existing[idempotencyFingerprintField].(string)
+	if fingerprint != "" && stored != "" && stored != fingerprint {
+		return nil, false, mismatch(idemKey)
 	}
 	return existing, true, nil
 }
@@ -806,6 +855,19 @@ func (s *Store) Skip(ctx context.Context, id, reason string) (map[string]any, ma
 // by voice, and a 40 KB paste would otherwise ride along in every list response.
 func truncSkipReason(s string) string {
 	const max = 200
+	return truncateRunes(s, max)
+}
+
+// truncateRunes caps a string at max BYTES without splitting a UTF-8 rune, so a
+// stored value never ends in the middle of a character.
+//
+// There were three hand-rolled versions of this (truncSkipReason, truncateField
+// and two inline `s[:n]` clamps) and only one of them was rune-safe — the skip
+// reason, added later, was; the idempotency key and the audit fields were not. So a
+// non-ASCII source label or a key with a multi-byte character could be stored as
+// invalid UTF-8, which BSON accepts and every reader then has to defend against.
+// Same rule, one place, applied to every capped field.
+func truncateRunes(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}

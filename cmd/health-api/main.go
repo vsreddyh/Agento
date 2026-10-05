@@ -77,7 +77,17 @@ func main() {
 		Addr:              ":8000",
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// Bounds the whole request READ, headers and body together, so a client that
+		// dribbles a slow body cannot pin a handler goroutine indefinitely. Bodies here
+		// are small JSON (MaxBytesReader caps them at 64KB), so this cannot cut off a
+		// legitimate write.
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 120 * time.Second,
+		// NO WriteTimeout, deliberately. /exports serves files of unbounded size from
+		// the host, and a global WriteTimeout would abort a large download partway
+		// through — turning a slow client into a corrupt file for every caller behind
+		// it. The per-handler read budget above covers the abuse case (a stalled
+		// request body) without touching the response.
 	}
 	log.Print("health-api listening on :8000")
 	if err := srv.ListenAndServe(); err != nil {

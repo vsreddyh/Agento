@@ -193,3 +193,126 @@ func TestSourceKeyDoesNotRetainTheToken(t *testing.T) {
 		t.Error("an unauthenticated request still needs a key to throttle against")
 	}
 }
+
+// The compose file publishes health-api as `8001:8000`, so a client can reach it
+// WITHOUT nginx and can set X-Real-IP to anything. Trusting the header
+// unconditionally would let any caller defeat the limiter by rotating one header —
+// which is the difference between a rate limit and decoration. These pin the trust
+// boundary: the header is believed only from an internal peer.
+func TestSourceKeyIgnoresForwardedHeadersFromAPublicPeer(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	r.RemoteAddr = "203.0.113.9:5555" // PUBLIC client, straight at the published port
+	r.Header.Set("X-Real-IP", "198.51.100.7")
+	r.Header.Set("X-Forwarded-For", "198.51.100.7")
+	key := sourceKey(r)
+	if strings.Contains(key, "198.51.100.7") {
+		t.Errorf("a public peer chose its own bucket via X-Real-IP: %q", key)
+	}
+	if !strings.HasPrefix(key, "203.0.113.9") {
+		t.Errorf("key = %q, want it keyed on the real peer 203.0.113.9", key)
+	}
+}
+
+// Rotating the header from a public peer must not buy a fresh bucket each time —
+// otherwise "per-source" means "per-request" and the limiter does nothing.
+func TestSourceKeyCannotBeRotatedByAPublicPeer(t *testing.T) {
+	seen := map[string]bool{}
+	for _, spoofed := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"} {
+		r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		r.RemoteAddr = "203.0.113.9:5555"
+		r.Header.Set("X-Real-IP", spoofed)
+		seen[sourceKey(r)] = true
+	}
+	if len(seen) != 1 {
+		t.Errorf("one client produced %d buckets by rotating a header: %v", len(seen), seen)
+	}
+}
+
+// Traffic that came through the compose network IS separated per real client, which
+// is the whole reason for reading the header at all.
+func TestSourceKeySeparatesClientsBehindTheProxy(t *testing.T) {
+	key := func(client string) string {
+		r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		r.RemoteAddr = "172.18.0.5:5000" // the nginx container
+		r.Header.Set("X-Real-IP", client)
+		return sourceKey(r)
+	}
+	if key("198.51.100.7") == key("198.51.100.8") {
+		t.Error("two clients through the proxy share a bucket — X-Real-IP is being ignored")
+	}
+	if key("198.51.100.7") == "172.18.0.5" {
+		t.Error("the bucket is keyed on the proxy, so every client shares one budget")
+	}
+}
+
+// nginx uses $proxy_add_x_forwarded_for, which APPENDS to a client-supplied list, so
+// every entry except the last is attacker-chosen. Taking the first — the conventional
+// choice — takes the attacker's value.
+func TestSourceKeyUsesTheLastForwardedHop(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	r.RemoteAddr = "172.18.0.5:5000"
+	r.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8, 198.51.100.9")
+	key := sourceKey(r)
+	if !strings.HasPrefix(key, "198.51.100.9") {
+		t.Errorf("key = %q, want the LAST hop (198.51.100.9)", key)
+	}
+}
+
+// A garbage header must not become a bucket key, and must not fall through to an
+// empty one — either would let a client choose its own bucket.
+func TestSourceKeyRejectsUnparseableHeaders(t *testing.T) {
+	for _, bad := range []string{"not-an-ip", "", "999.999.999.999", "1.2.3.4; DROP"} {
+		r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		r.RemoteAddr = "172.18.0.5:5000"
+		if bad != "" {
+			r.Header.Set("X-Real-IP", bad)
+		}
+		key := sourceKey(r)
+		if key == "" {
+			t.Errorf("header %q produced an empty bucket key", bad)
+		}
+		if key == bad {
+			t.Errorf("unparseable header %q was used verbatim as the key", bad)
+		}
+	}
+}
+
+// The end-to-end property: a flood arriving through the proxy is throttled as ONE
+// source, and a second proxied client is unaffected by it.
+func TestProxiedClientsGetIndependentBudgets(t *testing.T) {
+	l, _ := newLimiterWithClock(2, 1.0)
+	h := rateLimit(l, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	do := func(client string) int {
+		ok200 := 0
+		for i := 0; i < 5; i++ {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+			req.RemoteAddr = "172.18.0.5:5000"
+			req.Header.Set("X-Real-IP", client)
+			h.ServeHTTP(rec, req)
+			if rec.Code == http.StatusOK {
+				ok200++
+			}
+		}
+		return ok200
+	}
+	if got := do("198.51.100.7"); got != 2 {
+		t.Errorf("flooding client got %d through, want 2 (its burst)", got)
+	}
+	if got := do("198.51.100.8"); got != 2 {
+		t.Errorf("an innocent proxied client got %d through, want its own burst of 2", got)
+	}
+}
+
+// The bucket's `last` must be initialised. Left as the zero time, the first refill
+// measures from year 1 and saturates instantly — harmless only because the burst
+// clamp hides it, which is exactly why relying on the clamp is the problem.
+func TestNewBucketStartsWithAClockNotTheEpoch(t *testing.T) {
+	l, _ := newLimiterWithClock(3, 1.0)
+	l.allow("fresh")
+	b := l.buckets["fresh"]
+	if b.last.IsZero() {
+		t.Error("a new bucket has a zero `last`; the first refill saturates instead of metering")
+	}
+}

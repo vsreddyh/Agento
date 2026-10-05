@@ -5,6 +5,8 @@ package main
 import (
 	"agento/internal/tasks"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,6 +102,16 @@ func writeTaskErr(w http.ResponseWriter, err error) {
 		// to reload), so the app can show it as-is.
 		if se.Conflict {
 			writeJSON(w, http.StatusConflict, bson.M{"detail": se.Msg})
+			return
+		}
+		// A reused Idempotency-Key with a different body. 422 like any other
+		// validation failure, but named separately: the fix is a NEW key, not
+		// different fields, and the message has to say which.
+		if se.Mismatch {
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{
+				"detail": se.Msg,
+				"hint":   "idempotency keys are single-use per distinct request body",
+			})
 			return
 		}
 		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": se.Msg})
@@ -273,6 +285,7 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		&parallelable,
 		idemKey,
 		source,
+		taskFingerprint(fields),
 	)
 	if err != nil {
 		writeTaskErr(w, err)
@@ -310,6 +323,43 @@ func changedKeys(fields map[string]any) string {
 		return "no fields"
 	}
 	return strings.Join(keys, ",")
+}
+
+// taskFingerprint digests a create body so a reused Idempotency-Key can be told
+// apart from a genuine retry.
+//
+// Derived from the DECODED body, not the raw bytes: encoding/json emits map keys in
+// sorted order, so this is canonical, and a client that re-serialises its retry with
+// different key order or indentation still matches. Hashing the bytes would 422 a
+// legitimate retry for a cosmetic difference.
+//
+// Only the fields the create actually consumes, so a client adding an unknown key
+// to a NEW version of its payload is not rejected for it.
+func taskFingerprint(fields map[string]any) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	relevant := make(map[string]any, 9)
+	for _, k := range []string{
+		"name", "description", "due_date", "due_time",
+		"estimated_minutes", "parallelable",
+		"repeat_every", "repeat_unit", "repeat_custom",
+	} {
+		if v, ok := fields[k]; ok {
+			relevant[k] = v
+		}
+	}
+	if len(relevant) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(relevant)
+	if err != nil {
+		// Unencodable means the body holds a type the create will reject anyway.
+		// Returning "" disables the mismatch check rather than failing the write.
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // requestSource names the caller for the audit log (#176). The app sends

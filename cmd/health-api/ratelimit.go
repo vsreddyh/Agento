@@ -83,7 +83,12 @@ func (l *limiter) allow(key string) (bool, time.Duration) {
 
 	b, ok := l.buckets[key]
 	if !ok {
-		b = &bucket{tokens: l.burst}
+		// `last` is set, not left zero. With a zero `last`, the elapsed time below is
+		// measured from year 1 and the refill instantly saturates the bucket — which
+		// happens to be harmless only because the burst cap clamps it. Relying on a
+		// clamp to rescue an uninitialised field is how the field silently stops being
+		// the thing you think it is.
+		b = &bucket{tokens: l.burst, last: now, lastSeen: now}
 		l.buckets[key] = b
 	}
 	// Refill for the elapsed time, then consume. Refilling before spending is what
@@ -123,15 +128,76 @@ func (l *limiter) sweepLocked(now time.Time) {
 	}
 }
 
-// sourceKey identifies a caller for throttling. The address is preferred because
-// it is the thing an unauthenticated flood varies; the token is folded in so two
-// callers behind one address (app and agent on the same host) do not share a
-// budget they each need in full.
-func sourceKey(r *http.Request) string {
+// peerIsInternal reports whether the immediate TCP peer is on a private or
+// loopback network, i.e. plausibly our own nginx rather than the public internet.
+func peerIsInternal(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// Not an IP at all (a unix socket, a test harness). Refuse to trust the
+		// header: the safe answer is the one that cannot be spoofed.
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
+// clientIP is the address to throttle by, preferring what the reverse proxy
+// observed over what this process can see.
+//
+// WHY THIS IS NOT JUST "trust X-Real-IP": the compose file publishes health-api
+// directly as `8001:8000`, so a client can reach it WITHOUT going through nginx and
+// can set X-Real-IP to anything it likes. Trusting the header unconditionally would
+// hand every direct client a fresh bucket per request by rotating a header — a
+// rate limit that any caller can switch off with one line of curl.
+//
+// So the header is trusted only when the peer is internal, which is true for
+// traffic that came through the compose network and false for a public client
+// hitting the published port directly. Nginx overwrites X-Real-IP with $remote_addr
+// rather than passing the client's value through, which is what makes this safe on
+// our side of the wire.
+func clientIP(r *http.Request) string {
+	if peerIsInternal(r) {
+		if v := realIP(r); v != "" {
+			return v
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// realIP reads the proxy-observed client address. X-Real-IP first: nginx SETS it to
+// $remote_addr, overwriting whatever the client sent. X-Forwarded-For is only
+// consulted as a fallback and only its LAST hop, because nginx uses
+// $proxy_add_x_forwarded_for, which APPENDS to a client-supplied list — every entry
+// before the last is attacker-chosen, so taking the first (the conventional choice)
+// would be taking the attacker's value.
+func realIP(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
+		if net.ParseIP(v) != nil {
+			return v
+		}
+	}
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		parts := strings.Split(xff, ",")
+		last := strings.TrimSpace(parts[len(parts)-1])
+		if net.ParseIP(last) != nil {
+			return last
+		}
+	}
+	return ""
+}
+
+// sourceKey identifies a caller for throttling: the client address, plus a hash of
+// the bearer token so two callers sharing one address (app and agent on the same
+// host) do not share a budget they each need in full.
+func sourceKey(r *http.Request) string {
+	host := clientIP(r)
 	if tok := bearerToken(r); tok != "" {
 		// Hashed, not stored: the limiter's map is long-lived and there is no
 		// reason for it to hold anything derived from the password.
