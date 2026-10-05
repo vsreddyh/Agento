@@ -458,10 +458,16 @@ class UpdateContractWiringTest {
             repeatRule = "",
             parallelable = false,
         )
-        assertEquals(
-            emptyList<String>(),
-            contractMismatches(created, agreed.copy(description = "with water")),
+        // `agreed` must carry the SAME values the create path sends, or this asserts
+        // nothing useful: it first failed with `expected:<[]> but was:<[estimated_minutes]>`
+        // because `agreed` left estimatedMinutes at its 0 default while the create sent 5.
+        // A fixture that disagrees with the thing under test produces a test that either
+        // fails for the wrong reason or passes for the wrong one.
+        val storedByServer = agreed.copy(
+            description = "with water",
+            estimatedMinutes = 5,
         )
+        assertEquals(emptyList<String>(), contractMismatches(created, storedByServer))
         // Nothing was left null by the create path.
         assertTrue(
             "create must assert every field it sends",
