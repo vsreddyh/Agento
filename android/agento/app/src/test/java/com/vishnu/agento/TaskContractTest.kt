@@ -503,3 +503,63 @@ class UpdateContractWiringTest {
         )
     }
 }
+
+/**
+ * The record a write is ASSERTED from must be the record its body was WRITTEN from.
+ *
+ * `update` used to trim in two places — once for `body.put(...)` and once inside
+ * `buildTaskContractSent` — which is the same value today and two rules tomorrow. Change
+ * the builder's trimming and the body silently diverges, and the trim-insensitive compare
+ * hides it, so the drift stays invisible until a server stops trimming on our behalf.
+ *
+ * Both write paths now build one `sent` and use it for both jobs. This asserts the shape
+ * that makes that true: a partial edit leaves unsent fields null, which is what lets the
+ * body omit them (a JSON null would read as an explicit clear) while the comparator skips
+ * them.
+ */
+class SingleSourceOfTruthTest {
+
+    private fun sent(
+        name: String? = null,
+        estimatedMinutes: Int? = null,
+        repeatEvery: Int? = null,
+        repeatCustom: Boolean? = null,
+    ) = TasksApi.buildTaskContractSent(
+        name = name, estimatedMinutes = estimatedMinutes,
+        repeatEvery = repeatEvery, repeatCustom = repeatCustom,
+    )
+
+    @Test
+    fun `an unsent field is null, so the body omits it and the compare skips it`() {
+        val s = sent(name = "Take meds")
+        assertEquals("Take meds", s.name)
+        assertEquals(null, s.estimatedMinutes)
+        assertEquals(null, s.repeatEvery)
+        assertEquals(null, s.repeatCustom)
+        // Null means "not asserted" — a JSON null would be an explicit clear.
+        assertEquals(null, s.description)
+    }
+
+    @Test
+    fun `a sent zero is preserved rather than collapsed to null`() {
+        // The distinction that makes `?.let { body.put(...) }` safe: a null means NOT SENT,
+        // and 0 means sent-and-zero. If the builder conflated them, an explicit "clear the
+        // estimate" would silently stop being sent.
+        val s = sent(estimatedMinutes = 0, repeatEvery = 0, repeatCustom = false)
+        assertEquals(0, s.estimatedMinutes)
+        assertEquals(0, s.repeatEvery)
+        assertEquals(false, s.repeatCustom)
+    }
+
+    @Test
+    fun `a sent blank string survives trimming as an empty string, not null`() {
+        // Same reasoning as the zero case: "" was sent deliberately (clear the field) and
+        // must not be mistaken for "not sent".
+        assertEquals("", sent(name = "   ").name)
+    }
+
+    @Test
+    fun `padding is trimmed once so body and assertion cannot diverge`() {
+        assertEquals("Take meds", sent(name = "  Take meds  ").name)
+    }
+}

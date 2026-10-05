@@ -412,20 +412,37 @@ class TasksApi(context: Context) {
         if (clean.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Missing task id"))
         }
-        // Trimmed at the SEND site, matching what the contract check asserts below.
-        // These went out raw while the assertion compared trimmed, so the two could
-        // disagree on padding — invisible only because the compare ignores it.
+        // ONE record, built once, and the body is written from it — exactly what
+        // `create` does. This used to trim here AND inside `buildTaskContractSent`,
+        // which is the same value today and two rules tomorrow: change the builder's
+        // trimming and the body silently diverges, and the trim-insensitive compare
+        // hides it, so the drift is invisible until a server stops trimming for us.
+        //
+        // A null field means "not sent", so it is omitted from the body entirely rather
+        // than sent as a JSON null — which the server would read as an explicit clear.
+        val sent = buildTaskContractSent(
+            name = name,
+            description = description,
+            dueDate = dueDate,
+            dueTime = dueTime,
+            estimatedMinutes = estimatedMinutes,
+            repeatEvery = repeatEvery,
+            repeatUnit = repeatUnit,
+            repeatCustom = repeatCustom,
+            repeatRule = repeatRule,
+            parallelable = parallelable,
+        )
         val body = JSONObject()
-        if (name != null) body.put("name", name.trim())
-        if (description != null) body.put("description", description.trim())
-        if (dueDate != null) body.put("due_date", dueDate.trim())
-        if (dueTime != null) body.put("due_time", dueTime.trim())
-        if (estimatedMinutes != null) body.put("estimated_minutes", estimatedMinutes)
-        if (repeatEvery != null) body.put("repeat_every", repeatEvery)
-        if (repeatUnit != null) body.put("repeat_unit", repeatUnit.trim())
-        if (repeatCustom != null) body.put("repeat_custom", repeatCustom)
-        if (repeatRule != null) body.put("repeat_rule", repeatRule.trim())
-        if (parallelable != null) body.put("parallelable", parallelable)
+        sent.name?.let { body.put("name", it) }
+        sent.description?.let { body.put("description", it) }
+        sent.dueDate?.let { body.put("due_date", it) }
+        sent.dueTime?.let { body.put("due_time", it) }
+        sent.estimatedMinutes?.let { body.put("estimated_minutes", it) }
+        sent.repeatEvery?.let { body.put("repeat_every", it) }
+        sent.repeatUnit?.let { body.put("repeat_unit", it) }
+        sent.repeatCustom?.let { body.put("repeat_custom", it) }
+        sent.repeatRule?.let { body.put("repeat_rule", it) }
+        sent.parallelable?.let { body.put("parallelable", it) }
         if (expectedRevision != null) body.put("expected_revision", expectedRevision)
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
             .also { r ->
@@ -436,19 +453,10 @@ class TasksApi(context: Context) {
                     // over it — correct, because the unsent fields then matched
                     // themselves, but fragile: a field added to one side and not the
                     // other becomes silently "asserted" as whatever the server said.
-                    // Nulls put the decision at this call site, where it is visible.
-                    checkContract(task, buildTaskContractSent(
-                        name = name,
-                        description = description,
-                        dueDate = dueDate,
-                        dueTime = dueTime,
-                        estimatedMinutes = estimatedMinutes,
-                        repeatEvery = repeatEvery,
-                        repeatUnit = repeatUnit,
-                        repeatCustom = repeatCustom,
-                        repeatRule = repeatRule,
-                        parallelable = parallelable,
-                    ))
+                    // Nulls put the decision at this call site, where it is visible —
+                    // and `sent` is the SAME record the body was written from, so what
+                    // is asserted is what was sent rather than a second construction of it.
+                    checkContract(task, sent)
                 }
             }
     }
