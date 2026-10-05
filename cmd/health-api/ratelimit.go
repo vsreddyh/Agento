@@ -198,12 +198,27 @@ func realIP(r *http.Request) string {
 // host) do not share a budget they each need in full.
 func sourceKey(r *http.Request) string {
 	host := clientIP(r)
-	if tok := bearerToken(r); tok != "" {
-		// Hashed, not stored: the limiter's map is long-lived and there is no
-		// reason for it to hold anything derived from the password.
-		return host + "|" + shortHash(tok)
+	tok := bearerToken(r)
+	if tok == "" {
+		return host
 	}
-	return host
+	// Only a token that is ACTUALLY CONFIGURED earns its own bucket.
+	//
+	// The limiter deliberately runs before authorize, so an unauthenticated caller
+	// reaches this function holding a token it chose. Folding whatever was presented
+	// into the key would therefore hand anyone a fresh bucket per request by rotating
+	// a bogus Authorization header — which is not rate limiting, it is rate limiting
+	// with an off switch made of one header. Keying those by IP alone means the flood
+	// still costs the attacker a real address, and the legitimate reason for folding
+	// the token in survives: two real callers (app and agent) behind one address each
+	// need their full budget.
+	//
+	// Hashed rather than stored even here: the map is long-lived and there is no
+	// reason for it to hold anything derived from the password.
+	if !tokens()[tok] {
+		return host
+	}
+	return host + "|" + shortHash(tok)
 }
 
 func bearerToken(r *http.Request) string {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -180,13 +181,21 @@ func TestSourceKeyDoesNotRetainTheToken(t *testing.T) {
 		}
 		return r
 	}
+	// Distinct VALID tokens get distinct budgets.
+	//
+	// This assertion used to read "two different tokens" with no PASSWORD set, which
+	// passed for the wrong reason: both were invalid, so at the time any presented
+	// token was folded into the key and the hash separated them. Now that invalid
+	// tokens are deliberately keyed by IP alone — so they cannot mint fresh buckets —
+	// the test has to configure them to mean what it claims. Left as it was, it would
+	// have kept passing the day the bypass was closed only if the bypass reopened.
+	t.Setenv("PASSWORD", "super-secret-password, password-a, password-b")
 	withToken := sourceKey(mk("super-secret-password"))
 	if strings.Contains(withToken, "super-secret") {
 		t.Errorf("source key retains the token verbatim: %q", withToken)
 	}
-	// Distinct tokens still get distinct budgets.
 	if sourceKey(mk("password-a")) == sourceKey(mk("password-b")) {
-		t.Error("two different tokens share a bucket — the hash is not being applied")
+		t.Error("two valid tokens share a bucket — the hash is not being applied")
 	}
 	// And an absent token is fine.
 	if sourceKey(mk("")) == "" {
@@ -314,5 +323,72 @@ func TestNewBucketStartsWithAClockNotTheEpoch(t *testing.T) {
 	b := l.buckets["fresh"]
 	if b.last.IsZero() {
 		t.Error("a new bucket has a zero `last`; the first refill saturates instead of metering")
+	}
+}
+
+// The limiter runs BEFORE authorize, so an unauthenticated caller reaches
+// sourceKey holding a token it chose. If the key were built from whatever token was
+// presented, anyone could mint a fresh bucket per request by rotating a bogus
+// Authorization header — a rate limit with an off switch made of one header.
+func TestBogusTokensCannotMintFreshBuckets(t *testing.T) {
+	t.Setenv("PASSWORD", "the-real-password")
+	r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	r.RemoteAddr = "203.0.113.9:5555"
+	base := sourceKey(r)
+	seen := map[string]bool{base: true}
+	for i := 0; i < 25; i++ {
+		r2 := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		r2.RemoteAddr = "203.0.113.9:5555"
+		r2.Header.Set("Authorization", fmt.Sprintf("Bearer not-the-password-%d", i))
+		seen[sourceKey(r2)] = true
+	}
+	if len(seen) != 1 {
+		t.Errorf("rotating bogus tokens produced %d buckets — the limiter is bypassable: %v",
+			len(seen), seen)
+	}
+}
+
+// End-to-end version of the same bypass: rotating the header must NOT get an
+// unauthenticated flooder past the burst. This is the assertion that would fail if
+// the token were folded in unconditionally.
+func TestRotatingBogusTokensCannotEvadeTheBurst(t *testing.T) {
+	t.Setenv("PASSWORD", "the-real-password")
+	l, _ := newLimiterWithClock(3, 1.0)
+	ran := 0
+	h := rateLimit(l, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ran++ }))
+
+	for i := 0; i < 20; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		req.RemoteAddr = "203.0.113.9:5555"
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer guess-%d", i))
+		h.ServeHTTP(rec, req)
+	}
+	if ran != 3 {
+		t.Errorf("handler ran %d times against a burst of 3 — rotating a bogus token "+
+			"evaded the limit entirely", ran)
+	}
+}
+
+// The legitimate reason for folding the token in must survive: two REAL callers
+// (app and agent) behind one address each need their own budget.
+func TestValidTokensStillGetSeparateBudgets(t *testing.T) {
+	t.Setenv("PASSWORD", "app-password, agent-password")
+	mk := func(token string) string {
+		r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		r.RemoteAddr = "203.0.113.9:5555"
+		r.Header.Set("Authorization", "Bearer "+token)
+		return sourceKey(r)
+	}
+	app, agent := mk("app-password"), mk("agent-password")
+	if app == agent {
+		t.Error("two valid callers share a bucket; neither gets a full budget")
+	}
+	if app == "203.0.113.9" || agent == "203.0.113.9" {
+		t.Error("a valid token was not folded into the key, so callers were not separated")
+	}
+	// And the key must not retain the secret itself.
+	if strings.Contains(app, "app-password") {
+		t.Errorf("the bucket key holds the password verbatim: %q", app)
 	}
 }

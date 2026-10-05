@@ -148,6 +148,12 @@ Two additions beside it:
   collection-scanning a collection that only grows. The write does **not** inherit
   the request context, so a client that disconnects mid-request cannot drop the entry
   for a mutation that already committed; it is bounded at 5s independently.
+
+  The limiter counts a source as `IP + hash(token)` so two real callers behind one
+  address each get a full budget — but **only for a token that is actually
+  configured**. The limiter runs before auth, so folding in whatever token was
+  presented would let anyone evade the limit by rotating a bogus `Authorization`
+  header. Unauthenticated traffic is keyed by address alone.
 - **Retention:** done tasks auto-delete 3 days after completion via TTL. **Skipped
   occurrences expire the same way** — `skip_task` resolves the occurrence, so it
   sets `expiresAt` exactly as `complete_task` does. A skip is not permanent

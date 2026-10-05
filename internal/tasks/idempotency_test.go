@@ -477,3 +477,69 @@ func TestAuditWriteIsBounded(t *testing.T) {
 		t.Errorf("audit deadline is %s away, want ~%s", remaining.Round(time.Second), auditWriteBudget)
 	}
 }
+
+// An overlong key must be REJECTED, never truncated. Truncating to the cap makes a
+// 250-byte key byte-identical to the 200-byte key that is its own prefix, so the
+// unique index sees a duplicate and the second, genuinely different request is handed
+// the first's task as a "replay" — the silent wrong answer this mechanism exists to
+// prevent, reached by the fix for a different problem.
+func TestOverlongIdempotencyKeyIsRejectedNotTruncated(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupIdem(t, s, ctx)
+
+	prefix := strings.Repeat("k", IdempotencyKeyMax)
+	exact, _, err := s.CreateWithKey(ctx, "exact", "d", "2026-10-05", "08:00",
+		intP(5), Repeat{}, boolP(false), prefix, "test", "fp-exact")
+	if err != nil {
+		t.Fatalf("a key of exactly the limit must be accepted: %v", err)
+	}
+
+	// One byte over, sharing the whole prefix.
+	over := prefix + "X"
+	doc, replayed, err := s.CreateWithKey(ctx, "overlong", "d", "2026-10-05", "09:00",
+		intP(99), Repeat{}, boolP(false), over, "test", "fp-over")
+	if err == nil {
+		t.Fatalf("an overlong key was accepted; it would collide with its own prefix")
+	}
+	if replayed || doc != nil {
+		t.Errorf("an overlong key returned a task (replayed=%v, doc=%v) — the caller "+
+			"would believe it created or replayed something", replayed, doc)
+	}
+	var se *StoreError
+	if !errors.As(err, &se) {
+		t.Errorf("error is %T, want *StoreError", err)
+	}
+	if !strings.Contains(se.Msg, "shorter key") {
+		t.Errorf("the message does not say how to fix it: %q", se.Msg)
+	}
+	// And the truncated-collision task was never created.
+	rows, _, err := s.List(ctx, "open", false, "overlong", 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("the overlong request created %d tasks", len(rows))
+	}
+	_ = exact
+}
+
+// The boundary itself: exactly at the limit is fine, one byte over is not. Pinned
+// both sides, since an off-by-one here turns a legitimate client key into a hard
+// error at an arbitrary point in its life.
+func TestIdempotencyKeyLimitBoundary(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupIdem(t, s, ctx)
+
+	atLimit := strings.Repeat("b", IdempotencyKeyMax)
+	if _, _, err := s.CreateWithKey(ctx, "atlimit", "d", "2026-10-05", "08:00",
+		intP(5), Repeat{}, boolP(false), atLimit, "test", "fp-a"); err != nil {
+		t.Errorf("a key of exactly %d bytes was rejected: %v", IdempotencyKeyMax, err)
+	}
+	overBy1 := strings.Repeat("c", IdempotencyKeyMax+1)
+	if _, _, err := s.CreateWithKey(ctx, "overby1", "d", "2026-10-05", "08:00",
+		intP(5), Repeat{}, boolP(false), overBy1, "test", "fp-b"); err == nil {
+		t.Errorf("a key of %d bytes was accepted", IdempotencyKeyMax+1)
+	}
+}

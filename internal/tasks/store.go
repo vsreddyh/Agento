@@ -169,6 +169,20 @@ func toDoc(doc bson.M) map[string]any {
 		}
 		out[k] = v
 	}
+	// `idempotency_key` and `source` are STORED on the doc, so they appear in every
+	// response. Deliberate, and worth stating because it looks like a leak:
+	//   - the key is client-generated (a UUID), not a secret, and echoing it back is
+	//     what lets a client correlate a retry with the task it already created
+	//     without keeping its own log;
+	//   - `source` is the only record of WHICH caller wrote a row, which is the whole
+	//     reason it exists — a task changed by the agent and by the app are otherwise
+	//     indistinguishable, because both authenticate with the same password;
+	//   - both are needed by the reconciler and by anyone reading `task_mutations`,
+	//     and hiding them from the API while leaving them in the database would only
+	//     mean the next reader adds a second, inconsistent path to the same facts.
+	// The one thing that IS withheld is the bearer token: it never reaches Mongo, and
+	// where the limiter needs to distinguish callers it stores only a short hash.
+
 	// `skipped` is derived, not stored, so it cannot disagree with `skippedAt`
 	// (#209). A skip sets completedAt so the occurrence leaves the open list — which
 	// means "is it done?" and "was it done?" are different questions and a client
@@ -253,6 +267,10 @@ const (
 	// the store would hand back the original task with a 200 and no signal, so the
 	// caller would believe it created something it did not. See CreateWithKey.
 	idempotencyFingerprintField = "idempotency_fingerprint"
+	// IdempotencyKeyMax caps the client key, in BYTES (what BSON and the unique index
+	// actually compare). Over the limit is an error, never a truncation — see
+	// CreateWithKey.
+	IdempotencyKeyMax = 200
 )
 
 // CreateWithKey is Create plus a client-supplied idempotency key and the caller's
@@ -320,7 +338,16 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 	}
 	idemKey = strings.TrimSpace(idemKey)
 	if idemKey != "" {
-		idemKey = truncateRunes(idemKey, 200)
+		// REJECTED, not truncated. Truncating to 200 bytes makes a 250-byte key equal
+		// to the 200-byte key that is its own prefix, so two genuinely different
+		// requests collide on the unique index and the second is handed the first's
+		// task as a "replay". That is the silent wrong answer this whole mechanism
+		// exists to avoid, reached by the fix for a different problem — an overlong key
+		// is a client bug, and saying so is far cheaper than inventing a task.
+		if len(idemKey) > IdempotencyKeyMax {
+			return nil, false, fail("idempotency key is %d bytes, over the %d-byte limit; "+
+				"send a shorter key (a UUID is 36)", len(idemKey), IdempotencyKeyMax)
+		}
 		doc[idempotencyKeyField] = idemKey
 		// Same insert as the key, so a task can never carry one without the other.
 		// An empty fingerprint disables the check rather than failing the write: a
@@ -330,6 +357,11 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 		}
 	}
 	if source = strings.TrimSpace(source); source != "" {
+		// Truncated rather than rejected, deliberately — the OPPOSITE call from the
+		// key above, and the asymmetry is the point. `source` is a human label in an
+		// audit log: two long labels colliding degrades a log line and nothing else.
+		// `idempotency_key` is an identity that decides whether a request is a replay,
+		// so two keys colliding there silently returns the wrong task.
 		source = truncateRunes(source, 40)
 		doc[sourceField] = source
 	}
