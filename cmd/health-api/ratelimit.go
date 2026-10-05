@@ -114,11 +114,22 @@ func (l *limiter) allow(key string) (bool, time.Duration) {
 	return true, 0
 }
 
+// sweepFloor is the map size above which sweeping runs. Below it, idle buckets are
+// left alone: the walk is O(n) and this runs on every request, so paying it for a map
+// of three entries would be paying a linear scan to delete nothing.
+//
+// The consequence, stated rather than left to be discovered: up to sweepFloor-1 stale
+// buckets can persist indefinitely, because nothing else prunes them. That is a few
+// tens of kilobytes held for the life of the process and is not worth a background
+// goroutine to reclaim. Above the floor the sweep runs on every request, so the map
+// tracks distinct-active-sources rather than growing without bound.
+const sweepFloor = 256
+
 // sweepLocked drops buckets untouched for idleTTL. Called under the lock, and
 // only when the map has grown enough to be worth walking — this runs on every
 // request and a personal service does not need a linear scan per call.
 func (l *limiter) sweepLocked(now time.Time) {
-	if len(l.buckets) < 256 {
+	if len(l.buckets) < sweepFloor {
 		return
 	}
 	for k, b := range l.buckets {
