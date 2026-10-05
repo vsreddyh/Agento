@@ -306,6 +306,19 @@ class TasksApi(context: Context) {
         if (estimatedMinutes < 0) {
             return@withContext Result.failure(IllegalArgumentException("Estimated minutes must be 0 or above"))
         }
+        // #185: what the app is about to assert the server stored. Built here, from
+        // the same values the body carries, so the two cannot drift apart.
+        val sent = TaskContractSent(
+            name = name.trim(),
+            dueDate = dueDate.trim(),
+            dueTime = dueTime.trim(),
+            estimatedMinutes = estimatedMinutes,
+            repeatEvery = repeatEvery,
+            repeatUnit = repeatUnit.trim(),
+            repeatCustom = repeatCustom,
+            repeatRule = repeatRule.trim(),
+            parallelable = parallelable,
+        )
         val body = JSONObject()
             .put("name", name.trim())
             .put("description", description.trim())
@@ -318,6 +331,7 @@ class TasksApi(context: Context) {
             .put("repeat_custom", repeatCustom)
             .put("repeat_rule", repeatRule.trim())
         call("POST", "/api/tasks", body).map { parseOne(it) }
+            .also { r -> r.getOrNull()?.let { checkContract(it, sent) } }
     }
 
     /** Partial edit: only non-null keys are sent. The repeat keys are sent
@@ -356,11 +370,61 @@ class TasksApi(context: Context) {
         if (parallelable != null) body.put("parallelable", parallelable)
         if (expectedRevision != null) body.put("expected_revision", expectedRevision)
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
+            .also { r ->
+                r.getOrNull()?.let { task ->
+                    // A partial edit leaves the untouched fields UNKNOWN, not
+                    // unchanged, so they are carried through from the response rather
+                    // than asserted: comparing a field the app never sent would
+                    // report it as a mismatch on every single edit.
+                    checkContract(task, TaskContractSent(
+                        name = task.name,
+                        dueDate = task.dueDate,
+                        dueTime = task.dueTime,
+                        estimatedMinutes = task.estimatedMinutes,
+                        repeatEvery = task.repeatEvery,
+                        repeatUnit = task.repeatUnit,
+                        repeatCustom = task.repeatCustom,
+                        repeatRule = task.repeatRule,
+                        parallelable = task.parallelable,
+                    ).let { base ->
+                        // ...except the ones this call actually set, which is what
+                        // gets asserted.
+                        var out = base
+                        if (name != null) out = out.copy(name = name.trim())
+                        if (dueDate != null) out = out.copy(dueDate = dueDate.trim())
+                        if (dueTime != null) out = out.copy(dueTime = dueTime.trim())
+                        if (estimatedMinutes != null) out = out.copy(estimatedMinutes = estimatedMinutes)
+                        if (repeatEvery != null) out = out.copy(repeatEvery = repeatEvery)
+                        if (repeatUnit != null) out = out.copy(repeatUnit = repeatUnit.trim())
+                        if (repeatCustom != null) out = out.copy(repeatCustom = repeatCustom)
+                        if (repeatRule != null) out = out.copy(repeatRule = repeatRule.trim())
+                        if (parallelable != null) out = out.copy(parallelable = parallelable)
+                        out
+                    })
+                }
+            }
     }
 
     /** Marks a task done (server starts the 3-day retention clock). The
      * response carries the rolled-over occurrence in `next` when a
      * structured cadence produced one. */
+    /**
+     * Compares a write's response against what was asked for, and surfaces any field
+     * the server stored differently.
+     *
+     * A snackbar, not an exception: the write genuinely succeeded, so failing it would
+     * tell the user their task was not saved when it was. That is the same class of lie
+     * as #214 — reporting an outcome that did not happen — and it is the reason this
+     * warns instead of throws. The user needs to know the app and the server disagree
+     * while the task is still on screen; silently keeping the app's belief is what made
+     * the 4.6.0 and 4.7.0 response-shape changes look like bugs in the app.
+     */
+    private fun checkContract(task: ServerTask, sent: TaskContractSent) {
+        val mismatched = contractMismatches(sent, task)
+        if (mismatched.isEmpty()) return
+        ContractWarnings.report(mismatched)
+    }
+
     suspend fun complete(id: String): Result<ServerTask> =
         withContext(Dispatchers.IO) {
             val clean = encodeId(id)
@@ -462,4 +526,42 @@ fun serverDetail(message: String): String {
         JSONObject("{\"v\":$raw}").optString("v", "")
     }.getOrDefault("")
     return detail.trim().ifEmpty { message }
+}
+
+/**
+ * Where a task-response contract mismatch goes (#185).
+ *
+ * A `var` sink rather than a callback so the API layer does not have to know about the
+ * UI, and so a mismatch raised outside a running screen is still recorded rather than
+ * dropped. Tests read [last] directly.
+ *
+ * `last` deliberately holds only the most recent mismatch: a burst of writes during
+ * editor autosave would otherwise queue a stack of stale warnings the user never
+ * dismisses, and the newest one is the only one that describes the current state.
+ */
+internal object ContractWarnings {
+    /** Newest set of mismatched field names; empty when the last write agreed. */
+    var last: List<String> = emptyList()
+        private set
+
+    /** Bumped on every report, so a repeat of the same fields is still observable. */
+    var generation: Int = 0
+        private set
+
+    fun report(mismatched: List<String>) {
+        if (mismatched.isEmpty()) return
+        last = mismatched
+        generation++
+    }
+
+    /** Called after the user is told, so the warning is not re-shown on recomposition. */
+    fun clear() {
+        last = emptyList()
+    }
+
+    /** The user-facing text. Names the fields: "something differs" sends them hunting. */
+    fun message(mismatched: List<String> = last): String =
+        "Saved, but the server stored different values for " +
+            mismatched.joinToString(", ") +
+            ". Your app and the server may be on different versions — reopen the task to resync."
 }

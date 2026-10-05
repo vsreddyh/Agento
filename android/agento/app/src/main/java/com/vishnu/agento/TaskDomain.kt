@@ -246,3 +246,61 @@ internal fun ServerTaskDraft.repeatOrNull(): Triple<Int, String, String>? {
     if (repeatUnit !in REPEAT_UNITS) return null
     return Triple(every, repeatUnit, "")
 }
+
+/**
+ * The task fields the app asserts after a write (#185).
+ *
+ * Deliberately not [ServerTaskDraft]: a draft is what the editor holds and is full of
+ * "not being changed right now" defaults, whereas this is "what I just asked the server
+ * to store", where every field has a definite value. Reusing the draft type is how a
+ * partial edit would start being validated as if it were a full one.
+ */
+internal data class TaskContractSent(
+    val name: String = "",
+    val dueDate: String = "",
+    val dueTime: String = "",
+    val estimatedMinutes: Int = 0,
+    val repeatEvery: Int = 0,
+    val repeatUnit: String = "",
+    val repeatCustom: Boolean = false,
+    val repeatRule: String = "",
+    val parallelable: Boolean = false,
+)
+
+/**
+ * Names the task fields the server stored that differ from what the app asked it to
+ * store. Empty means the round trip agreed.
+ *
+ * #185: every field used to be read with a default, so a response from an older server
+ * — or one where a field failed to persist — was indistinguishable from a genuine zero.
+ * After the 4.6.0 structured-repeat change that meant an un-updated client read every
+ * structured cadence as a one-shot and rendered the task with no repeat at all, with
+ * nothing warning. During the 4.7.0 review the complete-response shape changed and the
+ * old client read `nextDueDate = ""`, decided the task had not rolled over, and opened
+ * a recreate draft asking for a date that already existed. Silent, and plausible enough
+ * to look like a bug in the rollover rather than a disagreement between versions.
+ *
+ * Comparison is on trimmed text, because the app trims before sending and the server
+ * trims before storing: a padded value that agrees after trimming IS agreement, and
+ * flagging it would teach people to ignore this.
+ *
+ * Zeros and empties are compared as real values, not as "absent" — `estimated_minutes: 0`
+ * is a legal answer meaning "no estimate", and a check written on falsy defaults would
+ * report it missing on every one-shot task.
+ */
+internal fun contractMismatches(sent: TaskContractSent, got: ServerTask): List<String> {
+    val out = mutableListOf<String>()
+    // An id is the one field with no sensible default: without it there is no record
+    // to point at, so a write cannot be reported as successful.
+    if (got.id.isBlank()) out += "id"
+    if (sent.name.trim() != got.name.trim()) out += "name"
+    if (sent.dueDate.trim() != got.dueDate.trim()) out += "due_date"
+    if (sent.dueTime.trim() != got.dueTime.trim()) out += "due_time"
+    if (sent.estimatedMinutes != got.estimatedMinutes) out += "estimated_minutes"
+    if (sent.repeatEvery != got.repeatEvery) out += "repeat_every"
+    if (sent.repeatUnit.trim() != got.repeatUnit.trim()) out += "repeat_unit"
+    if (sent.repeatCustom != got.repeatCustom) out += "repeat_custom"
+    if (sent.repeatRule.trim() != got.repeatRule.trim()) out += "repeat_rule"
+    if (sent.parallelable != got.parallelable) out += "parallelable"
+    return out
+}

@@ -21,6 +21,28 @@ see GitHub Releases for older notes.
   compare the field that was supposed to change, and report the fields verified
   rather than the calls made. No app code, no VERSION bump.
 
+## [4.14.5]
+
+- **The app now checks what the server actually stored** (#185). Every task
+  field was parsed with a default, so a response from an older server — or one
+  where a field failed to persist — was indistinguishable from a genuine zero,
+  empty or false. After the 4.6.0 structured-repeat change that meant an
+  un-updated client read every structured cadence as a one-shot and rendered
+  the task with no repeat at all, with nothing warning. During the 4.7.0 review
+  the complete-response shape changed and the old client read `nextDueDate = ""`,
+  decided the task had not rolled over, and opened a recreate draft asking for a
+  date that already existed.
+  `contractMismatches` compares the repeat and due fields the app sent against
+  the ones that came back, and names every field that differs.
+  It **warns rather than throws**: the write did succeed, so failing it would
+  tell the user their task was not saved when it was — the same class of lie as
+  #214 below, and reporting an outcome that did not happen is worse than a
+  missing feature. Text is compared trimmed, and zeros are compared as real
+  values, because `estimated_minutes: 0` is a legal answer and a falsy-default
+  check would report it missing on every one-shot task.
+  A partial edit asserts only the fields it actually sent; the rest are carried
+  through from the response rather than compared.
+
 ## [4.14.3]
 
 - **Unit tests, and a CI step that runs them** (#162). The app had no tests at
