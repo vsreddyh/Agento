@@ -2,14 +2,12 @@ package tasks
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
 	"agento/internal/mongostore"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	mongoDrv "go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -190,6 +188,41 @@ func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]a
 	return next, RolloverCreated, nil
 }
 
+// parentsWithSuccessors returns the set of parent ids (as hex strings) that have at
+// least one successor pointing at them. Read-only, one query, no per-row round trip.
+//
+// Only the back-link field is projected: the answer is "does any doc name this
+// parent", so the successor's contents are never read and never needed.
+func (s *Store) parentsWithSuccessors(ctx context.Context, candidates []bson.M) (map[string]bool, error) {
+	linked := map[string]bool{}
+	ids := make([]string, 0, len(candidates))
+	for _, d := range candidates {
+		if id, ok := d["_id"].(primitive.ObjectID); ok {
+			ids = append(ids, id.Hex())
+		}
+	}
+	if len(ids) == 0 {
+		return linked, nil
+	}
+	cur, err := s.tasks.Find(ctx,
+		bson.M{rolledFromField: bson.M{"$in": ids}},
+		options.Find().SetProjection(bson.M{rolledFromField: 1, "_id": 0}))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cur.Close(ctx) }()
+	var rows []struct {
+		RolledFrom string `bson:"rolled_from"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		linked[r.RolledFrom] = true
+	}
+	return linked, nil
+}
+
 // RolloverGap is one completed structured repeat with no successor — a task that
 // has silently stopped recurring.
 type RolloverGap struct {
@@ -244,15 +277,46 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 	if err != nil {
 		return ReconcileResult{}, err
 	}
+	// Closed on every exit path. Negligible for a short-lived binary, but a cursor
+	// left to the garbage collector is a cursor whose Close error nobody will ever
+	// see — and List closes explicitly, so an unclosed one here would be the odd
+	// case a future reader copies.
+	defer func() { _ = cur.Close(ctx) }()
 	var done []bson.M
 	if err := cur.All(ctx, &done); err != nil {
 		return ReconcileResult{}, err
 	}
-	res := ReconcileResult{Scanned: len(done)}
+	var res ReconcileResult
 	if len(done) > ReconcileLimit {
 		done = done[:ReconcileLimit]
 		res.Truncated = true
 	}
+	// Scanned counts rows actually EXAMINED, set after the cap is applied. Setting
+	// it from len(done) beforehand reported the +1 probe row — 501 against a limit of
+	// 500 — so the reconciler told the operator it had scanned more than it is
+	// allowed to, in precisely the run where the number is being read to judge
+	// whether the report is complete. `Truncated` is what says there was more.
+	res.Scanned = len(done)
+	// Which of these HAD a successor, resolved in ONE query rather than one per row.
+	//
+	// It was a FindOne per candidate: 500 sequential round trips at the cap, which is
+	// an N+1 against a remote Atlas and a real threat to the 45s budget reconcileTasks
+	// gets. Measured at ~70s for a capped run locally — over budget before the first
+	// row was reported, which is exactly the failure mode a "reports, never repairs"
+	// job must not have, because a timed-out reconciler reports nothing at all.
+	//
+	// A single $in over the ids is the same question asked once. Batch rather than
+	// chunked because ReconcileLimit bounds the $in at 500 values, well inside what
+	// the server accepts, so there is nothing to chunk.
+	//
+	// The successor outlives the parent by construction: both get expiresAt =
+	// completedAt + RetentionDays, and the successor is completed no earlier than the
+	// parent, so if the parent is still here the back-link is too.
+	linked, err := s.parentsWithSuccessors(ctx, done)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+
 	now := time.Now().UTC()
 	var gaps []RolloverGap
 	for _, d := range done {
@@ -269,17 +333,8 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 		// again, so the parent looks unlinked and every chained task is reported as a
 		// gap. A back-link is write-once and never cleared, so any doc carrying it is
 		// proof the rollover happened.
-		//
-		// The successor outlives the parent by construction: both get expiresAt =
-		// completedAt + RetentionDays, and the successor is completed no earlier than
-		// the parent, so if the parent is still here the back-link is too.
-		var successor bson.M
-		err := s.tasks.FindOne(ctx, bson.M{rolledFromField: id.Hex()}).Decode(&successor)
-		if err == nil {
+		if linked[id.Hex()] {
 			continue // rolled over fine
-		}
-		if !errors.Is(err, mongoDrv.ErrNoDocuments) {
-			return ReconcileResult{}, err
 		}
 		// The SAME classification rollOver would have produced, not a second guess.
 		// The old heuristic here only knew about a blank due_time and called
