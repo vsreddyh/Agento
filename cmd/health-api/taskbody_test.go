@@ -258,3 +258,89 @@ func TestAbsentAndExplicitZeroAgreeForEveryField(t *testing.T) {
 		}
 	}
 }
+
+// The digest must agree with the STORE about what "the same request" means. The store
+// TrimSpaces name/description/due_date/due_time and taskRepeat TrimSpaces repeat_unit,
+// so a body padded with whitespace creates the same task as the trimmed one. Hashing it
+// verbatim made the digest stricter than reality, and a retry differing only in padding
+// got 422 Mismatch instead of a replay.
+//
+// Same class as the repeat_rule omission: the digest is only correct if it matches what
+// actually gets stored.
+func TestFingerprintAgreesWithWhatTheStoreTrims(t *testing.T) {
+	trimmed := map[string]any{
+		"name": "padded name", "description": "padded desc",
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"estimated_minutes": 5, "parallelable": false,
+		"repeat_every": 2, "repeat_unit": "weeks",
+		"repeat_custom": false, "repeat_rule": "",
+	}
+	padded := map[string]any{}
+	for k, v := range trimmed {
+		padded[k] = v
+	}
+	// Pad every field the store trims. NOT repeat_rule: create stores that verbatim,
+	// so "  a  " and "a" really are different stored values and must digest
+	// differently.
+	for k := range trimmedForFingerprint {
+		if str, ok := padded[k].(string); ok {
+			padded[k] = "  " + str + "  "
+		}
+	}
+	if taskFingerprint(trimmed) != taskFingerprint(padded) {
+		t.Error("whitespace-padded fields digest differently even though the store trims " +
+			"them, so a legitimate retry would 422 instead of replaying")
+	}
+	// The reverse direction must still hold: a field the store does NOT trim has to
+	// keep distinguishing, or two genuinely different requests would replay as one.
+	realRule := map[string]any{}
+	for k, v := range trimmed {
+		realRule[k] = v
+	}
+	realRule["repeat_rule"] = " 3rd Friday "
+	plainRule := map[string]any{}
+	for k, v := range trimmed {
+		plainRule[k] = v
+	}
+	plainRule["repeat_rule"] = "3rd Friday"
+	if taskFingerprint(realRule) == taskFingerprint(plainRule) {
+		t.Error("padded repeat_rule digests the same as the plain one, but create stores " +
+			"it verbatim — two different stored tasks would replay as identical")
+	}
+}
+
+// The liveness probe must never be throttled: compose healthchecks /health with
+// `curl -f`, so a 429 under load fails the probe and can mark the container unhealthy
+// exactly when it is already struggling. /health touches no database, so throttling it
+// protects nothing.
+func TestHealthProbeIsNeverThrottled(t *testing.T) {
+	l, _ := newLimiterWithClock(1, 1.0)
+	probed, limited := 0, 0
+	h := rateLimit(l, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	for i := 0; i < 25; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		req.RemoteAddr = "203.0.113.9:5555"
+		h.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			t.Fatalf("probe %d was throttled with %d; the container would flap under load", i+1, rec.Code)
+		}
+		probed++
+	}
+	// And the exemption is narrow: a path that merely STARTS with /health must still be
+	// limited, or the wrong route would be exempt.
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/health/sync", nil)
+		req.RemoteAddr = "203.0.113.9:5555"
+		h.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+	if limited == 0 {
+		t.Errorf("/api/health/sync was never throttled — the exemption is too broad (%d/%d limited)", limited, 5)
+	}
+}

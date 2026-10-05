@@ -422,6 +422,22 @@ var taskCreateFields = []string{
 	"repeat_every", "repeat_unit", "repeat_custom", "repeat_rule",
 }
 
+// trimmedForFingerprint is the subset of taskCreateFields the create path TrimSpaces
+// before storing. It must mirror that list exactly: a field trimmed by the store but
+// hashed verbatim makes the digest stricter than reality and 422s a legitimate retry,
+// and a field trimmed by the digest but stored verbatim makes it looser — two
+// genuinely different requests would replay as one.
+//
+// Kept as its own map rather than derived, because the trimming is spread across two
+// layers (the store trims the four core fields, taskRepeat trims the unit) and there is
+// nothing to derive from. TestFingerprintAgreesWithWhatTheStoreTrims round-trips
+// through the store to keep the two in step.
+var trimmedForFingerprint = map[string]bool{
+	"name": true, "description": true,
+	"due_date": true, "due_time": true,
+	"repeat_unit": true,
+}
+
 // taskFingerprint digests a create body so a reused Idempotency-Key can be told
 // apart from a genuine retry.
 //
@@ -446,13 +462,38 @@ func taskFingerprint(fields map[string]any) string {
 	// turns a client merely upgrading to an explicit empty value into a 422 on its own
 	// retry of a request that succeeded. A false rejection of a legitimate retry is
 	// the same class of silent-wrong-answer as the one this guards against.
+	// Trimmed exactly where the create path trims, and NOWHERE else.
+	//
+	// The store TrimSpaces name, description, due_date and due_time, and taskRepeat
+	// (this layer) TrimSpaces repeat_unit — so " foo " and "foo" create the SAME task.
+	// Hashing them verbatim made the digest disagree with the store about what "the
+	// same request" means, so a retry differing only in surrounding whitespace got a
+	// 422 Mismatch instead of a replay. Same class as the repeat_rule omission: the
+	// digest is only correct if it agrees with what actually gets stored.
+	//
+	// repeat_rule is deliberately NOT trimmed, because create stores it verbatim —
+	// measured, not assumed. ("  3rd Friday  " and "3rd Friday" really are two
+	// different stored values, so digesting them differently is correct. Note the
+	// update path does trim it, so the two disagree; that is the store's business, not
+	// the digest's, and the digest only ever covers create.)
+	//
+	// Verified by round-tripping through the store rather than by reading it: a body
+	// padded on all five fields must digest the same as the trimmed body AND produce
+	// the same stored task.
+	trimmed := trimmedForFingerprint
 	relevant := make(map[string]any, len(taskCreateFields))
 	for _, k := range taskCreateFields {
-		if v, ok := fields[k]; ok {
-			relevant[k] = v
+		v, ok := fields[k]
+		if !ok {
+			relevant[k] = zeroLike(fields, k)
 			continue
 		}
-		relevant[k] = zeroLike(fields, k)
+		if trimmed[k] {
+			if str, isStr := v.(string); isStr {
+				v = strings.TrimSpace(str)
+			}
+		}
+		relevant[k] = v
 	}
 	if len(relevant) == 0 {
 		return ""

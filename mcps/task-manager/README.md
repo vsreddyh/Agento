@@ -130,7 +130,16 @@ the list and fails if any field is left out of the digest.
 
 An absent key is normalised to its zero value rather than skipped — the store reads
 absent and zero identically, so a client that upgrades to sending `"repeat_rule": ""`
-must not 422 its own retry.
+must not 422 its own retry. String values are likewise TrimSpaced for exactly the
+fields the create path trims (`name`, `description`, `due_date`, `due_time`,
+`repeat_unit`), because `" foo "` and `"foo"` create the *same* task and a retry
+differing only in padding must replay. `repeat_rule` is deliberately not trimmed: create
+stores it verbatim, so those really are two different tasks.
+
+The general rule the digest has to keep: **it must agree with the store about what
+"the same request" means.** Every gap so far — `repeat_rule` missing, absent-vs-zero,
+whitespace — was the digest and the store disagreeing about sameness, in one direction
+or the other.
 
 `idempotency_key` and `source` are returned on every task, deliberately: the key is
 client-generated rather than secret, and echoing it is what lets a client correlate a

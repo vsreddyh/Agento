@@ -252,8 +252,27 @@ func shortHash(s string) string {
 // rateLimit wraps h with the limiter. Exported-for-test seam: newLimiter takes
 // burst/refill and a clock, so the bucket's behaviour can be asserted without
 // sleeping.
+// exemptPath is the one route the limiter does not touch. EXACT match on purpose:
+// /api/health/sync is a different path and does write data, so a prefix rule here
+// would exempt the wrong thing.
+const exemptPath = "/health"
+
 func rateLimit(l *limiter, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The liveness probe is exempt, because a rate limiter that can mark the
+		// container unhealthy is worse than the flood it was added to survive.
+		//
+		// compose healthchecks this exact path with `curl -f`, so a 429 under load
+		// fails the probe — and the failure lands precisely when the service is
+		// already struggling, which can mean a restart at the worst possible moment.
+		// Throttling a probe does not protect anything: /health is a static reply that
+		// touches no database, so it adds no load to the thing the limiter exists to
+		// protect. Being unreachable under flood is the one property a liveness probe
+		// must never have.
+		if r.URL.Path == exemptPath {
+			h.ServeHTTP(w, r)
+			return
+		}
 		if ok, wait := l.allow(sourceKey(r)); !ok {
 			secs := int(wait.Seconds())
 			if secs < 1 {
