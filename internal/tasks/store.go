@@ -845,6 +845,37 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 	return done, next, reason, nil
 }
 
+// stateOnMiss fetches a task that a resolve verb could not claim, because the
+// update matched no rows. Returns the stored doc so the caller can say WHICH state it
+// is actually in, or an error only when the task does not exist at all.
+func (s *Store) stateOnMiss(ctx context.Context, oid primitive.ObjectID, id string) (bson.M, *StoreError) {
+	var doc bson.M
+	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); err != nil {
+		return nil, fail("unknown task '%s'", id)
+	}
+	return doc, nil
+}
+
+// resolvedStateErr names the state a task is ACTUALLY in when complete_task or
+// skip_task finds it already resolved.
+//
+// Both verbs land here, which is the point. Skip used to distinguish "already
+// skipped" from "already completed" while Complete did not, so completing a skipped
+// occurrence reported it as DONE — a false record of work that never happened, which
+// is the exact thing #209 exists to stop, reached from the other direction. And the
+// two states need different remedies, so the message that names the wrong one sends
+// the reader to the wrong verb.
+//
+// Kept as one function rather than a check copied into each miss path: a rule written
+// twice is a rule that will be updated once.
+func resolvedStateErr(doc bson.M, id string) *StoreError {
+	if at, ok := doc["skippedAt"].(primitive.DateTime); ok && at != 0 {
+		return fail("task '%s' is already skipped, not done — reopen_task returns it to "+
+			"the open list if you now mean to do it", id)
+	}
+	return fail("task '%s' is already completed", id)
+}
+
 // Skip resolves ONE occurrence of a task as skipped rather than done (#209).
 //
 // The reason this is a verb and not a note: asked to "skip the skippable tasks
@@ -879,37 +910,6 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 // distinction. Omitting the empty case would save a few bytes per row and make a
 // skipped-without-reason task indistinguishable from a completed one in that field
 // alone.
-// stateOnMiss fetches a task that a resolve verb could not claim, because the
-// update matched no rows. Returns the stored doc so the caller can say WHICH state it
-// is actually in, or an error only when the task does not exist at all.
-func (s *Store) stateOnMiss(ctx context.Context, oid primitive.ObjectID, id string) (bson.M, *StoreError) {
-	var doc bson.M
-	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); err != nil {
-		return nil, fail("unknown task '%s'", id)
-	}
-	return doc, nil
-}
-
-// resolvedStateErr names the state a task is ACTUALLY in when complete_task or
-// skip_task finds it already resolved.
-//
-// Both verbs land here, which is the point. Skip used to distinguish "already
-// skipped" from "already completed" while Complete did not, so completing a skipped
-// occurrence reported it as DONE — a false record of work that never happened, which
-// is the exact thing #209 exists to stop, reached from the other direction. And the
-// two states need different remedies, so the message that names the wrong one sends
-// the reader to the wrong verb.
-//
-// Kept as one function rather than a check copied into each miss path: a rule written
-// twice is a rule that will be updated once.
-func resolvedStateErr(doc bson.M, id string) *StoreError {
-	if at, ok := doc["skippedAt"].(primitive.DateTime); ok && at != 0 {
-		return fail("task '%s' is already skipped, not done — reopen_task returns it to "+
-			"the open list if you now mean to do it", id)
-	}
-	return fail("task '%s' is already completed", id)
-}
-
 func (s *Store) Skip(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
