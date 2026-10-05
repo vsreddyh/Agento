@@ -473,15 +473,19 @@ func taskFingerprint(fields map[string]any) string {
 	// 422 Mismatch instead of a replay. Same class as the repeat_rule omission: the
 	// digest is only correct if it agrees with what actually gets stored.
 	//
-	// repeat_rule is deliberately NOT trimmed, because create stores it verbatim —
-	// measured, not assumed. ("  3rd Friday  " and "3rd Friday" really are two
-	// different stored values, so digesting them differently is correct. Note the
-	// update path does trim it, so the two disagree; that is the store's business, not
-	// the digest's, and the digest only ever covers create.)
+	// repeat_rule IS trimmed, because Repeat.Normalize now trims Text.
+	//
+	// This comment previously said the opposite — "deliberately NOT trimmed, because
+	// create stores it verbatim" — and it was true when written. Normalize then started
+	// trimming, so the store and the digest changed together while this paragraph did
+	// not. That made it worse than a stale comment: a reader trusting it would have
+	// removed "repeat_rule" from trimmedForFingerprint and reinstated a bug that two
+	// commits earlier had been fixed, with the comment actively telling them to.
 	//
 	// Verified by round-tripping through the store rather than by reading it: a body
-	// padded on all five fields must digest the same as the trimmed body AND produce
-	// the same stored task.
+	// padded on any trimmed field must digest the same as the trimmed body AND produce
+	// the same stored task. That round trip is what caught the store-side change, and it
+	// is what should catch the next one.
 	trimmed := trimmedForFingerprint
 	relevant := make(map[string]any, len(taskCreateFields))
 	for _, k := range taskCreateFields {

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
+
+	"agento/internal/tasks"
 )
 
 // The skip endpoint's body decoding (#209).
@@ -355,4 +359,89 @@ func TestHealthProbeIsNeverThrottled(t *testing.T) {
 	if limited == 0 {
 		t.Errorf("/api/health/sync was never throttled — the exemption is too broad (%d/%d limited)", limited, 5)
 	}
+}
+
+// The digest's trim list must agree with what the store ACTUALLY does, in both
+// directions, checked against real store behaviour rather than against the list itself.
+//
+// This exists because the list went stale once already: Repeat.Normalize started trimming
+// `repeat_rule`, the store and the digest changed together, and a nearby comment kept
+// asserting the old behaviour — so a reader following it would have removed
+// "repeat_rule" from the list and reinstated the bug it had just fixed.
+//
+// Reading trimmedForFingerprint cannot catch that, because the list was correct and the
+// PROSE was not. Going through the store can: each field is padded, created for real, and
+// compared with what came back.
+func TestTrimListMatchesWhatTheStoreActuallyTrims(t *testing.T) {
+	store, err := tasks.FromEnv()
+	if err != nil {
+		t.Skipf("no database: %v", err)
+	}
+	ctx := context.Background()
+
+	// Every field the list claims is trimmed must actually come back trimmed.
+	padded := map[string]any{
+		"name": "  trim me  ", "description": "  desc  ",
+		"due_date": " 2026-10-05 ", "due_time": " 08:00 ",
+		"repeat_every": 2, "repeat_unit": "  weeks  ",
+		"repeat_custom": true, "repeat_rule": "   3rd Friday   ",
+	}
+	doc, _, err := store.CreateWithKey(ctx, "trim probe", "d",
+		padded["due_date"].(string), padded["due_time"].(string),
+		intPtr(5), tasks.Repeat{Custom: true, Text: "   3rd Friday   "},
+		boolPtr(false), "", "test", "")
+	if err != nil {
+		t.Skipf("create unavailable: %v", err)
+	}
+	id, _ := doc["id"].(string)
+	if id == "" {
+		t.Fatalf("no id returned: %v", doc)
+	}
+	defer func() { _, _ = store.Delete(ctx, id) }()
+
+	for _, k := range sortedKeys(trimmedForFingerprint) {
+		switch k {
+		case "repeat_every":
+			// Numeric: nothing to trim, and it must survive the create unchanged.
+			continue
+		case "estimated_minutes", "parallelable", "repeat_custom":
+			continue
+		}
+		got, _ := doc[k].(string)
+		if got == "" {
+			continue // not stored under this name, or cleared by Normalize
+		}
+		if got != strings.TrimSpace(got) {
+			t.Errorf("the store returned %q=%q untrimmed, but trimmedForFingerprint "+
+				"claims it is trimmed — the list and the store disagree", k, got)
+		}
+	}
+
+	// And the reverse, stated explicitly because it is the direction that broke: if the
+	// store ever STOPS trimming a field, the digest must stop claiming it does, or the
+	// digest silently becomes stricter than reality and rejects a legitimate retry.
+	//
+	// repeat_rule is the field that actually moved; assert its direction explicitly so
+	// the next change to either side has something to fail against.
+	if !trimmedForFingerprint["repeat_rule"] {
+		t.Error("repeat_rule is no longer in the trim list. If Repeat.Normalize still " +
+			"trims Text, that makes the digest stricter than the store and a retry " +
+			"differing only in padding would 422")
+	}
+	if got, _ := doc["repeat_rule"].(string); got != "3rd Friday" {
+		t.Errorf("stored repeat_rule = %q; the store is not trimming it, so keeping it "+
+			"in the trim list would reject legitimate retries", got)
+	}
+}
+
+func intPtr(v int) *int    { return &v }
+func boolPtr(v bool) *bool { return &v }
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
