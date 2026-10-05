@@ -176,7 +176,14 @@ func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]a
 	if _, err := s.insert(ctx, doc); err != nil {
 		return nil, RolloverFailed, err
 	}
-	next, err := s.Get(ctx, doc["_id"].(primitive.ObjectID).Hex())
+	// Checked, not asserted: insert always sets doc["_id"] to an ObjectID, but a
+	// bare type assertion here is a panic waiting for a contract change, and this
+	// function runs inside a user's completion.
+	newID, ok := doc["_id"].(primitive.ObjectID)
+	if !ok {
+		return nil, RolloverFailed, fail("cannot roll over: inserted task has no id")
+	}
+	next, err := s.Get(ctx, newID.Hex())
 	if err != nil {
 		return nil, RolloverFailed, err
 	}
