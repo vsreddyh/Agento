@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // #209: there was no verb for "not doing this occurrence", so an agent asked to
@@ -227,5 +229,106 @@ func TestSkippedIsAlwaysPresent(t *testing.T) {
 	}
 	if completed["skipped"] != false {
 		t.Error("a COMPLETED task must report skipped:false — that is the false record this fixes")
+	}
+}
+
+// Completing an occurrence that was SKIPPED must not report it as done. That is a
+// false record of work that never happened — the exact failure #209 exists to stop,
+// reached from the other direction: Skip distinguished its two terminal states while
+// Complete did not, so the two paths disagreed about what a resolved task is.
+func TestCompleteOnASkippedTaskReportsSkippedNotDone(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	id := mustCreate(t, s, "Skipped then completed", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+	})
+	if _, _, _, err := s.Skip(ctx, id, "out of time"); err != nil {
+		t.Fatalf("skip: %v", err)
+	}
+	_, _, _, err := s.Complete(ctx, id)
+	if err == nil {
+		t.Fatal("completing an already-resolved task must fail")
+	}
+	if !strings.Contains(err.Error(), "already skipped") {
+		t.Errorf("error = %q; it must name the task as skipped, not report it as completed", err)
+	}
+	if !strings.Contains(err.Error(), "not done") {
+		t.Errorf("error = %q does not distinguish skipped from done in words", err)
+	}
+	if strings.Contains(err.Error(), "already completed") {
+		t.Errorf("error = %q reports a skipped occurrence as completed", err)
+	}
+	// And the remedy has to name the right verb: reopening a skipped occurrence is
+	// what returns it to the open list, not completing it again.
+	if !strings.Contains(err.Error(), "reopen_task") {
+		t.Errorf("error = %q does not point at the verb that can fix it", err)
+	}
+}
+
+// The same task, completed for real first, must still say "completed" — the fix must
+// not swing the message the other way and invent a skip that never happened.
+func TestCompleteOnACompletedTaskStillSaysCompleted(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	id := mustCreate(t, s, "Completed twice", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+	})
+	if _, _, _, err := s.Complete(ctx, id); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	_, _, _, err := s.Complete(ctx, id)
+	if err == nil {
+		t.Fatal("completing twice must fail")
+	}
+	if !strings.Contains(err.Error(), "already completed") {
+		t.Errorf("error = %q, want it to say already completed", err)
+	}
+	if strings.Contains(err.Error(), "SKIPPED") {
+		t.Errorf("error = %q claims a skip that never happened", err)
+	}
+}
+
+// The symmetry, from the other direction: skipping an already-COMPLETED task must not
+// claim it was skipped. Same helper, so this is now true by construction — the test
+// is what makes "by construction" checkable rather than merely asserted.
+func TestSkipOnACompletedTaskStillSaysCompleted(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	id := mustCreate(t, s, "Completed then skipped", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+	})
+	if _, _, _, err := s.Complete(ctx, id); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	_, _, _, err := s.Skip(ctx, id, "changed my mind")
+	if err == nil {
+		t.Fatal("skipping an already-resolved task must fail")
+	}
+	if !strings.Contains(err.Error(), "already completed") {
+		t.Errorf("error = %q, want it to say already completed", err)
+	}
+}
+
+// An unknown id is still "unknown", from BOTH verbs — the shared fetch must not have
+// turned a missing task into a "already completed" claim.
+func TestResolveVerbsStillReportUnknownTasks(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	oid := primitive.NewObjectID().Hex()
+	if _, _, _, err := s.Complete(ctx, oid); err == nil ||
+		!strings.Contains(err.Error(), "unknown task") {
+		t.Errorf("complete on an unknown id: %v, want an unknown-task error", err)
+	}
+	if _, _, _, err := s.Skip(ctx, oid, "r"); err == nil ||
+		!strings.Contains(err.Error(), "unknown task") {
+		t.Errorf("skip on an unknown id: %v, want an unknown-task error", err)
 	}
 }
