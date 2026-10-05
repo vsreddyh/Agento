@@ -47,14 +47,19 @@ Every completion reports WHY a next occurrence did or did not get created:
 | `created` | Structured cadence; `next` holds the new task | nothing |
 | `none` | One-shot; there was never a next to make | nothing |
 | `custom` | The condition is the caller's to interpret | create it (the `follow_up` says so) |
-| `exhausted` | Structured, but no future date is computable | tell the user; the repeat stopped |
-| `failed` | Minting errored — the repeat has stopped | tell the user, loudly |
+| `exhausted` | Structured and intact, but past `MaxRollovers` | tell the user; re-enter the repeat |
+| `failed` | Stored data won't carry forward, or minting errored | tell the user which field, loudly |
 
 This field exists because the outcome used to be inferred from `next == nil`,
 which made `none`, `exhausted` and `failed` indistinguishable. A repeat that had
 silently stopped recurring was reported as an ordinary completion, and the failure
 existed only in a log line — which is how four legacy tasks stopped scheduling
 before anyone noticed. `exhausted` and `failed` also carry `needs_attention`.
+
+`exhausted` deliberately covers ONLY the `MaxRollovers` ceiling. An unreadable
+`due_date` used to land there too, and its remedy was "re-enter the repeat" — the wrong
+advice for a repeat that was perfectly intact and merely had an unreadable field. It is
+`failed` now, and names the field.
 
 The nightly `retention` job runs `ReconcileRollover` for the same reason: rollover is a
 side effect of `Complete`, so any writer that does not go through it stops a task

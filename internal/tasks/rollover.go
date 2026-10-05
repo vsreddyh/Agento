@@ -37,8 +37,10 @@ const (
 	// ("every 3rd friday"). The caller owns creating the next occurrence. This is a
 	// normal outcome, not a fault — see NeedsAttention.
 	RolloverCustom Rollover = "custom"
-	// RolloverExhausted: structured, but no future date is computable — the
-	// cadence has run past MaxRollovers, or the stored due_date will not parse.
+	// RolloverExhausted: structured and perfectly intact, but the cadence has
+	// genuinely run past MaxRollovers. This is the ONLY state it covers: an
+	// unreadable due_date used to land here too, which sent the operator off to
+	// re-enter a repeat that did not need re-entering — it is RolloverFailed now.
 	RolloverExhausted Rollover = "exhausted"
 	// RolloverFailed: minting was attempted and errored. The completion itself
 	// succeeded; the recurrence did not. This is the case that needs a human.
@@ -57,7 +59,14 @@ func (r Rollover) UserFacing() string {
 	case RolloverCustom:
 		return "this task repeats on a custom condition the server will not interpret; create the next occurrence yourself"
 	case RolloverExhausted:
-		return "this task repeats, but no future date could be computed from its stored due date or the cadence has run out — check the repeat and re-enter it if it should continue"
+		// Narrowed to the MaxRollovers ceiling when `exhausted` was narrowed. The old
+		// sentence also claimed "no future date could be computed from its stored due
+		// date", which is now RolloverFailed — a mistyped or unparseable date arrives
+		// here with its field named and needs fixing, NOT re-entering. Telling someone
+		// to re-enter an intact repeat is the wrong remedy, and it was the exact defect
+		// the classification fix removed one commit earlier: I changed what the value
+		// MEANS and left the words describing it unchanged.
+		return "this task repeats, but the cadence has run past the maximum number of rollovers — re-enter the repeat if it should continue"
 	case RolloverFailed:
 		return "this task was marked done or skipped, but creating its next occurrence FAILED — the repeat has stopped until you fix it"
 	default:

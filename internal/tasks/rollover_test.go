@@ -1064,3 +1064,109 @@ func TestDueTimeMistypedIsNotReportedAsMissing(t *testing.T) {
 		t.Errorf("err = %v, want the missing-value message preserved", err)
 	}
 }
+
+// The live path must carry the field-specific reason, not just the outcome sentence.
+//
+// Complete logged the rollover error and returned only RolloverFailed, so
+// `needs_attention` reached the user as "this task was marked done, but creating its next
+// occurrence FAILED" — with no indication of WHICH field to open. The nightly reconciler
+// already produced the specific text, so the same failure was fixable-in-the-morning
+// when noticed at night and not at all when noticed live.
+func TestCompleteCarriesTheFieldSpecificReason(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	// A structured repeat with a blank due_time: the legacy shape that actually stopped
+	// recurring. The store accepts it on the doc; the ROLLOVER is what fails.
+	id := mustCreate(t, s, "Live detail", map[string]any{
+		"due_date": "2026-10-05", "due_time": "",
+		"repeat_every": 1, "repeat_unit": "days",
+	})
+	_, _, reason, detail, err := s.CompleteDetail(ctx, id)
+	if err != nil {
+		t.Fatalf("CompleteDetail: %v", err)
+	}
+	if reason != RolloverFailed {
+		t.Fatalf("reason = %q, want %q", reason, RolloverFailed)
+	}
+	if detail == "" {
+		t.Fatal("detail is empty on the live path — the user gets a category and no field")
+	}
+	if !strings.Contains(detail, "due_time") {
+		t.Errorf("detail = %q, want it to name due_time", detail)
+	}
+
+	// The rendered message leads with it, because that is the part that says what to open.
+	msg := reason.Attention(detail)
+	if !strings.HasPrefix(msg, "cannot roll over:") {
+		t.Errorf("message = %q, want the field-specific reason first", msg)
+	}
+	if !strings.Contains(msg, reason.UserFacing()) {
+		t.Errorf("message = %q, want the outcome sentence retained", msg)
+	}
+}
+
+// The user-facing sentence must not describe a state that can no longer produce it.
+//
+// I narrowed `exhausted` to the MaxRollovers ceiling and left its sentence unchanged, so
+// `exhausted` still told the user "no future date could be computed from its stored due
+// date ... re-enter it". An unparseable due_date is RolloverFailed now and needs a FIELD
+// fixed — telling someone to re-enter an intact repeat is the exact wrong remedy the
+// classification change removed. Sixth instance on this stack of changing what a value
+// MEANS and leaving the words describing it alone.
+//
+// This cannot be caught by asserting the sentence's exact text, so it asserts the
+// property instead: exhausted must not promise to explain a bad date, and failed must not
+// claim the cadence ran out.
+func TestUserFacingMatchesWhatEachOutcomeCanActuallyBe(t *testing.T) {
+	exhausted := RolloverExhausted.UserFacing()
+	if strings.Contains(exhausted, "due date") {
+		t.Errorf("exhausted still explains a bad date, which is now `failed`: %q", exhausted)
+	}
+	if !strings.Contains(strings.ToLower(exhausted), "rollover") &&
+		!strings.Contains(strings.ToLower(exhausted), "maximum") {
+		t.Errorf("exhausted no longer names the ceiling it now exclusively means: %q", exhausted)
+	}
+
+	// The inverse: `failed` must not tell the user the cadence ran out, because that is
+	// the outcome whose remedy is to re-enter rather than to fix.
+	failed := RolloverFailed.UserFacing()
+	if strings.Contains(strings.ToLower(failed), "run out") ||
+		strings.Contains(strings.ToLower(failed), "re-enter") {
+		t.Errorf("failed tells the user to re-enter, which is exhausted's remedy: %q", failed)
+	}
+}
+
+// And the classification half of the same invariant, asserted at the layer that decides
+// it rather than only in the prose.
+func TestExhaustedIsOnlyEverTheCeiling(t *testing.T) {
+	now := time.Now()
+	doc := func(m map[string]any) map[string]any {
+		d := map[string]any{
+			"due_date": "2026-10-05", "due_time": "08:00",
+			"repeat_every": 1, "repeat_unit": "days",
+		}
+		for k, v := range m {
+			d[k] = v
+		}
+		return d
+	}
+	// Every kind of broken data must be `failed`, never `exhausted`.
+	for _, tc := range []struct {
+		name string
+		doc  map[string]any
+	}{
+		{"unparseable due_date", doc(map[string]any{"due_date": "not-a-date"})},
+		{"untyped due_date", doc(map[string]any{"due_date": 20261005})},
+		{"blank due_time", doc(map[string]any{"due_time": "  "})},
+		{"untyped due_time", doc(map[string]any{"due_time": 900})},
+		{"untyped estimated_minutes", doc(map[string]any{"estimated_minutes": "soon"})},
+		{"untyped parallelable", doc(map[string]any{"parallelable": "yes"})},
+	} {
+		_, reason, _ := rolloverPlan(tc.doc, now)
+		if reason == RolloverExhausted {
+			t.Errorf("%s reported as exhausted; broken data must be `failed`", tc.name)
+		}
+	}
+}
