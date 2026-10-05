@@ -628,6 +628,14 @@ internal object ContractWarnings {
      * Newest mismatch, or null when there is nothing pending. Null rather than an empty
      * list so "nothing to show" and "a mismatch with no fields" cannot be confused —
      * [report] rejects the latter anyway, but the type should not have to carry that.
+     *
+     * NEWEST WINS, deliberately. `StateFlow` holds one value, so three reports arriving
+     * while a single snackbar is up coalesce to the last one. That is a policy rather
+     * than a second loss path: the pending warnings all describe the same underlying
+     * disagreement with the same server, and stacking three identical snackbars in a
+     * queue the user must dismiss before reaching the conversation would be worse than
+     * showing the most recent one. What must never happen is the newest being WIPED by
+     * the cleanup of an older one — hence [consume] matching on the generation.
      */
     val mismatched: StateFlow<ContractMismatch?> = _mismatched.asStateFlow()
 
@@ -673,7 +681,16 @@ internal object ContractWarnings {
      */
     fun consume(shown: Int) {
         val current = _mismatched.value ?: return
-        if (current.generation == shown) _mismatched.value = null
+        if (current.generation != shown) return
+        // CAS, not a plain assignment. The read above and the write here are two
+        // operations, and `showSnackbar` suspends for its whole duration, so a
+        // `report()` can land BETWEEN them: the check passes against gen1, the new gen2
+        // is stored, and the assignment then wipes it — the exact lost-warning shape the
+        // generation exists to prevent, with the window narrowed rather than closed.
+        //
+        // `compareAndSet` only writes if the value is still `current`, so a report that
+        // arrived in the meantime survives and is collected next.
+        _mismatched.compareAndSet(current, null)
     }
 
     /**
