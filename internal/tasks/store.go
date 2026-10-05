@@ -249,6 +249,20 @@ func toDoc(doc bson.M) map[string]any {
 	if _, ok := out["parallelable"]; !ok {
 		out["parallelable"] = false
 	}
+	// `rolled_from` is stripped: it is INTERNAL linkage between a task and the
+	// occurrence it produced, and it lands on exactly the successor docs a user has no
+	// reason to be reading. Exposing it invites a client to reconstruct rollover chains
+	// from the API and then depend on that — reimplementing the reconciler's job against
+	// a field that has no contract.
+	//
+	// Safe to strip, and deliberately checked before doing so: NOTHING reads this off a
+	// rendered doc. The reconciler reads it from a raw projection (parentsWithSuccessors),
+	// because that too is linkage it must not infer from a display document.
+	// TestReconcileStillWorksWithRolledFromHidden pins that condition, so a future
+	// reader who renders it again finds out immediately.
+	if _, present := out[rolledFromField]; present {
+		delete(out, rolledFromField)
+	}
 	return out
 }
 

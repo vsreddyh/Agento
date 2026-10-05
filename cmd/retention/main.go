@@ -191,15 +191,31 @@ func reconcileTasks(parent context.Context) {
 	}
 	fmt.Printf("[retention] tasks: %d repeating task(s) stopped recurring — each needs the next occurrence created by hand:\n", len(res.Gaps))
 	for _, g := range res.Gaps {
-		// Detail first when present: it names the field to fix, and UserFacing() only
-		// ever described the OUTCOME. Leading with the outcome made the reader parse a
-		// sentence about a category before learning which field was actually wrong.
-		if g.Detail != "" {
-			fmt.Printf("  - %s (%s) — %s: %s\n", g.Name, g.TaskID, g.Detail, g.Why.UserFacing())
-			continue
-		}
-		fmt.Printf("  - %s (%s) — %s\n", g.Name, g.TaskID, g.Why.UserFacing())
+		fmt.Printf("  - %s (%s) — %s\n", g.Name, g.TaskID, gapLine(g))
 	}
+}
+
+// gapLine renders one gap, and CANNOT produce a line with no explanation.
+//
+// UserFacing() is empty for RolloverNone and RolloverCreated, which is correct in the
+// contexts that use it — those outcomes need no explanation. Here every line is a
+// "this needs a human" line, so an empty explanation would render as " - name (id) — "
+// and leave the reader with a dangling dash and nothing to act on. Rather than trust
+// the caller to have normalised the reason, the fallback states plainly that there is
+// none, which is itself the information.
+//
+// Detail leads when present: it names the field to fix, while UserFacing() only ever
+// described the OUTCOME, and making the reader parse a sentence about a category
+// before learning which field was wrong is the wrong order.
+func gapLine(g tasks.RolloverGap) string {
+	outcome := g.Why.UserFacing()
+	if outcome == "" {
+		outcome = "no reason was recorded for this one (" + string(g.Why) + ")"
+	}
+	if g.Detail == "" {
+		return outcome
+	}
+	return g.Detail + ": " + outcome
 }
 
 func main() { os.Exit(run()) }
