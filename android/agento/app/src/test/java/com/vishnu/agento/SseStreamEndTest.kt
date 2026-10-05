@@ -96,7 +96,7 @@ class SseStreamEndTest {
     }
 
     @Test
-    fun `org.json is a real implementation, not an android stub`() {
+    fun `the org json parser is a real implementation, not an android stub`() {
         val o = JSONObject("""{"choices":[{"delta":{"content":"hi"}}]}""")
         assertEquals(
             "org.json is stubbed to throw or return defaults on the unit-test classpath; " +
