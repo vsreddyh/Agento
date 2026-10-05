@@ -57,7 +57,10 @@ existed only in a log line — which is how four legacy tasks stopped scheduling
 before anyone noticed. `exhausted` and `failed` also carry `needs_attention`.
 
 The nightly `retention` job runs `ReconcileRollover` for the same reason: rollover
-is a side effect of `Complete`, so any writer that does not go through it stops a
+is a side effect of `Complete`, so any writer that does not go through it stops a repeat. Each gap it prints leads with the field that caused it — "cannot roll
+over: due_time is required (HH:MM)" — rather than the bare outcome, because the whole
+point of the report is that a person has to go and fix something. It never repairs
+anything itself.
 task recurring with nothing to show for it. It reports, and does not repair —
 a task that failed to roll over usually failed because its stored data is wrong.
 
