@@ -492,6 +492,17 @@ func skipTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
+	// `{"reason": null}` is treated as an omitted reason, on purpose, and deliberately
+	// NOT rejected. JSON null counting as absent is the convention this file already
+	// uses for every other field (see checkTaskFields: "JSON null counts as absent (no
+	// change)"), and a null that meant "clear this" would be a different contract from
+	// the one every other field already has. Rejecting it here would make `reason` the
+	// one field where null is an error while `description`, `due_time` and the rest
+	// accept it silently — a caller clearing optional values would get a 422 from one
+	// endpoint and success from the others.
+	//
+	// Stated here because the ambiguity is real otherwise: null and omitted both mean
+	// "no reason given", which is the same outcome either way.
 	if raw, ok := fields["reason"]; ok && raw != nil {
 		if _, isStr := raw.(string); !isStr {
 			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "reason must be a string"})

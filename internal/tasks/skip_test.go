@@ -6,6 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -331,4 +332,126 @@ func TestResolveVerbsStillReportUnknownTasks(t *testing.T) {
 		!strings.Contains(err.Error(), "unknown task") {
 		t.Errorf("skip on an unknown id: %v, want an unknown-task error", err)
 	}
+}
+
+// "Was this skipped?" must be ONE rule, not two. It used to be written twice: toDoc
+// derived the response boolean from `skippedAt != nil`, while the miss-path error
+// required a non-zero primitive.DateTime. Any row where the field is present but is not
+// a real timestamp — a zero DateTime, or another type entirely — therefore read as
+// `skipped: true` in every response AND produced "already completed" when you tried to
+// act on it. Such a row cannot be written through the API, which is exactly why the
+// divergence survived.
+func TestIsSkippedIsTheSameRuleEverywhere(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	// A real skip: both agree it is skipped, and the doc says so.
+	real := mustCreate(t, s, "Real skip", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+	})
+	if _, _, _, err := s.Skip(ctx, real, "out of time"); err != nil {
+		t.Fatalf("skip: %v", err)
+	}
+	if !isSkipped(mustGet(t, s, real)) {
+		t.Error("isSkipped says a genuinely skipped task is not skipped")
+	}
+	if got := mustGet(t, s, real)["skipped"]; got != true {
+		t.Errorf("response says skipped=%v for a skipped task", got)
+	}
+	if _, _, _, err := s.Complete(ctx, real); err == nil ||
+		!strings.Contains(err.Error(), "already skipped") {
+		t.Errorf("completing a skipped task: %v, want the ALREADY SKIPPED error", err)
+	}
+
+	// The divergent shapes: skippedAt present, but not a real timestamp.
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{"zero DateTime", primitive.DateTime(0)},
+		{"string", "2026-10-05"},
+	} {
+		id := mustCreate(t, s, "Drifted "+tc.name, map[string]any{
+			"due_date": "2026-10-05", "due_time": "08:00",
+		})
+		if _, err := s.tasks.UpdateOne(ctx, bson.M{"_id": mustObjectID(t, id)},
+			bson.M{"$set": bson.M{"skippedAt": tc.value}}); err != nil {
+			t.Fatalf("set skippedAt: %v", err)
+		}
+		doc := mustGet(t, s, id)
+		derived, _ := doc["skipped"].(bool)
+		byRule := isSkipped(doc)
+		if derived != byRule {
+			t.Errorf("%s: the response boolean is %v but isSkipped says %v — the two "+
+				"must not disagree, or the task reads as skipped and then errors as "+
+				"completed", tc.name, derived, byRule)
+		}
+	}
+}
+
+// The trap in the obvious fix. Unifying on "assert primitive.DateTime and compare to
+// zero" is correct for a STORED doc and silently wrong for a RENDERED one, because
+// toDoc renders dates to ISO strings for the API. Every response would then carry
+// `skipped: false` even for a genuinely skipped occurrence — no compile error, no
+// failing test, and a client filtering on the flag would quietly see no skips at all.
+//
+// So this pins BOTH representations against the same rule.
+func TestIsSkippedHandlesBothRepresentations(t *testing.T) {
+	cases := []struct {
+		name string
+		val  any
+		want bool
+	}{
+		{"stored, real timestamp", primitive.DateTime(1791197697928), true},
+		{"stored, zero DateTime", primitive.DateTime(0), false},
+		{"stored, Reopen's clearing value", "", false},
+		{"stored, absent", nil, false},
+		{"rendered ISO string", "2026-10-05T10:54:57Z", true},
+		{"rendered empty string", "", false},
+		{"a type that is neither", int64(5), false},
+	}
+	for _, c := range cases {
+		doc := map[string]any{}
+		if c.val != nil {
+			doc["skippedAt"] = c.val
+		}
+		if got := isSkipped(doc); got != c.want {
+			t.Errorf("%s: isSkipped = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// And the end-to-end consequence: a skipped task must actually report skipped=true
+// through the API, which is what the representation bug would have broken.
+func TestSkippedTaskReportsSkippedTrueThroughTheApi(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	id := mustCreate(t, s, "Api shape", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+	})
+	if _, _, _, err := s.Skip(ctx, id, "why"); err != nil {
+		t.Fatalf("skip: %v", err)
+	}
+	if got := mustGet(t, s, id)["skipped"]; got != true {
+		t.Errorf("a skipped task reports skipped=%v through the API", got)
+	}
+	// And after reopening it must flip back, or the flag is stuck.
+	if _, err := s.Reopen(ctx, id); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if got := mustGet(t, s, id)["skipped"]; got != false {
+		t.Errorf("after reopen, skipped=%v, want false", got)
+	}
+}
+
+func mustObjectID(t *testing.T, id string) primitive.ObjectID {
+	t.Helper()
+	oid, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		t.Fatalf("bad id %q: %v", id, err)
+	}
+	return oid
 }
