@@ -123,3 +123,138 @@ func TestDefaultDecodeStillRejectsAnEmptyBody(t *testing.T) {
 		t.Errorf("status = %d, want 422", rec.Code)
 	}
 }
+
+// Every body key the create path reads must change the idempotency fingerprint.
+//
+// This is the drift guard for taskCreateFields. `repeat_rule` was genuinely missing —
+// consumed into Repeat.Text, validated, and stored, yet absent from the digest — so
+// two creates differing only in their custom repeat text hashed identically and the
+// second was handed the first's task as a "replay". That is the silent wrong answer,
+// reached through the mechanism built to prevent it.
+//
+// The test walks the list and mutates one key at a time, so the next field someone
+// adds to the create path without adding it here fails here rather than in review.
+func TestFingerprintCoversEveryConsumedField(t *testing.T) {
+	base := map[string]any{
+		"name": "task", "description": "d",
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"estimated_minutes": 5, "parallelable": false,
+		"repeat_every": 1, "repeat_unit": "days",
+		"repeat_custom": false, "repeat_rule": "",
+	}
+	baseFP := taskFingerprint(base)
+	if baseFP == "" {
+		t.Fatal("a complete body produced no fingerprint; the mismatch check would be off")
+	}
+
+	// A different value per key. repeat_custom/repeat_every/repeat_unit have typed
+	// expectations, so use values of the right shape rather than one string for all.
+	differ := map[string]any{
+		"name": "other", "description": "other",
+		"due_date": "2026-10-06", "due_time": "09:00",
+		"estimated_minutes": 30, "parallelable": true,
+		"repeat_every": 2, "repeat_unit": "weeks",
+		"repeat_custom": true, "repeat_rule": "3rd Friday",
+	}
+	for _, k := range taskCreateFields {
+		if _, ok := differ[k]; !ok {
+			t.Errorf("taskCreateFields lists %q but the test has no differing value for it", k)
+			continue
+		}
+		mutated := make(map[string]any, len(base))
+		for kk, vv := range base {
+			mutated[kk] = vv
+		}
+		mutated[k] = differ[k]
+		if taskFingerprint(mutated) == baseFP {
+			t.Errorf("changing %q does NOT change the fingerprint — a request differing "+
+				"only in that field would replay as identical instead of 422", k)
+		}
+	}
+}
+
+// The specific defect, pinned directly: two custom repeats whose text differs must
+// not share a digest. This is the case that shipped broken.
+func TestFingerprintDistinguishesCustomRepeatText(t *testing.T) {
+	body := func(rule string) map[string]any {
+		return map[string]any{
+			"name": "monthly-ish", "description": "d",
+			"due_date": "2026-10-05", "due_time": "08:00",
+			"estimated_minutes": 5, "parallelable": false,
+			"repeat_custom": true, "repeat_rule": rule,
+		}
+	}
+	a := taskFingerprint(body("3rd Friday"))
+	b := taskFingerprint(body("end of month"))
+	if a == "" || b == "" {
+		t.Fatalf("a custom-only body produced no fingerprint (%q, %q); the mismatch "+
+			"check would be disabled for every custom repeat", a, b)
+	}
+	if a == b {
+		t.Error("two different custom repeat rules hash identically — the second create " +
+			"would replay the first's task")
+	}
+	// And an identical body must still match, or every genuine retry would 422.
+	if taskFingerprint(body("3rd Friday")) != a {
+		t.Error("the fingerprint is not stable for an unchanged body")
+	}
+}
+
+// An absent key and a present-but-empty key are different bodies for the digest's
+// purposes only if the create treats them differently — it does not, so they must
+// hash the same or a client that starts sending an explicit empty value would 422 its
+// own retries.
+func TestFingerprintTreatsAbsentAndEmptyAlike(t *testing.T) {
+	withEmpty := map[string]any{
+		"name": "t", "description": "d",
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"estimated_minutes": 5, "parallelable": false,
+		"repeat_custom": false, "repeat_rule": "",
+	}
+	without := map[string]any{
+		"name": "t", "description": "d",
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"estimated_minutes": 5, "parallelable": false,
+		"repeat_custom": false,
+	}
+	if taskFingerprint(withEmpty) != taskFingerprint(without) {
+		t.Error("an explicit empty repeat_rule changed the digest; the store treats " +
+			"absent and empty alike, so the digest must too")
+	}
+}
+
+// The zero-defaulting must be complete: absent vs explicit zero must agree for EVERY
+// consumed field, not just the string one that the repeat_rule bug exposed. Each of
+// these is a body a client could send either way, and a mismatch on any of them is a
+// 422 on a legitimate retry.
+func TestAbsentAndExplicitZeroAgreeForEveryField(t *testing.T) {
+	full := map[string]any{
+		"name": "t", "description": "d",
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"estimated_minutes": 5, "parallelable": true,
+		"repeat_every": 2, "repeat_unit": "weeks",
+		"repeat_custom": true, "repeat_rule": "3rd Friday",
+	}
+	// For each key, the zero value of its type as the store would read it.
+	zeros := map[string]any{
+		"description": "", "due_time": "", "repeat_unit": "", "repeat_rule": "",
+		"estimated_minutes": 0, "repeat_every": 0,
+		"parallelable": false, "repeat_custom": false,
+	}
+	for k, zero := range zeros {
+		mutated := make(map[string]any, len(full))
+		for kk, vv := range full {
+			mutated[kk] = vv
+		}
+		mutated[k] = zero
+		dropped := make(map[string]any, len(full))
+		for kk, vv := range full {
+			dropped[kk] = vv
+		}
+		delete(dropped, k)
+		if taskFingerprint(mutated) != taskFingerprint(dropped) {
+			t.Errorf("omitting %q and sending it as its zero value hash differently; "+
+				"the store reads them alike, so the digest must too", k)
+		}
+	}
+}

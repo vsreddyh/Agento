@@ -372,6 +372,56 @@ func changedKeys(fields map[string]any) string {
 	return strings.Join(keys, ",")
 }
 
+// zeroLike returns the zero value of whatever type this field takes elsewhere, so an
+// absent key and an explicit zero hash the same. Type is taken from the OTHER keys
+// present in the same body where possible, because the digest has no schema of its own;
+// the fallbacks match what taskStrField / taskMinutes / the bool read would produce.
+func zeroLike(fields map[string]any, key string) any {
+	switch key {
+	case "estimated_minutes", "repeat_every":
+		for _, probe := range []string{"estimated_minutes", "repeat_every"} {
+			switch fields[probe].(type) {
+			case float64:
+				return float64(0)
+			case int:
+				return 0
+			case json.Number:
+				return json.Number("0")
+			}
+		}
+		return float64(0)
+	case "parallelable", "repeat_custom":
+		for _, probe := range []string{"parallelable", "repeat_custom"} {
+			if _, ok := fields[probe].(bool); ok {
+				return false
+			}
+		}
+		return false
+	default:
+		return ""
+	}
+}
+
+// taskCreateFields is every body key the create path READS, and therefore every key
+// the idempotency fingerprint must cover.
+//
+// It is a named list rather than something derived because the consumers are spread
+// across taskStrField / taskMinutes / taskRepeat and nothing enforces that a new
+// consumed field is added here. That gap was real and shipped: `repeat_rule` is
+// consumed into Repeat.Text, validated, and STORED (repeat.go), yet was missing from
+// this list — so two creates differing only in their custom repeat text ("3rd Friday"
+// vs "end of month") hashed identically and the second was handed the first's task as
+// a replay. The silent wrong answer, reached through the mechanism built to prevent it.
+//
+// `TestFingerprintCoversEveryConsumedField` walks this list and asserts each field
+// changes the digest, which is what makes the next omission a test failure rather than
+// a review finding. When a field is added to the create path, add it here too.
+var taskCreateFields = []string{
+	"name", "description", "due_date", "due_time",
+	"estimated_minutes", "parallelable",
+	"repeat_every", "repeat_unit", "repeat_custom", "repeat_rule",
+}
+
 // taskFingerprint digests a create body so a reused Idempotency-Key can be told
 // apart from a genuine retry.
 //
@@ -386,15 +436,23 @@ func taskFingerprint(fields map[string]any) string {
 	if len(fields) == 0 {
 		return ""
 	}
-	relevant := make(map[string]any, 9)
-	for _, k := range []string{
-		"name", "description", "due_date", "due_time",
-		"estimated_minutes", "parallelable",
-		"repeat_every", "repeat_unit", "repeat_custom",
-	} {
+	// Every key is present in the digest, defaulting to its zero value when absent.
+	//
+	// The store reads an absent key and a zero-valued one IDENTICALLY —
+	// taskStrField returns "" either way, and the bool/number reads yield false/0 —
+	// so the digest must too. Skipping absent keys (the obvious implementation) makes
+	// a body that omits `repeat_rule` hash differently from the same body sending
+	// `"repeat_rule": ""`, and since the mismatch check only fires on a replay, that
+	// turns a client merely upgrading to an explicit empty value into a 422 on its own
+	// retry of a request that succeeded. A false rejection of a legitimate retry is
+	// the same class of silent-wrong-answer as the one this guards against.
+	relevant := make(map[string]any, len(taskCreateFields))
+	for _, k := range taskCreateFields {
 		if v, ok := fields[k]; ok {
 			relevant[k] = v
+			continue
 		}
+		relevant[k] = zeroLike(fields, k)
 	}
 	if len(relevant) == 0 {
 		return ""
