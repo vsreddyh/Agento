@@ -49,6 +49,11 @@ const (
 
 // UserFacing explains the outcome in words a caller can show without inventing
 // its own explanation. Empty for the outcomes that need no explanation.
+//
+// Deliberately neutral about HOW the task was resolved. `RolloverFailed` is
+// returned by Skip as well as Complete, so a message saying "this task was
+// completed" is simply false on the skip path — and the false part is the part a
+// user reads. These strings are shared by both verbs, so they may not assume one.
 func (r Rollover) UserFacing() string {
 	switch r {
 	case RolloverCustom:
@@ -56,7 +61,7 @@ func (r Rollover) UserFacing() string {
 	case RolloverExhausted:
 		return "this task repeats, but no future date could be computed from its stored due date or the cadence has run out — check the repeat and re-enter it if it should continue"
 	case RolloverFailed:
-		return "this task was completed, but creating its next occurrence FAILED — the repeat has stopped until you fix it"
+		return "this task was marked done or skipped, but creating its next occurrence FAILED — the repeat has stopped until you fix it"
 	default:
 		return ""
 	}
