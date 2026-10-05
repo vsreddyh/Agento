@@ -132,9 +132,15 @@ An absent key is normalised to its zero value rather than skipped — the store 
 absent and zero identically, so a client that upgrades to sending `"repeat_rule": ""`
 must not 422 its own retry. String values are likewise TrimSpaced for exactly the
 fields the create path trims (`name`, `description`, `due_date`, `due_time`,
-`repeat_unit`), because `" foo "` and `"foo"` create the *same* task and a retry
-differing only in padding must replay. `repeat_rule` is deliberately not trimmed: create
-stores it verbatim, so those really are two different tasks.
+`repeat_unit`, and `repeat_rule`), because `" foo "` and `"foo"` create the *same* task
+and a retry differing only in padding must replay.
+
+`repeat_rule` is in that set because `Repeat.Normalize` trims the text for every create
+path. It used to be trimmed by the MCP path and by the update path but **not** by HTTP
+create, so the same custom condition was stored two different ways depending on which
+door it came through — and it had been excluded from this digest precisely because create
+stored it raw, an exclusion that was correct until the store changed. The rule now lives
+in `Normalize`, which every path already calls, so a future caller cannot skip it.
 
 The general rule the digest has to keep: **it must agree with the store about what
 "the same request" means.** Every gap so far — `repeat_rule` missing, absent-vs-zero,
