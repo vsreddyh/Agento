@@ -332,10 +332,6 @@ class TasksApi(context: Context) {
             repeatRule = tRepeatRule,
             parallelable = parallelable,
         )
-        // Every string is trimmed HERE, at the send site, rather than only in `sent`.
-        // The comparison is trim-insensitive so a mismatch is never hidden by padding,
-        // but sending exactly what is asserted is the honest direction: the app should
-        // not depend on the server to clean up before the two agree.
         val body = JSONObject()
             .put("name", tName)
             .put("description", tDescription)
@@ -561,50 +557,58 @@ fun serverDetail(message: String): String {
  * recomposition.
  */
 internal object ContractWarnings {
-    private val _mismatched = MutableStateFlow<List<String>>(emptyList())
-
-    /** Newest set of mismatched field names; empty when the last write agreed. */
-    val mismatched: StateFlow<List<String>> = _mismatched.asStateFlow()
+    private val _mismatched = MutableStateFlow<ContractMismatch?>(null)
 
     /**
-     * Advances on every report, so a repeat of the same fields is still observable as a
-     * new event rather than a duplicate of the last one.
+     * Newest mismatch, or null when there is nothing pending. Null rather than an empty
+     * list so "nothing to show" and "a mismatch with no fields" cannot be confused —
+     * [report] rejects the latter anyway, but the type should not have to carry that.
+     */
+    val mismatched: StateFlow<ContractMismatch?> = _mismatched.asStateFlow()
+
+    /**
+     * Advances on every report.
      *
      * An [AtomicInteger] rather than a plain counter: `report()` runs on
-     * `Dispatchers.IO`, and `generation++` is a read-modify-write, so two concurrent
-     * autosaves could each read the same value and one increment would vanish. That is
-     * observability-only today, so the impact is a skipped number rather than a lost
-     * warning — but a counter that silently loses counts is the kind of thing that is
-     * load-bearing the day someone wires it to something real.
+     * `Dispatchers.IO` and `generation++` is a read-modify-write, so two concurrent
+     * autosaves could each read the same value and one increment would vanish.
+     *
+     * This is LOAD-BEARING, not observability: [consume] matches on it, so a lost
+     * increment would let one warning clear another.
      */
     private val _generation = AtomicInteger(0)
+
+    /** The current generation. Exposed for tests and diagnostics. */
     val generation: Int get() = _generation.get()
 
     fun report(fields: List<String>) {
         if (fields.isEmpty()) return
-        _generation.incrementAndGet()
-        _mismatched.value = fields
+        _mismatched.value = ContractMismatch(_generation.incrementAndGet(), fields)
     }
 
     /**
      * Clears the warning **only if it is still the one that was shown**.
      *
-     * [shown] is the exact list the collector passed to [message]. A plain
-     * `_mismatched.value = emptyList()` was a lost-warning bug:
+     * [shown] is the generation passed to [message], not the field list, and that
+     * distinction is the whole fix.
      *
-     *     collect[A] -> showSnackbar(A)   // suspends for as long as the snackbar shows
-     *     report(B)   -> value = [B]      // a second write lands meanwhile
-     *     consume()   -> value = []       // B is wiped before it was ever shown
+     * The first version compared the LISTS:
      *
-     * `showSnackbar` suspends, so that interleaving is ordinary rather than exotic — two
-     * saves in quick succession is exactly when a contract mismatch is most likely, since
-     * both would be hitting the same broken server.
+     *     collect[A] -> showSnackbar(A)      // suspends as long as the snackbar shows
+     *     report(B)  -> value = [B]          // a second write lands meanwhile
+     *     consume(A) -> clears iff value == A
      *
-     * `compareAndSet` makes the clear conditional on the value still being [shown], so a
-     * report that arrived while the snackbar was up survives and is collected next.
+     * which holds only while A != B. Two reports of the SAME fields break it:
+     * `report([X])`, `showSnackbar([X])`, `report([X])`, `consume([X])` clears the second
+     * one — and same-fields is the COMMON case, not the exotic one, because both writes
+     * are hitting the same broken server and get the same answer from it.
+     *
+     * Matching on a monotonic generation instead makes the two reports distinct values,
+     * so clearing the first cannot touch the second however alike they look.
      */
-    fun consume(shown: List<String>) {
-        _mismatched.compareAndSet(shown, emptyList())
+    fun consume(shown: Int) {
+        val current = _mismatched.value ?: return
+        if (current.generation == shown) _mismatched.value = null
     }
 
     /**
@@ -619,3 +623,15 @@ internal object ContractWarnings {
             fields.joinToString(", ") +
             ". Your app and the server may be on different versions — open the task again to resync."
 }
+
+/**
+ * One reported contract mismatch.
+ *
+ * Carries the generation so two reports of identical fields are distinguishable values.
+ * Without it the pair collapses to the same list, and clearing one clears the other —
+ * see [ContractWarnings.consume].
+ */
+internal data class ContractMismatch(
+    val generation: Int,
+    val fields: List<String>,
+)

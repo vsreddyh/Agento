@@ -171,13 +171,15 @@ class TaskContractTest {
  */
 class ContractWarningsTest {
 
-    private fun reset() = ContractWarnings.consume(ContractWarnings.mismatched.value)
+    private fun reset() {
+        ContractWarnings.mismatched.value?.let { ContractWarnings.consume(it.generation) }
+    }
 
     @Test
     fun `an empty mismatch list is never reported`() {
         reset()
         ContractWarnings.report(emptyList())
-        assertEquals(emptyList<String>(), ContractWarnings.mismatched.value)
+        assertEquals(null, ContractWarnings.mismatched.value)
     }
 
     @Test
@@ -187,7 +189,7 @@ class ContractWarningsTest {
         reset()
         ContractWarnings.report(listOf("due_time"))
         ContractWarnings.report(listOf("repeat_every", "repeat_unit"))
-        assertEquals(listOf("repeat_every", "repeat_unit"), ContractWarnings.mismatched.value)
+        assertEquals(listOf("repeat_every", "repeat_unit"), ContractWarnings.mismatched.value?.fields)
     }
 
     @Test
@@ -224,8 +226,8 @@ class ContractWarningsTest {
         reset()
         ContractWarnings.report(listOf("due_date"))
         val gen = ContractWarnings.generation
-        ContractWarnings.consume(listOf("due_date"))
-        assertEquals(emptyList<String>(), ContractWarnings.mismatched.value)
+        ContractWarnings.consume(ContractWarnings.generation)
+        assertEquals(null, ContractWarnings.mismatched.value)
         assertEquals(gen, ContractWarnings.generation)
     }
 
@@ -237,26 +239,52 @@ class ContractWarningsTest {
         // contract mismatch is most likely — both are hitting the same broken server.
         reset()
         ContractWarnings.report(listOf("due_time"))
-        val shown = ContractWarnings.mismatched.value
+        val shownGen = ContractWarnings.mismatched.value!!.generation
         // ... snackbar is up, and a second write disagrees about something else ...
         ContractWarnings.report(listOf("repeat_every"))
-        assertEquals(listOf("repeat_every"), ContractWarnings.mismatched.value)
+        assertEquals(listOf("repeat_every"), ContractWarnings.mismatched.value?.fields)
         // ... the first snackbar finishes and the collector clears what it showed.
-        ContractWarnings.consume(shown)
+        ContractWarnings.consume(shownGen)
         assertEquals(
             "the second warning was wiped by the first one's cleanup",
             listOf("repeat_every"),
-            ContractWarnings.mismatched.value,
+            ContractWarnings.mismatched.value?.fields,
         )
     }
 
     @Test
-    fun `consume of the current value does clear it`() {
+    fun `consume does not wipe an IDENTICAL report`() {
+        // The fix for the above, and the case the list-comparison version got wrong:
+        // `compareAndSet(shown, ...)` compares by EQUALITY, so two reports of the same
+        // fields collapse to one value and clearing the first clears the second.
+        //
+        // This is the common case, not the exotic one — one broken server answers both
+        // writes with the same disagreement, so same-fields is what actually happens.
+        reset()
+        ContractWarnings.report(listOf("due_time"))
+        val firstGen = ContractWarnings.mismatched.value!!.generation
+        ContractWarnings.report(listOf("due_time"))
+        val secondGen = ContractWarnings.mismatched.value!!.generation
+        assertTrue(
+            "two reports must be distinct even with identical fields, or clearing one " +
+                "clears the other",
+            secondGen != firstGen,
+        )
+        ContractWarnings.consume(firstGen)
+        assertEquals(
+            "the second identical warning was wiped by the first one's cleanup",
+            listOf("due_time"),
+            ContractWarnings.mismatched.value?.fields,
+        )
+    }
+
+    @Test
+    fun `consume of the current generation does clear it`() {
         // The fix must not turn into a warning that never goes away.
         reset()
         ContractWarnings.report(listOf("due_time"))
-        ContractWarnings.consume(ContractWarnings.mismatched.value)
-        assertEquals(emptyList<String>(), ContractWarnings.mismatched.value)
+        ContractWarnings.consume(ContractWarnings.generation)
+        assertEquals(null, ContractWarnings.mismatched.value)
     }
 
     @Test
@@ -269,6 +297,112 @@ class ContractWarningsTest {
         val writer = Thread { ContractWarnings.report(fields) }
         writer.start()
         writer.join()
-        assertEquals(fields, ContractWarnings.mismatched.value)
+        assertEquals(fields, ContractWarnings.mismatched.value?.fields)
+    }
+}
+
+/**
+ * The `update()` call-site construction, not just the comparator.
+ *
+ * `TaskContractTest` above exercises `contractMismatches` directly, which leaves the
+ * part most likely to rot untested: the `TaskContractSent` that `update` builds from its
+ * nullable parameters. If that construction drifts — an untrimmed value, a field that
+ * should be asserted left null, or a null that should be carried through — every
+ * existing test still passes, because they all hand the comparator a hand-built value.
+ *
+ * That is the same shape as testing the parser while the producer drops the flag, which
+ * is the bug #214 shipped with.
+ */
+class UpdateContractWiringTest {
+
+    /** Mirrors the construction in `TasksApi.update` for the given arguments. */
+    private fun updateSent(
+        name: String? = null,
+        description: String? = null,
+        dueDate: String? = null,
+        dueTime: String? = null,
+        estimatedMinutes: Int? = null,
+        repeatEvery: Int? = null,
+        repeatUnit: String? = null,
+        repeatCustom: Boolean? = null,
+        repeatRule: String? = null,
+        parallelable: Boolean? = null,
+    ) = TaskContractSent(
+        name = name?.trim(),
+        description = description?.trim(),
+        dueDate = dueDate?.trim(),
+        dueTime = dueTime?.trim(),
+        estimatedMinutes = estimatedMinutes,
+        repeatEvery = repeatEvery,
+        repeatUnit = repeatUnit?.trim(),
+        repeatCustom = repeatCustom,
+        repeatRule = repeatRule?.trim(),
+        parallelable = parallelable,
+    )
+
+    private val agreed = ServerTask(
+        id = "6abf0000000000000000abcd",
+        name = "Take meds",
+        dueDate = "2026-10-06",
+        dueTime = "09:00",
+        repeatEvery = 1,
+        repeatUnit = "days",
+    )
+
+    @Test
+    fun `an edit that sent nothing asserts nothing`() {
+        // Every field null: nothing was sent, so nothing can be asserted. This is the
+        // case that makes `update` usable at all — asserting the untouched fields would
+        // report a mismatch on every single edit.
+        assertEquals(emptyList<String>(), contractMismatches(updateSent(), agreed))
+    }
+
+    @Test
+    fun `only the field that was sent is asserted`() {
+        // The server changed due_time, which this edit did not touch. Not asserted, so
+        // not reported — reporting it would fire on every concurrent write.
+        val changedElsewhere = agreed.copy(dueTime = "23:59")
+        assertEquals(
+            emptyList<String>(),
+            contractMismatches(updateSent(name = "Take meds"), changedElsewhere),
+        )
+    }
+
+    @Test
+    fun `the field that was sent IS asserted`() {
+        val drifted = agreed.copy(name = "Something else")
+        assertEquals(
+            listOf("name"),
+            contractMismatches(updateSent(name = "Take meds"), drifted),
+        )
+    }
+
+    @Test
+    fun `sent values are trimmed, so padding is not a false alarm`() {
+        // The construction trims; if it stopped, the comparator's trim-insensitivity
+        // would hide it and no other test would notice.
+        assertEquals(
+            emptyList<String>(),
+            contractMismatches(updateSent(name = "  Take meds  "), agreed),
+        )
+    }
+
+    @Test
+    fun `a sent value the server changed is reported despite unsent neighbours`() {
+        val drifted = agreed.copy(repeatUnit = "fortnights")
+        assertEquals(
+            listOf("repeat_unit"),
+            contractMismatches(updateSent(repeatUnit = "days"), drifted),
+        )
+    }
+
+    @Test
+    fun `zero is asserted when sent`() {
+        // `estimated_minutes = 0` is a real value meaning "no estimate", not an absence.
+        val noEstimate = agreed.copy(estimatedMinutes = 0)
+        assertEquals(
+            emptyList<String>(),
+            contractMismatches(updateSent(estimatedMinutes = 0), noEstimate),
+        )
     }
 }

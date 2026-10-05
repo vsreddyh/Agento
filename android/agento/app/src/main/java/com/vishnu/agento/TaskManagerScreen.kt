@@ -93,13 +93,14 @@ internal fun TaskManagerScreen(
     // recomposition does not re-show the same warning — but only if it is still the one
     // that was shown, or a warning that arrived meanwhile would be lost.
     LaunchedEffect(Unit) {
-        ContractWarnings.mismatched.collect { fields ->
-            if (fields.isEmpty()) return@collect
-            snackbar.showSnackbar(ContractWarnings.message(fields))
-            // Pass back what was SHOWN, not a bare clear: showSnackbar suspends, so
-            // another report can land while it is up, and an unconditional clear would
-            // wipe that one before it was ever displayed.
-            ContractWarnings.consume(fields)
+        ContractWarnings.mismatched.collect { mismatch ->
+            if (mismatch == null) return@collect
+            snackbar.showSnackbar(ContractWarnings.message(mismatch.fields))
+            // Clear by GENERATION, not by the field list: showSnackbar suspends, so
+            // another report can land while it is up. Matching on the list would still
+            // wipe that one whenever the fields happen to be the same — which, against
+            // one broken server, they usually are.
+            ContractWarnings.consume(mismatch.generation)
         }
     }
 

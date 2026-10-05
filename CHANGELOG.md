@@ -46,7 +46,10 @@ see GitHub Releases for older notes.
   the app sends exactly what it asserts. The warning reaches the user as a
   snackbar naming the fields; it is a `StateFlow` so the IO-thread write and the
   main-thread read are ordered correctly, and so there is exactly one obvious
-  collector.
+  collector. Each mismatch carries a generation, so clearing one warning cannot
+  eat a second one that arrived while the snackbar was still up — including a
+  second warning about the same fields, which is what happens against one broken
+  server.
 
 ## [4.14.3]
 

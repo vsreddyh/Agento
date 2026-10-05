@@ -301,8 +301,15 @@ internal data class TaskContractSent(
  */
 internal fun contractMismatches(sent: TaskContractSent, got: ServerTask): List<String> {
     val out = mutableListOf<String>()
-    // An id is the one field with no sensible default: without it there is no record
-    // to point at, so a write cannot be reported as successful. Always asserted.
+    // An id is the one field with no sensible default: without it there is no record to
+    // point at, so a write cannot be reported as successful.
+    //
+    // DEFENCE IN DEPTH, not a reachable warning on the wired path. `parseTask` returns
+    // null on a blank id, so `parseOne` throws "Unexpected response shape" before
+    // `checkContract` ever runs — a create or update can never reach this arm. It stays
+    // because `contractMismatches` is also called directly (tests, and any future caller
+    // that already holds a ServerTask), and a comparator that silently skipped the one
+    // field that makes a record unusable would be the wrong default.
     if (got.id.isBlank()) out += "id"
     if (sent.name != null && sent.name.trim() != got.name.trim()) out += "name"
     if (sent.description != null &&
