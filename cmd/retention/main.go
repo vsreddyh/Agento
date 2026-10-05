@@ -205,6 +205,11 @@ func reconcileTasks(parent context.Context) {
 	}
 }
 
+// gapSeparator sits between the machine reason and the human-readable half of a gap
+// line. Declared once, and matched by name in the tests rather than as a literal, so
+// the two cannot drift.
+const gapSeparator = " — "
+
 // gapLine renders one gap, and CANNOT produce a line with no explanation.
 //
 // UserFacing() is empty for RolloverNone and RolloverCreated, which is correct in the
@@ -220,12 +225,25 @@ func reconcileTasks(parent context.Context) {
 func gapLine(g tasks.RolloverGap) string {
 	outcome := g.Why.UserFacing()
 	if outcome == "" {
-		outcome = "no reason was recorded for this one (" + string(g.Why) + ")"
+		outcome = "no explanation is recorded for this outcome"
 	}
-	if g.Detail == "" {
-		return outcome
+	// Every line LEADS with the machine reason, then the human part.
+	//
+	// The reason goes first for two reasons that pull the same way. It makes each line
+	// greppable by state, which it was not before: `exhausted` and `failed` have prose
+	// from UserFacing(), so the fallback never fired and the string "exhausted" appeared
+	// nowhere on the line — you could read why it stopped but not find every row in that
+	// state. And it makes the three shapes uniform, so an operator reading a wall of
+	// these sees the same shape every time instead of learning a new format per reason.
+	//
+	// Within the human part, Detail still leads: it names the field to fix, while
+	// UserFacing() only ever described the outcome, and making someone parse a sentence
+	// about a category before learning which field was wrong is the wrong order.
+	body := outcome
+	if g.Detail != "" {
+		body = g.Detail + ": " + outcome
 	}
-	return g.Detail + ": " + outcome
+	return string(g.Why) + gapSeparator + body
 }
 
 func main() { os.Exit(run()) }
