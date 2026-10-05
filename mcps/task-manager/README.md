@@ -123,6 +123,17 @@ the second replayed the first's task. An absent key is normalised to its zero va
 rather than skipped — the store reads absent and zero identically, so a client that
 upgrades to sending `"repeat_rule": ""` must not 422 its own retry.
 
+`idempotency_key` and `source` are returned on every task, deliberately: the key is
+client-generated rather than secret, and echoing it is what lets a client correlate a
+retry without keeping its own log; `source` is the only record of *which* caller wrote
+a row, which matters because the app and the agent share one password.
+
+`idempotency_fingerprint` is **not** returned. It is internal to this mechanism, and a
+digest of the body the client just sent tells it nothing it does not already know. It
+is read back from the raw stored document rather than from the rendered task, so hiding
+it cannot switch off the mismatch check — a cosmetic edit must never be able to
+disable a correctness guarantee.
+
 The guarantee is enforced by a **unique sparse index**, not by a lookup before the
 insert — a read-then-write has a window between the two, and the failure it
 produces is the one this exists to prevent: a client retrying after a timeout,
