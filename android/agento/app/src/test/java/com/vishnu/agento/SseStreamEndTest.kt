@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import okio.Buffer
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -58,6 +59,52 @@ class SseStreamEndTest {
             emit = { events += it },
         )
         return Result(end, full.toString(), events, usage)
+    }
+
+    /**
+     * Guards the fixture itself, which is the layer that decides whether any of these
+     * tests mean anything.
+     *
+     * The first run of this file failed 5 of 8 tests and the cause was NOT the parser:
+     * `org.json` is stubbed to throw "not mocked" on the unit-test classpath, and
+     * `readSseStream` wraps each frame in `runCatching`, so every `JSONObject` call
+     * failed silently. `[DONE]` still resolved correctly because it is a plain string
+     * compare that touches no JSON — so the failures had the shape of a parser bug
+     * (`[DONE]` found, text empty) rather than a missing dependency.
+     *
+     * A JSON-parsing test that can pass while the JSON parser is a stub is not testing
+     * anything, so assert that the parser is real before trusting the rest.
+     */
+    /**
+     * The truncated fixture must genuinely lack the terminal frame.
+     *
+     * It failed this on the first run too: `trimIndent()` left the trailing blank line
+     * in, the appended newline produced `[DONE]\n\n`, and the first `removeSuffix`
+     * stripped only one of the two newlines — so the "truncated" stream still ended
+     * with `[DONE]` and the regression test quietly tested nothing.
+     */
+    @Test
+    fun `the truncated fixture really is truncated`() {
+        assertTrue(
+            "the truncated fixture still contains [DONE], so the regression test is vacuous",
+            !truncatedStream().contains("[DONE]"),
+        )
+        assertTrue(
+            "the truncated fixture must keep the content it did receive",
+            truncatedStream().contains("Hello"),
+        )
+    }
+
+    @Test
+    fun `org.json is a real implementation, not an android stub`() {
+        val o = JSONObject("""{"choices":[{"delta":{"content":"hi"}}]}""")
+        assertEquals(
+            "org.json is stubbed to throw or return defaults on the unit-test classpath; " +
+                "every other test in this file silently passes no frames through it",
+            "hi",
+            o.optJSONArray("choices")!!.optJSONObject(0)!!
+                .optJSONObject("delta")!!.optString("content"),
+        )
     }
 
     @Test
