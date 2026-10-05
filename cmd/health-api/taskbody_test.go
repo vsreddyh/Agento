@@ -445,3 +445,53 @@ func sortedKeys(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// An update that wrote nothing must not be audited as an update.
+//
+// Store.Update takes a no-op path when its `set` map ends up empty — no field
+// supplied, or only the `expected_revision` guard — and returns without bumping the
+// revision. Logging OpUpdate for that claims a change to a task that was not changed,
+// the same defect as logging a `create` for a replayed create: the log stops being a
+// record of what happened and becomes a record of what was asked for.
+//
+// This asserts the handler's half of the guard. The store's half — that a no-op does
+// not bump the revision — is asserted in internal/tasks, where the collection is
+// reachable. Together they are the invariant: the handler suppresses exactly the writes
+// the store declines to make.
+//
+// No database here on purpose. Counting audit rows needs an accessor that does not exist,
+// and adding public API so a test can read one collection is a worse trade than
+// asserting the pure decision the handler actually makes.
+func TestNoOpUpdateFieldsAreRecognisedAsNoOp(t *testing.T) {
+	noOps := map[string]map[string]any{
+		"empty":                     {},
+		"nil map":                   nil,
+		"guard only":                {"expected_revision": 0},
+		"guard and a null":          {"expected_revision": 3, "name": nil},
+		"guard with a null pointer": {"expected_revision": 1},
+	}
+	for name, fields := range noOps {
+		if got := tasks.ChangedFieldNames(fields); got != "no fields" {
+			t.Errorf("%s: ChangedFieldNames = %q, so the handler would log an update "+
+				"for a write the store never makes", name, got)
+		}
+	}
+
+	// The control, and the more important half: a real change must NOT read as a no-op,
+	// or the guard has become a way to silently drop genuine edits. That failure is
+	// silent in production and much worse than the one it prevents.
+	real := map[string]any{
+		"name": "renamed", "due_date": "2026-11-11", "repeat_rule": "3rd Friday",
+		"estimated_minutes": 30, "parallelable": true, "repeat_custom": true,
+	}
+	if got := tasks.ChangedFieldNames(real); got == "no fields" {
+		t.Error("a real change reads as a no-op — the guard is too broad and would " +
+			"silently drop genuine edits from the audit log")
+	}
+	// expected_revision alongside a real field must not hide it.
+	mixed := map[string]any{"expected_revision": 2, "name": "renamed"}
+	if got := tasks.ChangedFieldNames(mixed); got != "name" {
+		t.Errorf("ChangedFieldNames(%v) = %q, want \"name\" — the guard is "+
+			"concurrency plumbing and must not mask a real edit", mixed, got)
+	}
+}

@@ -278,7 +278,13 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
-			store.RecordMutation(ctx, tasks.OpUpdate, in.ID, mcpSource, tasks.ChangedFieldNames(fields))
+			// Only when something was actually written — see the same guard in
+			// health-api's updateTask: a PATCH carrying no field the store will set takes
+			// the no-op path, and an audit entry for it would claim a change that did not
+			// happen.
+			if names := tasks.ChangedFieldNames(fields); names != "no fields" {
+				store.RecordMutation(ctx, tasks.OpUpdate, in.ID, mcpSource, names)
+			}
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 

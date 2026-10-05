@@ -609,7 +609,21 @@ func updateTask(w http.ResponseWriter, r *http.Request, id string) {
 		writeTaskErr(w, err)
 		return
 	}
-	store.RecordMutation(ctx, tasks.OpUpdate, id, requestSource(r), changedKeys(fields))
+	// Skip the audit when nothing was written. Store.Update takes a no-op path when its
+	// `set` map ends up empty — no field was supplied, or only `expected_revision` was —
+	// and returns without bumping the revision. Logging an OpUpdate for that claims a
+	// change to a task that was not changed, which is the same defect as logging a
+	// create for a replayed one: the log stops being a record of what happened and
+	// becomes a record of what was asked for.
+	//
+	// `changedKeys(fields) == "no fields"` is exactly the store's condition, because
+	// `set` only ever gains an entry for a field that was actually supplied. Checking it
+	// here rather than widening Update's signature keeps the knowledge where the data is
+	// though: the store is still the only thing that decides whether a write happened,
+	// and this merely mirrors the one case where it provably did not.
+	if names := changedKeys(fields); names != "no fields" {
+		store.RecordMutation(ctx, tasks.OpUpdate, id, requestSource(r), names)
+	}
 	writeJSON(w, http.StatusOK, doc)
 }
 

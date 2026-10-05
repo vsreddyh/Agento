@@ -90,13 +90,17 @@ const auditWriteBudget = 5 * time.Second
 // divergence would show up as the app and the agent describing the same edit differently
 // in the one log meant to reconcile them.
 //
-// `expected_revision` is excluded on purpose: it is optimistic-concurrency plumbing, not
-// a change to the task. Sorted so the string is stable — Go randomises map iteration, and
+// Sorted so the string is stable — Go randomises map iteration, and
 // an unstable detail would make two identical updates look different in the log.
 func ChangedFieldNames(fields map[string]any) string {
 	keys := make([]string, 0, len(fields))
-	for k := range fields {
-		if k == "expected_revision" {
+	for k, v := range fields {
+		// expected_revision is the optimistic-concurrency guard, not a change to the
+		// task. A JSON null is treated as ABSENT by every field read in this store, so
+		// naming it here would claim an edit that Update never makes — the caller uses
+		// this to decide whether to write an audit entry at all, and a null-valued field
+		// takes Update's no-op path.
+		if k == "expected_revision" || v == nil {
 			continue
 		}
 		keys = append(keys, k)

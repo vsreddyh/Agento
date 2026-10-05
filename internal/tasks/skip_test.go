@@ -455,3 +455,56 @@ func mustObjectID(t *testing.T, id string) primitive.ObjectID {
 	}
 	return oid
 }
+
+// The store half of the invariant the audit guard relies on: a field set that resolves
+// to nothing really does leave the revision alone.
+//
+// The handler suppresses its audit entry when ChangedFieldNames reports "no fields", on
+// the reasoning that this is exactly when Update takes its no-op path. That reasoning is
+// only sound because of what this test pins — if Update began bumping the revision on a
+// no-op, the handler would be dropping audit entries for real writes instead, silently.
+func TestNoOpUpdateDoesNotBumpRevision(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	id := mustCreate(t, s, "No-op update", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+	})
+	before := mustGet(t, s, id)["revision"]
+
+	// The shapes that resolve to an empty `set`: nothing at all, and the concurrency
+	// guard on its own. A JSON null resolves to nothing too, since every field read in
+	// the store treats null as absent.
+	for name, fields := range map[string]map[string]any{
+		"empty":            {},
+		"guard only":       {"expected_revision": 0},
+		"null field":       {"name": nil},
+		"guard and a null": {"expected_revision": 0, "description": nil},
+	} {
+		doc, err := s.Update(ctx, id, fields)
+		if err != nil {
+			t.Fatalf("%s: update: %v", name, err)
+		}
+		if doc["revision"] != before {
+			t.Errorf("%s: revision moved %v -> %v. A no-op that bumps the revision "+
+				"means the audit guard's assumption is wrong — it would now suppress "+
+				"entries for real writes", name, before, doc["revision"])
+		}
+		if got := ChangedFieldNames(fields); got != "no fields" {
+			t.Errorf("%s: ChangedFieldNames = %q, so the handler would suppress an "+
+				"entry for a write that DID happen", name, got)
+		}
+	}
+
+	// The control: a real change must bump the revision, or none of the above means
+	// anything.
+	doc, err := s.Update(ctx, id, map[string]any{"name": "actually changed"})
+	if err != nil {
+		t.Fatalf("real update: %v", err)
+	}
+	if doc["revision"] == before {
+		t.Error("a real update did not bump the revision, so the no-op assertions " +
+			"above are vacuous")
+	}
+}
