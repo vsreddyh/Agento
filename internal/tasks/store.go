@@ -183,6 +183,19 @@ func toDoc(doc bson.M) map[string]any {
 	// The one thing that IS withheld is the bearer token: it never reaches Mongo, and
 	// where the limiter needs to distinguish callers it stores only a short hash.
 
+	// The fingerprint is stripped: it is an INTERNAL field of the idempotency
+	// mechanism, no client has any use for a digest of the body it just sent, and it
+	// is the only one of these three that says nothing about the task.
+	//
+	// Note what this is NOT coupled to: byIdempotencyKey reads the stored fingerprint
+	// from the RAW BSON, not from here. Had it read it from the rendered doc, adding
+	// this line would have silently switched off the payload-mismatch check — a
+	// cosmetic edit disabling a correctness guarantee. TestCreateWithKeyRejectsADifferentBody
+	// is the test that catches that, and it is why the raw read exists.
+	if _, present := out[idempotencyFingerprintField]; present {
+		delete(out, idempotencyFingerprintField)
+	}
+
 	// `skipped` is derived, not stored, so it cannot disagree with `skippedAt`
 	// (#209). A skip sets completedAt so the occurrence leaves the open list — which
 	// means "is it done?" and "was it done?" are different questions and a client
@@ -375,8 +388,8 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 	if idemKey == "" || !mongoDrv.IsDuplicateKeyError(err) {
 		return nil, false, err
 	}
-	existing, getErr := s.byIdempotencyKey(ctx, idemKey)
-	if getErr != nil || existing == nil {
+	found, getErr := s.byIdempotencyKey(ctx, idemKey)
+	if getErr != nil || found == nil {
 		// The insert reported a duplicate but the row cannot be read back. Returning
 		// the original error is more useful than a silent success.
 		return nil, false, err
@@ -390,17 +403,32 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 	// field existed has none, and so does a caller that sent no body to digest;
 	// treating "unknown" as "different" would reject every legacy key on its first
 	// retry, which is the opposite of what an idempotency key is for.
-	stored, _ := existing[idempotencyFingerprintField].(string)
+	stored := found.storedFingerprint
 	if fingerprint != "" && stored != "" && stored != fingerprint {
 		return nil, false, mismatch(idemKey)
 	}
-	return existing, true, nil
+	return found.doc, true, nil
+}
+
+// replayedTask is a task found by its idempotency key, carrying the stored fingerprint
+// SEPARATELY from the rendered doc.
+type replayedTask struct {
+	doc map[string]any
+	// storedFingerprint is read from the RAW document, never from `doc`.
+	storedFingerprint string
 }
 
 // byIdempotencyKey finds a task by its idempotency key. Used ONLY to resolve the
 // duplicate-key race above, never to pre-check — a pre-check is exactly the
 // read-then-write window this design exists to avoid.
-func (s *Store) byIdempotencyKey(ctx context.Context, key string) (map[string]any, error) {
+//
+// It deliberately does NOT go through toDoc for the fingerprint. The fingerprint is
+// an internal field of the idempotency mechanism and is stripped from API responses,
+// so reading it back off a rendered doc meant the mismatch check silently stopped
+// working the moment anyone tidied that list — a cosmetic change quietly disabling a
+// correctness guarantee, with no test failing. Pulling it from the raw BSON here
+// means the two concerns cannot be coupled by a future edit.
+func (s *Store) byIdempotencyKey(ctx context.Context, key string) (*replayedTask, error) {
 	var doc bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{idempotencyKeyField: key}).Decode(&doc); err != nil {
 		if errors.Is(err, mongoDrv.ErrNoDocuments) {
@@ -408,7 +436,8 @@ func (s *Store) byIdempotencyKey(ctx context.Context, key string) (map[string]an
 		}
 		return nil, err
 	}
-	return toDoc(doc), nil
+	stored, _ := doc[idempotencyFingerprintField].(string)
+	return &replayedTask{doc: toDoc(doc), storedFingerprint: stored}, nil
 }
 
 // insert writes a prepared document and renders it. Split out of Create so that

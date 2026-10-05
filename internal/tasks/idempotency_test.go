@@ -543,3 +543,80 @@ func TestIdempotencyKeyLimitBoundary(t *testing.T) {
 		t.Errorf("a key of %d bytes was accepted", IdempotencyKeyMax+1)
 	}
 }
+
+// The fingerprint must not appear in any rendered task. It is internal to the
+// idempotency mechanism, no client has a use for a digest of the body it just sent,
+// and it is the only one of these fields that says nothing about the task.
+func TestFingerprintIsNotExposedOnAnyTask(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupIdem(t, s, ctx)
+
+	created, _, err := s.CreateWithKey(ctx, "hidden", "d", "2026-10-05", "08:00",
+		intP(5), Repeat{}, boolP(false), "hide-key", "app", "fp-secret-digest")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, doc := range []map[string]any{
+		created,
+		mustGet(t, s, fmt.Sprint(created["id"])),
+	} {
+		if v, ok := doc[idempotencyFingerprintField]; ok {
+			t.Errorf("%s is exposed on a rendered task: %v", idempotencyFingerprintField, v)
+		}
+	}
+	// The key and source stay: both are documented as intentional, and the key is what
+	// lets a client correlate a retry without keeping its own log.
+	if _, ok := created[idempotencyKeyField]; !ok {
+		t.Errorf("%s was stripped too; it is documented as intentionally returned", idempotencyKeyField)
+	}
+	if created[sourceField] != "app" {
+		t.Errorf("%s = %v, want \"app\"", sourceField, created[sourceField])
+	}
+}
+
+// Stripping the fingerprint from responses must NOT disable the mismatch check.
+//
+// This is the regression that motivated reading the stored fingerprint from the raw
+// BSON: while byIdempotencyKey returned toDoc(doc) and CreateWithKey read the
+// fingerprint off that map, adding the strip above would have silently turned the
+// payload check off — every other test still green, because the replay tests never
+// asserted the 422 through a rendered document.
+//
+// So the check is asserted END TO END here, after the strip: a different body with the
+// same key must still be refused.
+func TestMismatchCheckSurvivesTheFingerprintBeingStripped(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupIdem(t, s, ctx)
+
+	if _, _, err := s.CreateWithKey(ctx, "first", "d", "2026-10-05", "08:00",
+		intP(5), Repeat{}, boolP(false), "survive-key", "app", "fp-one"); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	// Same key, different body. Must be refused even though the rendered task no
+	// longer carries the fingerprint.
+	_, replayed, err := s.CreateWithKey(ctx, "second", "d", "2026-10-05", "09:00",
+		intP(99), Repeat{}, boolP(false), "survive-key", "app", "fp-two")
+	if err == nil {
+		t.Fatal("a different body with the same key was accepted — the mismatch check " +
+			"is reading the fingerprint from a stripped document")
+	}
+	if replayed {
+		t.Error("replayed=true on a mismatch")
+	}
+	var se *StoreError
+	if !errors.As(err, &se) || !se.Mismatch {
+		t.Errorf("error = %v (%T), want a Mismatch StoreError", err, err)
+	}
+	// And the genuine retry still replays, so the check is discriminating rather than
+	// rejecting everything.
+	doc, replayed, err := s.CreateWithKey(ctx, "first", "d", "2026-10-05", "08:00",
+		intP(5), Repeat{}, boolP(false), "survive-key", "app", "fp-one")
+	if err != nil || !replayed {
+		t.Errorf("a genuine retry no longer replays: replayed=%v err=%v", replayed, err)
+	}
+	if doc != nil && doc["name"] != "first" {
+		t.Errorf("replay returned %v, want the original task", doc["name"])
+	}
+}
