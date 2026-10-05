@@ -580,3 +580,109 @@ func TestReconcileStillWorksWithRolledFromHidden(t *testing.T) {
 		}
 	}
 }
+
+// A type-drifted row can pass the reconciler's own "looks structured" filter and still
+// fail to classify as structured — and it is then a genuinely broken repeat that must
+// be REPORTED.
+//
+// Measured against Atlas rather than assumed, because the mechanism is not the obvious
+// one: a `repeat_every` stored as a string does NOT pass `$gt: 0`, since MongoDB
+// brackets comparison operators by BSON type. A `repeat_unit` stored as a NUMBER does
+// pass `$nin: ["", nil]` and then reads back as an empty string, so the row is selected,
+// classified as non-structured, and its repeat cannot be planned.
+//
+// This is the case that makes `continue` the wrong fix: skipping would omit a task that
+// really did stop recurring, which is the precise failure this job exists to prevent.
+func TestReconcileReportsATypeDriftedRepeat(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	drift := func(name string, extra map[string]any) {
+		doc := map[string]any{
+			"name": name, "description": "d",
+			"due_date": "2026-10-05", "due_time": "08:00",
+			"estimated_minutes": 5, "parallelable": false,
+			"completedAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+			"revision":    0,
+		}
+		for k, v := range extra {
+			doc[k] = v
+		}
+		if _, err := s.tasks.InsertOne(ctx, doc); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+	// Selected by the filter (unit is a number, so it is outside the ["", nil] string
+	// bracket) but unreadable as a unit, which is what strands the repeat. This is the
+	// case the guard exists for: the classifier calls it `custom`, and that advice is
+	// actively wrong, since the task has no rule text at all.
+	drift("Drifted unit", map[string]any{"repeat_every": 5, "repeat_unit": 7})
+	// Selected and NOT actually broken. `repeat_custom` as a string reads as false
+	// because ToBool is a strict type assertion, so the row is structurally fine and
+	// gets promoted to `failed` for having no successor — which is the right verdict.
+	// It is here because it must also be REPORTED rather than skipped: if `continue`
+	// ever comes back, a plain no-successor row goes missing too, and nothing else in
+	// the suite would notice.
+	drift("Drifted custom", map[string]any{
+		"repeat_every": 5, "repeat_unit": "days", "repeat_custom": "yes",
+	})
+
+	res, err := s.ReconcileRollover(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRollover: %v", err)
+	}
+	byName := map[string]RolloverGap{}
+	for _, g := range res.Gaps {
+		byName[g.Name] = g
+	}
+	for _, name := range []string{"Drifted unit", "Drifted custom"} {
+		g, ok := byName[name]
+		if !ok {
+			t.Errorf("%q was selected by the filter but NOT reported — a skipped row "+
+				"here is a task that silently stopped recurring", name)
+			continue
+		}
+		if g.Why == RolloverCustom {
+			t.Errorf("%q is reported as a custom repeat, but it has no rule text; the "+
+				"operator would be told to create an occurrence against a condition that "+
+				"does not exist", name)
+		}
+		if !g.Why.NeedsAttention() {
+			t.Errorf("%q: Why = %q, which NeedsAttention() excludes, so this broken "+
+				"repeat would not be flagged for anyone", name, g.Why)
+		}
+	}
+
+	// The drift case specifically must name the type as the actionable cause.
+	if g, ok := byName["Drifted unit"]; ok && !strings.Contains(g.Detail, "wrong type") {
+		t.Errorf("Drifted unit: Detail = %q, want it to name the type drift — that is "+
+			"the actionable part, and `custom` would send the operator after a condition "+
+			"the task does not have", g.Detail)
+	}
+}
+
+// And the direction that does NOT drift must not be caught by the new guard: a genuine
+// custom repeat is fine to complete, because the caller's job is not a gap.
+func TestReconcileStillIgnoresAGenuineCustomRepeat(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	// Selected by the filter only if repeat_custom != true; a genuine custom repeat has
+	// it true, so the filter excludes it. Asserted directly so a change to the filter
+	// that let custom rows through would be caught here rather than being silently
+	// rescued by the drift guard above.
+	n, err := s.tasks.CountDocuments(ctx, bson.M{
+		"completedAt":   bson.M{"$ne": nil, "$exists": true},
+		"repeat_every":  bson.M{"$gt": 0},
+		"repeat_unit":   bson.M{"$nin": bson.A{"", nil}},
+		"repeat_custom": bson.M{"$ne": true},
+	})
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("%d rows matched the reconciler filter in a clean fixture set", n)
+	}
+}
