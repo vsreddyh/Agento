@@ -19,6 +19,10 @@
     "project-manager": {
       "command": "/usr/local/bin/project-manager",
       "args": []
+    },
+    "notes": {
+      "command": "/usr/local/bin/notes",
+      "args": []
     }
   }
 }

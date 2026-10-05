@@ -106,7 +106,7 @@ Each profile is a directory under [`pi/profiles/`](pi/profiles) — god, story a
 
 ## Remote MongoDB & Storage Model
 
-Domain data for `money`, `health-check`, `cookbook`, `task-manager`, and `project-manager` is managed in MongoDB (default database: `hermes`, configurable via `MONGODB_DB`):
+Domain data for `money`, `health-check`, `cookbook`, `task-manager`, `project-manager`, and `notes` is managed in MongoDB (default database: `hermes`, configurable via `MONGODB_DB`):
 
 | Collection | Associated Bot | Schema / Keys |
 |---|---|---|
@@ -119,6 +119,7 @@ Domain data for `money`, `health-check`, `cookbook`, `task-manager`, and `projec
 | `cookbook_cook_log` | Cookbook | `recipe_id`, `date`, `cooking_note`, `aftertaste_note` — **permanent** |
 | `tasks` | Task-manager | `name`, `description`, `due_date`, `due_time`, `estimated_minutes`, `repeat_rule` (verbatim) — no status field; `completedAt` null = open, done tasks TTL 3d via `expiresAt` |
 | `projects` | Project-manager | `name`, `status` (Todo\|Ongoing\|Paused\|Done), `note`, `createdAt`, `updatedAt` — **permanent**, shared with the app's Projects tab |
+| `notes` | Notes | `title` (NOT unique — notes are addressed by id), `body` (markdown, one list item per line), `tags[]` (lowercased), `pinned` (bool), `createdAt`, `updatedAt` — **permanent**, shared across profiles |
 
 ### Database Helper CLI
 Bots and scripts interact with MongoDB using the `mongo` Go CLI (`cmd/mongo/main.go`). It is **not** in the pi image — no skill invokes it, and agents reach MongoDB through the MCP servers rather than a shell — so it is built by hand when an operator needs it:
@@ -142,6 +143,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `hc_days` | > 30 days | Pruned when `date < today - 30d` |
 | `hc_weight` | Permanent | **Never pruned** |
 | `cookbook_*` | Permanent | **Never pruned** |
+| `notes` | Permanent | **Never pruned** |
 | `story` / `resumes` | Git history | No database retention operations |
 
 Run manual dry-runs via:
