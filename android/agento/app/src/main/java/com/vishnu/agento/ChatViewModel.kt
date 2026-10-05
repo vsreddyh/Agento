@@ -360,7 +360,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val last = msgs.lastOrNull()
         val patched = if (wasStreaming && last?.role == "assistant") {
             if (last.content.isNotBlank() || last.reasoning.isNotBlank()) {
-                msgs.dropLast(1) + last.copy(interrupted = true)
+                msgs.dropLast(1) + last.copy(
+                    interrupted = true,
+                    interruptedBy = InterruptedBy.user,
+                )
             } else {
                 // Stopped before anything arrived: drop the empty
                 // placeholder so it never enters history or counts.
@@ -633,7 +636,31 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // so the queued send's doSend never "cancels" the
                         // just-finished collection it runs inside of.
                         streamJob = null
-                        flushQueued(gen)
+                        if (event.interrupted) {
+                            // A dropped stream does NOT auto-fire the queued send.
+                            //
+                            // The turn is a fragment: the reply is truncated and the
+                            // server-side turn may still be running with its tool calls
+                            // half done. Firing the next message straight on top of that
+                            // sends it against a context the agent never finished
+                            // building — the same class of mistake as #214 itself, where
+                            // the user resent into a turn that had not actually ended.
+                            // The Error path already parks queued text for exactly this
+                            // reason, and a drop is closer to a failure than to a
+                            // success, so it parks too.
+                            _state.value = _state.value.copy(
+                                pending = if (_state.value.queued.isNotBlank() &&
+                                    _state.value.pending.isBlank()
+                                ) {
+                                    _state.value.queued
+                                } else {
+                                    _state.value.pending
+                                },
+                                queued = "",
+                            )
+                        } else {
+                            flushQueued(gen)
+                        }
                     }
                     is ChatEvent.Error -> {
                         // Terminal (see streamChat): nothing follows. Keep any
@@ -709,6 +736,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             model = model.trim(),
             reasoning = reasoning,
             interrupted = interrupted,
+            // Derived rather than passed: a Done that is interrupted is interrupted
+            // BY A DROP, and the only other way a message ends up flagged is the
+            // user pressing stop, which sets its own copy() directly. Passing this in
+            // as a second parameter would be a second place to keep in step with the
+            // flag — the rule written twice, which is how the two producers of
+            // `interrupted` drifted apart in the first place.
+            interruptedBy = if (interrupted) InterruptedBy.drop else InterruptedBy.user,
         )
     }
 

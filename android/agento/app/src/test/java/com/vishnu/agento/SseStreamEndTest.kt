@@ -185,3 +185,55 @@ class SseStreamEndTest {
         assertEquals(SseEnd.Terminal, r.end)
     }
 }
+
+/**
+ * The call-site mapping — the line #214 was actually broken at.
+ *
+ * `SseStreamEndTest` above locks `readSseStream`, which was never the bug: it correctly
+ * distinguished `EndOfStream` from `Terminal`, and the producer then emitted an
+ * unqualified `ChatEvent.Done` and dropped the distinction on the floor. A suite that
+ * tests only the parser looks thorough and leaves the real defect uncovered, which is
+ * how the original shipped.
+ */
+class DoneMappingTest {
+
+    private val usage = TokenUsage(prompt = 10, completion = 5, total = 15)
+
+    @Test
+    fun `end of stream maps to an interrupted Done`() {
+        val e = doneFor(SseEnd.EndOfStream, "partial", usage) as ChatEvent.Done
+        assertTrue("a dropped stream must not report a finished turn", e.interrupted)
+    }
+
+    @Test
+    fun `terminal maps to a non-interrupted Done`() {
+        val e = doneFor(SseEnd.Terminal, "complete", usage) as ChatEvent.Done
+        assertTrue("a finished turn must not be flagged interrupted", !e.interrupted)
+    }
+
+    @Test
+    fun `the text and usage survive the mapping`() {
+        // The flag must not cost the user anything: the partial reply and the reported
+        // counts are still real, and dropping them here would discard the turn.
+        val e = doneFor(SseEnd.EndOfStream, "partial", usage) as ChatEvent.Done
+        assertEquals("partial", e.fullText)
+        assertEquals(usage, e.usage)
+    }
+
+    @Test
+    fun `an error frame has no Done mapping`() {
+        // It yields ChatEvent.Error at the call site instead, so reaching doneFor with
+        // one is a programming error rather than something to paper over.
+        val threw = runCatching { doneFor(SseEnd.ErrorFrame("boom"), "", null) }
+        assertTrue("an error frame must not be mappable to Done", threw.isFailure)
+    }
+
+    @Test
+    fun `the two ends print as names, not identity hashes`() {
+        // data object, so a log line or an assertion failure reads
+        // `expected:<EndOfStream> but was:<Terminal>` instead of two @1a2b3c values —
+        // which is what made the first CI failure of this PR hard to read.
+        assertEquals("Terminal", SseEnd.Terminal.toString())
+        assertEquals("EndOfStream", SseEnd.EndOfStream.toString())
+    }
+}

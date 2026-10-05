@@ -59,6 +59,11 @@ see GitHub Releases for older notes.
   affordance were already there, only the producer never set it.
   The partial text is still kept: it is real output, and discarding it would
   throw away something the user can see.
+  The label says *Connection lost* rather than *Stopped*, because a boolean
+  cannot tell a user-initiated stop from a dropped stream and "Stopped" blames
+  the user for a failure they did not cause. Queued text is handed back to the
+  composer instead of auto-firing: a dropped turn is a fragment, and the
+  server-side turn may still be running with its tool calls half done.
 
 ## [4.14.3]
 

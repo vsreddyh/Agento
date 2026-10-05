@@ -43,7 +43,27 @@ data class ChatMessage(
     val reasoning: String = "",
     /** True when streaming stopped mid-reply (explicit stopped state). */
     val interrupted: Boolean = false,
+    /**
+     * WHY it was interrupted — [InterruptedBy.user] when the user pressed stop, or
+     * [InterruptedBy.drop] when the connection died mid-turn (#214).
+     *
+     * A boolean cannot carry this. It has two producers and they mean opposite things to
+     * the reader: "Stopped" blames the user for a network failure, so the one label that
+     * serves both is wrong for at least one of them. Defaulting to [InterruptedBy.user]
+     * is right for every message recorded before #214 existed, because a user stop was
+     * then the only thing that could set the flag.
+     */
+    val interruptedBy: InterruptedBy = InterruptedBy.user,
 )
+
+/** What ended a reply before it finished. */
+enum class InterruptedBy {
+    /** The user pressed stop. Nothing went wrong. */
+    user,
+
+    /** The connection dropped mid-turn (#214). The server-side turn may still be running. */
+    drop,
+}
 
 sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
@@ -525,12 +545,7 @@ class ChatApi(context: Context) {
                             return@launch
                         }
                         // Terminal and Eof both end the read; only the flag differs.
-                        else -> trySend(
-                            ChatEvent.Done(
-                                full.toString(), seenUsage,
-                                interrupted = end is SseEnd.EndOfStream,
-                            ),
-                        )
+                        else -> trySend(doneFor(end, full.toString(), seenUsage))
                     }
                 }
             } catch (e: Exception) {
@@ -547,6 +562,25 @@ class ChatApi(context: Context) {
 }
 
 /**
+ * Maps how a stream ended onto the terminal event the consumer sees.
+ *
+ * Extracted because this ONE expression is the line #214 was broken at: `readSseStream`
+ * returning `EndOfStream` was correct, and the producer then emitted an unqualified
+ * `Done` and dropped the distinction on the floor. Tests that only exercise
+ * `readSseStream` lock the parser and leave this untested — which is how the original bug
+ * shipped with a thorough-looking suite beside it.
+ *
+ * `ErrorFrame` deliberately has no mapping: it produces `ChatEvent.Error` at the call
+ * site, because an error frame is terminal by contract and no `Done` follows it.
+ */
+internal fun doneFor(end: SseEnd, text: String, usage: TokenUsage?): ChatEvent = when (end) {
+    is SseEnd.ErrorFrame ->
+        throw IllegalArgumentException("an error frame yields ChatEvent.Error, not Done")
+    SseEnd.Terminal -> ChatEvent.Done(text, usage, interrupted = false)
+    SseEnd.EndOfStream -> ChatEvent.Done(text, usage, interrupted = true)
+}
+
+/**
  * How an SSE body ended.
  *
  * The distinction is the fix for #214 and it cannot be inferred by the caller: both
@@ -556,9 +590,9 @@ class ChatApi(context: Context) {
  */
 internal sealed interface SseEnd {
     /** The stream sent `[DONE]`. The turn finished. */
-    object Terminal : SseEnd
+    data object Terminal : SseEnd
     /** EOF with no `[DONE]`. The connection dropped mid-turn. */
-    object EndOfStream : SseEnd
+    data object EndOfStream : SseEnd
     /**
      * A gateway `{"error": "..."}` frame. Terminal by contract — no `Done` follows,
      * the same contract as the HTTP-error path.
