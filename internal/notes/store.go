@@ -93,6 +93,8 @@ func trunc(s string, n int) string {
 	return s[:cut]
 }
 
+// cleanTags lowercases, trims, caps each tag's length and the number of tags. Like
+// trunc, it is a silent helper — so callers report what it dropped via truncated.
 func cleanTags(tags []string) []string {
 	out := make([]string, 0, len(tags))
 	for _, t := range tags {
@@ -106,6 +108,30 @@ func cleanTags(tags []string) []string {
 		}
 	}
 	return out
+}
+
+// tagsDropped reports whether cleanTags had to cut or discard anything, so a
+// caller can say so instead of silently storing 19 of the 25 tags it was given.
+//
+// Blank tags are NOT counted as dropped: cleaning `" "` away is sanitation, and
+// reporting it as truncation would train the caller to ignore the flag. Only the
+// two lossy caps count — a tag longer than maxTagLen, and tags past maxTags.
+func tagsDropped(tags []string) bool {
+	kept := 0
+	for _, t := range tags {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "" {
+			continue
+		}
+		if len(t) > maxTagLen {
+			return true
+		}
+		kept++
+		if kept > maxTags {
+			return true
+		}
+	}
+	return false
 }
 
 // Store binds the notes collection + indexes on first use.
@@ -165,6 +191,7 @@ func (s *Store) AddNote(ctx context.Context, title, body string, tags []string, 
 	out["truncated"] = map[string]any{
 		"title": truncated(title, maxTitle),
 		"body":  truncated(body, maxBody),
+		"tags":  tagsDropped(tags),
 	}
 	return out, nil
 }
@@ -351,11 +378,21 @@ func (s *Store) UpdateNote(ctx context.Context, id string, patch map[string]any)
 		out["truncated"] = map[string]any{"title": truncated(v, maxTitle)}
 	}
 	if v, ok := patch["body"].(string); ok {
-		if t, _ := out["truncated"].(map[string]any); t != nil {
-			t["body"] = truncated(v, maxBody)
-		} else {
-			out["truncated"] = map[string]any{"body": truncated(v, maxBody)}
+		t := map[string]any{"body": truncated(v, maxBody)}
+		if prev, _ := out["truncated"].(map[string]any); prev != nil {
+			for k, val := range prev {
+				t[k] = val
+			}
 		}
+		out["truncated"] = t
+	}
+	if v, ok := patch["tags"].([]string); ok {
+		t, _ := out["truncated"].(map[string]any)
+		if t == nil {
+			t = map[string]any{}
+		}
+		t["tags"] = tagsDropped(v)
+		out["truncated"] = t
 	}
 	return out, nil
 }

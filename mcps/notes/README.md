@@ -25,10 +25,10 @@ these are not guessable from the argument names.
 Notes are addressed by **id only**. Titles are not unique, so a title does not
 resolve and the store refuses to pick a winner.
 
-`search_notes` matches with an unindexed `$regex` (correctly `QuoteMeta`d) over title
-and body. That is a collection scan — irrelevant at the size this runs at, and the
-first thing to change if notes ever grows into thousands of rows, which is what an
-Atlas text index would be for.
+`search_notes` matches with an unindexed `$regex` (correctly `QuoteMeta`d) over
+title, body and tags. That is a collection scan — irrelevant at the size this runs
+at, and the first thing to change if notes ever grows into thousands of rows, which
+is what an Atlas text index would be for.
 
 - `search_notes` matches title, body **and tags**, so a word the user remembers
   finds the note even when it is only a tag. Tags are lowercased on write and the
@@ -38,8 +38,9 @@ Atlas text index would be for.
   `docOut`, a Go caller asserting `.([]string)` passes on the create response and
   panics on the get.
 - Over-cap input is still stored, but the response carries `truncated: {title,
-  body}` naming which fields lost bytes. A 25 KB paste stored as 20 KB and
-  answered `ok:true` is data loss reported as success.
+  body, tags}` naming which fields lost bytes. A 25 KB paste stored as 20 KB and
+  answered `ok:true` is data loss reported as success. Blank tags are sanitation and
+  do not set the flag; the two lossy tag caps (length, count) do.
 
 Four behaviours worth knowing before calling anything:
 

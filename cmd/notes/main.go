@@ -143,7 +143,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "search_notes",
-		Description: "Substring search over note titles, bodies AND tags, returning full notes. Use when the user names a thing ('milk') without saying which note holds it. Over-cap input is stored truncated and reported in `truncated`."},
+		Description: "Substring search over note titles, bodies AND tags, returning full notes. Use when the user names a thing ('milk') without saying which note holds it. Returns full bodies, so limit is capped at 50 — narrow the query rather than asking for more."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchNotesInput) (*mcp.CallToolResult, map[string]any, error) {
 			limit := in.Limit
 			if limit == 0 {

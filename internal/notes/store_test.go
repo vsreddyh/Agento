@@ -2,6 +2,7 @@ package notes
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -377,8 +378,52 @@ func TestOverCapInputIsStoredAndReported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add short: %v", err)
 	}
-	if tr, _ := small["truncated"].(map[string]any); tr["body"] != false {
-		t.Errorf("a short body reported truncated: %v", tr)
+	if tr, _ := small["truncated"].(map[string]any); tr["body"] != false || tr["tags"] != false {
+		t.Errorf("a short note reported truncation: %v", tr)
 	}
 	_, _ = s.DeleteNote(ctx, small["_id"].(string))
+}
+
+// A cap that silently discards input is the same defect whichever field it hits.
+// Tags are the field most likely to be over-supplied (an agent enumerating a
+// vocabulary), so their caps report like title and body rather than vanishing.
+func TestTagCapsAreReported(t *testing.T) {
+	long := strings.Repeat("x", maxTagLen+10)
+	many := make([]string, maxTags+5)
+	for i := range many {
+		many[i] = fmt.Sprintf("t%02d", i)
+	}
+
+	for _, tc := range []struct {
+		name string
+		tags []string
+		want bool
+	}{
+		{"none dropped", []string{"shopping", "errands"}, false},
+		{"blank is sanitation not truncation", []string{"  ", "shopping"}, false},
+		{"one tag over the length cap", []string{long}, true},
+		{"more tags than the count cap", many, true},
+	} {
+		if got := tagsDropped(tc.tags); got != tc.want {
+			t.Errorf("%s: tagsDropped = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	// And the flag reaches the caller, not just the helper.
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cleanup(t, s, ctx)
+
+	kept, err := s.AddNote(ctx, "gotest capped tags", "- x", many, false)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	defer func() { _, _ = s.DeleteNote(ctx, kept["_id"].(string)) }()
+	if tr, _ := kept["truncated"].(map[string]any); tr["tags"] != true {
+		t.Errorf("truncated.tags = %v, want true", tr["tags"])
+	}
+	if got := len(kept["tags"].([]string)); got != maxTags {
+		t.Errorf("stored %d tags, want the cap %d", got, maxTags)
+	}
 }

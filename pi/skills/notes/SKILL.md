@@ -55,9 +55,9 @@ Two consequences the tool descriptions cannot enforce for you:
 
 - `list_notes` returns summaries **without** bodies. To read or edit a list,
   `get_note` first.
-- A very long title or body is stored truncated and the response says so in
-  `truncated`. If that comes back, tell the user the tail was cut — do not
-  report the whole thing was saved.
+- A very long title or body, or too many/too-long tags, is stored truncated and
+  the response says so in `truncated`. If that comes back, tell the user the tail
+  was cut — do not report the whole thing was saved.
 - `update_note` **replaces** the body. Adding one item means `get_note`, append
   the line, and send the whole body back. Sending a partial body silently deletes
   every line you left out. Never reconstruct a body from a `list_notes` summary —
