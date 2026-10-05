@@ -23,9 +23,14 @@ class TaskPresentationTest {
 
     @Test
     fun `relative days read as words`() {
+        // 2026-08-08 is a Saturday, so +2 days is Monday. The weekday is also
+        // asserted against the real calendar, so a wrong expectation is
+        // distinguishable from a wrong test fixture.
         assertEquals("Today, 09:00", friendlyDue(today.toString(), "09:00", today))
         assertEquals("Tomorrow, 09:00", friendlyDue(today.plusDays(1).toString(), "09:00", today))
-        assertEquals("Sunday, 09:00", friendlyDue(today.plusDays(2).toString(), "09:00", today))
+        assertEquals("Monday, 09:00", friendlyDue(today.plusDays(2).toString(), "09:00", today))
+        assertEquals("Monday", today.plusDays(2).dayOfWeek
+            .getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.ENGLISH))
     }
 
     @Test
