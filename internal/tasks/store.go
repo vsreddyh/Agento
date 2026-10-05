@@ -154,6 +154,46 @@ func checkDue(dueDate, dueTime string) error {
 	return nil
 }
 
+// isSkipped is the ONE rule for "was this occurrence skipped, rather than done?".
+//
+// It used to be written twice with different rules: toDoc derived the `skipped` boolean
+// from `skippedAt != nil`, while resolvedStateErr required a primitive.DateTime whose
+// value was non-zero. Those disagree on any row where the field is present but is not a
+// real timestamp — a zero DateTime, or a value of some other type — so such a task would
+// be REPORTED as skipped in every response and simultaneously produce "already
+// completed" when you tried to skip or complete it again. A row like that cannot be
+// written through the API, which is exactly why the divergence survived: both halves
+// were individually reasonable and neither was ever compared against the other.
+//
+// The stricter rule wins on purpose. A zero DateTime is the epoch, not a moment someone
+// decided to skip something, so crediting the occurrence with that decision would be
+// inventing it.
+func isSkipped(doc map[string]any) bool {
+	// Accepts BOTH representations, and it has to: the raw BSON doc holds a
+	// primitive.DateTime, while toDoc renders dates to an ISO string for the API. So a
+	// caller holding a rendered task and a caller holding a stored one see the same
+	// field as different Go types.
+	//
+	// This is why the check cannot simply be "assert primitive.DateTime and compare to
+	// zero", which is what the divergence was originally resolved to. That version is
+	// correct for the stored doc and SILENTLY WRONG for the rendered one: every response
+	// would carry `skipped: false` even for a genuinely skipped occurrence, and nothing
+	// would fail — no compile error, no test touching a raw doc. A client filtering on
+	// `skipped` would quietly see no skips at all.
+	//
+	// The empty string is Reopen's own clearing value (`skippedAt: ""`), so it must read
+	// as NOT skipped, exactly as a cleared DateTime must.
+	switch v := doc["skippedAt"].(type) {
+	case primitive.DateTime:
+		return v != 0
+	case string:
+		return v != ""
+	default:
+		// Absent, nil, or a type that is neither: not a skip this code wrote.
+		return false
+	}
+}
+
 func toDoc(doc bson.M) map[string]any {
 	out := map[string]any{}
 	for k, v := range doc {
@@ -202,11 +242,7 @@ func toDoc(doc bson.M) map[string]any {
 	// reading only completedAt would report work that never happened as finished.
 	// Deriving it here means every response shape carries it, including ones an old
 	// client already parses: it ignores a key it does not know.
-	if out["skippedAt"] != nil {
-		out["skipped"] = true
-	} else {
-		out["skipped"] = false
-	}
+	out["skipped"] = isSkipped(out)
 	// Backfill keys that pre-mandatory docs lack, so every response
 	// speaks the same contract (readers default the same way).
 	// due_time "" is the "created before times were required" sentinel:
@@ -869,7 +905,7 @@ func (s *Store) stateOnMiss(ctx context.Context, oid primitive.ObjectID, id stri
 // Kept as one function rather than a check copied into each miss path: a rule written
 // twice is a rule that will be updated once.
 func resolvedStateErr(doc bson.M, id string) *StoreError {
-	if at, ok := doc["skippedAt"].(primitive.DateTime); ok && at != 0 {
+	if isSkipped(doc) {
 		return fail("task '%s' is already skipped, not done — reopen_task returns it to "+
 			"the open list if you now mean to do it", id)
 	}
