@@ -2,7 +2,9 @@ package com.vishnu.agento
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Before
@@ -296,21 +298,30 @@ class ContractWarningsTest {
     @Test
     fun `two back-to-back identical reports both reach a collector`() = runBlocking {
         val seen = mutableListOf<List<String>>()
+        val started = CompletableDeferred<Unit>()
         val job = launch(Dispatchers.Unconfined) {
+            // Signal that the collector is SUBSCRIBED before any report, so the test
+            // cannot pass or fail depending on whether collection happened to start first.
+            started.complete(Unit)
             ContractWarnings.mismatched.collect { m -> if (m != null) seen += m.fields }
         }
         try {
+            started.await()
             ContractWarnings.report(listOf("due_time"))
             ContractWarnings.report(listOf("due_time"))
+            // Let the collector drain before reading. `Dispatchers.Unconfined` delivers
+            // synchronously, but relying on that is the flake: cancelling immediately
+            // after the second report could win the race and leave `seen` short.
+            yield()
+            assertEquals(
+                "the second identical report was conflated away — StateFlow suppresses an " +
+                    "EQUAL value, so the payload must carry the generation to differ",
+                listOf(listOf("due_time"), listOf("due_time")),
+                seen,
+            )
         } finally {
             job.cancel()
         }
-        assertEquals(
-            "the second identical report was conflated away — StateFlow suppresses an " +
-                "EQUAL value, so the payload must carry the generation to differ",
-            listOf(listOf("due_time"), listOf("due_time")),
-            seen,
-        )
     }
 
     @Test

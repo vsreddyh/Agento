@@ -379,11 +379,11 @@ class TasksApi(context: Context) {
             .put("description", sent.description)
             .put("due_date", sent.dueDate)
             .put("due_time", sent.dueTime)
-            .put("estimated_minutes", estimatedMinutes)
-            .put("parallelable", parallelable)
-            .put("repeat_every", repeatEvery)
+            .put("estimated_minutes", sent.estimatedMinutes)
+            .put("parallelable", sent.parallelable)
+            .put("repeat_every", sent.repeatEvery)
             .put("repeat_unit", sent.repeatUnit)
-            .put("repeat_custom", repeatCustom)
+            .put("repeat_custom", sent.repeatCustom)
             .put("repeat_rule", sent.repeatRule)
         call("POST", "/api/tasks", body).map { parseOne(it) }
             .also { r -> r.getOrNull()?.let { checkContract(it, sent) } }
