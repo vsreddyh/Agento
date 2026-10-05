@@ -234,6 +234,16 @@ type RolloverGap struct {
 	TaskID string
 	Name   string
 	Why    Rollover
+	// Detail is WHY, in the words of the check that refused — "cannot roll over:
+	// due_time is required (HH:MM)". Empty when there is nothing specific to say.
+	//
+	// This was being thrown away. rolloverPlan returns a third value carrying exactly
+	// the field that is wrong, and the reconciler discarded it with `_`, so the nightly
+	// line read "FAILED" and left a human to go and find out which field. The whole
+	// premise of this job is that a repeat stopped for a fixable reason and a person
+	// has to go fix it; a generic reason makes them dig for the one thing the report
+	// already knew.
+	Detail string
 }
 
 // ReconcileRollover finds completed STRUCTURED repeats that never produced a
@@ -352,7 +362,11 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 		// The old heuristic here only knew about a blank due_time and called
 		// everything else `exhausted`, which is the wrong remedy for an unparseable
 		// date, a MaxRollovers ceiling or untyped fields.
-		_, why, _ := rolloverPlan(map[string]any(d), now)
+		_, why, planErr := rolloverPlan(map[string]any(d), now)
+		detail := ""
+		if planErr != nil {
+			detail = planErr.Error()
+		}
 		if why == RolloverCreated {
 			// The plan says it should have rolled and it did not — a write that
 			// failed after planning, or a back-link that never landed. Name it
@@ -362,6 +376,7 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 		name, _ := d["name"].(string)
 		gaps = append(gaps, RolloverGap{
 			TaskID: id.Hex(),
+			Detail: detail,
 			Name:   name,
 			Why:    why,
 		})
