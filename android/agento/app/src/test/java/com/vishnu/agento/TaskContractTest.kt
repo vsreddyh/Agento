@@ -278,40 +278,51 @@ class ContractWarningsTest {
     }
 
     /**
-     * Two reports of the SAME fields must both reach a real collector.
+     * Two back-to-back reports of the SAME fields must both reach a real collector.
      *
-     * This is stronger than "the stored values differ", which is what the generation
-     * test above checks. `StateFlow` is distinct-until-changed: it conflates any value
-     * equal to the current one, so if the payload were a bare `List<String>` then
-     * `report([X])` twice would set an equal value the second time and the collector
-     * would NEVER WAKE — the second failure silently lost, with no state change
-     * anywhere to notice.
+     * **No `consume` between them** — that is the whole point, and the previous version of
+     * this test got it wrong. It did `report -> consume -> report`, so the second report
+     * set against `null` rather than against `[X]`, and passed even with the buggy bare
+     * `List<String>` payload it was written to guard. It asserted a thing that was never
+     * at risk.
      *
-     * Carrying the generation makes the payload differ on every report, so the test that
-     * matters is whether a live collector is actually invoked twice. Asserting on the
-     * stored value would have passed against the buggy version, because the stored value
-     * would look right while nothing was ever shown.
+     * The real failure is `StateFlow`'s distinct-until-changed: with a bare list,
+     * `report([X])` twice sets an EQUAL value the second time, the flow conflates it, and
+     * the collector never wakes. Nothing in the state changes to notice — the stored value
+     * looks exactly right while the user is never told.
+     *
+     * So: report twice, assert the collector was invoked twice, and only then consume.
      */
     @Test
-    fun `two identical reports both reach a collector`() = runBlocking {
+    fun `two back-to-back identical reports both reach a collector`() = runBlocking {
         val seen = mutableListOf<List<String>>()
         val job = launch(Dispatchers.Unconfined) {
             ContractWarnings.mismatched.collect { m -> if (m != null) seen += m.fields }
         }
         try {
             ContractWarnings.report(listOf("due_time"))
-            ContractWarnings.consume(ContractWarnings.generation)
             ContractWarnings.report(listOf("due_time"))
-            ContractWarnings.consume(ContractWarnings.generation)
         } finally {
             job.cancel()
         }
         assertEquals(
-            "the second identical warning never reached the collector — StateFlow " +
-                "conflated it because the payload was equal to the current value",
+            "the second identical report was conflated away — StateFlow suppresses an " +
+                "EQUAL value, so the payload must carry the generation to differ",
             listOf(listOf("due_time"), listOf("due_time")),
             seen,
         )
+    }
+
+    @Test
+    fun `consume between reports does not hide a second emission`() {
+        // The previous shape, kept as its own assertion: the consume path is a separate
+        // mechanism from the conflation path and both need to work.
+        reset()
+        ContractWarnings.report(listOf("due_time"))
+        ContractWarnings.consume(ContractWarnings.generation)
+        assertEquals(null, ContractWarnings.mismatched.value)
+        ContractWarnings.report(listOf("due_time"))
+        assertEquals(listOf("due_time"), ContractWarnings.mismatched.value?.fields)
     }
 
     @Test

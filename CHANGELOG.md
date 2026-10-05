@@ -46,12 +46,14 @@ see GitHub Releases for older notes.
   so what is asserted is literally the same code that builds what is sent.
   `description` is asserted too, and every string is trimmed at the send site so
   the app sends exactly what it asserts. The warning reaches the user as a
-  snackbar naming the fields; it is a `StateFlow` so the IO-thread write and the
-  main-thread read are ordered correctly, and so there is exactly one obvious
-  collector. Each mismatch carries a generation, so clearing one warning cannot
-  eat a second one that arrived while the snackbar was still up — including a
-  second warning about the same fields, which is what happens against one broken
-  server.
+  snackbar naming the fields, shown long enough to read them — this is a
+  warning to act on, not a confirmation. It is a `StateFlow` so the IO-thread
+  write and the main-thread read are ordered correctly, and so there is exactly
+  one obvious collector. Each mismatch carries a generation, so clearing one
+  warning cannot eat a second one that arrived while the snackbar was still up —
+  including a second warning about the same fields, which is what happens
+  against one broken server. The list is refreshed alongside the warning, so the
+  instruction to resync actually resyncs.
 
 ## [4.14.3]
 
