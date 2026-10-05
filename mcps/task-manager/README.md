@@ -115,16 +115,22 @@ use per distinct request, and this matters more than it looks: answering `200` w
 the original task would tell the caller it had created a task carrying the fields it
 just sent, when the task it receives has none of them. A silent wrong answer is worse
 than the duplicate the key exists to prevent. The mismatch is detected by a digest of
-the **ten** fields the create reads, written in the same insert as the key — so a
-retry that differs only in JSON key order or indentation still replays, and adding an
-unrelated field to a newer client does not break an existing key.
+**every field the create reads** (`taskCreateFields` in the source), written in the
+same insert as the key — so a retry that differs only in JSON key order or indentation
+still replays, and adding an unrelated field to a newer client does not break an
+existing key.
 
-The digest covers all ten, not the nine it started as: `repeat_rule` is consumed,
-validated and **stored**, and omitting it from the digest meant two creates differing
-only in their custom repeat text ("3rd Friday" vs "end of month") hashed alike, so
-the second replayed the first's task. An absent key is normalised to its zero value
-rather than skipped — the store reads absent and zero identically, so a client that
-upgrades to sending `"repeat_rule": ""` must not 422 its own retry.
+No count is given here on purpose. The list is enumerated in one place in the code, and
+a number in prose is a second place to fall behind — `repeat_rule` was once missing
+from the digest because it is consumed, validated and **stored**, so two creates
+differing only in their custom repeat text ("3rd Friday" vs "end of month") hashed
+alike and the second replayed the first's task. The prose said "nine" while the code
+had ten, and would have said "ten" the next time a field was added. A test now walks
+the list and fails if any field is left out of the digest.
+
+An absent key is normalised to its zero value rather than skipped — the store reads
+absent and zero identically, so a client that upgrades to sending `"repeat_rule": ""`
+must not 422 its own retry.
 
 `idempotency_key` and `source` are returned on every task, deliberately: the key is
 client-generated rather than secret, and echoing it is what lets a client correlate a
