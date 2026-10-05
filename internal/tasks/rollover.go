@@ -427,6 +427,12 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 			detail = planErr.Error()
 		}
 		if why == RolloverCreated {
+			// This is the one gap that is a STORAGE fault rather than bad data, and it was
+			// reporting with the least information of any: the plan succeeded, so planErr
+			// was nil and Detail came back empty. Naming what should exist turns "FAILED"
+			// into something a human can go and look for.
+			detail = "planned the next occurrence (" + planned + ") but no successor " +
+				"was found — the write or the back-link did not land"
 			// The plan says it should have rolled and it did not — a write that
 			// failed after planning, or a back-link that never landed. Name it
 			// as a failure rather than reporting a gap with no explanation.
