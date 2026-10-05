@@ -2,6 +2,9 @@ package com.vishnu.agento
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
 /**
@@ -275,6 +278,44 @@ class ContractWarningsTest {
             "the second identical warning was wiped by the first one's cleanup",
             listOf("due_time"),
             ContractWarnings.mismatched.value?.fields,
+        )
+    }
+
+    /**
+     * Two reports of the SAME fields must both reach a real collector.
+     *
+     * This is stronger than "the stored values differ", which is what the generation
+     * test above checks. `StateFlow` is distinct-until-changed: it conflates any value
+     * equal to the current one, so if the payload were a bare `List<String>` then
+     * `report([X])` twice would set an equal value the second time and the collector
+     * would NEVER WAKE — the second failure silently lost, with no state change
+     * anywhere to notice.
+     *
+     * Carrying the generation makes the payload differ on every report, so the test that
+     * matters is whether a live collector is actually invoked twice. Asserting on the
+     * stored value would have passed against the buggy version, because the stored value
+     * would look right while nothing was ever shown.
+     */
+    @Test
+    fun `two identical reports both reach a collector`() = runBlocking {
+        reset()
+        val seen = mutableListOf<List<String>>()
+        val job = launch(Dispatchers.Unconfined) {
+            ContractWarnings.mismatched.collect { m -> if (m != null) seen += m.fields }
+        }
+        try {
+            ContractWarnings.report(listOf("due_time"))
+            ContractWarnings.consume(ContractWarnings.generation)
+            ContractWarnings.report(listOf("due_time"))
+            ContractWarnings.consume(ContractWarnings.generation)
+        } finally {
+            job.cancel()
+        }
+        assertEquals(
+            "the second identical warning never reached the collector — StateFlow " +
+                "conflated it because the payload was equal to the current value",
+            listOf(listOf("due_time"), listOf("due_time")),
+            seen,
         )
     }
 
