@@ -132,7 +132,17 @@ func rolloverPlan(done map[string]any, now time.Time) (string, Rollover, error) 
 	// The stored shape has to be carryable before a successor is even possible.
 	// These are the checks rollOver used to make inline, and they are checks on the
 	// PLAN, not on Create's behaviour — so the reconciler sees the same verdict.
-	if dueTime, _ := done["due_time"].(string); strings.TrimSpace(dueTime) == "" {
+	// Asserted like its three siblings below. This one discarded the assertion and
+	// collapsed a mistyped due_time into "", so a due_time stored as a number was
+	// reported as "is required" — telling the operator to fill in a field that is
+	// already there, under the wrong type. Same defect as the due_date check two
+	// blocks down, and for the same reason: four checks written as four separate
+	// statements, three of which happened to check the assertion.
+	dueTime, ok := done["due_time"].(string)
+	if !ok {
+		return "", RolloverFailed, fail("cannot roll over: due_time is not a string")
+	}
+	if strings.TrimSpace(dueTime) == "" {
 		// The exact shape of the legacy rows that stopped recurring: a structured
 		// repeat with no time to carry forward. Create would reject it, but the
 		// reason belongs to the recurrence, not to the create.

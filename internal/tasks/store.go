@@ -876,6 +876,10 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 		return nil, nil, "", "", err
 	}
 	if res.MatchedCount == 0 {
+		// HEAD wins: stateOnMiss/resolvedStateErr (#209) name the task's ACTUAL state,
+		// where the incoming side is the older inline version that only knew "already
+		// completed" — the same defect #209 fixed. Returns widened to CompleteDetail's
+		// five values.
 		doc, serr := s.stateOnMiss(ctx, oid, id)
 		if serr != nil {
 			return nil, nil, "", "", serr

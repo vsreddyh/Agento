@@ -1030,3 +1030,37 @@ func TestAttentionHandlesBothHalvesMissing(t *testing.T) {
 		t.Errorf("got %q, want empty when there is nothing to say", got)
 	}
 }
+
+// `due_time` is asserted like its three siblings. It used to discard the type assertion
+// and collapse a mistyped value into "", so a due_time stored as a number was reported
+// as "is required" — telling the operator to fill in a field that is already there,
+// under the wrong type. Four checks written as four statements, three of which happened
+// to check the assertion.
+func TestDueTimeMistypedIsNotReportedAsMissing(t *testing.T) {
+	base := func(m map[string]any) map[string]any {
+		d := map[string]any{
+			"due_date": "2026-10-05", "due_time": "08:00",
+			"repeat_every": 1, "repeat_unit": "days",
+		}
+		for k, v := range m {
+			d[k] = v
+		}
+		return d
+	}
+	_, reason, err := rolloverPlan(base(map[string]any{"due_time": 900}), time.Now())
+	if reason != RolloverFailed {
+		t.Fatalf("reason = %q, want %q", reason, RolloverFailed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "not a string") {
+		t.Fatalf("err = %v, want it to name the wrong TYPE", err)
+	}
+	// The genuine missing-value case must keep its own distinct message, or fixing the
+	// type check would have swallowed it.
+	_, reason, err = rolloverPlan(base(map[string]any{"due_time": "  "}), time.Now())
+	if reason != RolloverFailed {
+		t.Fatalf("reason = %q, want %q", reason, RolloverFailed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "is required") {
+		t.Errorf("err = %v, want the missing-value message preserved", err)
+	}
+}
