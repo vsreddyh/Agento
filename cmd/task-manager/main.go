@@ -135,6 +135,15 @@ type reopenTaskInput struct {
 	ID string `json:"id"`
 }
 
+type skipTaskInput struct {
+	ID string `json:"id"`
+	// The user's own words for skipping this occurrence, kept verbatim and capped.
+	// Optional — the action is unambiguous without it — but it is the difference
+	// between a skip and a quiet disappearance, so pass it when the user gave a
+	// reason ("out of time", "doing it tomorrow").
+	Reason string `json:"reason,omitempty"`
+}
+
 type deleteTaskInput struct {
 	ID string `json:"id"`
 }
@@ -268,8 +277,34 @@ func main() {
 			return result(out)
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "skip_task",
+		Description: "Skip ONE occurrence of a task — for 'not doing this tonight', 'out of time', 'doing it tomorrow'. Use this instead of complete_task whenever the work did NOT happen: complete_task records it as DONE, which is a false record, and completed rows are auto-deleted after 3 days so a false one is erased rather than corrected. A STRUCTURED repeat still rolls over (the habit continues); a CUSTOM one is yours, same contract as complete_task. Leaves the task out of the open list either way, so the user is not asked again tonight."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in skipTaskInput) (*mcp.CallToolResult, map[string]any, error) {
+			doc, next, rollover, err := store.Skip(ctx, in.ID, in.Reason)
+			if err != nil {
+				return fail(err)
+			}
+			out := map[string]any{"ok": true, "task": doc, "skipped": true}
+			out["rollover"] = string(rollover)
+			rep := repeatOf(doc)
+			switch {
+			case next != nil:
+				out["rolled_over"] = true
+				out["next"] = next
+			case rollover == tasks.RolloverCustom:
+				out["repeat_every"] = rep.Every
+				out["repeat_unit"] = rep.Unit
+				out["repeat_custom"] = rep.Custom
+				out["repeat_rule"] = rep.Text
+				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys, advancing only due_date"
+			case rollover.NeedsAttention():
+				out["needs_attention"] = rollover.UserFacing()
+			}
+			return result(out)
+		})
+
 	mcp.AddTool(s, &mcp.Tool{Name: "reopen_task",
-		Description: "Reopen a completed task (clears completion, cancels the 3-day expiry)."},
+		Description: "Reopen a completed OR skipped task (clears completion and the skip marker, cancels the 3-day expiry). Reopening a skipped task puts it back on the open list — it does not mark it done."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in reopenTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Reopen(ctx, in.ID)
 			if err != nil {

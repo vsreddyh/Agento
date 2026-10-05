@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"agento/internal/mongostore"
 	"agento/internal/validate"
@@ -127,6 +128,17 @@ func toDoc(doc bson.M) map[string]any {
 			continue
 		}
 		out[k] = v
+	}
+	// `skipped` is derived, not stored, so it cannot disagree with `skippedAt`
+	// (#209). A skip sets completedAt so the occurrence leaves the open list — which
+	// means "is it done?" and "was it done?" are different questions and a client
+	// reading only completedAt would report work that never happened as finished.
+	// Deriving it here means every response shape carries it, including ones an old
+	// client already parses: it ignores a key it does not know.
+	if out["skippedAt"] != nil {
+		out["skipped"] = true
+	} else {
+		out["skipped"] = false
 	}
 	// Backfill keys that pre-mandatory docs lack, so every response
 	// speaks the same contract (readers default the same way).
@@ -602,7 +614,95 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 	return done, next, reason, nil
 }
 
-// Reopen clears completion (completedAt + expiresAt), making it open again.
+// Skip resolves ONE occurrence of a task as skipped rather than done (#209).
+//
+// The reason this is a verb and not a note: asked to "skip the skippable tasks
+// for tonight", an agent with only complete/reopen/delete has no correct action,
+// and the nearest available mutation is `complete` — so skips were being recorded
+// as completions. Five of them, once, on work that never happened. Because those
+// rows TTL away after RetentionDays, the false history was erased rather than
+// corrected and the user never got a chance to notice.
+//
+// What skip does, precisely:
+//   - sets `skippedAt`, so the record says SKIPPED and not done — that is the
+//     whole point, and it is what `skipped` in the response reads;
+//   - also sets `completedAt`, because the occurrence is RESOLVED: it must leave
+//     the open list or the user is asked again tonight. Skipping is not "leave it
+//     open" — that is what a task the user intends to do today already is, and
+//     conflating the two would put skipped chores back on tonight's list;
+//   - advances a STRUCTURED cadence, exactly as Complete does. Skipping tonight is
+//     not skipping the habit.
+//
+// A one-shot or a custom repeat has no next occurrence to advance to; `reason`
+// says which, and the caller owns the custom case (same contract as Complete).
+//
+// `reason` is the user's words, kept verbatim and capped — "out of time", "doing it
+// tomorrow". It is the difference between a skip and a quiet disappearance, and it
+// is the only part of this the user would miss.
+func (s *Store) Skip(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, error) {
+	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
+	if err != nil {
+		return nil, nil, "", fail("bad id '%s'", id)
+	}
+	now := time.Now().UTC()
+	res, err := s.tasks.UpdateOne(ctx,
+		bson.M{"_id": oid, "completedAt": nil},
+		bson.M{
+			"$set": bson.M{
+				"completedAt": primitive.NewDateTimeFromTime(now),
+				"skippedAt":   primitive.NewDateTimeFromTime(now),
+				"skipReason":  truncSkipReason(reason),
+				"expiresAt":   primitive.NewDateTimeFromTime(now.AddDate(0, 0, RetentionDays)),
+			},
+			"$inc": bson.M{"revision": 1},
+		})
+	if err != nil {
+		return nil, nil, "", err
+	}
+	if res.MatchedCount == 0 {
+		var doc bson.M
+		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); ferr != nil {
+			return nil, nil, "", fail("unknown task '%s'", id)
+		}
+		// Distinguish "already done" from "already skipped": they need different
+		// remedies, and reusing Complete's message would send someone to reopen a
+		// task that was never finished.
+		if at, ok := doc["skippedAt"].(primitive.DateTime); ok && at != 0 {
+			return nil, nil, "", fail("task '%s' is already skipped", id)
+		}
+		return nil, nil, "", fail("task '%s' is already completed", id)
+	}
+	skipped, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	// The cadence advances exactly as on Complete. Skipping an occurrence is not
+	// abandoning the series — that is what delete_task is for.
+	next, rollover, rerr := s.rollOver(ctx, skipped)
+	if rerr != nil {
+		log.Printf("task %s skipped but rollover failed: %v", id, rerr)
+		return skipped, nil, RolloverFailed, nil
+	}
+	return skipped, next, rollover, nil
+}
+
+// truncSkipReason caps the user's own words, rune-safely: this is free text typed
+// by voice, and a 40 KB paste would otherwise ride along in every list response.
+func truncSkipReason(s string) string {
+	const max = 200
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
+// Reopen clears completion (completedAt + expiresAt + the skip marker), making it
+// open again. A skipped task reopens to OPEN, not to "done" — the user is putting
+// it back on the list, which is the opposite of what a skip recorded.
 // Errors on unknown ids and on tasks that are already open.
 func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
@@ -612,8 +712,11 @@ func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 	res, err := s.tasks.UpdateOne(ctx,
 		bson.M{"_id": oid, "completedAt": bson.M{"$ne": nil, "$exists": true}},
 		bson.M{
-			"$unset": bson.M{"completedAt": "", "expiresAt": ""},
-			"$inc":   bson.M{"revision": 1},
+			"$unset": bson.M{
+				"completedAt": "", "expiresAt": "",
+				"skippedAt": "", "skipReason": "",
+			},
+			"$inc": bson.M{"revision": 1},
 		})
 	if err != nil {
 		return nil, err

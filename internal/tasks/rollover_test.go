@@ -305,6 +305,9 @@ func TestRolloverPlanClassifiesEachFailure(t *testing.T) {
 var fixtureNames = []string{
 	"One shot", "Custom", "Structured", "Legacy broken",
 	"Good", "Bad", "Custom done", "One shot done",
+	// skip_test.go
+	"Skip me", "Skip repeat", "Skip twice", "Done then skip",
+	"Skip then reopen", "Not skipped",
 }
 
 func mustCreate(t *testing.T, s *Store, name string, fields map[string]any) string {

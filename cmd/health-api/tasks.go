@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"go.mongodb.org/mongo-driver/bson"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -298,10 +299,12 @@ func taskItem(w http.ResponseWriter, r *http.Request) {
 		deleteTask(w, r, id)
 	case action == "complete" && r.Method == http.MethodPost:
 		completeTask(w, r, id)
+	case action == "skip" && r.Method == http.MethodPost:
+		skipTask(w, r, id)
 	case action == "reopen" && r.Method == http.MethodPost:
 		reopenTask(w, r, id)
 	default:
-		if action != "" && action != "complete" && action != "reopen" {
+		if action != "" && action != "complete" && action != "skip" && action != "reopen" {
 			writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
 			return
 		}
@@ -401,6 +404,51 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	// from "repeats, and the rollover failed" instead of inferring from an absent
 	// `next` — which is how a repeat that had stopped recurring still looked like a
 	// successful completion.
+	out["rollover"] = string(rollover)
+	if rollover.NeedsAttention() {
+		out["needs_attention"] = rollover.UserFacing()
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// skipTask resolves ONE occurrence as skipped rather than done (#209). The route
+// is additive, so an app that has never heard of it is unaffected; the response
+// carries the same top-level shape as completeTask plus `skipped`/`skip_reason`.
+func skipTask(w http.ResponseWriter, r *http.Request, id string) {
+	var fields map[string]any
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&fields); err != nil {
+		// An absent or empty body is fine: the reason is optional and the whole
+		// action is still unambiguous without it.
+		if err != io.EOF {
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + err.Error()})
+			return
+		}
+		fields = map[string]any{}
+	}
+	if raw, ok := fields["reason"]; ok && raw != nil {
+		if _, isStr := raw.(string); !isStr {
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "reason must be a string"})
+			return
+		}
+	}
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	doc, next, rollover, err := store.Skip(ctx, id, taskStrField(fields, "reason"))
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	out := bson.M{}
+	for k, v := range doc {
+		out[k] = v
+	}
+	if next != nil {
+		out["next"] = next
+	}
 	out["rollover"] = string(rollover)
 	if rollover.NeedsAttention() {
 		out["needs_attention"] = rollover.UserFacing()

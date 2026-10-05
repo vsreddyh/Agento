@@ -14,7 +14,8 @@ store, same validation — see `cmd/health-api/main.go`).
 | `get_task` | Fetch one task by id |
 | `update_task` | Edit fields. Only `id` is required — every other field is nil-safe, and empty repeat_rule clears the rule |
 | `complete_task` | Mark done (3-day retention starts); echoes repeat_rule + follow-up nudge; always reports `rollover` |
-| `reopen_task` | Reopen a completed task (cancels expiry) |
+| `reopen_task` | Reopen a completed **or skipped** task (cancels expiry; a skip returns to open, not to done) |
+| `skip_task` | Skip ONE occurrence without claiming it was done; advances a structured repeat |
 | `delete_task` | Permanently delete |
 
 ## Schema (MongoDB `hermes` DB)
@@ -59,6 +60,36 @@ The nightly `retention` job runs `ReconcileRollover` for the same reason: rollov
 is a side effect of `Complete`, so any writer that does not go through it stops a
 task recurring with nothing to show for it. It reports, and does not repair —
 a task that failed to roll over usually failed because its stored data is wrong.
+
+## `skip_task` — a skip is not a completion (#209)
+
+There was no verb for "not doing this occurrence". An agent asked to skip five
+chores called `complete_task` on all five, recording work that never happened as
+done — and since completed rows are TTL-deleted after 3 days, the false record was
+erased rather than corrected. The agent's own reasoning had read *"this is
+ambiguous, I should ask"* and then guessed, because there was nothing else to call.
+
+`skip_task(id, reason?)`:
+
+- sets **`skippedAt`** so the record says skipped, not done. Every task response
+  carries a derived `skipped` boolean, so "is it done?" and "was it done?" are
+  different questions and a client reading only `completedAt` no longer conflates
+  them;
+- also sets `completedAt`, deliberately — the occurrence is *resolved* and must
+  leave the open list, or the user is asked again tonight. Leaving it open is
+  already what an open task is; conflating the two would put skipped chores back
+  on tonight's list;
+- **still advances a structured repeat**. Skipping an occurrence is not abandoning
+  the series — `delete_task` is what abandons it.
+
+`reason` is the user's words, verbatim and capped at 200 bytes on a rune boundary.
+
+`reopen_task` clears the skip marker too, and returns a skipped task to **open**,
+not to done.
+
+Over HTTP: `POST /api/tasks/{id}/skip` with an optional `{"reason": "..."}`. The
+response keeps the task at the top level (so an old app still parses it) and adds
+`skipped`, `skip_reason`, `next` and `rollover`.
 - **Retention:** done tasks auto-delete 3 days after completion via TTL.
   Open tasks never expire. `reopen_task` clears the expiry.
 
