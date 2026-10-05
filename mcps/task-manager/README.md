@@ -90,6 +90,37 @@ not to done.
 Over HTTP: `POST /api/tasks/{id}/skip` with an optional `{"reason": "..."}`. The
 response keeps the task at the top level (so an old app still parses it) and adds
 `skipped`, `skip_reason`, `next` and `rollover`.
+
+## HTTP hardening (#176)
+
+`POST /api/tasks` accepts an **`Idempotency-Key`** header. The same key returns the
+*original* task rather than creating a second one, answering `200` with
+`Idempotent-Replay: true` instead of `201`.
+
+The guarantee is enforced by a **unique sparse index**, not by a lookup before the
+insert — a read-then-write has a window between the two, and the failure it
+produces is the one this exists to prevent: a client retrying after a timeout,
+whose first request is still in flight, reads "nothing with this key" and inserts a
+duplicate. Two concurrent retries therefore produce one task, and the loser of the
+race is handed the winner's row. Without the header, behaviour is unchanged.
+
+Sparse matters as much as unique: most tasks are created without a key, and a
+plain unique index would treat every missing value as the same key and reject all
+but the first.
+
+Two additions beside it:
+
+- **Rate limiting** — a per-source token bucket (burst 40, ~2/s sustained) with a
+  `429` and `Retry-After`. The API is network-reachable and authed by one shared
+  password, so a stuck client retrying in a loop was an unbounded write load on a
+  shared production MongoDB. The limiter wraps the mux, so a route added later
+  cannot forget it.
+- **A mutation log** (`task_mutations`) recording op, task, source and timestamp for
+  every create/update/complete/skip/reopen/delete. The agent and the app are the
+  same caller as far as the server is concerned, so nothing previously recorded
+  *who* changed a task. `X-Agento-Source` labels the caller — trusted only as a
+  label, never for authorisation. Writes are best-effort: a failed audit write
+  never fails the mutation it was recording. Pruned at 90 days by `retention`.
 - **Retention:** done tasks auto-delete 3 days after completion via TTL.
   Open tasks never expire. `reopen_task` clears the expiry.
 

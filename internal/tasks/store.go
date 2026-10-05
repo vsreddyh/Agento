@@ -14,6 +14,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -95,6 +96,16 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		// difference between the nightly job being free and being the slowest thing
 		// in the stack.
 		{Keys: bson.D{{Key: "rolled_from", Value: 1}}, Options: options.Index().SetName("rolled_from_1")},
+		// The idempotency guarantee (#176). UNIQUE + SPARSE, and both words matter:
+		//   - unique, so the database — not a read-then-write in Go — decides who wins
+		//     a concurrent retry. The loser gets a duplicate-key error and is handed
+		//     the winner's row.
+		//   - sparse, so tasks created WITHOUT a key are not all treated as the same
+		//     key. A plain unique index here would let exactly one keyless task exist
+		//     and reject every subsequent one, which is a far worse bug than the
+		//     duplicate this prevents.
+		{Keys: bson.D{{Key: idempotencyKeyField, Value: 1}},
+			Options: options.Index().SetName("idempotency_key_uniq").SetUnique(true).SetSparse(true)},
 	})
 	return err
 }
@@ -188,38 +199,78 @@ func toDoc(doc bson.M) map[string]any {
 // Create inserts an open task. Every field except the repeat is required
 // (an all-zero Repeat = one-shot task); parallelable marks tasks that can
 // run alongside other tasks.
+//
+// A non-empty key makes the insert idempotent (#176): a repeat of the same key
+// returns the ORIGINAL task instead of creating a second one.
 func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool) (map[string]any, error) {
+	doc, _, err := s.CreateWithKey(ctx, name, description, dueDate, dueTime, estimatedMinutes, rep, parallelable, "", "")
+	return doc, err
+}
+
+// Field names for #176. Declared here rather than inline so the write and the
+// unique index below cannot drift apart.
+const (
+	// idempotencyKeyField is the client's key. Unique and SPARSE: most tasks are
+	// created without one (the MCP path does not use it), and a unique index over
+	// missing values would treat every one of them as the same key and reject all
+	// but the first. Sparse means "absent is not a value".
+	idempotencyKeyField = "idempotency_key"
+	// sourceField records WHICH caller wrote the row — app vs MCP — so a duplicate
+	// or a surprise is traceable. health-api and the agent are indistinguishable at
+	// the auth layer (one shared password), which is exactly why this was missing.
+	sourceField = "source"
+)
+
+// CreateWithKey is Create plus a client-supplied idempotency key and the caller's
+// identity, both recorded on the doc.
+//
+// WHY THE KEY IS RESOLVED BY THE DATABASE AND NOT BY A LOOKUP FIRST: a
+// read-then-insert has a window between them, and the failure it produces is
+// exactly the one this exists to prevent. A client retrying after a timeout is the
+// case that matters — the first request may still be in flight, so a lookup finds
+// nothing and the retry inserts a second task. `Complete` is already idempotent by
+// accident (it filters on completedAt: nil); `Create` was not, so a double-tapped
+// button or a flaky connection produced duplicates with no way to tell them apart
+// or remove them in bulk.
+//
+// So the unique index does the work: the loser of a concurrent race gets a
+// duplicate-key error from the INSERT and is handed the winner's row. There is no
+// window, because the constraint and the insert are the same operation.
+//
+// `replayed` is returned true only for that second-and-subsequent case, so a
+// caller can answer "already saved" rather than implying it created something.
+func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool, idemKey, source string) (map[string]any, bool, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return nil, fail("name is required")
+		return nil, false, fail("name is required")
 	}
 	description = strings.TrimSpace(description)
 	if description == "" {
-		return nil, fail("description is required")
+		return nil, false, fail("description is required")
 	}
 	dueDate = strings.TrimSpace(dueDate)
 	if dueDate == "" {
-		return nil, fail("due_date is required (YYYY-MM-DD)")
+		return nil, false, fail("due_date is required (YYYY-MM-DD)")
 	}
 	dueTime = strings.TrimSpace(dueTime)
 	if dueTime == "" {
-		return nil, fail("due_time is required (HH:MM)")
+		return nil, false, fail("due_time is required (HH:MM)")
 	}
 	if err := checkDue(dueDate, dueTime); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if estimatedMinutes == nil {
-		return nil, fail("estimated_minutes is required")
+		return nil, false, fail("estimated_minutes is required")
 	}
 	if *estimatedMinutes < 0 {
-		return nil, fail("estimated_minutes must be >= 0")
+		return nil, false, fail("estimated_minutes must be >= 0")
 	}
 	if parallelable == nil {
-		return nil, fail("parallelable is required")
+		return nil, false, fail("parallelable is required")
 	}
 	rep = rep.Normalize()
 	if err := rep.Validate(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{
@@ -233,7 +284,50 @@ func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime 
 	for k, v := range rep.docs() {
 		doc[k] = v
 	}
-	return s.insert(ctx, doc)
+	idemKey = strings.TrimSpace(idemKey)
+	if idemKey != "" {
+		if len(idemKey) > 200 {
+			idemKey = idemKey[:200]
+		}
+		doc[idempotencyKeyField] = idemKey
+	}
+	if source = strings.TrimSpace(source); source != "" {
+		if len(source) > 40 {
+			source = source[:40]
+		}
+		doc[sourceField] = source
+	}
+	out, err := s.insert(ctx, doc)
+	if err == nil {
+		return out, false, nil
+	}
+	// The unique index on idempotency_key is what makes this safe: the loser of a
+	// concurrent race lands here and is handed the winner's row, instead of
+	// creating the duplicate this was added to prevent.
+	if idemKey == "" || !mongoDrv.IsDuplicateKeyError(err) {
+		return nil, false, err
+	}
+	existing, getErr := s.byIdempotencyKey(ctx, idemKey)
+	if getErr != nil || existing == nil {
+		// The insert reported a duplicate but the row cannot be read back. Returning
+		// the original error is more useful than a silent success.
+		return nil, false, err
+	}
+	return existing, true, nil
+}
+
+// byIdempotencyKey finds a task by its idempotency key. Used ONLY to resolve the
+// duplicate-key race above, never to pre-check — a pre-check is exactly the
+// read-then-write window this design exists to avoid.
+func (s *Store) byIdempotencyKey(ctx context.Context, key string) (map[string]any, error) {
+	var doc bson.M
+	if err := s.tasks.FindOne(ctx, bson.M{idempotencyKeyField: key}).Decode(&doc); err != nil {
+		if errors.Is(err, mongoDrv.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toDoc(doc), nil
 }
 
 // insert writes a prepared document and renders it. Split out of Create so that

@@ -19,6 +19,7 @@ import (
 	"agento/internal/tasks"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func run() int {
@@ -84,6 +85,29 @@ func run() int {
 	// data is wrong.
 	if code := reconcileTasks(ctx); code != 0 {
 		return code
+	}
+
+	// The task mutation log (#176). Pruned like money_transactions: it is an audit
+	// trail, so it has to outlive any single task, but it must not grow forever.
+	// 90 days matches the money window — long enough to answer "who changed this,
+	// and when did they stop?" after the fact.
+	logCutoff := primitive.NewDateTimeFromTime(today.AddDate(0, 0, -90))
+	auditN, err := d.Collection("task_mutations").CountDocuments(ctx,
+		bson.M{"at": bson.M{"$lt": logCutoff}})
+	if err != nil {
+		fmt.Printf("[retention] task_mutations count failed: %v\n", err)
+		return 1
+	}
+	if !*dry {
+		if _, err := d.Collection("task_mutations").DeleteMany(ctx,
+			bson.M{"at": bson.M{"$lt": logCutoff}}); err != nil {
+			fmt.Printf("[retention] task_mutations prune failed: %v\n", err)
+			return 1
+		}
+	}
+	if auditN > 0 {
+		fmt.Printf("%stask_mutations: would remove %d entries older than %s\n",
+			prefix, auditN, logCutoff.Time().UTC().Format("2006-01-02"))
 	}
 
 	fmt.Println("[retention] story/resumes/cookbook/projects: no retention policy (git repos / permanent).")

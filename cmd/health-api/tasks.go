@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go.mongodb.org/mongo-driver/bson"
 	"io"
 	"log"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	syncpkg "sync"
@@ -252,7 +254,16 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 	parallelable, _ := fields["parallelable"].(bool)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	doc, err := store.Create(ctx,
+	// Idempotency (#176). The header is the contract: the same key plus the same
+	// body returns the SAME task, not a second one. Absent means the old
+	// behaviour, so every existing client is unaffected.
+	//
+	// `replayed` comes back from the STORE, not from a lookup here — the unique
+	// index decides, so a retry racing the original request cannot slip through a
+	// read-then-write window and create the duplicate this prevents.
+	idemKey := r.Header.Get("Idempotency-Key")
+	source := requestSource(r)
+	doc, replayed, err := store.CreateWithKey(ctx,
 		taskStrField(fields, "name"),
 		taskStrField(fields, "description"),
 		taskStrField(fields, "due_date"),
@@ -260,12 +271,55 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		&minutes,
 		taskRepeat(fields),
 		&parallelable,
+		idemKey,
+		source,
 	)
 	if err != nil {
 		writeTaskErr(w, err)
 		return
 	}
+	store.RecordMutation(ctx, tasks.OpCreate, fmt.Sprint(doc["id"]), source, "http POST /api/tasks")
+	if replayed {
+		// 200, not 201: nothing was created this time. A client counting 201s to
+		// learn what it created would otherwise be told it made a new task.
+		if idemKey != "" {
+			w.Header().Set("Idempotent-Replay", "true")
+		}
+		writeJSON(w, http.StatusOK, doc)
+		return
+	}
 	writeJSON(w, http.StatusCreated, doc)
+}
+
+// changedKeys names which fields a PATCH touched, for the audit log. "PATCH
+// /api/tasks" alone does not say whether the user moved a due date or fixed a
+// typo, and that is the whole reason the log exists.
+func changedKeys(fields map[string]any) string {
+	if len(fields) == 0 {
+		return "no fields"
+	}
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		if k == "expected_revision" {
+			continue // concurrency plumbing, not a change to the task
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return "no fields"
+	}
+	return strings.Join(keys, ",")
+}
+
+// requestSource names the caller for the audit log (#176). The app sends
+// X-Agento-Source; the header is trusted only as a LABEL — it decides what the log
+// says, never what the caller may do, which authorize() already settled.
+func requestSource(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("X-Agento-Source")); v != "" {
+		return v
+	}
+	return "http"
 }
 
 // taskItem dispatches /api/tasks/{id}[/{action}]: get + patch + delete on
@@ -353,6 +407,7 @@ func updateTask(w http.ResponseWriter, r *http.Request, id string) {
 		writeTaskErr(w, err)
 		return
 	}
+	store.RecordMutation(ctx, tasks.OpUpdate, id, requestSource(r), changedKeys(fields))
 	writeJSON(w, http.StatusOK, doc)
 }
 
@@ -372,6 +427,9 @@ func deleteTask(w http.ResponseWriter, r *http.Request, id string) {
 		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown task '" + id + "'"})
 		return
 	}
+	// Logged AFTER the delete, so there is no window where the log claims a delete
+	// that was then rolled back by a failed response.
+	store.RecordMutation(ctx, tasks.OpDelete, id, requestSource(r), "http DELETE")
 	writeJSON(w, http.StatusOK, bson.M{"deleted": true})
 }
 
@@ -388,6 +446,7 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 		writeTaskErr(w, err)
 		return
 	}
+	store.RecordMutation(ctx, tasks.OpComplete, id, requestSource(r), fmt.Sprint(rollover))
 	// The task stays at the top level: a 4.6.0 app parses the response as
 	// the bare doc, so nesting it under "task" would break completing a task
 	// for anyone who hasn't updated. "next" is the only addition, and it is
@@ -442,6 +501,7 @@ func skipTask(w http.ResponseWriter, r *http.Request, id string) {
 		writeTaskErr(w, err)
 		return
 	}
+	store.RecordMutation(ctx, tasks.OpSkip, id, requestSource(r), fmt.Sprint(rollover))
 	out := bson.M{}
 	for k, v := range doc {
 		out[k] = v
@@ -469,6 +529,7 @@ func reopenTask(w http.ResponseWriter, r *http.Request, id string) {
 		writeTaskErr(w, err)
 		return
 	}
+	store.RecordMutation(ctx, tasks.OpReopen, id, requestSource(r), "")
 	writeJSON(w, http.StatusOK, doc)
 }
 
