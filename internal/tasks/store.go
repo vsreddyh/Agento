@@ -634,6 +634,10 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 // and could not distinguish "one-shot, nothing to do" from "repeats, but the
 // rollover failed", so a task that had silently stopped recurring was reported as
 // an ordinary completion.
+//
+// It DISCARDS the field-specific reason a rollover failed. Use CompleteDetail if you need
+// to tell the user WHICH field to fix — the two transports do, and a caller that picks
+// this one by accident gets a `RolloverFailed` with no explanation attached.
 func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, error) {
 	doc, next, reason, _, err := s.CompleteDetail(ctx, id)
 	return doc, next, reason, err
