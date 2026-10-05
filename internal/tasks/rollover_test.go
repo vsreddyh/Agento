@@ -398,3 +398,101 @@ func cleanupFixtures(t *testing.T, s *Store, ctx context.Context) {
 		}
 	}
 }
+
+// The reconciler used to discard rolloverPlan's error with `_`, so the nightly line
+// read a bare "FAILED" and the human had to go and discover which field was wrong.
+// The whole premise of this job is that a repeat stopped for a FIXABLE reason and a
+// person has to go fix it, so throwing away the one thing the report already knew was
+// the most expensive kind of omission.
+func TestReconcileGapsCarryTheReasonTheyFailed(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	// Two different broken fields, so the detail must distinguish them rather than
+	// restate the outcome.
+	blankTime := mustCreate(t, s, "Bad time", map[string]any{
+		"due_date": "2026-10-05", "due_time": "",
+		"repeat_every": 1, "repeat_unit": "days",
+	})
+	badEstimate := mustCreate(t, s, "Bad estimate", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"estimated_minutes": "not a number",
+		"repeat_every":      1, "repeat_unit": "days",
+	})
+	for _, id := range []string{blankTime, badEstimate} {
+		if _, _, _, err := s.Complete(ctx, id); err != nil {
+			t.Fatalf("complete %s: %v", id, err)
+		}
+	}
+
+	res, err := s.ReconcileRollover(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRollover: %v", err)
+	}
+	byID := map[string]RolloverGap{}
+	for _, g := range res.Gaps {
+		byID[g.TaskID] = g
+	}
+	for id, wantSubstr := range map[string]string{
+		blankTime:   "due_time",
+		badEstimate: "estimated_minutes",
+	} {
+		g, ok := byID[id]
+		if !ok {
+			t.Errorf("task %s was not reported as a gap", id)
+			continue
+		}
+		if g.Why != RolloverFailed {
+			t.Errorf("task %s: Why = %q, want %q", id, g.Why, RolloverFailed)
+		}
+		if g.Detail == "" {
+			t.Errorf("task %s: Detail is empty — the reader is told FAILED and nothing else", id)
+			continue
+		}
+		if !strings.Contains(g.Detail, wantSubstr) {
+			t.Errorf("task %s: Detail = %q, want it to name %q", id, g.Detail, wantSubstr)
+		}
+	}
+	// The two details must not be the same string, or the field name is being faked.
+	if byID[blankTime].Detail == byID[badEstimate].Detail {
+		t.Errorf("both gaps report the identical detail %q — it is not naming the field",
+			byID[blankTime].Detail)
+	}
+}
+
+// A gap whose reason is not a validation failure (the cadence is exhausted) has
+// nothing specific to add, and must not invent something. Detail stays empty and the
+// reader gets the outcome sentence on its own.
+func TestReconcileGapDetailIsEmptyWhenThereIsNothingToAdd(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	// A due date so far in the past that no future occurrence can be computed.
+	exhausted := mustCreate(t, s, "Exhausted", map[string]any{
+		"due_date": "2001-01-01", "due_time": "08:00",
+		"repeat_every": 1, "repeat_unit": "days",
+	})
+	if _, _, r, err := s.Complete(ctx, exhausted); err != nil {
+		t.Fatalf("complete: %v", err)
+	} else if r != RolloverExhausted {
+		t.Fatalf("setup: rollover = %q, want %q", r, RolloverExhausted)
+	}
+
+	res, err := s.ReconcileRollover(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRollover: %v", err)
+	}
+	for _, g := range res.Gaps {
+		if g.TaskID == exhausted {
+			if g.Why != RolloverExhausted {
+				t.Errorf("Why = %q, want %q", g.Why, RolloverExhausted)
+			}
+			if g.Detail != "" {
+				t.Errorf("Detail = %q for an exhausted cadence; there is no field to "+
+					"blame and it must not invent one", g.Detail)
+			}
+		}
+	}
+}

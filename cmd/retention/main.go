@@ -82,9 +82,7 @@ func run() int {
 	// with no error a user would ever see. Read-only: it reports, and a human fixes
 	// it, because a task that failed to roll over usually failed because its stored
 	// data is wrong.
-	if code := reconcileTasks(ctx); code != 0 {
-		return code
-	}
+	reconcileTasks(ctx)
 
 	fmt.Println("[retention] story/resumes/cookbook/projects: no retention policy (git repos / permanent).")
 	return 0
@@ -117,7 +115,12 @@ func reconcileBudget(parent context.Context) (context.Context, context.CancelFun
 // reconcileBudgetFor is the reconciler's own ceiling, independent of retention's.
 const reconcileBudgetFor = 45 * time.Second
 
-func reconcileTasks(parent context.Context) int {
+// It returns NOTHING, deliberately. It used to return an int that was always 0, which
+// left `if code := reconcileTasks(ctx); code != 0 { return code }` at the call site — a
+// branch no input could reach, inviting the next reader to hunt for the nonzero path
+// that does not exist. The contract is stated in the comment above instead: this pass
+// reports, and it can never fail the job.
+func reconcileTasks(parent context.Context) {
 	// WithoutCancel drops the parent's DEADLINE and cancellation but keeps its values,
 	// so this really is an independent 45s rather than "45s, or whatever the caller
 	// has left".
@@ -145,12 +148,12 @@ func reconcileTasks(parent context.Context) int {
 	store, err := tasks.FromEnv()
 	if err != nil {
 		fmt.Printf("[retention] tasks: cannot connect, rollover gaps NOT reported: %v\n", err)
-		return 0
+		return
 	}
 	res, err := store.ReconcileRollover(ctx)
 	if err != nil {
 		fmt.Printf("[retention] tasks: rollover reconciliation FAILED (%v); pruning is unaffected, but any stopped repeats are NOT listed this run\n", err)
-		return 0
+		return
 	}
 	if res.Truncated {
 		// Say so rather than letting an incomplete pass read as a clean one.
@@ -160,13 +163,19 @@ func reconcileTasks(parent context.Context) int {
 		if !res.Truncated {
 			fmt.Println("[retention] tasks: every repeating task rolled over correctly.")
 		}
-		return 0
+		return
 	}
 	fmt.Printf("[retention] tasks: %d repeating task(s) stopped recurring — each needs the next occurrence created by hand:\n", len(res.Gaps))
 	for _, g := range res.Gaps {
+		// Detail first when present: it names the field to fix, and UserFacing() only
+		// ever described the OUTCOME. Leading with the outcome made the reader parse a
+		// sentence about a category before learning which field was actually wrong.
+		if g.Detail != "" {
+			fmt.Printf("  - %s (%s) — %s: %s\n", g.Name, g.TaskID, g.Detail, g.Why.UserFacing())
+			continue
+		}
 		fmt.Printf("  - %s (%s) — %s\n", g.Name, g.TaskID, g.Why.UserFacing())
 	}
-	return 0
 }
 
 func main() { os.Exit(run()) }
