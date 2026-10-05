@@ -23,21 +23,35 @@ class SseStreamEndTest {
     private fun delta(content: String) =
         """data: {"choices":[{"delta":{"content":"$content"}}]}"""
 
+    /**
+     * The stream, as a list of lines.
+     *
+     * A LIST rather than a raw string with `trimIndent()`, because that is what made this
+     * fixture wrong twice. `trimIndent()` on a raw string with a blank line before the
+     * closing quotes keeps a trailing newline, so `... + "\n"` produced
+     * `data: [DONE]\n\n` and a single `removeSuffix("data: [DONE]\n")` stripped one
+     * newline — leaving the "truncated" stream ending in `[DONE]`. The central
+     * regression test then asserted nothing and still looked like it was testing the
+     * fix. `dropLast(1)` cannot be wrong that way.
+     */
+    private val completeLines = listOf(
+        ": keepalive",
+        "event: ping",
+        frame(delta("Hello")),
+        frame(delta(" world")),
+        frame("""{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"""),
+        "data: [DONE]",
+    )
+
+    private fun frame(payload: String) = "data: $payload"
+
+    private fun streamOf(lines: List<String>) = lines.joinToString("\n", postfix = "\n")
+
     /** A well-formed stream: content frames, a usage frame, then the terminal `[DONE]`. */
-    private fun completeStream() = """
-        : keepalive
-        event: ping
-        ${delta("Hello")}
-        ${delta(" world")}
-        data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
-        data: [DONE]
+    private fun completeStream() = streamOf(completeLines)
 
-    """.trimIndent() + "\n"
-
-    /** The same stream with the terminal frame and the trailing newline removed. */
-    private fun truncatedStream() = completeStream()
-        .removeSuffix("data: [DONE]\n")
-        .removeSuffix("\n")
+    /** The same stream with the terminal frame removed. */
+    private fun truncatedStream() = streamOf(completeLines.dropLast(1))
 
     private class Result(
         val end: SseEnd,
@@ -150,11 +164,9 @@ class SseStreamEndTest {
 
     @Test
     fun `a gateway error frame is terminal and carries its message`() {
-        val raw = """
-            ${delta("partial")}
-            data: {"error":"SSE client disconnected"}
-        """.trimIndent() + "\n"
-        val r = read(raw)
+        val r = read(
+            streamOf(listOf(frame(delta("partial")), frame("""{"error":"SSE client disconnected"}"""))),
+        )
         assertTrue(
             "an error frame must win over the EOF that follows it, or the user sees " +
                 "a bogus empty reply for a failed turn",
@@ -170,11 +182,9 @@ class SseStreamEndTest {
         // The real failure in #214 happened on a turn that had already run tool calls,
         // so the partial turn carried tool frames. They must not be dropped on the way
         // to reporting the interruption.
-        val raw = """
-            data: {"tool":"bash","status":"start"}
-            ${delta("running")}
-        """.trimIndent() + "\n"
-        val r = read(raw)
+        val r = read(
+            streamOf(listOf(frame("""{"tool":"bash","status":"start"}"""), frame(delta("running")))),
+        )
         assertEquals(SseEnd.EndOfStream, r.end)
         assertEquals(1, r.events.count { it is ChatEvent.ToolProgress })
     }
