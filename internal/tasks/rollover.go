@@ -368,6 +368,24 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 			// as a failure rather than reporting a gap with no explanation.
 			why = RolloverFailed
 		}
+		if why == RolloverNone {
+			// A contradiction, and deliberately NOT skipped.
+			//
+			// The query above already selected only structured repeats
+			// (repeat_every > 0, a unit, repeat_custom != true), so the classifier
+			// agreeing is guaranteed unless the two disagree about what "structured"
+			// means. Skipping here would drop the row on the strength of that
+			// contradiction — which is precisely the silent-disappearance failure this
+			// whole job exists to prevent, arrived at through a defensive-looking `continue`.
+			//
+			// So it is reported, with a detail that says what disagreed. RolloverNone
+			// also has an empty UserFacing(), which would print a line ending in a
+			// dangling dash and no explanation at all; RolloverFailed at least promises
+			// the reader something, and NeedsAttention() then includes it.
+			why = RolloverFailed
+			detail = "the stored repeat no longer parses as structured, so no next " +
+				"occurrence could be planned; re-enter the repeat on this task"
+		}
 		name, _ := d["name"].(string)
 		gaps = append(gaps, RolloverGap{
 			TaskID: id.Hex(),
