@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -81,8 +82,29 @@ func TestRolloverOutcomeIsNamed(t *testing.T) {
 		// The back-link is what lets the reconciler PROVE a rollover happened
 		// instead of inferring it from a name and date a hand-made task could
 		// collide with.
-		if got := mustGet(t, s, next["id"].(string))[rolledFromField]; got != id {
+		//
+		// Asserted against the RAW document, because that is where the intent lives.
+		// This used to read it off a rendered task via mustGet, which made the test
+		// depend on `rolled_from` being part of the response contract — and it is
+		// internal linkage that deliberately is not. So the assertion was coupled to a
+		// presentation decision it never cared about, and would have failed the moment
+		// the field was hidden for a reason that had nothing to do with rollover. The
+		// reconciler reads it from a raw projection too (parentsWithSuccessors), so this
+		// now matches how it is actually consumed.
+		childOID, err := primitive.ObjectIDFromHex(next["id"].(string))
+		if err != nil {
+			t.Fatalf("successor id: %v", err)
+		}
+		var raw bson.M
+		if err := s.tasks.FindOne(ctx, bson.M{"_id": childOID}).Decode(&raw); err != nil {
+			t.Fatalf("raw read of the successor: %v", err)
+		}
+		if got := raw[rolledFromField]; got != id {
 			t.Errorf("successor's %s = %v, want the parent's id %q", rolledFromField, got, id)
+		}
+		// Written in the same insert, so it is present the moment the successor exists.
+		if _, exposed := next[rolledFromField]; exposed {
+			t.Errorf("%s is exposed on a rendered task; it is internal linkage", rolledFromField)
 		}
 	})
 
@@ -496,6 +518,68 @@ func TestReconcileGapDetailIsEmptyWhenThereIsNothingToAdd(t *testing.T) {
 				t.Errorf("Detail = %q for an exhausted cadence; there is no field to "+
 					"blame and it must not invent one", g.Detail)
 			}
+		}
+	}
+}
+
+// `rolled_from` is internal linkage and must not reach a client — but the reconciler
+// DEPENDS on it to decide whether a repeat rolled over. If anything ever rendered it
+// and the reconciler read it back off the rendered doc, hiding the field would
+// silently report every chained repeat as a gap.
+//
+// So this asserts the reconciler still works while the field is hidden, which is the
+// condition that makes the strip safe in the first place.
+func TestReconcileStillWorksWithRolledFromHidden(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	id := mustCreate(t, s, "Rolled and hidden", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"repeat_every": 1, "repeat_unit": "days",
+	})
+	// Complete returns (doc, next, rollover, err). Taking the FIRST return here — as
+	// this test did at first — silently asserts on the PARENT, which has no back-link
+	// by construction, and the assertion then fails for a reason that has nothing to
+	// do with what it claims to check.
+	_, next, r, err := s.Complete(ctx, id)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if r != RolloverCreated || next == nil {
+		t.Fatalf("setup: rollover = %q, next = %v", r, next)
+	}
+
+	// The back-link IS in the stored document — that is what the reconciler reads.
+	oid, err := primitive.ObjectIDFromHex(fmt.Sprint(next["id"]))
+	if err != nil {
+		t.Fatalf("successor id is not an ObjectID: %v", err)
+	}
+	var raw bson.M
+	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&raw); err != nil {
+		t.Fatalf("raw read: %v", err)
+	}
+	if raw[rolledFromField] == nil {
+		t.Error("rolled_from is not in the stored document — the reconciler would " +
+			"report this as a gap regardless of what responses expose")
+	}
+
+	// ...and absent from every rendered view of it.
+	for _, doc := range []map[string]any{next, mustGet(t, s, fmt.Sprint(next["id"]))} {
+		if v, ok := doc[rolledFromField]; ok {
+			t.Errorf("%s is exposed on a rendered task: %v", rolledFromField, v)
+		}
+	}
+
+	// And the reconciler still sees the back-link, so nothing is reported.
+	res, err := s.ReconcileRollover(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRollover: %v", err)
+	}
+	for _, g := range res.Gaps {
+		if g.TaskID == id {
+			t.Error("a repeat that rolled over correctly was reported as a gap — the " +
+				"reconciler is reading the back-link from somewhere the strip can reach")
 		}
 	}
 }
