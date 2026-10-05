@@ -102,6 +102,12 @@ class ReminderPointsTest {
         val pts = reminderPoints(today.toString(), "09:00", 1, now)
         assertTrue(pts.containsKey(ReminderKind.Due))
         assertFalse(pts.containsKey(ReminderKind.Start))
+        // BeforeStart lands at 08:54, which is already in the past relative to
+        // `now`, so addIfFuture drops it — NOT the collapse, which never sees it.
+        // Asserted anyway so the full set is pinned: if either rule changed, a
+        // one-minute task would start firing a stray "Starting soon" alert.
+        assertFalse(pts.containsKey(ReminderKind.BeforeStart))
+        assertEquals(setOf(ReminderKind.Due), pts.keys)
     }
 
     @Test
