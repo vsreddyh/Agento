@@ -145,7 +145,9 @@ Two additions beside it:
   never fails the mutation it was recording. Pruned at 90 days by `retention`.
   Indexed by `at` and `task_id`, declared in the same `EnsureSchema` as the task
   indexes — an earlier `EnsureAuditIndex` that nothing called meant both readers were
-  collection-scanning a collection that only grows.
+  collection-scanning a collection that only grows. The write does **not** inherit
+  the request context, so a client that disconnects mid-request cannot drop the entry
+  for a mutation that already committed; it is bounded at 5s independently.
 - **Retention:** done tasks auto-delete 3 days after completion via TTL. **Skipped
   occurrences expire the same way** — `skip_task` resolves the occurrence, so it
   sets `expiresAt` exactly as `complete_task` does. A skip is not permanent
