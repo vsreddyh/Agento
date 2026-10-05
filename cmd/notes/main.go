@@ -110,7 +110,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "notes", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_note",
-		Description: "Create a note. body is markdown, one list item per line (`- milk`). Tags are lowercased; titles need not be unique. For anything with a due date use the task-manager, not this."},
+		Description: "Create a note. body is markdown, one list item per line (`- milk`). Tags are lowercased; titles need not be unique. For anything with a due date use the task-manager, not this. Over-cap title/body is stored truncated and reported in `truncated`."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in addNoteInput) (*mcp.CallToolResult, map[string]any, error) {
 			n, err := store.AddNote(ctx, in.Title, in.Body, in.Tags, in.Pinned)
 			if err != nil {
@@ -143,7 +143,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "search_notes",
-		Description: "Substring search over note titles AND bodies, returning full notes. Use when the user names a thing ('milk') without saying which note holds it."},
+		Description: "Substring search over note titles, bodies AND tags, returning full notes. Use when the user names a thing ('milk') without saying which note holds it. Over-cap input is stored truncated and reported in `truncated`."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchNotesInput) (*mcp.CallToolResult, map[string]any, error) {
 			limit := in.Limit
 			if limit == 0 {

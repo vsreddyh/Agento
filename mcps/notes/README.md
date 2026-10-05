@@ -30,11 +30,23 @@ and body. That is a collection scan — irrelevant at the size this runs at, and
 first thing to change if notes ever grows into thousands of rows, which is what an
 Atlas text index would be for.
 
-Two behaviours worth knowing before calling anything:
+- `search_notes` matches title, body **and tags**, so a word the user remembers
+  finds the note even when it is only a tag. Tags are lowercased on write and the
+  query is lowercased to match.
+- `tags` is always a `[]string` in a response, whichever call produced it. A doc
+  read back from Mongo decodes its BSON array as `bson.A`; without normalising in
+  `docOut`, a Go caller asserting `.([]string)` passes on the create response and
+  panics on the get.
+- Over-cap input is still stored, but the response carries `truncated: {title,
+  body}` naming which fields lost bytes. A 25 KB paste stored as 20 KB and
+  answered `ok:true` is data loss reported as success.
+
+Four behaviours worth knowing before calling anything:
 
 - `list_notes` returns summaries: the body is replaced by a `preview` (the first
-  line that is not blank and not a `#` heading — the title already carries the
-  heading), so a 200-note filter cannot flood the context window. `get_note` and
+  line that is not blank and not an ATX heading — `#` followed by a space or
+  end of line; the title already carries the heading), so a 200-note filter
+  cannot flood the context window. `#milk` is content, not a heading. `get_note` and
   `search_notes` return the body.
 - `update_note` with nothing to change writes nothing, so `updatedAt` is not bumped
   and the note does not jump to the top of every list.

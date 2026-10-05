@@ -155,8 +155,22 @@ func (s *Store) AddNote(ctx context.Context, title, body string, tags []string, 
 		return nil, err
 	}
 	doc["_id"] = res.InsertedID
-	return docOut(doc), nil
+	out := docOut(doc)
+	// A cap that discards input must say so. `trunc` is silent by design — it is a
+	// helper, not a policy — but a 25 KB paste stored as 20 KB and answered with
+	// ok:true is data loss reported as success. The note is still written (refusing
+	// would be worse: the user's list would be lost entirely for being too long);
+	// the response just carries the sizes so the caller can tell the user what
+	// happened instead of believing the whole thing landed.
+	out["truncated"] = map[string]any{
+		"title": truncated(title, maxTitle),
+		"body":  truncated(body, maxBody),
+	}
+	return out, nil
 }
+
+// truncated reports whether trunc(s, n) would have dropped bytes.
+func truncated(s string, n int) bool { return len(s) > n }
 
 // GetNote resolves by id only. Unlike cookbook, there is no title lookup: titles
 // are not unique, so resolving one would silently pick a winner among notes the
@@ -247,7 +261,21 @@ func (s *Store) SearchNotes(ctx context.Context, q string, limit int) ([]bson.M,
 		limit = searchCap
 	}
 	re := bson.M{"$regex": regexp.QuoteMeta(q), "$options": "i"}
-	cur, err := s.notes.Find(ctx, bson.M{"$or": []bson.M{{"title": re}, {"body": re}}},
+	// Tags are searched too, not just title and body. Tags are lowercased on write
+	// (cleanTags), so the query is lowercased to match — `search_notes("Shopping")`
+	// must find a note tagged `shopping`. Without this clause the tag was a filter
+	// only reachable through list_notes(tag:), which made the tag vocabulary
+	// invisible to the tool a user reaches for when they remember a word but not
+	// which note holds it.
+	//
+	// `tags` is an array field, so a regex against it matches when ANY element
+	// matches — no $elemMatch needed, and a plain equality would only ever hit an
+	// exact tag.
+	cur, err := s.notes.Find(ctx, bson.M{"$or": []bson.M{
+		{"title": re},
+		{"body": re},
+		{"tags": bson.M{"$regex": regexp.QuoteMeta(strings.ToLower(q)), "$options": "i"}},
+	}},
 		options.Find().
 			SetSort(bson.D{{Key: "pinned", Value: -1}, {Key: "updatedAt", Value: -1}}).
 			SetLimit(int64(limit)))
@@ -313,7 +341,23 @@ func (s *Store) UpdateNote(ctx context.Context, id string, patch map[string]any)
 	if _, err := s.notes.UpdateOne(ctx, bson.M{"_id": o}, bson.M{"$set": upd}); err != nil {
 		return nil, err
 	}
-	return s.GetNote(ctx, id)
+	out, err := s.GetNote(ctx, id)
+	if err != nil || out == nil {
+		return out, err
+	}
+	// Same honesty as AddNote: if the incoming title or body was longer than the cap,
+	// the stored note is shorter than what was sent, and the caller is told.
+	if v, ok := patch["title"].(string); ok {
+		out["truncated"] = map[string]any{"title": truncated(v, maxTitle)}
+	}
+	if v, ok := patch["body"].(string); ok {
+		if t, _ := out["truncated"].(map[string]any); t != nil {
+			t["body"] = truncated(v, maxBody)
+		} else {
+			out["truncated"] = map[string]any{"body": truncated(v, maxBody)}
+		}
+	}
+	return out, nil
 }
 
 // DeleteNote reports whether a note was actually deleted. A missing id is NOT an
@@ -344,10 +388,40 @@ func docOut(d bson.M) bson.M {
 			out[k] = fmt.Sprint(v)
 		}
 	}
+	// Tags are always []string on the way out, whichever path produced the doc.
+	// A freshly inserted doc holds the Go []string that cleanTags returned; a doc
+	// read back from Mongo decodes the BSON array as bson.A. The two are identical
+	// over JSON but not identical in Go, so `note["tags"].([]string)` succeeds on
+	// the create response and PANICS on the get — a type assertion that passes in a
+	// test written against the create path and fails in production on the read path.
+	// Normalising here means every caller can assert once.
+	if raw, ok := out["tags"]; ok {
+		out["tags"] = toStringSlice(raw)
+	}
 	if body, ok := out["body"].(string); ok {
 		out["preview"] = preview(body)
 	}
 	return out
+}
+
+// toStringSlice renders a BSON array or an existing []string as []string, never
+// nil, so `out["tags"].([]string)` always succeeds.
+func toStringSlice(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		if t == nil {
+			return []string{}
+		}
+		return t
+	case bson.A:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			out = append(out, fmt.Sprint(e))
+		}
+		return out
+	default:
+		return []string{}
+	}
 }
 
 // headingRe matches an ATX heading and only a heading: 1-6 '#' followed by

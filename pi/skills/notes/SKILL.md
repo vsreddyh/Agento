@@ -34,7 +34,7 @@ the list", it is a note. Do not create a task with no due date to hold a list.
 | `create_note` | `title` | `body`, `tags`, `pinned` |
 | `get_note` | `id` | — |
 | `list_notes` | — | `tag`, `pinned_only`, `limit` (0 → 50) |
-| `search_notes` | `text` | `limit` (0 → 20) |
+| `search_notes` | `text` | `limit` (0 → 20) — matches title, body **and tags** |
 | `update_note` | `id` | `title`, `body`, `tags`, `pinned` — **omitted args are left alone; `body`/`tags` sent as empty clear that field, but an empty `title` is rejected** |
 | `delete_note` | `id` | — (unknown id returns an error, not a silent no-op) |
 
@@ -55,6 +55,9 @@ Two consequences the tool descriptions cannot enforce for you:
 
 - `list_notes` returns summaries **without** bodies. To read or edit a list,
   `get_note` first.
+- A very long title or body is stored truncated and the response says so in
+  `truncated`. If that comes back, tell the user the tail was cut — do not
+  report the whole thing was saved.
 - `update_note` **replaces** the body. Adding one item means `get_note`, append
   the line, and send the whole body back. Sending a partial body silently deletes
   every line you left out. Never reconstruct a body from a `list_notes` summary —
@@ -69,8 +72,9 @@ ask which one rather than guessing.
 
 Deleting a note is irreversible — confirm first, and never as a way to "tidy".
 
-`list_notes` shows a note by its `preview` (first line that is not blank or a
-`#` heading), so a list usually previews as its first item. Read it before
+`list_notes` shows a note by its `preview` (first line that is not blank and
+not an ATX heading — a `#` followed by a space), so a list usually previews
+as its first item. Read it before
 asking which note the user means.
 
 Run: `go run ./cmd/notes` (stdio) for a local check. In the running stack the

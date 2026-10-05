@@ -3,6 +3,7 @@ package notes
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -47,6 +48,16 @@ func TestNoteRoundTrip(t *testing.T) {
 	// this cleans by searching for the tag rather than by name.
 	cleanup(t, s, ctx)
 
+	// A second, unpinned, differently-tagged note. Created up front because the
+	// search assertions below need a note whose ONLY match is a tag, and the
+	// pinned-first ordering assertion needs a rival to outrank.
+	other, err := s.AddNote(ctx, "gotest unpinned", "- soap", []string{"errands"}, false)
+	if err != nil {
+		t.Fatalf("add rival: %v", err)
+	}
+	otherID := other["_id"].(string)
+	defer func() { _, _ = s.DeleteNote(ctx, otherID) }()
+
 	n, err := s.AddNote(ctx, "gotest groceries", "- milk\n- eggs\n\n- bread", []string{"Test", " Shopping "}, true)
 	if err != nil {
 		t.Fatalf("add: %v", err)
@@ -79,12 +90,7 @@ func TestNoteRoundTrip(t *testing.T) {
 		t.Errorf("preview = %v, want the first non-blank body line", rows[0]["preview"])
 	}
 
-	// Pinned-first ordering: the pinned note is this one, so add an unpinned rival.
-	other, err := s.AddNote(ctx, "gotest unpinned", "- soap", []string{"test"}, false)
-	if err != nil {
-		t.Fatalf("add rival: %v", err)
-	}
-	defer func() { _, _ = s.DeleteNote(ctx, other["_id"].(string)) }()
+	// Pinned-first ordering: the pinned note is this one and the rival is not.
 	rows, err = s.ListNotes(ctx, "", false, 0)
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("list all: %v %v", rows, err)
@@ -101,6 +107,32 @@ func TestNoteRoundTrip(t *testing.T) {
 	}
 	if _, ok := hits[0]["body"]; !ok {
 		t.Error("search_notes must return the body it matched")
+	}
+
+	// Tags are searchable too, and case-insensitively: a word the user remembers
+	// has to find the note when it is only a tag. `rival` below is tagged
+	// "errands" and has a body of "- soap", so a tag-only hit is unambiguous.
+	byTag, err := s.SearchNotes(ctx, "ERRANDS", 0)
+	if err != nil || len(byTag) != 1 {
+		t.Fatalf("tag search: %v %v", byTag, err)
+	}
+	if byTag[0]["_id"] != otherID {
+		t.Errorf("tag search returned %v, want the errands note", byTag[0]["_id"])
+	}
+
+	// `tags` must be []string on the READ path too, not just the insert path. A doc
+	// decoded from Mongo carries a bson.A, so without docOut's normalisation this
+	// assertion panics here — and passes in a test written against AddNote, which
+	// is how the inconsistency survived the first two rounds of review.
+	fetched, err := s.GetNote(ctx, id)
+	if err != nil || fetched == nil {
+		t.Fatalf("get: %v %v", fetched, err)
+	}
+	if _, ok := fetched["tags"].([]string); !ok {
+		t.Errorf("GetNote tags is %T, want []string (bson.A leaks through docOut)", fetched["tags"])
+	}
+	if _, ok := byTag[0]["tags"].([]string); !ok {
+		t.Errorf("SearchNotes tags is %T, want []string", byTag[0]["tags"])
 	}
 
 	// Patch semantics: absent keys are left alone. This is the regression that keeps
@@ -283,4 +315,70 @@ func TestTruncRejectsNonPositiveLimits(t *testing.T) {
 			t.Errorf("trunc(%q, %d) = %q, want \"\"", "milk", n, got)
 		}
 	}
+	// And the flag that reports the cut must agree with what trunc actually did,
+	// rather than being an independent guess at the same condition. `len(s) == n`
+	// keeps every byte, so the flag is false there — an off-by-one would make the
+	// app tell the user it was cut when it was not.
+	if truncated("milk", 4) != false {
+		t.Error("a string exactly at the cap is not truncated")
+	}
+	if truncated("milk", 3) != true {
+		t.Error("truncated disagrees with trunc below the cap")
+	}
+	if truncated("milk", 40) != false {
+		t.Error("truncated disagrees with trunc above the cap")
+	}
+	if trunc("milk", 3) != "mil" || len(trunc("milk", 3)) == len("milk") {
+		t.Error("trunc did not actually cut below the cap")
+	}
+}
+
+// An over-cap write is stored, but the response must admit it dropped bytes.
+// Storing 20 KB of a 25 KB paste and answering ok:true is data loss reported as
+// success — the user believes the whole thing is saved.
+func TestOverCapInputIsStoredAndReported(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cleanup(t, s, ctx)
+
+	long := strings.Repeat("x", maxBody+500)
+	n, err := s.AddNote(ctx, "gotest long", long, nil, false)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	id := n["_id"].(string)
+	defer func() { _, _ = s.DeleteNote(ctx, id) }()
+
+	tr, ok := n["truncated"].(map[string]any)
+	if !ok {
+		t.Fatalf("truncated missing from the create response: %v", n)
+	}
+	if tr["body"] != true {
+		t.Errorf("truncated.body = %v, want true", tr["body"])
+	}
+	if tr["title"] != false {
+		t.Errorf("truncated.title = %v, want false for a short title", tr["title"])
+	}
+	// Stored, not rejected: the user's list is still there, just shorter.
+	stored, err := s.GetNote(ctx, id)
+	if err != nil || stored == nil {
+		t.Fatalf("get: %v %v", stored, err)
+	}
+	if len(stored["body"].(string)) != maxBody {
+		t.Errorf("stored body is %d bytes, want the capped %d", len(stored["body"].(string)), maxBody)
+	}
+	if !utf8.ValidString(stored["body"].(string)) {
+		t.Error("the cap split a rune — stored body is not valid UTF-8")
+	}
+
+	// A short note reports nothing was cut.
+	small, err := s.AddNote(ctx, "gotest short", "- milk", nil, false)
+	if err != nil {
+		t.Fatalf("add short: %v", err)
+	}
+	if tr, _ := small["truncated"].(map[string]any); tr["body"] != false {
+		t.Errorf("a short body reported truncated: %v", tr)
+	}
+	_, _ = s.DeleteNote(ctx, small["_id"].(string))
 }
