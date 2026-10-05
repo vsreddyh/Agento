@@ -86,6 +86,28 @@ internal fun TaskManagerScreen(
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
+    // One client for the screen (its OkHttpClient is shared process-wide).
+    val api = remember(context) { TasksApi(context) }
+    var tasks by remember { mutableStateOf<List<ServerTask>>(emptyList()) }
+    // Whether the server held back rows beyond its cap: the list below
+    // must say so rather than silently ending mid-collection (#168).
+    var listTruncated by remember { mutableStateOf(false) }
+    // Persisted by enum name (enums have no default Saveable saver);
+    // rotation used to reset these while the search query survived.
+    var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
+    val filter = runCatching { ServerTaskFilter.valueOf(filterName) }
+        .getOrDefault(ServerTaskFilter.Open)
+    var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
+    val sort = runCatching { ServerTaskSort.valueOf(sortName) }
+        .getOrDefault(ServerTaskSort.Start)
+    var query by rememberSaveable { mutableStateOf("") }
+    var sortMenu by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<ServerTask?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf("") }
+    // Bumped after every load/mutation so the loader below reruns.
+    var refreshTick by remember { mutableIntStateOf(0) }
+
     // #185: surface a task-response contract mismatch. Without this collector the
     // warning was recorded and shown to nobody, which is the bug the check exists to
     // fix — the user needs to know the app and the server disagree while the task is
@@ -109,27 +131,6 @@ internal fun TaskManagerScreen(
         }
     }
 
-    // One client for the screen (its OkHttpClient is shared process-wide).
-    val api = remember(context) { TasksApi(context) }
-    var tasks by remember { mutableStateOf<List<ServerTask>>(emptyList()) }
-    // Whether the server held back rows beyond its cap: the list below
-    // must say so rather than silently ending mid-collection (#168).
-    var listTruncated by remember { mutableStateOf(false) }
-    // Persisted by enum name (enums have no default Saveable saver);
-    // rotation used to reset these while the search query survived.
-    var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
-    val filter = runCatching { ServerTaskFilter.valueOf(filterName) }
-        .getOrDefault(ServerTaskFilter.Open)
-    var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
-    val sort = runCatching { ServerTaskSort.valueOf(sortName) }
-        .getOrDefault(ServerTaskSort.Start)
-    var query by rememberSaveable { mutableStateOf("") }
-    var sortMenu by remember { mutableStateOf(false) }
-    var selected by remember { mutableStateOf<ServerTask?>(null) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf("") }
-    // Bumped after every load/mutation so the loader below reruns.
-    var refreshTick by remember { mutableIntStateOf(0) }
     // Editor draft (id empty = new task) and delete target.
     var editing by remember { mutableStateOf<ServerTaskDraft?>(null) }
     var deleting by remember { mutableStateOf<ServerTask?>(null) }
