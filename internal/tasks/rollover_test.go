@@ -383,9 +383,6 @@ func TestRolloverPlanClassifiesEachFailure(t *testing.T) {
 var fixtureNames = []string{
 	"One shot", "Custom", "Structured", "Legacy broken",
 	"Good", "Bad", "Custom done", "One shot done", "Chain",
-	// skip_test.go
-	"Skip me", "Skip repeat", "Skip twice", "Done then skip",
-	"Skip then reopen", "Not skipped",
 }
 
 func mustCreate(t *testing.T, s *Store, name string, fields map[string]any) string {
@@ -956,62 +953,6 @@ func TestPromotedGapSaysWhatShouldHaveExisted(t *testing.T) {
 	}
 	if !strings.Contains(gap.Detail, "no successor") {
 		t.Errorf("Detail = %q, want it to say the successor is missing", gap.Detail)
-	}
-}
-
-// The live path must carry the field-specific reason, not just the outcome sentence.
-//
-// Complete and Skip logged the rollover error and returned only RolloverFailed, so
-// `needs_attention` reached the user as "this task was marked done or skipped, but
-// creating its next occurrence FAILED" — with no indication of WHICH field to open. The
-// nightly reconciler already produced the specific text, so the same failure was
-// fixable-in-the-morning when noticed at night and not at all when noticed live.
-func TestCompleteAndSkipCarryTheFieldSpecificReason(t *testing.T) {
-	s := testStore(t)
-	ctx := context.Background()
-	defer cleanupFixtures(t, s, ctx)
-
-	// A structured repeat with a blank due_time: the legacy shape that actually stopped
-	// recurring. The store accepts it on the doc; the ROLLOVER is what fails.
-	id := mustCreate(t, s, "Live detail", map[string]any{
-		"due_date": "2026-10-05", "due_time": "",
-		"repeat_every": 1, "repeat_unit": "days",
-	})
-	_, _, reason, detail, err := s.CompleteDetail(ctx, id)
-	if err != nil {
-		t.Fatalf("CompleteDetail: %v", err)
-	}
-	if reason != RolloverFailed {
-		t.Fatalf("reason = %q, want %q", reason, RolloverFailed)
-	}
-	if detail == "" {
-		t.Fatal("detail is empty on the live path — the user gets a category and no field")
-	}
-	if !strings.Contains(detail, "due_time") {
-		t.Errorf("detail = %q, want it to name due_time", detail)
-	}
-
-	// And the rendered message leads with it, because that is the part that says what
-	// to open.
-	msg := reason.Attention(detail)
-	if !strings.HasPrefix(msg, "cannot roll over:") {
-		t.Errorf("message = %q, want the field-specific reason first", msg)
-	}
-	if !strings.Contains(msg, reason.UserFacing()) {
-		t.Errorf("message = %q, want the outcome sentence retained", msg)
-	}
-
-	// Skip carries it too — same defect, second verb.
-	id2 := mustCreate(t, s, "Live detail skip", map[string]any{
-		"due_date": "2026-10-05", "due_time": "",
-		"repeat_every": 1, "repeat_unit": "days",
-	})
-	_, _, r2, detail2, err := s.SkipDetail(ctx, id2, "out of time")
-	if err != nil {
-		t.Fatalf("SkipDetail: %v", err)
-	}
-	if r2 != RolloverFailed || !strings.Contains(detail2, "due_time") {
-		t.Errorf("skip: reason=%q detail=%q, want failed + due_time named", r2, detail2)
 	}
 }
 

@@ -32,10 +32,17 @@ On `complete_task`, read `rollover`:
   only `due_date` per the rule. Keep `due_time` unless the rule names a time.
 - `exhausted`/`failed` — repeat stopped. Tell the user; do not silently recreate.
 
-Ambiguous rule or empty `due_time` on an old task: ask the user, never guess.
+- Capture fast: collect name + description + due date/time + estimate +
+  parallelable BEFORE calling `create_task` — it rejects missing fields.
+  ("takes about an hour" → `estimated_minutes: 60`; "I can do it alongside
+  X" → `parallelable: true`; no repeat mentioned → send no repeat keys.)
+- Morning check: `list_tasks` with `overdue: true`, then state=open.
+- Done for now but not finished: leave open. Only `complete_task` finishes.
+- "Not tonight" / "skip it" means the work did NOT happen: never `complete_task`
+  it — leave it open, or push `due_date`/`due_time` via `update_task` when the
+  user names another time. A completion is a claim the work is done, and
+  completed rows vanish after 3 days, so a false one is erased, not corrected.
 
-## Skip vs complete
+## Mistake
 
-Work happened → `complete_task`. Work did NOT happen ("not tonight",
-"tomorrow") → `skip_task` (marks `skipped: true`, still advances structured
-repeats). Unsure → ask. Mistaken either → `reopen_task`, never `delete_task`.
+`reopen_task` — for a mistaken completion. Never `delete_task` to "undo" it.
