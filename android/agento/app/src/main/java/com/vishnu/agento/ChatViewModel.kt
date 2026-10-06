@@ -5,6 +5,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -639,7 +640,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // the server responded at all.
                         val nothingArrived = final.isBlank() && racc.toString().isBlank()
                         val finished = if (event.interrupted && nothingArrived) {
-                            msgs.dropLast(1)
+                            _state.value.messages.dropLast(1)
                         } else msgsDropLastPlusAssistant(
                             final, finishedAt, liveTools.toList(), event.usage,
                             racc.toString(), model,
@@ -946,7 +947,6 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         recoveryJob?.cancel()
         recoveryJob = viewModelScope.launch(Dispatchers.IO) {
             delay(RECOVERY_FIRST_DELAY_MS)
-            if (!isActive) return@launch
             var current = fragment
             fetchRecoveryText(path, sessionId)?.let { first ->
                 if (recoveryAdoptable(current, first)) {
@@ -957,7 +957,6 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 }
             }
             delay(RECOVERY_SECOND_DELAY_MS)
-            if (!isActive) return@launch
             val second = fetchRecoveryText(path, sessionId) ?: return@launch
             // Settled (same text twice, even if it equals the fragment) means
             // the orphan stopped producing: the turn finished, flag cleared.
@@ -972,11 +971,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** One transcript read for recovery: null on any failure (transport,
      * unknown session, unparseable body) — recovery is best-effort, and a
-     * failed poll must end the attempt, never fail the turn. */
-    private suspend fun fetchRecoveryText(path: String, sessionId: String): String? =
-        runCatching {
+     * failed poll must end the attempt, never fail the turn. Cancellation is
+     * rethrown, never swallowed: delay() already propagates it, and swallowing
+     * it here would let a cancelled recovery keep polling and patching. */
+    private suspend fun fetchRecoveryText(path: String, sessionId: String): String? {
+        return try {
             serverApi.fetchLastAssistantText(path, sessionId).getOrNull()
-        }.getOrNull()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            null
+        }
+    }
 
     /**
      * Writes recovered text into the flagged tail message. False when the
