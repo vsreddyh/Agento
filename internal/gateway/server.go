@@ -696,7 +696,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// The request may ask for a single JSON response; the app always streams, but
 	// a non-streaming client must not hang waiting for SSE.
 	if !req.Stream {
-		s.handleChatBuffered(w, turnCtx, h, events, userTurn, conversationID, req)
+		s.handleChatBuffered(w, turnCtx, h, events, userTurn, conversationID, req, revertModel)
 		return
 	}
 
@@ -717,6 +717,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	defer keepalive()
 
 	if err := h.runner.agent.Send(turnCtx, "prompt", promptPayload(userTurn)); err != nil {
+		// The turn never executed: revert like any other pre-prompt failure
+		// rather than leaving the switch sticky.
+		revertModel()
 		s.writeStreamError(sse, "could not deliver the prompt to the agent")
 		return
 	}
@@ -834,6 +837,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 func (s *Server) handleChatBuffered(
 	w http.ResponseWriter, ctx context.Context, h *agentHandler,
 	events <-chan pi.Record, userTurn *turn, conversationID string, req chatRequest,
+	revert func(),
 ) {
 	// Same derived id as the streaming path, so a completion can be correlated
 	// from logs regardless of which mode served it.
@@ -842,6 +846,9 @@ func (s *Server) handleChatBuffered(
 	var lastUsage piUsage
 
 	if err := h.runner.agent.Send(ctx, "prompt", promptPayload(userTurn)); err != nil {
+		// Same rule as the streaming path: a turn that never executed must
+		// not leave the switch sticky.
+		revert()
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not deliver the prompt to the agent")
 		return

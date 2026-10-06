@@ -443,3 +443,59 @@ func TestQualifiedClaimPrefixFoldsCase(t *testing.T) {
 		t.Fatalf("agent runs %q after the switch", got)
 	}
 }
+
+func TestPromptDeliveryFailureRevertsTheSwitch(t *testing.T) {
+	// Streaming path: the prompt never reached the agent, so the turn never
+	// executed — the switch must not stand.
+	agent := newFakeAgent()
+	agent.failCommands["prompt"] = errors.New("agent unreachable")
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"model":"muse-spark-1.3-contributor","model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}],"stream":true}`)
+	if !strings.Contains(rec.Body.String(), "could not deliver the prompt") {
+		t.Fatalf("expected the delivery error frame, got %d: %s", rec.Code, rec.Body)
+	}
+	if got := switchedModel(t, agent); got != "mimo-v2.6-flash" {
+		t.Fatalf("undelivered turn left the agent on %q instead of reverting", got)
+	}
+}
+
+func TestBufferedPromptDeliveryFailureRevertsTheSwitch(t *testing.T) {
+	// Same rule on the buffered path, which carries its own Send call.
+	agent := newFakeAgent()
+	agent.failCommands["prompt"] = errors.New("agent unreachable")
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"model":"muse-spark-1.3-contributor","model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}],"stream":false}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("got %d, want 502. body=%s", rec.Code, rec.Body)
+	}
+	if got := switchedModel(t, agent); got != "mimo-v2.6-flash" {
+		t.Fatalf("undelivered turn left the agent on %q instead of reverting", got)
+	}
+}
+
+func TestMixedCaseRunningProviderIsNoSwitch(t *testing.T) {
+	// The fast-path comparison folds the running side too: a mixed-case slug
+	// Pi reports must equal the folded target, not force a redundant switch
+	// every turn.
+	agent := newFakeAgent()
+	agent.modelProvider = "OpenCode-Go"
+	agent.events = []pi.Record{{Type: pi.TypeAgentSettled}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"provider":"opencode-go","model":"mimo-v2.6-flash",`+
+			`"model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if agent.sawCommand("set_model") {
+		t.Fatal("requesting the running model under a differently-cased provider switched")
+	}
+}

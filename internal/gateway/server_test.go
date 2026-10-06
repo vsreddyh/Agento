@@ -224,7 +224,12 @@ func (f *fakeAgent) Send(ctx context.Context, command string, payload map[string
 	}
 	events := append([]pi.Record(nil), f.events...)
 	settles := len(events) == 0 && !f.noSettle
+	fail := f.failCommands[command]
 	f.mu.Unlock()
+
+	if fail != nil {
+		return fail
+	}
 
 	if pushing && f.onPrompt != nil {
 		f.onPrompt()
