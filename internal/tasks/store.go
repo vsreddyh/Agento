@@ -194,6 +194,17 @@ func isSkipped(doc map[string]any) bool {
 	}
 }
 
+// TaskContractVersion is the version of the task response contract (#185).
+//
+// Every task response carries it as `contract_version` (see toDoc), and the app
+// asserts it alongside the fields it sent. Bump it whenever the contract changes
+// — a renamed key, a new shape, a different rollover envelope — and update the
+// app's TASK_CONTRACT_VERSION in the same change, so a stale install on either
+// side reads as a version disagreement instead of silent wrong data. That is the
+// mechanical form of the review that caught the 4.7.0 complete-response break:
+// it must not depend on a reviewer happening to look.
+const TaskContractVersion = 1
+
 func toDoc(doc bson.M) map[string]any {
 	out := map[string]any{}
 	for k, v := range doc {
@@ -243,6 +254,11 @@ func toDoc(doc bson.M) map[string]any {
 	// Deriving it here means every response shape carries it, including ones an old
 	// client already parses: it ignores a key it does not know.
 	out["skipped"] = isSkipped(out)
+	// The contract version this response speaks (#185). Additive on purpose: an
+	// app that has never heard of it ignores the key, while an app that asserts
+	// it can tell "old server" from "genuine zero" instead of defaulting every
+	// missing field and rendering a structured cadence as a one-shot.
+	out["contract_version"] = TaskContractVersion
 	// Backfill keys that pre-mandatory docs lack, so every response
 	// speaks the same contract (readers default the same way).
 	// due_time "" is the "created before times were required" sentinel:

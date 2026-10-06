@@ -248,6 +248,17 @@ internal fun ServerTaskDraft.repeatOrNull(): Triple<Int, String, String>? {
 }
 
 /**
+ * The task response contract this app speaks (#185).
+ *
+ * Every task response carries it as `contract_version`, and every write
+ * asserts it alongside the fields it sent. Bump it in the same change as the
+ * server's `TaskContractVersion` whenever the contract changes — a renamed
+ * key, a new shape, a different rollover envelope — so a stale install on
+ * either side reads as a version disagreement instead of silent wrong data.
+ */
+internal const val TASK_CONTRACT_VERSION = 1
+
+/**
  * The task fields the app asserts after a write (#185).
  *
  * Every field is **nullable, and null means "not asserted"** — not "absent from the
@@ -326,6 +337,15 @@ internal fun contractMismatches(
     ) {
         out += "id"
     }
+    // The contract itself, before any field (#185). 0 means the server
+    // predates versions entirely; anything above TASK_CONTRACT_VERSION means
+    // the server is newer than the app. Either way the fields below may have
+    // been read with defaults — a missing repeat_custom defaulting to false
+    // is exactly the 4.6.0 silent case — so the version disagreeing is
+    // reported like any other disagreement, through the same warn-not-throw
+    // path. The field name is what the server actually sent (or didn't),
+    // which is what a reader needs to find it in the response.
+    if (got.contractVersion != TASK_CONTRACT_VERSION) out += "contract_version"
     if (sent.name != null && sent.name.trim() != got.name.trim()) out += "name"
     if (sent.description != null &&
         sent.description.trim() != got.description.trim()

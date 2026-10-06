@@ -8,6 +8,23 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.14.7]
+- **Task responses now carry their contract version, and the app asserts it**
+  (#185). The 4.14.5 check compared the fields the app sent against the ones
+  that came back — but a response from a server older than versions has no
+  version key at all, and every field still defaulted silently. Every task
+  response now carries `contract_version` (1 today), and a write whose
+  response speaks any other contract warns naming `contract_version`: 0 means
+  the server predates versions, anything higher means the server is newer
+  than the app. `complete` and `reopen` send no fields to compare, so the
+  version is the only thing those paths assert — fitting, since the
+  complete-response shape change is the break this issue was written about.
+  The app also records the highest contract it has seen, so a stale install
+  is diagnosable instead of guesswork. A Go round-trip test pins the literal
+  bodies the app sends through validation and the idempotency fingerprint,
+  so the next shape change fails a test instead of waiting for a reviewer
+  to happen to look.
+
 ## Unreleased
 - **Read-back rule for writes** (#210). An agent closed a 33-write task
   reporting "verified against a fresh list (39 open = 33 + 6 clones)". The count

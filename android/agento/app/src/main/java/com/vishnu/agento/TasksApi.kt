@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +41,13 @@ data class ServerTask(
     val revision: Int = 0,
     val completedAt: String = "",
     val createdAt: String = "",
+    /**
+     * The response contract the server spoke (#185). 0 means the server
+     * predates versions entirely; anything else is asserted against
+     * [TASK_CONTRACT_VERSION] on write, so a version disagreement warns
+     * instead of defaulting every missing field to a genuine zero.
+     */
+    val contractVersion: Int = 0,
     /**
      * The next occurrence the server created by itself when a structured
      * cadence was completed ("" when there is none, or when the repeat is a
@@ -236,6 +244,11 @@ class TasksApi(context: Context) {
         if (name.isEmpty()) return null
         // estimated_minutes may encode as int, long, or double.
         val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
+        // contract_version likewise: int today, long or double tomorrow.
+        // 0 = absent = a server that predates versions, which the write paths
+        // report rather than silently default past (#185).
+        val version = (o.opt("contract_version") as? Number)?.toInt() ?: 0
+        noteContractVersion(version)
         return ServerTask(
             id = id,
             name = name,
@@ -253,7 +266,24 @@ class TasksApi(context: Context) {
             revision = (o.opt("revision") as? Number)?.toInt() ?: 0,
             completedAt = optStr(o, "completedAt"),
             createdAt = optStr(o, "createdAt"),
+            contractVersion = version,
         )
+    }
+
+    /**
+     * Records the highest task contract ever seen (#185).
+     *
+     * A stale install is otherwise diagnosable only by guesswork: the symptom
+     * of a contract mismatch is "the app is wrong", not "the versions
+     * disagree". The stored max says which contracts this install has actually
+     * spoken, without a new endpoint to ask. Zeros are not recorded — absent
+     * is "unknown", not a version.
+     */
+    private fun noteContractVersion(v: Int) {
+        if (v <= 0) return
+        if (prefs.getInt("contract_version_seen", 0) < v) {
+            prefs.edit { putInt("contract_version_seen", v) }
+        }
     }
 
     /**
@@ -516,7 +546,7 @@ class TasksApi(context: Context) {
                     // literal string "null" and reach the snackbar.
                     task.copy(nextDueDate = optStr(next, "due_date"))
                 }
-            }
+            }.also { r -> r.getOrNull()?.let { checkVersion(it) } }
         }
 
     /** Reopens a done task. */
@@ -527,6 +557,7 @@ class TasksApi(context: Context) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
             call("POST", "/api/tasks/$clean/reopen", JSONObject()).map { parseOne(it) }
+                .also { r -> r.getOrNull()?.let { checkVersion(it) } }
         }
 
     /** Permanently deletes a task. */
@@ -563,6 +594,28 @@ class TasksApi(context: Context) {
         // #214 is about, so this warns and leaves the stored task authoritative.
         ContractWarnings.report(mismatched, task.name)
     }
+
+    /**
+     * The version half of [checkContract], for the responses that carry no
+     * request to compare against (#185).
+     *
+     * `complete` and `reopen` send no fields — there is nothing to assert —
+     * but the issue's evidence is exactly a complete-response shape change
+     * that parsed cleanly and read as a rollover bug. The version is the only
+     * thing those paths CAN assert, so they do. Same warn-not-throw channel:
+     * the mutation succeeded, only the contract is in doubt.
+     *
+     * `list` and `get` deliberately do not call this: a list refresh would
+     * re-warn on every poll against one old server, and a get fires from
+     * background flows with no screen to show it on. Writes are the moments
+     * the user is looking.
+     */
+    private fun checkVersion(task: ServerTask) {
+        if (task.contractVersion != TASK_CONTRACT_VERSION) {
+            ContractWarnings.report(listOf("contract_version"), task.name)
+        }
+    }
+
     private fun parseOne(body: String): ServerTask =
         parseTask(JSONObject(body))
             ?: throw RuntimeException("Unexpected response shape")
