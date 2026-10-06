@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -223,9 +224,8 @@ type agentRunner struct {
 // history intact.
 // It also returns the agent state it read along the way, so a caller can report
 // the model that is actually answering without a second RPC. That matters because
-// the client's own `model` field is only a claim: the gateway never selects on it,
-// Pi's model is fixed when the process starts. Echoing the claim would be both
-// unbounded and wrong.
+// the client's own `model` field is a request, not a fact: the frames must carry
+// what Pi runs after selection, never the unchecked claim.
 func (a agentRunner) resolveSession(ctx context.Context, conversationID string) (*state, error) {
 	// No conversation id means an untracked turn. Use whatever session is current.
 	//
@@ -443,6 +443,228 @@ func supportedList(set levelSet) string {
 // so an unbounded tail turns one bad agent into an unbounded log. 2000 characters
 // is enough to see the last error and not enough to matter.
 const StderrTailLimit = 2000
+
+// Selection failures, as sentinels. The handler needs to tell "you named
+// something that does not exist" (400, the caller's value is wrong) from "Pi
+// broke mid-switch" (502, nothing about the request is wrong), and comparing
+// error strings for that distinction would break the first time either
+// message is reworded.
+type unknownModelError struct{ model string }
+
+func (e *unknownModelError) Error() string { return "unknown model: " + e.model }
+
+type unknownProviderError struct{ provider string }
+
+func (e *unknownProviderError) Error() string { return "unknown provider: " + e.provider }
+
+// modelInventory is the agent's advertised id → providers mapping, plus the
+// provider set, learned from Pi rather than hardcoded. One local IPC round
+// trip per turn — same class as thinkingLevels, which also reads fresh rather
+// than caching, because a stale cache turns a newly added model into a 400
+// until the gateway restarts.
+func (a agentRunner) modelInventory(ctx context.Context) (map[string][]string, map[string]bool, error) {
+	rec, err := a.agent.Call(ctx, "get_available_models", nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var payload struct {
+		Models []struct {
+			ID       string `json:"id"`
+			Provider string `json:"provider"`
+		} `json:"models"`
+	}
+	if len(rec.Data) > 0 {
+		if err := json.Unmarshal(rec.Data, &payload); err != nil {
+			return nil, nil, fmt.Errorf("gateway: decode model list: %w", err)
+		}
+	}
+	byID := map[string][]string{}
+	providers := map[string]bool{}
+	for _, m := range payload.Models {
+		id := strings.TrimSpace(m.ID)
+		// Lowercased at build, not just at lookup: selectModel folds the
+		// request the same way, so keys, membership checks and the composed
+		// target all agree. Slugs are lowercase by convention today, which
+		// makes this a no-op in practice — and if a mixed-case slug ever
+		// appears, the worst case is a loud 400, never a silent mismatch.
+		slug := strings.ToLower(strings.TrimSpace(m.Provider))
+		if id == "" || slug == "" {
+			continue
+		}
+		providers[slug] = true
+		known := false
+		for _, p := range byID[id] {
+			if p == slug {
+				known = true
+				break
+			}
+		}
+		if !known {
+			byID[id] = append(byID[id], slug)
+		}
+	}
+	return byID, providers, nil
+}
+
+// selectModel applies the client's provider/model selection to the profile's
+// process (#251). Before this the gateway never selected on those fields — Pi
+// ran its startup model no matter what the pickers said, and the response
+// echoed the running model while the app stamped the requested one, so the
+// substitution was invisible end to end.
+//
+// Switching is in-process (set_model), never a restart: transcripts live in
+// session files Pi keeps across switches (it records model_change itself),
+// while a restart would drop the in-memory conversation bindings and kill
+// in-flight turns. resolveSession runs after this, so everything it reads is
+// already post-switch; the thinking levels are read after too, because they
+// are per-model and validating effort against the previous model's ladder is
+// the mismatch this issue was written about.
+//
+// A bad selection costs nothing: validation runs against the inventory before
+// any RPC that mutates state, so unknown values 400 without touching the
+// process. (Effort is the exception that proves the shape: it can only be
+// judged against the post-switch levels, so a bad-effort request switches
+// first — and the handler reverts to the pre-switch model on every
+// pre-prompt failure, so the failed turn never silently repoints the
+// profile. See revertModel in handleChat.)
+func (a agentRunner) selectModel(ctx context.Context, provider, model string) (string, bool, error) {
+	// Providers compare case-insensitively (slugs are lowercase by
+	// convention); model ids match exactly first, then through the
+	// normalized spelling below.
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	model = strings.TrimSpace(model)
+	if i := strings.LastIndex(model, "/"); i >= 0 {
+		// A provider-qualified claim ("opencode-go/mimo-v2.6-flash"), split
+		// the way the app's own catalog lookup splits it. The prefix folds
+		// like provider does, so "OpenCode-Go/…" still strips. An explicit
+		// provider that disagrees with the prefix falls through to the
+		// inventory lookup, which fails as unknown — the slashed id names
+		// no real model. A trailing slash ("opencode-go/") is provider-only
+		// with an empty model: validated as such, selects nothing.
+		if pfx, rest := model[:i], model[i+1:]; provider == "" {
+			provider, model = strings.ToLower(strings.TrimSpace(pfx)), strings.TrimSpace(rest)
+		} else if strings.ToLower(strings.TrimSpace(pfx)) == provider {
+			model = strings.TrimSpace(rest)
+		}
+	}
+	if model == "" && provider == "" {
+		// Legacy callers that never heard of selection keep today's
+		// behaviour — the running model, validated effort and all.
+		return "", false, nil
+	}
+	byID, providers, err := a.modelInventory(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	if provider != "" && !providers[provider] {
+		return "", false, &unknownProviderError{provider: provider}
+	}
+	if model == "" {
+		// Provider alone selects nothing, but an unknown provider is still
+		// refused rather than silently ignored (#251 review): otherwise
+		// {"provider":"no-such"} with no model 200s on whatever runs.
+		return "", false, nil
+	}
+	var cand modelCandidates
+	if ps, ok := byID[model]; ok {
+		cand = modelCandidates{canonical: model, providers: ps}
+	} else if nc, ok := a.normalizedCandidates(byID, model); ok {
+		cand = nc
+		model = nc.canonical
+	} else {
+		return "", false, &unknownModelError{model: model}
+	}
+	if provider == "" {
+		if len(cand.providers) != 1 {
+			return "", false, &unknownModelError{model: model + " (available from several providers; name one)"}
+		}
+		provider = cand.providers[0]
+	} else if !slices.Contains(cand.providers, provider) {
+		// Both halves exist but never together: naming the composed target
+		// would report a model Pi never offered, so the refusal names where
+		// the model actually lives.
+		return "", false, &unknownModelError{model: model +
+			" (not offered by " + provider +
+			"; available from " + strings.Join(cand.providers, ", ") + ")"}
+	}
+	target := provider + "/" + model
+	st, err := a.getState(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	// Folded for the comparison only: the target is already folded, and a
+	// mixed-case slug Pi reports must not force a redundant switch every
+	// turn. Pi always receives the inventory-canonical target, never either
+	// spelling variant.
+	if strings.ToLower(st.Model.Provider)+"/"+st.Model.ID == target {
+		return "", false, nil
+	}
+	prev := ""
+	if st.Model.ID != "" && st.Model.Provider != "" {
+		// Both parts, or nothing: a half-composed "provider/" id would make
+		// the revert itself a malformed switch. Folded like the comparison
+		// and the target, so the revert replays canonical spelling.
+		prev = strings.ToLower(st.Model.Provider) + "/" + st.Model.ID
+	}
+	if _, err := a.agent.Call(ctx, "set_model", map[string]any{"model": target}); err != nil {
+		// The inventory said this model exists and Pi still refused it: the
+		// registry moved between the two calls. Pi names the model in that
+		// refusal (measured), so it reads as unknown, not wedged — anything
+		// else is a broken agent.
+		if isUnknownModelRefusal(err) {
+			return "", false, &unknownModelError{model: target}
+		}
+		return "", false, err
+	}
+	return prev, true, nil
+}
+
+// modelCandidates is one inventory id plus every provider offering it.
+type modelCandidates struct {
+	canonical string
+	providers []string
+}
+
+// normalizedCandidates resolves a model id the way the app looks it up:
+// dots, dashes and underscores unified, case folded (#251 review). The app's
+// catalog normalizes the same way, so "mimo-v2-6-flash" must find inventory
+// id "mimo-v2.6-flash" rather than 400. Comparison only — Pi always receives
+// the inventory's canonical spelling, never the normalized guess.
+func (a agentRunner) normalizedCandidates(byID map[string][]string, model string) (modelCandidates, bool) {
+	want := normModelID(model)
+	var hits []modelCandidates
+	for id, ps := range byID {
+		if normModelID(id) == want {
+			hits = append(hits, modelCandidates{canonical: id, providers: ps})
+		}
+	}
+	if len(hits) != 1 {
+		return modelCandidates{}, false
+	}
+	return hits[0], true
+}
+
+func normModelID(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, ".", "-")
+	s = strings.ReplaceAll(s, "_", "-")
+	return s
+}
+
+// isUnknownModelRefusal reports whether Pi refused a switch because the model
+// does not exist. Matched against the refusal shapes Pi emits, not against any
+// error merely containing "model" — "remodel failed" or "out of memory…
+// model…" would otherwise misread as unknown and 400 a wedged agent.
+func isUnknownModelRefusal(err error) bool {
+	msg := strings.ToLower(err.Error())
+	for _, m := range []string{"model not found", "unknown model", "invalid model"} {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
+}
 
 // Tail returns the END of s, which is where an error message is.
 //

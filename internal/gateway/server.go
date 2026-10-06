@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -536,8 +537,76 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	turnCtx, cancel := context.WithTimeout(r.Context(), s.cfg.TurnTimeout)
 	defer cancel()
 
-	// Resolve and validate the reasoning level before touching the session, so a
-	// bad request costs nothing and never mutates state.
+	// Apply the client's provider/model selection before anything that reads
+	// model-dependent state (#251). selectModel validates against the live
+	// inventory first, so an unknown provider or model 400s here without
+	// touching the process — a bad selection costs nothing, same guarantee
+	// the effort check below used to carry alone.
+	wantProvider := strings.TrimSpace(req.Provider)
+	wantModel := strings.TrimSpace(req.Model)
+	prevModel, switched, err := h.runner.selectModel(turnCtx, wantProvider, wantModel)
+	if err != nil {
+		var um *unknownModelError
+		var up *unknownProviderError
+		switch {
+		case errors.As(err, &um):
+			// Echo um.model, not wantModel: the multi-provider case
+			// appends a "name one" hint to the value, and rebuilding
+			// from the request would drop it.
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "model",
+				"unknown model "+strconv.Quote(bounded(um.model)))
+			return
+		case errors.As(err, &up):
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "provider",
+				"unknown provider "+strconv.Quote(bounded(up.provider)))
+			return
+		default:
+			s.cfg.Logf("gateway: selecting model: %v", err)
+			apiError(w, http.StatusBadGateway, "upstream_error", "",
+				"could not switch the agent's model")
+			return
+		}
+	}
+
+	// A failed pre-prompt turn must not silently repoint the profile: the
+	// switch above already applied, so every failure below that returns
+	// before prompting reverts to the pre-switch model first. Best-effort —
+	// if the revert itself fails, log and still report the turn's error,
+	// not the cleanup's. No-op when nothing switched (or the previous
+	// model could not be named).
+	//
+	// Detached context, not turnCtx: when the failure IS the deadline (or a
+	// client disconnect), turnCtx is already done and a revert fired on it
+	// would silently no-op — leaving exactly the sticky switch this exists
+	// to prevent. Five seconds is generous for a local IPC round trip.
+	revertModel := func() {
+		if switched && prevModel != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, rerr := h.runner.agent.Call(ctx, "set_model",
+				map[string]any{"model": prevModel}); rerr != nil {
+				s.cfg.Logf("gateway: reverting model after failed turn: %v", rerr)
+			}
+		}
+	}
+
+	agentState, err := h.runner.resolveSession(turnCtx, conversationID)
+	if err != nil {
+		revertModel()
+		s.cfg.Logf("gateway: resolving session: %v", err)
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"could not resolve the agent session")
+		return
+	}
+
+	// The thinking levels are read AFTER the model switch, because they are
+	// per-model: validating effort against the previous model's ladder is the
+	// wrong-model refusal #251 was written about. This used to run before the
+	// session resolve so a bad request cost nothing; the model gate above keeps
+	// that property for selections. Effort can only be judged against the
+	// applied model's levels, so a bad-effort request is refused after the
+	// switch — and the refusal path reverts to the pre-switch model, or one
+	// bad request would silently repoint every following turn.
 	levels, err := h.runner.thinkingLevels(turnCtx)
 	if err != nil {
 		// Tail, not verbatim: a wedged agent can emit megabytes of stderr and this
@@ -545,12 +614,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		// bound. The last lines are the ones that say what went wrong.
 		s.cfg.Logf("gateway: reading thinking levels: %v (stderr: %s)", err,
 			Tail(h.runner.agent.Stderr(), StderrTailLimit))
+		revertModel()
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not read the agent's supported reasoning levels")
 		return
 	}
 	level, effortErr := resolveEffort(req.ModelOptions.ReasoningEffort, levels)
 	if effortErr != nil {
+		revertModel()
 		detail := "unrecognised value"
 		if errors.Is(effortErr, errEffortUnsupported) {
 			detail = "not supported by this model; supported levels: " + supportedList(levels)
@@ -561,30 +632,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		return
 	}
 
-	agentState, err := h.runner.resolveSession(turnCtx, conversationID)
-	if err != nil {
-		s.cfg.Logf("gateway: resolving session: %v", err)
-		apiError(w, http.StatusBadGateway, "upstream_error", "",
-			"could not resolve the agent session")
-		return
-	}
-
-	// The model reported in frames is the one Pi is actually running, not the
-	// client's `model` claim. The gateway never selects on that field — Pi's model
-	// is fixed when the process starts — so echoing it would report a model that
-	// did not answer. It is also unbounded: it arrives in a body capped at 4 MiB
-	// and would otherwise be repeated on every streamed delta.
+	// The model reported in frames is the one Pi is actually running — which,
+	// since the selection above, is the applied model, not the claim. Before
+	// #251 the gateway never selected on those fields, so this echo was the
+	// only honest half of a substitution the app could not see; now the claim
+	// and the echo agree whenever the switch succeeded. It is still bounded:
+	// the value is echoed on every streamed delta, and real ids are about 15
+	// characters, so this guards the shape rather than the value and changes
+	// nothing in practice.
 	//
 	// If Pi reports no model, fall back to the client's claim but BOUND it: the
 	// raw claim arrives in a 4 MiB-capped body and would otherwise be repeated on
 	// every delta. Falling back unbounded would reintroduce the amplification this
 	// line was written to remove; blank would be worse still, since an empty model
 	// on every frame is a wire shape no client can do anything with.
-	// Both paths are bounded. The agent-reported id is no more trustworthy by
-	// virtue of arriving from a local process, and it is echoed on every frame, so
-	// a long value amplifies per delta exactly as the client claim would. Real
-	// ids are about 15 characters, so this guards the shape rather than the value
-	// and changes nothing in practice.
 	model := bounded(agentState.Model.ID)
 	if model == "" {
 		model = bounded(req.Model)
@@ -620,6 +681,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// reason: prefer a provably-correct state over a saved local call.
 	if _, err := h.runner.agent.Call(turnCtx, "set_thinking_level",
 		map[string]any{"level": level}); err != nil {
+		revertModel()
 		s.cfg.Logf("gateway: set_thinking_level(%s): %v", level, err)
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not apply the requested reasoning level")
@@ -634,7 +696,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// The request may ask for a single JSON response; the app always streams, but
 	// a non-streaming client must not hang waiting for SSE.
 	if !req.Stream {
-		s.handleChatBuffered(w, turnCtx, h, events, userTurn, conversationID, req)
+		s.handleChatBuffered(w, turnCtx, h, events, userTurn, conversationID, req, revertModel)
 		return
 	}
 
@@ -655,6 +717,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	defer keepalive()
 
 	if err := h.runner.agent.Send(turnCtx, "prompt", promptPayload(userTurn)); err != nil {
+		// The turn never executed: revert like any other pre-prompt failure
+		// rather than leaving the switch sticky.
+		revertModel()
 		s.writeStreamError(sse, "could not deliver the prompt to the agent")
 		return
 	}
@@ -772,6 +837,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 func (s *Server) handleChatBuffered(
 	w http.ResponseWriter, ctx context.Context, h *agentHandler,
 	events <-chan pi.Record, userTurn *turn, conversationID string, req chatRequest,
+	revert func(),
 ) {
 	// Same derived id as the streaming path, so a completion can be correlated
 	// from logs regardless of which mode served it.
@@ -780,6 +846,9 @@ func (s *Server) handleChatBuffered(
 	var lastUsage piUsage
 
 	if err := h.runner.agent.Send(ctx, "prompt", promptPayload(userTurn)); err != nil {
+		// Same rule as the streaming path: a turn that never executed must
+		// not leave the switch sticky.
+		revert()
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not deliver the prompt to the agent")
 		return

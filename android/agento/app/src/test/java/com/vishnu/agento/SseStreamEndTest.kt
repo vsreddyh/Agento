@@ -1,10 +1,12 @@
 package com.vishnu.agento
 
 import okio.Buffer
+import okio.buffer
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 /**
  * #214: a dropped connection must not be reported as a completed turn.
@@ -342,5 +344,72 @@ class InterruptedByStorageTest {
         // Any key outside the known set has no constant, which is what makes the
         // defensive fallback in ChatThreads reachable at all.
         assertEquals(null, InterruptedBy.entries.firstOrNull { it.storageKey == "cancelled" })
+    }
+}
+
+/**
+ * A mid-body `IOException` is a DROP, not a failed request.
+ *
+ * The `ChatEvent.Error` branch keeps partial text but never sets `interrupted`, so routing
+ * a socket reset there persists the fragment as a COMPLETE assistant reply — #214's defect
+ * on the path likelier to occur in the field than a clean EOF.
+ */
+class MidStreamIoFailureTest {
+
+    /** A source that yields [lines] and then throws, as a reset socket does. */
+    private class ExplodingSource(lines: List<String>) : okio.ForwardingSource(
+        Buffer().writeUtf8(lines.joinToString("\n", postfix = "\n")),
+    ) {
+        private var served = false
+        override fun read(sink: Buffer, byteCount: Long): Long {
+            if (!served) {
+                served = true
+                return super.read(sink, byteCount)
+            }
+            throw IOException("connection reset")
+        }
+    }
+
+    private val partial = listOf(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Half a \"}}]}",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"thought\"}}]}",
+    )
+
+    @Test
+    fun `a mid-body IOException reports EndOfStream not an exception`() {
+        // The uncaught case is the point: without the narrow catch this throws out of the
+        // reader and the test fails here rather than at the assert.
+        val full = StringBuilder()
+        val end = readSseStreamLenient(
+            source = ExplodingSource(partial).buffer(),
+            full = full,
+            reasoned = StringBuilder(),
+            onUsage = {},
+            emit = {},
+        )
+        assertEquals(SseEnd.EndOfStream, end)
+    }
+
+    @Test
+    fun `the text received before the reset is kept`() {
+        // The fragment is real output. Losing it is the other half of the bug — the user
+        // would have to guess what the agent had already said.
+        val full = StringBuilder()
+        readSseStreamLenient(
+            source = ExplodingSource(partial).buffer(),
+            full = full,
+            reasoned = StringBuilder(),
+            onUsage = {},
+            emit = {},
+        )
+        assertEquals("Half a thought", full.toString())
+    }
+
+    @Test
+    fun `EndOfStream maps to an interrupted Done`() {
+        // End-to-end over the two halves, because the defect lived in the SEAM: the reader
+        // returning the right thing and the producer reporting it wrong.
+        val done = doneFor(SseEnd.EndOfStream, "Half a thought", null) as ChatEvent.Done
+        assertTrue("the fragment must not be reported as finished", done.interrupted)
     }
 }

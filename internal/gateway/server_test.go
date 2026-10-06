@@ -65,6 +65,19 @@ type fakeAgent struct {
 	// reports none at all, which is a shape Pi may legitimately send.
 	modelID string
 
+	// modelProvider is the provider reported by get_state alongside modelID.
+	modelProvider string
+
+	// models backs get_available_models. Two models on one provider by
+	// default: enough for a switch to have somewhere to go, and for an
+	// unknown model to be genuinely unknown.
+	models []fakeModel
+
+	// levelsFor reports thinking levels per running model id, falling back
+	// to levels when the model has no entry — which is how the handler's
+	// post-switch validation reads the NEW model's ladder.
+	levelsFor map[string][]string
+
 	// prompts records the text of every prompt sent, so a test can assert what the
 	// agent actually receives rather than inferring it from the reply.
 	prompts []string
@@ -76,16 +89,28 @@ type fakeAgent struct {
 
 func newFakeAgent() *fakeAgent {
 	return &fakeAgent{
-		responses: map[string]any{},
-		levels:    []string{"off", "minimal", "low", "medium", "high"},
-		modelID:   "mimo-v2.6-flash",
-		calls:     map[string]int{},
-		events:    []pi.Record{},
+		responses:     map[string]any{},
+		levels:        []string{"off", "minimal", "low", "medium", "high"},
+		modelID:       "mimo-v2.6-flash",
+		modelProvider: "opencode-go",
+		models: []fakeModel{
+			{id: "mimo-v2.6-flash", provider: "opencode-go"},
+			{id: "muse-spark-1.3-contributor", provider: "opencode-go"},
+		},
+		calls:  map[string]int{},
+		events: []pi.Record{},
 		// Initialised rather than left nil: a test that assigns a failing command
 		// would otherwise panic on the nil map, which reads as a fake bug rather
 		// than the test setup it is.
 		failCommands: map[string]error{},
 	}
+}
+
+// fakeModel is one row of get_available_models: just enough to validate a
+// selection against.
+type fakeModel struct {
+	id       string
+	provider string
 }
 
 func (f *fakeAgent) Call(ctx context.Context, command string, payload map[string]any) (*pi.Record, error) {
@@ -107,8 +132,41 @@ func (f *fakeAgent) Call(ctx context.Context, command string, payload map[string
 		switch command {
 		case "get_available_thinking_levels":
 			f.mu.Lock()
-			resp = map[string]any{"levels": f.levels}
+			if lv, ok := f.levelsFor[f.modelID]; ok {
+				resp = map[string]any{"levels": lv}
+			} else {
+				resp = map[string]any{"levels": f.levels}
+			}
 			f.mu.Unlock()
+		case "get_available_models":
+			f.mu.Lock()
+			list := make([]map[string]any, 0, len(f.models))
+			for _, m := range f.models {
+				list = append(list, map[string]any{
+					"id": m.id, "provider": m.provider, "reasoning": true,
+				})
+			}
+			resp = map[string]any{"models": list}
+			f.mu.Unlock()
+		case "set_model":
+			// Models the state change, not Pi's validation: unknown values
+			// are rejected by the handler's inventory gate before this is
+			// ever called, and a Pi-side refusal is scripted with
+			// failCommands. "provider/id" splits; a bare id keeps the
+			// current provider, matching the handler which always composes
+			// the pair itself.
+			target, _ := payload["model"].(string)
+			id, provider := target, ""
+			if i := strings.Index(target, "/"); i >= 0 {
+				provider, id = target[:i], target[i+1:]
+			}
+			f.mu.Lock()
+			f.modelID = id
+			if provider != "" {
+				f.modelProvider = provider
+			}
+			f.mu.Unlock()
+			resp = map[string]any{}
 		case "get_state":
 			f.mu.Lock()
 			if f.curFile == "" {
@@ -122,7 +180,7 @@ func (f *fakeAgent) Call(ctx context.Context, command string, payload map[string
 				"thinkingLevel": "off",
 				"model": map[string]any{
 					"id":       f.modelID,
-					"provider": "opencode-go",
+					"provider": f.modelProvider,
 					"api":      "openai-completions",
 				},
 			}
@@ -166,7 +224,12 @@ func (f *fakeAgent) Send(ctx context.Context, command string, payload map[string
 	}
 	events := append([]pi.Record(nil), f.events...)
 	settles := len(events) == 0 && !f.noSettle
+	fail := f.failCommands[command]
 	f.mu.Unlock()
+
+	if fail != nil {
+		return fail
+	}
 
 	if pushing && f.onPrompt != nil {
 		f.onPrompt()
