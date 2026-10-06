@@ -14,8 +14,7 @@ store, same validation — see `cmd/health-api/main.go`).
 | `get_task` | Fetch one task by id |
 | `update_task` | Edit fields. Only `id` is required — every other field is nil-safe, and empty repeat_rule clears the rule |
 | `complete_task` | Mark done (3-day retention starts); echoes repeat_rule + follow-up nudge; always reports `rollover` |
-| `skip_task` | Skip ONE occurrence without claiming it was done; 3-day retention starts too; advances a structured repeat |
-| `reopen_task` | Reopen a completed **or skipped** task (cancels expiry; a skip returns to open, not to done) |
+| `reopen_task` | Reopen a completed task (cancels expiry) |
 | `delete_task` | Permanently delete |
 
 ## Schema (MongoDB `hermes` DB)
@@ -90,43 +89,6 @@ That asymmetry is a property of the query, not an oversight in it: widening the 
 match drifted types would also pull in rows that are not repeats at all. If a repeat you
 expect to be recurring is missing from the report, check its stored types first — that is
 the failure this caveat is here to prevent.
-
-## `skip_task` — a skip is not a completion (#209)
-
-There was no verb for "not doing this occurrence". An agent asked to skip five
-chores called `complete_task` on all five, recording work that never happened as
-done — and since completed rows are TTL-deleted after 3 days, the false record was
-erased rather than corrected. The agent's own reasoning had read *"this is
-ambiguous, I should ask"* and then guessed, because there was nothing else to call.
-
-`skip_task(id, reason?)`:
-
-- sets **`skippedAt`** so the record says skipped, not done. Every task response
-  carries a derived `skipped` boolean, so "is it done?" and "was it done?" are
-  different questions and a client reading only `completedAt` no longer conflates
-  them;
-- also sets `completedAt`, deliberately — the occurrence is *resolved* and must
-  leave the open list, or the user is asked again tonight. Leaving it open is
-  already what an open task is; conflating the two would put skipped chores back
-  on tonight's list;
-- **still advances a structured repeat**. Skipping an occurrence is not abandoning
-  the series — `delete_task` is what abandons it.
-
-`reason` is the user's words, verbatim and capped at 200 bytes on a rune boundary.
-
-`reopen_task` clears the skip marker too, and returns a skipped task to **open**,
-not to done.
-
-Over HTTP: `POST /api/tasks/{id}/skip` with an optional `{"reason": "..."}`. The
-body accepts **only** `reason`; an unknown key is a `422` naming the offending field.
-A misspelt `{"reson": ...}` used to decode into an empty reason, leaving the user
-believing they had recorded why with nothing recorded — the quiet disappearance a
-skip exists to be distinguishable from. An empty body is still valid.
-response keeps the task at the top level (so an old app still parses it) and adds
-`skipReason`, `next` and `rollover`. `skipped` is not among them: it is derived
-from `skippedAt` on **every** task response, so it reads `false` on anything
-completed or open and only flips here.
-
 
 ## HTTP hardening (#176)
 
@@ -211,7 +173,7 @@ Two additions beside it:
   its **last** hop is read, since nginx uses `$proxy_add_x_forwarded_for`, which
   appends to a client-supplied list and so leaves every earlier entry attacker-chosen.
 - **A mutation log** (`task_mutations`) recording op, task, source and timestamp for
-  every create/update/complete/skip/reopen/delete, from **both** callers: the HTTP API
+  every create/update/complete/reopen/delete, from **both** callers: the HTTP API
   (`source` = the `X-Agento-Source` header, or `http`) and the MCP server
   (`source` = `mcp`). The agent and the app are the same caller as far as the server is
   concerned — one shared password, one collection — so nothing previously recorded *who*
@@ -261,10 +223,9 @@ that is the failure this caveat is here to prevent. Writes are best-effort: a fa
   configured**. The limiter runs before auth, so folding in whatever token was
   presented would let anyone evade the limit by rotating a bogus `Authorization`
   header. Unauthenticated traffic is keyed by address alone.
-- **Retention:** done tasks auto-delete 3 days after completion via TTL. **Skipped
-  occurrences expire the same way** — `skip_task` resolves the occurrence, so it
-  sets `expiresAt` exactly as `complete_task` does. A skip is not permanent
-  history, and that is worth knowing before relying on it as a record.
+- **Retention:** done tasks auto-delete 3 days after completion via TTL.
+  (Legacy skipped rows from before the skip verb was removed expire the same
+  way — a skip set `expiresAt` exactly as `complete_task` does.)
   Open tasks never expire. `reopen_task` clears the expiry.
 
 ## Run

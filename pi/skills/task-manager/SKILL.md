@@ -75,39 +75,8 @@ rejects the mix:
   ("takes about an hour" → `estimated_minutes: 60`; "I can do it alongside
   X" → `parallelable: true`; no repeat mentioned → send no repeat keys.)
 - Morning check: `list_tasks` with `overdue: true`, then state=open.
-- Done for now but not finished: leave open. Only `complete_task` finishes, and
-  `skip_task` skips. See the skip rule below.
-
-## Skip is a verb, not a completion
-
-**`complete_task` records that work HAPPENED. If it did not happen, use
-`skip_task`** — "not doing this tonight", "out of time", "doing it tomorrow",
-"skipping the skippable ones".
-
-Why this matters enough to have its own tool: a completion is a claim that the
-work is done. Recording a skip as a completion writes a false record — and
-completed tasks are deleted after 3 days, so the false history is **erased rather
-than corrected**, and the user never finds out. This has already happened: five
-chores were marked complete for an evening in which none of them was done.
-
-| The user says | Call |
-|---|---|
-| "done", "finished it", "did it" | `complete_task` |
-| "skip it", "not tonight", "doing it tomorrow", "no time" | `skip_task` |
-| "still need to do it" | nothing — leave it open |
-
-`skip_task` does three things, all of which `complete_task` does not:
-
-- marks the record **skipped**, not done (`skipped: true`), so the history is
-  honest;
-- still takes it off tonight's open list, so the user is not asked again;
-- still advances a **structured** repeat — skipping tonight is not skipping the
-  habit. `delete_task` is what abandons a series.
-
-If you are ever unsure whether the work happened, **ask**. A wrong completion is
-worse than an extra question, and it disappears in three days.
+- Done for now but not finished: leave open. Only `complete_task` finishes.
 
 ## Mistake
 
-`reopen_task` — for both a mistaken completion and a mistaken skip. Never
-`delete_task` to "undo" either.
+`reopen_task` — for a mistaken completion. Never `delete_task` to "undo" it.

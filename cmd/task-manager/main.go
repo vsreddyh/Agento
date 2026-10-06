@@ -135,15 +135,6 @@ type reopenTaskInput struct {
 	ID string `json:"id"`
 }
 
-type skipTaskInput struct {
-	ID string `json:"id"`
-	// The user's own words for skipping this occurrence, kept verbatim and capped.
-	// Optional — the action is unambiguous without it — but it is the difference
-	// between a skip and a quiet disappearance, so pass it when the user gave a
-	// reason ("out of time", "doing it tomorrow").
-	Reason string `json:"reason,omitempty"`
-}
-
 type deleteTaskInput struct {
 	ID string `json:"id"`
 }
@@ -324,43 +315,8 @@ func main() {
 			return result(out)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "skip_task",
-		Description: "Skip ONE occurrence of a task — for 'not doing this tonight', 'out of time', 'doing it tomorrow'. Use this instead of complete_task whenever the work did NOT happen: complete_task records it as DONE, which is a false record, and completed rows are auto-deleted after 3 days so a false one is erased rather than corrected. A STRUCTURED repeat still rolls over (the habit continues); a CUSTOM one is yours, same contract as complete_task. Leaves the task out of the open list either way, so the user is not asked again tonight."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in skipTaskInput) (*mcp.CallToolResult, map[string]any, error) {
-			doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, in.ID, in.Reason)
-			if err != nil {
-				return fail(err)
-			}
-			store.RecordMutation(ctx, tasks.OpSkip, in.ID, mcpSource, fmt.Sprint(rollover))
-			// No top-level "skipped" here, deliberately. `task.skipped` is DERIVED from
-			// skippedAt in toDoc and is always present, so it cannot disagree with the
-			// record; a second `skipped` at the top level would be a hand-written literal
-			// for a fact the doc already carries, and the two are exactly the kind of pair
-			// that drifts the first time this verb grows a nuance. It would also be the
-			// only difference from complete_task, which returns {ok, task} and likewise
-			// states no top-level "completed". Read it off the task, like every other
-			// caller does.
-			out := map[string]any{"ok": true, "task": doc}
-			out["rollover"] = string(rollover)
-			rep := repeatOf(doc)
-			switch {
-			case next != nil:
-				out["rolled_over"] = true
-				out["next"] = next
-			case rollover == tasks.RolloverCustom:
-				out["repeat_every"] = rep.Every
-				out["repeat_unit"] = rep.Unit
-				out["repeat_custom"] = rep.Custom
-				out["repeat_rule"] = rep.Text
-				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys, advancing only due_date"
-			case rollover.NeedsAttention():
-				out["needs_attention"] = rollover.Attention(rolloverDetail)
-			}
-			return result(out)
-		})
-
 	mcp.AddTool(s, &mcp.Tool{Name: "reopen_task",
-		Description: "Reopen a completed OR skipped task (clears completion and the skip marker, cancels the 3-day expiry). Reopening a skipped task puts it back on the open list — it does not mark it done."},
+		Description: "Reopen a completed task (clears completion, cancels the 3-day expiry)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in reopenTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Reopen(ctx, in.ID)
 			if err != nil {

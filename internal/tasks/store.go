@@ -935,114 +935,16 @@ func (s *Store) stateOnMiss(ctx context.Context, oid primitive.ObjectID, id stri
 	return doc, nil
 }
 
-// resolvedStateErr names the state a task is ACTUALLY in when complete_task or
-// skip_task finds it already resolved.
-//
-// Both verbs land here, which is the point. Skip used to distinguish "already
-// skipped" from "already completed" while Complete did not, so completing a skipped
-// occurrence reported it as DONE — a false record of work that never happened, which
-// is the exact thing #209 exists to stop, reached from the other direction. And the
-// two states need different remedies, so the message that names the wrong one sends
-// the reader to the wrong verb.
-//
-// Kept as one function rather than a check copied into each miss path: a rule written
-// twice is a rule that will be updated once.
+// resolvedStateErr names the state a task is ACTUALLY in when complete_task
+// finds it already resolved. Legacy skipped rows keep their marker, so the
+// skipped branch stays: completing one must still say "already skipped", not
+// report work that never happened as done.
 func resolvedStateErr(doc bson.M, id string) *StoreError {
 	if isSkipped(doc) {
 		return fail("task '%s' is already skipped, not done — reopen_task returns it to "+
 			"the open list if you now mean to do it", id)
 	}
 	return fail("task '%s' is already completed", id)
-}
-
-// Skip resolves ONE occurrence of a task as skipped rather than done (#209).
-//
-// The reason this is a verb and not a note: asked to "skip the skippable tasks
-// for tonight", an agent with only complete/reopen/delete has no correct action,
-// and the nearest available mutation is `complete` — so skips were being recorded
-// as completions. Five of them, once, on work that never happened. Because those
-// rows TTL away after RetentionDays, the false history was erased rather than
-// corrected and the user never got a chance to notice.
-//
-// What skip does, precisely:
-//   - sets `skippedAt`, so the record says SKIPPED and not done — that is the
-//     whole point, and it is what `skipped` in the response reads;
-//   - also sets `completedAt`, because the occurrence is RESOLVED: it must leave
-//     the open list or the user is asked again tonight. Skipping is not "leave it
-//     open" — that is what a task the user intends to do today already is, and
-//     conflating the two would put skipped chores back on tonight's list;
-//   - advances a STRUCTURED cadence, exactly as Complete does. Skipping tonight is
-//     not skipping the habit.
-//
-// A one-shot or a custom repeat has no next occurrence to advance to; `reason`
-// says which, and the caller owns the custom case (same contract as Complete).
-//
-// `reason` is the user's words, kept verbatim and capped — "out of time", "doing it
-// tomorrow". It is the difference between a skip and a quiet disappearance, and it
-// is the only part of this the user would miss.
-//
-// `skipReason` is set UNCONDITIONALLY, so a skip with no reason stores "" rather
-// than leaving the field out. That is the point: its presence alongside the
-// timestamp is what marks the occurrence as skipped, and it is `$set` in the SAME
-// atomic update as `skippedAt`, so the two can never disagree. A task that was
-// never skipped has no `skipReason` key at all, which is the other half of the
-// distinction. Omitting the empty case would save a few bytes per row and make a
-// skipped-without-reason task indistinguishable from a completed one in that field
-// alone.
-func (s *Store) Skip(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, error) {
-	doc, next, r, _, err := s.SkipDetail(ctx, id, reason)
-	return doc, next, r, err
-}
-
-// SkipDetail is Skip plus the field-specific reason a rollover failed. Same rationale as
-// CompleteDetail: the detail was logged and discarded, so a skip that stopped a repeat
-// reached the agent as a generic "FAILED" with no field named.
-func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, string, error) {
-	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
-	if err != nil {
-		return nil, nil, "", "", fail("bad id '%s'", id)
-	}
-	now := time.Now().UTC()
-	res, err := s.tasks.UpdateOne(ctx,
-		bson.M{"_id": oid, "completedAt": nil},
-		bson.M{
-			"$set": bson.M{
-				"completedAt": primitive.NewDateTimeFromTime(now),
-				"skippedAt":   primitive.NewDateTimeFromTime(now),
-				"skipReason":  truncSkipReason(reason),
-				"expiresAt":   primitive.NewDateTimeFromTime(now.AddDate(0, 0, RetentionDays)),
-			},
-			"$inc": bson.M{"revision": 1},
-		})
-	if err != nil {
-		return nil, nil, "", "", err
-	}
-	if res.MatchedCount == 0 {
-		doc, serr := s.stateOnMiss(ctx, oid, id)
-		if serr != nil {
-			return nil, nil, "", "", serr
-		}
-		return nil, nil, "", "", resolvedStateErr(doc, id)
-	}
-	skipped, err := s.Get(ctx, id)
-	if err != nil {
-		return nil, nil, "", "", err
-	}
-	// The cadence advances exactly as on Complete. Skipping an occurrence is not
-	// abandoning the series — that is what delete_task is for.
-	next, rollover, rerr := s.rollOver(ctx, skipped)
-	if rerr != nil {
-		log.Printf("task %s skipped but rollover failed: %v", id, rerr)
-		return skipped, nil, RolloverFailed, rerr.Error(), nil
-	}
-	return skipped, next, rollover, "", nil
-}
-
-// truncSkipReason caps the user's own words, rune-safely: this is free text typed
-// by voice, and a 40 KB paste would otherwise ride along in every list response.
-func truncSkipReason(s string) string {
-	const max = 200
-	return truncateRunes(s, max)
 }
 
 // truncateRunes caps a string at max BYTES without splitting a UTF-8 rune, so a

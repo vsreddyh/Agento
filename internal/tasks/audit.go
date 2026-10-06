@@ -32,7 +32,6 @@ const (
 	OpUpdate   = "update"
 	OpDelete   = "delete"
 	OpComplete = "complete"
-	OpSkip     = "skip"
 	OpReopen   = "reopen"
 )
 
