@@ -557,12 +557,26 @@ func (a agentRunner) selectModel(ctx context.Context, provider, model string) (b
 		// registry moved between the two calls. Pi names the model in that
 		// refusal (measured), so it reads as unknown, not wedged — anything
 		// else is a broken agent.
-		if strings.Contains(strings.ToLower(err.Error()), "model") {
+		if isUnknownModelRefusal(err) {
 			return false, &unknownModelError{model: target}
 		}
 		return false, err
 	}
 	return true, nil
+}
+
+// isUnknownModelRefusal reports whether Pi refused a switch because the model
+// does not exist. Matched against the refusal shapes Pi emits, not against any
+// error merely containing "model" — "remodel failed" or "out of memory…
+// model…" would otherwise misread as unknown and 400 a wedged agent.
+func isUnknownModelRefusal(err error) bool {
+	msg := strings.ToLower(err.Error())
+	for _, m := range []string{"model not found", "unknown model", "invalid model"} {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // Tail returns the END of s, which is where an error message is.

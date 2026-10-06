@@ -49,8 +49,11 @@ object EffortCatalog {
         "mimo-v2-6-pro" to MIMO_GRADED,
         "mimo-v2-pro" to MIMO_GRADED,
         "mimo-v2-omni" to MIMO_GRADED,
-        // Muse Spark 1.x: graded levels.
-        "muse-spark" to listOf("minimal", "low", "medium", "high", "xhigh", "max"),
+        // Muse Spark 1.x: graded levels. "none" (= off) is unverified on the
+        // real model but consistent with every other graded row, FALLBACK,
+        // and the gateway fake — and if it is wrong the server 400s naming
+        // the real levels rather than running silently wrong.
+        "muse-spark" to listOf("none", "minimal", "low", "medium", "high", "xhigh", "max"),
         // GLM: 5/5.1 toggle; 5.2/5.3 graded.
         "glm-5-3" to listOf("low", "high", "max"),
         "glm-5-2" to listOf("low", "medium", "high", "xhigh", "max"),

@@ -195,3 +195,42 @@ func TestPiFailureMidSwitchIs502(t *testing.T) {
 		t.Fatalf("got %d, want 502. body=%s", rec.Code, rec.Body)
 	}
 }
+
+func TestAmbiguousModelNamesItsProviders(t *testing.T) {
+	// The same id under two providers with no provider named: the 400 must
+	// carry the "name one" hint, not a bare unknown-model.
+	agent := newFakeAgent()
+	agent.models = []fakeModel{
+		{id: "shared-model", provider: "provider-a"},
+		{id: "shared-model", provider: "provider-b"},
+	}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"model":"shared-model","model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400. body=%s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "name one") {
+		t.Fatalf("the 400 dropped the disambiguation hint: %s", rec.Body)
+	}
+	if agent.sawCommand("set_model") {
+		t.Fatal("an ambiguous selection still switched the model")
+	}
+}
+
+func TestModelSubstringInUnrelatedErrorIs502(t *testing.T) {
+	// "remodel" contains "model" but names no model: matching it would 400 a
+	// wedged agent instead of 502ing it.
+	agent := newFakeAgent()
+	agent.failCommands["set_model"] = errors.New("remodel failed: out of memory")
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"model":"muse-spark-1.3-contributor","model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("got %d, want 502. body=%s", rec.Code, rec.Body)
+	}
+}

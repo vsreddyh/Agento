@@ -550,8 +550,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 			var up *unknownProviderError
 			switch {
 			case errors.As(err, &um):
+				// Echo um.model, not wantModel: the multi-provider case
+				// appends a "name one" hint to the value, and rebuilding
+				// from the request would drop it.
 				apiError(w, http.StatusBadRequest, "invalid_request_error", "model",
-					"unknown model "+strconv.Quote(bounded(wantModel)))
+					"unknown model "+strconv.Quote(bounded(um.model)))
 				return
 			case errors.As(err, &up):
 				apiError(w, http.StatusBadRequest, "invalid_request_error", "provider",
