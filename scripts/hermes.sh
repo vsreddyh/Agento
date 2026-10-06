@@ -267,7 +267,12 @@ cmd_init() {
             # never delete real content — manual deletion also stays safe.
             rmdir "$REPO/workspace/story" 2>/dev/null || true
         elif [[ "$b" == "resumes" ]]; then
-            mkdir -p "$REPO/workspace/resumes"
+            # Resumes lives in the portfolio-resume repo, not workspace/resumes
+            # (retired) — never recreate it.
+            mkdir -p "$REPO/workspace/portfolio-resume"
+            # Retired dir: rmdir only removes it when empty, so this can
+            # never delete real content — manual deletion also stays safe.
+            rmdir "$REPO/workspace/resumes" 2>/dev/null || true
         fi
     done
     # Fix ownership before cloning: when run via sudo, dirs are root-owned and
@@ -281,7 +286,7 @@ cmd_init() {
     # commits locally only; pull/push happen here on the host. Both repos stay
     # as separate git remotes; this repo does NOT vendor their files.
     #  - vsreddyh/portals → workspace/portals (story bot lore vault AND story cwd)
-    #  - vsreddyh/Resume  → workspace/resumes  (resumes bot cwd IS the repo)
+    #  - vsreddyh/portfolio-resume → workspace/portfolio-resume (resumes bot works under resume/)
     # The host key at ~/.ssh (or $SUDO_USER's ~/.ssh when run with sudo)
     # is reused — no key generation. Add the deploy key to ~/.ssh before
     # running init.
@@ -296,9 +301,9 @@ cmd_init() {
             env GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone "$url" "$dest" 2>&1
         fi
     }
-    if [[ ! -d "$REPO/workspace/resumes/.git" ]]; then
-        info "Cloning Resumes repo into workspace/resumes..."
-        _clone_repo "git@github.com:vsreddyh/Resume.git" "$REPO/workspace/resumes" \
+    if [[ ! -d "$REPO/workspace/portfolio-resume/.git" ]]; then
+        info "Cloning portfolio-resume repo into workspace/portfolio-resume..."
+        _clone_repo "git@github.com:vsreddyh/portfolio-resume.git" "$REPO/workspace/portfolio-resume" \
             || warn "clone failed — configure an SSH key for this host first. ./scripts/hermes.sh start will still work, but the resumes bot won't have its workspace."
     fi
     if [[ ! -d "$REPO/workspace/portals/.git" ]]; then

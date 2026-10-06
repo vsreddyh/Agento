@@ -95,7 +95,7 @@ Each profile is a directory under [`pi/profiles/`](pi/profiles) — god, story a
 |---|---|---|
 | `god` (main) | God | Money (`money_transactions`), cookbook (`cookbook_*`), health (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync — `pi/profiles/god/`, same shape as the other two |
 | `story` (side) | Story | Lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) |
-| `resumes` (side) | Resumes | LaTeX CV workspace in Git repo (`workspace/resumes`, `vsreddyh/Resume`) |
+| `resumes` (side) | Resumes | LaTeX CV workspace in Git repo (`workspace/portfolio-resume`, `vsreddyh/portfolio-resume`, scope `resume/`) |
 
 ### Environment & Token Injection
 - All tokens and channel IDs reside in the root `.env`.
