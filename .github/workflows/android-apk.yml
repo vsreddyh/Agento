@@ -7,11 +7,19 @@ on:
       - "android/**"
       - "CHANGELOG.md"
       - ".github/workflows/android-apk.yml"
+      # The task-contract drift check below reads the server's
+      # TaskContractVersion: a server-only bump must start this workflow,
+      # or the mismatch fails nowhere until the app catches up (#185).
+      - "internal/tasks/store.go"
+      # Same for the key-set check: it reads the server's taskCreateFields.
+      - "cmd/health-api/tasks.go"
   pull_request:
     paths:
       - "android/**"
       - "CHANGELOG.md"
       - ".github/workflows/android-apk.yml"
+      - "internal/tasks/store.go"
+      - "cmd/health-api/tasks.go"
   workflow_dispatch:
 
 # Publishing GitHub Releases (APKs under the repo's Releases page) needs this.
@@ -113,6 +121,41 @@ jobs:
       # not to gate the release artifact.
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
+
+      # The task response contract is versioned on BOTH sides (#185): the
+      # server's TaskContractVersion (internal/tasks/store.go) and the app's
+      # TASK_CONTRACT_VERSION (TaskDomain.kt). The runtime version check warns
+      # on a mismatch, but a bump on one side without the other should fail
+      # HERE — at review time — rather than warn on users' screens. Cheap
+      # static step, placed with the other fail-fast checks.
+      - name: Verify task contract versions match
+        run: |
+          GO=$(sed -n 's/^const TaskContractVersion = \([0-9][0-9]*\)/\1/p' ../../internal/tasks/store.go)
+          KT=$(sed -n 's/^internal const val TASK_CONTRACT_VERSION = \([0-9][0-9]*\)/\1/p' app/src/main/java/com/vishnu/agento/TaskDomain.kt)
+          if [ -z "$GO" ] || [ -z "$KT" ]; then
+            echo "::error::could not read both contract versions (go='$GO' kotlin='$KT')"
+            exit 1
+          fi
+          if [ "$GO" != "$KT" ]; then
+            echo "::error::task contract drift: server TaskContractVersion=$GO but app TASK_CONTRACT_VERSION=$KT — bump both in the same change (#185)"
+            exit 1
+          fi
+          echo "Task contract versions match: $GO"
+          # The create key SETS must match too (#185 review): the app builds
+          # its body from TASK_CREATE_KEYS and the server fingerprints
+          # taskCreateFields, so a field added, renamed or dropped on one
+          # side without the other must fail here, not replay wrong in prod.
+          KT_KEYS=$(awk '/TASK_CREATE_KEYS = listOf\(/,/^\)$/' app/src/main/java/com/vishnu/agento/TaskDomain.kt | grep -o '"[a-z_]*"' | tr -d '"' | sort)
+          GO_KEYS=$(awk '/var taskCreateFields = \[\]string\{/,/^\}$/' ../../cmd/health-api/tasks.go | grep -o '"[a-z_]*"' | tr -d '"' | sort)
+          if [ -z "$KT_KEYS" ] || [ -z "$GO_KEYS" ]; then
+            echo "::error::could not read both create key sets"
+            exit 1
+          fi
+          if [ "$KT_KEYS" != "$GO_KEYS" ]; then
+            echo "::error::task create keys drift: app sends [$(echo "$KT_KEYS" | tr '\n' ' ')] but server fingerprints [$(echo "$GO_KEYS" | tr '\n' ' ')] — change both in the same PR (#185)"
+            exit 1
+          fi
+          echo "Task create keys match: $(echo "$KT_KEYS" | tr '\n' ' ')"
 
       - name: Upload unit test report
         if: always()

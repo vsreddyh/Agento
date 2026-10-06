@@ -511,6 +511,32 @@ func TestLegacyDocBackfill(t *testing.T) {
 	}
 }
 
+// Every response speaks its contract version out loud (#185).
+//
+// The 4.6.0 and 4.7.0 shape changes were absorbed silently because the app had
+// nothing to compare against: a missing field defaulted to a genuine zero and
+// the version disagreement looked like a bug in the app. `contract_version` is
+// the thing to compare against, so its absence from any response is itself a
+// break — including on legacy docs, which are the ones an old server is most
+// likely to serve.
+func TestToDocEmitsContractVersion(t *testing.T) {
+	for name, raw := range map[string]bson.M{
+		"current": {"name": "t", "due_date": "2026-10-05", "due_time": "08:00"},
+		"legacy":  {"name": "Read mails", "due_date": "2026-10-05", "completedAt": nil},
+		"empty":   {},
+	} {
+		doc := toDoc(raw)
+		v, ok := doc["contract_version"]
+		if !ok {
+			t.Fatalf("%s: response carries no contract_version: %v", name, doc)
+		}
+		n, ok := mongostore.ToInt(v)
+		if !ok || n != TaskContractVersion {
+			t.Fatalf("%s: contract_version = %v, want %d", name, v, TaskContractVersion)
+		}
+	}
+}
+
 // The app sends all four repeat keys on every repeat edit, with
 // zero-values for a one-shot (repeat_every 0, unit "", custom false, rule
 // ""); an unrelated edit omits all four. Each literal body must

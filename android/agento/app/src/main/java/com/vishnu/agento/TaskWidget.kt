@@ -209,6 +209,16 @@ class TaskWidget : AppWidgetProvider() {
             Log.w("TaskWidget", "factory failure at $where", e)
         }
 
+        /** "seen v3, app speaks v1" for diagnostics: which task contracts
+         * this install has actually spoken (#185). 0 seen = no task response
+         * parsed yet (or only pre-version servers), not a version. */
+        private fun taskContractLine(appCtx: Context): String {
+            val seen = appCtx.applicationContext
+                .getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+                .getInt(CONTRACT_VERSION_SEEN_KEY, 0)
+            return "seen v$seen, app speaks v$TASK_CONTRACT_VERSION"
+        }
+
         /** One-screen widget health summary for Settings → About, so
          * widget failures can be diagnosed without adb. Never throws
          * (a diagnostics call must not become a second crash). */
@@ -233,6 +243,11 @@ class TaskWidget : AppWidgetProvider() {
                 appendLine(
                     "reminders=" + (
                         TaskReminders.budget(ctx)?.line() ?: "no refresh yet"))
+                // Highest task contract this install has spoken, and the one
+                // it speaks (#185). A value nothing reads is not
+                // diagnosability, it is a write — so it lives here, in the
+                // report a user can copy out of Settings → About.
+                appendLine("taskContract=" + taskContractLine(ctx))
             }.trim()
         }.getOrDefault("(diagnostics unavailable)")
 

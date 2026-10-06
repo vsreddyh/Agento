@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
@@ -71,6 +72,9 @@ class TaskContractTest {
         repeatCustom = s.repeatCustom ?: false,
         repeatRule = s.repeatRule ?: "",
         parallelable = s.parallelable ?: false,
+        // The fixture states the contract it speaks: a stored task with no
+        // version is a pre-version server, which IS a mismatch (#185).
+        contractVersion = TASK_CONTRACT_VERSION,
     )
 
     @Test
@@ -464,6 +468,7 @@ class UpdateContractWiringTest {
         dueTime = "09:00",
         repeatEvery = 1,
         repeatUnit = "days",
+        contractVersion = TASK_CONTRACT_VERSION,
     )
 
     @Test
@@ -641,6 +646,7 @@ class ContractIdentityTest {
         name = "Take meds",
         dueDate = "2026-10-06",
         dueTime = "09:00",
+        contractVersion = TASK_CONTRACT_VERSION,
     )
 
     @Test
@@ -736,7 +742,7 @@ class ContractNoDuplicateFieldsTest {
         // was:<[id, name]>` — the duplicate was fixed and my fixture was wrong.
         val got = contractMismatches(
             sent,
-            ServerTask(id = "", name = "Take meds"),
+            ServerTask(id = "", name = "Take meds", contractVersion = TASK_CONTRACT_VERSION),
             expectedId = "6abfabc",
         )
         assertEquals(listOf("id"), got)
@@ -747,9 +753,205 @@ class ContractNoDuplicateFieldsTest {
     fun `every reported field appears once`() {
         val got = contractMismatches(
             sent,
-            ServerTask(id = "", name = "Something else"),
+            ServerTask(
+                id = "",
+                name = "Something else",
+                contractVersion = TASK_CONTRACT_VERSION,
+            ),
             expectedId = "6abfabc",
         )
         assertEquals("a field must never be reported twice: $got", got.size, got.distinct().size)
+    }
+}
+
+/**
+ * The contract version itself is asserted (#185).
+ *
+ * The 4.6.0 structured-repeat change taught this: a response from an older
+ * server defaulted every missing field to a genuine zero, so an un-updated
+ * client rendered every structured cadence as a one-shot with nothing
+ * warning. The version is what turns that silent default into a visible
+ * disagreement — 0 means the server predates versions entirely, anything
+ * above [TASK_CONTRACT_VERSION] means the server is newer than the app, and
+ * either way the fields below may have been misread.
+ */
+class ContractVersionTest {
+
+    private val sent = TasksApi.buildTaskContractSent(
+        name = "Take meds",
+        dueDate = "2026-10-06",
+        dueTime = "09:00",
+        estimatedMinutes = 5,
+        repeatEvery = 1,
+        repeatUnit = "days",
+        repeatCustom = false,
+        repeatRule = "",
+        parallelable = false,
+    )
+
+    private fun stored(version: Int) = ServerTask(
+        id = "6abf0000000000000000abcd",
+        name = "Take meds",
+        dueDate = "2026-10-06",
+        dueTime = "09:00",
+        estimatedMinutes = 5,
+        repeatEvery = 1,
+        repeatUnit = "days",
+        repeatCustom = false,
+        repeatRule = "",
+        parallelable = false,
+        contractVersion = version,
+    )
+
+    @Test
+    fun `the version this app speaks reports nothing`() {
+        assertEquals(
+            emptyList<String>(),
+            contractMismatches(sent, stored(TASK_CONTRACT_VERSION)),
+        )
+    }
+
+    @Test
+    fun `a server that predates versions is reported, not defaulted past`() {
+        // 0 = the key was absent: an old server, or a field that failed to
+        // persist. Defaulting past it is the 4.6.0 silent case.
+        assertEquals(
+            listOf("contract_version"),
+            contractMismatches(sent, stored(0)),
+        )
+    }
+
+    @Test
+    fun `a server newer than the app is reported`() {
+        // The app may misread fields the new contract added, so agreement on
+        // every known field is not enough.
+        assertEquals(
+            listOf("contract_version"),
+            contractMismatches(sent, stored(TASK_CONTRACT_VERSION + 1)),
+        )
+    }
+
+    @Test
+    fun `a version disagreement joins the field list once, not instead of it`() {
+        // Both halves matter: the version says the contracts disagree, the
+        // field says what visibly differs. One report, no duplicates.
+        val got = contractMismatches(
+            sent,
+            stored(0).copy(dueDate = "2026-10-07"),
+        )
+        assertEquals(listOf("contract_version", "due_date"), got)
+    }
+
+    @Test
+    fun `the expected version is a real version, not the absent default`() {
+        // If TASK_CONTRACT_VERSION were ever 0, every pre-version response
+        // would compare equal and the check would be dead. The constant must
+        // stay positive for the 0-means-absent reading to mean anything.
+        assertTrue(
+            "TASK_CONTRACT_VERSION must be positive, got $TASK_CONTRACT_VERSION",
+            TASK_CONTRACT_VERSION > 0,
+        )
+    }
+}
+
+/** Version parsing is lenient on type but strict on meaning (#185 review). */
+class ParseContractVersionTest {
+
+    @Test
+    fun `numbers read as their int value`() {
+        assertEquals(1, parseContractVersion(1))
+        assertEquals(2, parseContractVersion(2L))
+        assertEquals(3, parseContractVersion(3.0))
+    }
+
+    @Test
+    fun `a numeric string reads as its number, not as pre-version`() {
+        // A string "1" warning as an old server would be a false positive of
+        // exactly the class this check exists to remove.
+        assertEquals(1, parseContractVersion("1"))
+        assertEquals(2, parseContractVersion("  2  "))
+        // Double-encoded numbers get the same truncation Numbers do.
+        assertEquals(1, parseContractVersion("1.0"))
+    }
+
+    @Test
+    fun `absent null and garbage all mean predates versions`() {
+        assertEquals(0, parseContractVersion(null))
+        assertEquals(0, parseContractVersion("latest"))
+        assertEquals(0, parseContractVersion(""))
+        assertEquals(0, parseContractVersion(true))
+    }
+
+    @Test
+    fun `negatives clamp to predates versions`() {
+        // -5 fits neither bucket (0 = pre-version, >0 = real), so it must
+        // not pass through as a version that can never equal
+        // TASK_CONTRACT_VERSION yet reads as one.
+        assertEquals(0, parseContractVersion(-5))
+        assertEquals(0, parseContractVersion("-5"))
+        assertEquals(0, parseContractVersion(-5.5))
+    }
+}
+
+/** One number per response batch, not one prefs write per row (#185 review). */
+class MaxContractVersionTest {
+
+    private fun task(version: Int) = ServerTask(
+        id = "6abf0000000000000000abcd",
+        name = "Take meds",
+        contractVersion = version,
+    )
+
+    @Test
+    fun `the highest version in the batch wins`() {
+        assertEquals(
+            3,
+            maxContractVersion(listOf(task(1), task(3), task(2))),
+        )
+    }
+
+    @Test
+    fun `an empty batch records nothing`() {
+        assertEquals(0, maxContractVersion(emptyList()))
+    }
+
+    @Test
+    fun `zeros are unknown, not a version`() {
+        assertEquals(0, maxContractVersion(listOf(task(0), task(0))))
+    }
+}
+
+/** A complete response is two docs, each asserted on its own (#185 review). */
+class CompleteVersionMismatchTest {
+
+    @Test
+    fun `agreement on both halves warns nothing`() {
+        assertFalse(completeVersionMismatch(TASK_CONTRACT_VERSION, TASK_CONTRACT_VERSION))
+    }
+
+    @Test
+    fun `no next occurrence means nothing more to assert`() {
+        // One-shots roll over to nothing: a null next is absence, not a
+        // pre-version doc.
+        assertFalse(completeVersionMismatch(TASK_CONTRACT_VERSION, null))
+    }
+
+    @Test
+    fun `a pre-version next warns even when the task agrees`() {
+        // The maxOf version of this collapsed task=1 + next=0 to 1 and hid
+        // the half-disagreement — in both directions.
+        assertTrue(completeVersionMismatch(TASK_CONTRACT_VERSION, 0))
+    }
+
+    @Test
+    fun `a disagreeing task warns even when next agrees`() {
+        assertTrue(completeVersionMismatch(0, TASK_CONTRACT_VERSION))
+    }
+
+    @Test
+    fun `a newer server warns on either half`() {
+        val newer = TASK_CONTRACT_VERSION + 1
+        assertTrue(completeVersionMismatch(newer, TASK_CONTRACT_VERSION))
+        assertTrue(completeVersionMismatch(TASK_CONTRACT_VERSION, newer))
     }
 }

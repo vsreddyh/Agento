@@ -248,6 +248,89 @@ internal fun ServerTaskDraft.repeatOrNull(): Triple<Int, String, String>? {
 }
 
 /**
+ * The task response contract this app speaks (#185).
+ *
+ * Every task response carries it as `contract_version`, and every write
+ * asserts it alongside the fields it sent. Bump it in the same change as the
+ * server's `TaskContractVersion` whenever the contract changes — a renamed
+ * key, a new shape, a different rollover envelope — so a stale install on
+ * either side reads as a version disagreement instead of silent wrong data.
+ */
+internal const val TASK_CONTRACT_VERSION = 1
+
+/** Prefs key for the highest task contract this install has spoken (#185). */
+internal const val CONTRACT_VERSION_SEEN_KEY = "contract_version_seen"
+
+/**
+ * Every key `TasksApi.create` sends (#185).
+ *
+ * The body is BUILT from this (one map, iterated in order), so the list
+ * cannot drift from what is actually sent — and the CI drift step asserts
+ * this set equals the server's `taskCreateFields`, so neither side can add,
+ * rename or drop a field without the other noticing. That is the mechanical
+ * form of the "kept key-for-key" mirror the Go round-trip test used to rely
+ * on prose alone to maintain.
+ */
+internal val TASK_CREATE_KEYS = listOf(
+    "name",
+    "description",
+    "due_date",
+    "due_time",
+    "estimated_minutes",
+    "parallelable",
+    "repeat_every",
+    "repeat_unit",
+    "repeat_custom",
+    "repeat_rule",
+)
+
+/**
+ * Reads a contract version out of a decoded JSON value (#185).
+ *
+ * Lenient on the TYPE, strict on the meaning: int, long and double all
+ * arrive as [Number], and a numeric string reads as its number — but
+ * anything else (absent, null, `"latest"`) is 0, "predates versions",
+ * which the write paths report rather than silently default past. A string
+ * `"1"` warning as an old server would be a false positive of exactly the
+ * class this check exists to remove.
+ */
+internal fun parseContractVersion(raw: Any?): Int = when (raw) {
+    is Number -> raw.toInt()
+    // A double-encoded "1.0" gets the same leniency Numbers do (3.0 -> 3):
+    // without the toDouble fallback it warns as a pre-version server.
+    is String -> raw.trim().toIntOrNull()
+        ?: raw.trim().toDoubleOrNull()?.toInt()
+        ?: 0
+    else -> 0
+    // Negatives fit neither bucket (0 = pre-version, >0 = a real version),
+    // so they clamp to 0 rather than passing through as a version that can
+    // never equal TASK_CONTRACT_VERSION yet reads as one.
+}.coerceAtLeast(0)
+
+/**
+ * Whether a complete response disagrees on either half (#185 review).
+ *
+ * `next` is absent (null) for one-shots with nothing to roll over — nothing
+ * to assert then. Otherwise each doc is asserted on its own: collapsing the
+ * two with maxOf hides a half-disagreement in BOTH directions (task=1 +
+ * pre-version next=0, and task=0 + next=1, both read as 1), and next is the
+ * half that already broke once (#180).
+ */
+internal fun completeVersionMismatch(taskVersion: Int, nextVersion: Int?): Boolean =
+    taskVersion != TASK_CONTRACT_VERSION ||
+        (nextVersion != null && nextVersion != TASK_CONTRACT_VERSION)
+
+/**
+ * The highest contract in a response batch, or 0 when no task spoke one.
+ *
+ * One number per RESPONSE, not per row: `list` parses up to 200 tasks, and
+ * a prefs read-modify-write per row is 200 I/Os per refresh for a single
+ * fact. The callers record this once per batch instead.
+ */
+internal fun maxContractVersion(tasks: List<ServerTask>): Int =
+    tasks.maxOfOrNull { it.contractVersion } ?: 0
+
+/**
  * The task fields the app asserts after a write (#185).
  *
  * Every field is **nullable, and null means "not asserted"** — not "absent from the
@@ -326,6 +409,15 @@ internal fun contractMismatches(
     ) {
         out += "id"
     }
+    // The contract itself, before any field (#185). 0 means the server
+    // predates versions entirely; anything above TASK_CONTRACT_VERSION means
+    // the server is newer than the app. Either way the fields below may have
+    // been read with defaults — a missing repeat_custom defaulting to false
+    // is exactly the 4.6.0 silent case — so the version disagreeing is
+    // reported like any other disagreement, through the same warn-not-throw
+    // path. The field name is what the server actually sent (or didn't),
+    // which is what a reader needs to find it in the response.
+    if (got.contractVersion != TASK_CONTRACT_VERSION) out += "contract_version"
     if (sent.name != null && sent.name.trim() != got.name.trim()) out += "name"
     if (sent.description != null &&
         sent.description.trim() != got.description.trim()

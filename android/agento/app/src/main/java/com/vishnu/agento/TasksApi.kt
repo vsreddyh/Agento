@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +41,13 @@ data class ServerTask(
     val revision: Int = 0,
     val completedAt: String = "",
     val createdAt: String = "",
+    /**
+     * The response contract the server spoke (#185). 0 means the server
+     * predates versions entirely; anything else is asserted against
+     * [TASK_CONTRACT_VERSION] on write, so a version disagreement warns
+     * instead of defaulting every missing field to a genuine zero.
+     */
+    val contractVersion: Int = 0,
     /**
      * The next occurrence the server created by itself when a structured
      * cadence was completed ("" when there is none, or when the repeat is a
@@ -202,6 +210,15 @@ class TasksApi(context: Context) {
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .build()
         }
+
+        /**
+         * Guards the read-modify-write in [TasksApi.noteContractVersion].
+         * On the companion, not the instance: there is one TasksApi per
+         * screen, so an instance lock would not order two concurrent
+         * refreshes against each other — which is the interleaving that
+         * could land the older max last.
+         */
+        private val versionLock = Any()
     }
 
     private val appCtx = context.applicationContext
@@ -236,6 +253,12 @@ class TasksApi(context: Context) {
         if (name.isEmpty()) return null
         // estimated_minutes may encode as int, long, or double.
         val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
+        // Pure: no prefs here. list() parses up to 200 rows per refresh, so a
+        // read-modify-write per row is 200 I/Os for one fact — and a
+        // read-then-write that is not atomic can regress (sees v3, then a late
+        // v2 write wins). The callers record the batch max once, under one
+        // lock, instead (#185 review).
+        val version = parseContractVersion(o.opt("contract_version"))
         return ServerTask(
             id = id,
             name = name,
@@ -253,8 +276,38 @@ class TasksApi(context: Context) {
             revision = (o.opt("revision") as? Number)?.toInt() ?: 0,
             completedAt = optStr(o, "completedAt"),
             createdAt = optStr(o, "createdAt"),
+            contractVersion = version,
         )
     }
+
+    /**
+     * Records a task contract version: the running max of what this install
+     * has spoken (#185).
+     *
+     * A stale install is otherwise diagnosable only by guesswork: the symptom
+     * of a contract mismatch is "the app is wrong", not "the versions
+     * disagree". The stored max says which contracts this install has actually
+     * spoken, without a new endpoint to ask — and it is surfaced in
+     * Settings → About diagnostics, because a value nothing reads is not
+     * diagnosability, it is a write. Zeros are not recorded — absent is
+     * "unknown", not a version.
+     *
+     * Read-modify-write under one lock: this runs on Dispatchers.IO and two
+     * concurrent refreshes could otherwise interleave and land the older max
+     * last.
+     */
+    private fun noteContractVersion(version: Int) {
+        if (version <= 0) return
+        synchronized(versionLock) {
+            if (prefs.getInt(CONTRACT_VERSION_SEEN_KEY, 0) < version) {
+                prefs.edit { putInt(CONTRACT_VERSION_SEEN_KEY, version) }
+            }
+        }
+    }
+
+    /** Records the highest contract a response batch spoke. */
+    private fun noteContractVersion(tasks: List<ServerTask>) =
+        noteContractVersion(maxContractVersion(tasks))
 
     /**
      * Lists tasks by state (`open`, `done`, `all`); unknown states fail fast.
@@ -286,7 +339,7 @@ class TasksApi(context: Context) {
                     parseTask(o)?.let { out.add(it) }
                 }
                 TaskList(out, root.optBoolean("truncated", false))
-            }
+            }.also { r -> r.getOrNull()?.let { noteContractVersion(it.tasks) } }
         }
 
     /**
@@ -310,6 +363,7 @@ class TasksApi(context: Context) {
                 parseOne(body)
             }.fold(
                 onSuccess = { task ->
+                    task?.let { noteContractVersion(listOf(it)) }
                     Result.success(task)
                 },
                 onFailure = { e ->
@@ -390,19 +444,42 @@ class TasksApi(context: Context) {
                 IllegalStateException("create: builder dropped a required field"),
             )
         }
+        // The body is written from TASK_CREATE_KEYS, not from a second literal
+        // list of puts: one key list means the list cannot drift from what is
+        // actually sent, and the CI drift step asserts this set equals the
+        // server's taskCreateFields (#185 review).
+        //
+        // A missing key fails IN-CHANNEL, like the null-guard above: the
+        // callers fold Result.failure into a snackbar, while a throw (require,
+        // getValue) would escape the coroutine and show nothing at all.
+        val values: Map<String, Any?> = mapOf(
+            "name" to sent.name,
+            "description" to sent.description,
+            "due_date" to sent.dueDate,
+            "due_time" to sent.dueTime,
+            "estimated_minutes" to sent.estimatedMinutes,
+            "parallelable" to sent.parallelable,
+            "repeat_every" to sent.repeatEvery,
+            "repeat_unit" to sent.repeatUnit,
+            "repeat_custom" to sent.repeatCustom,
+            "repeat_rule" to sent.repeatRule,
+        )
         val body = JSONObject()
-            .put("name", sent.name)
-            .put("description", sent.description)
-            .put("due_date", sent.dueDate)
-            .put("due_time", sent.dueTime)
-            .put("estimated_minutes", sent.estimatedMinutes)
-            .put("parallelable", sent.parallelable)
-            .put("repeat_every", sent.repeatEvery)
-            .put("repeat_unit", sent.repeatUnit)
-            .put("repeat_custom", sent.repeatCustom)
-            .put("repeat_rule", sent.repeatRule)
+        for (k in TASK_CREATE_KEYS) {
+            // A null value would be silently DROPPED by put, sending a short
+            // body — so null fails here, the same as a missing key.
+            val v = values[k] ?: return@withContext Result.failure(
+                IllegalStateException("create: no value for key $k"),
+            )
+            body.put(k, v)
+        }
         call("POST", "/api/tasks", body).map { parseOne(it) }
-            .also { r -> r.getOrNull()?.let { checkContract(it, sent) } }
+            .also { r ->
+                r.getOrNull()?.let {
+                    noteContractVersion(listOf(it))
+                    checkContract(it, sent)
+                }
+            }
     }
 
     /**
@@ -490,6 +567,7 @@ class TasksApi(context: Context) {
                     // The app knows which task it asked to change, so a response
                     // carrying a DIFFERENT id is detectable — a server answering with
                     // the wrong record is otherwise invisible when every field matches.
+                    noteContractVersion(listOf(task))
                     checkContract(task, sent, expectedId = id)
                 }
             }
@@ -509,6 +587,19 @@ class TasksApi(context: Context) {
                 val task = parseTask(root.optJSONObject("task") ?: root)
                     ?: throw RuntimeException("Unexpected response shape")
                 val next = root.optJSONObject("next")
+                // Each half versioned on its own (#185 review): maxOf would
+                // collapse task=1 + pre-version next=0 to 1 and hide the
+                // half-disagreement — in both directions — and next is the
+                // half that already broke once (#180). Handled here rather
+                // than in an also below, which would only ever see the task
+                // half. Read leniently, like the top-level version: this must
+                // never fail a completion, only version it.
+                val nextVersion =
+                    next?.let { parseContractVersion(it.opt("contract_version")) }
+                if (completeVersionMismatch(task.contractVersion, nextVersion)) {
+                    ContractWarnings.report(listOf("contract_version"), task.name)
+                }
+                noteContractVersion(maxOf(task.contractVersion, nextVersion ?: 0))
                 if (next == null) {
                     task
                 } else {
@@ -527,6 +618,12 @@ class TasksApi(context: Context) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
             call("POST", "/api/tasks/$clean/reopen", JSONObject()).map { parseOne(it) }
+                .also { r ->
+                    r.getOrNull()?.let {
+                        noteContractVersion(listOf(it))
+                        checkVersion(it)
+                    }
+                }
         }
 
     /** Permanently deletes a task. */
@@ -563,6 +660,28 @@ class TasksApi(context: Context) {
         // #214 is about, so this warns and leaves the stored task authoritative.
         ContractWarnings.report(mismatched, task.name)
     }
+
+    /**
+     * The version half of [checkContract], for the responses that carry no
+     * request to compare against (#185).
+     *
+     * `complete` and `reopen` send no fields — there is nothing to assert —
+     * but the issue's evidence is exactly a complete-response shape change
+     * that parsed cleanly and read as a rollover bug. The version is the only
+     * thing those paths CAN assert, so they do. Same warn-not-throw channel:
+     * the mutation succeeded, only the contract is in doubt.
+     *
+     * `list` and `get` deliberately do not call this: a list refresh would
+     * re-warn on every poll against one old server, and a get fires from
+     * background flows with no screen to show it on. Writes are the moments
+     * the user is looking.
+     */
+    private fun checkVersion(task: ServerTask) {
+        if (task.contractVersion != TASK_CONTRACT_VERSION) {
+            ContractWarnings.report(listOf("contract_version"), task.name)
+        }
+    }
+
     private fun parseOne(body: String): ServerTask =
         parseTask(JSONObject(body))
             ?: throw RuntimeException("Unexpected response shape")

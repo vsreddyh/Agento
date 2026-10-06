@@ -19,6 +19,30 @@ see GitHub Releases for older notes.
   `pi/AGENTS.md` now carries a hard rule: read the specific records back by id,
   compare the field that was supposed to change, and report the fields verified
   rather than the calls made. No app code, no VERSION bump.
+
+## [4.14.7]
+- **Task responses now carry their contract version, and the app asserts it**
+  (#185). The 4.14.5 check compared the fields the app sent against the ones
+  that came back — but a response from a server older than versions has no
+  version key at all, and every field still defaulted silently. Every task
+  response now carries `contract_version` (1 today), and a write whose
+  response speaks any other contract warns naming `contract_version`: 0 means
+  the server predates versions, anything higher means the server is newer
+  than the app. `complete` and `reopen` send no fields to compare, so the
+  version is the only thing those paths assert — fitting, since the
+  complete-response shape change is the break this issue was written about.
+  The app also records the highest contract it has seen, and shows it in
+  Settings → About diagnostics ("seen" vs "speaks"), so a stale install is
+  diagnosable instead of guesswork. The version is parsed leniently (numeric
+  strings read as their number) but strictly in meaning: anything
+  unparseable is "predates versions", never a silent pass. `complete`
+  versions the rolled-over `next` occurrence as well as the task, and a CI
+  step asserts the app's create key set equals the server's fingerprint set,
+  so neither side can add, rename or drop a field without the other. A Go round-trip
+  test pins the literal bodies the app sends through validation and the
+  idempotency fingerprint, so the next shape change fails a test instead of
+  waiting for a reviewer to happen to look.
+
 ## [4.14.6]
 
 - **A dropped stream is no longer reported as a finished reply** (#214). The SSE
