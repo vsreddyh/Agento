@@ -31,7 +31,7 @@ On `complete_task`, read `rollover`:
 - `none` — one-shot. Do nothing.
 - `custom` — YOU create the next occurrence: copy all fields verbatim, advance
   only `due_date` per the rule. Keep `due_time` unless the rule names a time.
-- `exhausted`/`failed` — repeat stopped. Tell the user; do not silently recreate.
+- `exhausted`/`failed` — repeat stopped (see `needs_attention`). Tell the user; do not silently recreate.
 
 Ambiguous rule: ask the user for the next due date, never guess. Empty
 `due_time` (`""` on old tasks): ask for a time, never invent one — `create_task`

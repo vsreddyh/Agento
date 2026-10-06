@@ -29,5 +29,5 @@ the vault first.
 
 ## Git workflow
 
-`git status` before edits, `git diff` after. Commit/push only on explicit
+Show `git status` before edits, `git diff` after. Commit/push only on explicit
 request (`feat(lore):`, `docs(characters):`, `fix(timeline):`).

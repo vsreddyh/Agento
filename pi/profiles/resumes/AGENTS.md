@@ -28,10 +28,10 @@ All paths below are relative to `resume/`: master `Main_Resume.tex`, JDs in
 - Cover letters: `.txt` in `CV/`, 50–100 words.
 - Compile every `.tex` to `exports/` with `tectonic` and confirm the PDF.
   Never leave PDFs outside `exports/`.
-- Never drop an experience (role) section; trim bullets instead — an experience
-  may be cut to two bullets, most JD-relevant first plus a one-line summary of
-  the rest. Never leave a section with one bullet; keep two or drop the
-  section, never invent filler.
+- Never drop an experience (role) section, but an experience may be cut to two
+  bullets: most JD-relevant bullets first plus a one-line summary of the rest
+  of the bullets. Never leave a section with one bullet; keep two or drop the
+  section (if not an experience section), never invent filler.
 - No invented metrics or capabilities unless the user confirms them.
 
 ## Changelog
