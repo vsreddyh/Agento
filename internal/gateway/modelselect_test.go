@@ -363,3 +363,41 @@ func TestUnnameablePreviousModelStaysSwitched(t *testing.T) {
 		t.Fatalf("agent runs %q; without a nameable previous model the switch stands", got)
 	}
 }
+
+func TestProviderMatchingIgnoresCase(t *testing.T) {
+	// Provider slugs compare case-insensitively, like model ids do through
+	// normalization: {"provider":"OpenCode-Go"} must not 400.
+	agent := newFakeAgent()
+	agent.events = []pi.Record{{Type: pi.TypeAgentSettled}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"provider":"OpenCode-Go","model":"muse-spark-1.3-contributor",`+
+			`"model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if got := switchedModel(t, agent); got != "muse-spark-1.3-contributor" {
+		t.Fatalf("agent runs %q after the switch", got)
+	}
+}
+
+func TestQualifiedModelClaimResolves(t *testing.T) {
+	// A provider-qualified model claim splits the way the app's own catalog
+	// lookup splits it — while Pi receives the canonical spelling.
+	agent := newFakeAgent()
+	agent.events = []pi.Record{{Type: pi.TypeAgentSettled}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"model":"opencode-go/muse-spark-1.3-contributor",`+
+			`"model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if got := switchedModel(t, agent); got != "muse-spark-1.3-contributor" {
+		t.Fatalf("Pi received %q, want the canonical inventory spelling", got)
+	}
+}

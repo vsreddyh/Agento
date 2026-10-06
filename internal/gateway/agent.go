@@ -517,14 +517,29 @@ func (a agentRunner) modelInventory(ctx context.Context) (map[string][]string, m
 //
 // A bad selection costs nothing: validation runs against the inventory before
 // any RPC that mutates state, so unknown values 400 without touching the
-// process. (Effort cannot join that guarantee — its validation needs the
-// post-switch levels — so a bad-effort request switches the model and then
-// 400s. The switch is the caller's own selection, audited by Pi, with no
-// tokens spent; the alternative, validating against the previous model's
-// ladder, reintroduces the exact wrong-model refusal being fixed.)
+// process. (Effort is the exception that proves the shape: it can only be
+// judged against the post-switch levels, so a bad-effort request switches
+// first — and the handler reverts to the pre-switch model on every
+// pre-prompt failure, so the failed turn never silently repoints the
+// profile. See revertModel in handleChat.)
 func (a agentRunner) selectModel(ctx context.Context, provider, model string) (string, bool, error) {
-	provider = strings.TrimSpace(provider)
+	// Providers compare case-insensitively (slugs are lowercase by
+	// convention); model ids match exactly first, then through the
+	// normalized spelling below.
+	provider = strings.ToLower(strings.TrimSpace(provider))
 	model = strings.TrimSpace(model)
+	if i := strings.LastIndex(model, "/"); i >= 0 {
+		// A provider-qualified claim ("opencode-go/mimo-v2.6-flash"), split
+		// the way the app's own catalog lookup splits it. An explicit
+		// provider that disagrees with the prefix falls through to the
+		// inventory lookup, which fails as unknown — the slashed id names
+		// no real model.
+		if pfx, rest := model[:i], model[i+1:]; provider == "" {
+			provider, model = strings.ToLower(strings.TrimSpace(pfx)), strings.TrimSpace(rest)
+		} else if pfx == provider {
+			model = strings.TrimSpace(rest)
+		}
+	}
 	if model == "" && provider == "" {
 		// Legacy callers that never heard of selection keep today's
 		// behaviour — the running model, validated effort and all.

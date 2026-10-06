@@ -574,9 +574,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// if the revert itself fails, log and still report the turn's error,
 	// not the cleanup's. No-op when nothing switched (or the previous
 	// model could not be named).
+	//
+	// Detached context, not turnCtx: when the failure IS the deadline (or a
+	// client disconnect), turnCtx is already done and a revert fired on it
+	// would silently no-op — leaving exactly the sticky switch this exists
+	// to prevent. Five seconds is generous for a local IPC round trip.
 	revertModel := func() {
 		if switched && prevModel != "" {
-			if _, rerr := h.runner.agent.Call(turnCtx, "set_model",
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, rerr := h.runner.agent.Call(ctx, "set_model",
 				map[string]any{"model": prevModel}); rerr != nil {
 				s.cfg.Logf("gateway: reverting model after failed turn: %v", rerr)
 			}
