@@ -299,9 +299,26 @@ internal fun parseContractVersion(raw: Any?): Int = when (raw) {
     // A double-encoded "1.0" gets the same leniency Numbers do (3.0 -> 3):
     // without the toDouble fallback it warns as a pre-version server.
     is String -> raw.trim().toIntOrNull()
-        ?: raw.trim().toDoubleOrNull()?.toInt() ?: 0
+        ?: raw.trim().toDoubleOrNull()?.toInt()
+        ?: 0
     else -> 0
-}
+    // Negatives fit neither bucket (0 = pre-version, >0 = a real version),
+    // so they clamp to 0 rather than passing through as a version that can
+    // never equal TASK_CONTRACT_VERSION yet reads as one.
+}.coerceAtLeast(0)
+
+/**
+ * Whether a complete response disagrees on either half (#185 review).
+ *
+ * `next` is absent (null) for one-shots with nothing to roll over — nothing
+ * to assert then. Otherwise each doc is asserted on its own: collapsing the
+ * two with maxOf hides a half-disagreement in BOTH directions (task=1 +
+ * pre-version next=0, and task=0 + next=1, both read as 1), and next is the
+ * half that already broke once (#180).
+ */
+internal fun completeVersionMismatch(taskVersion: Int, nextVersion: Int?): Boolean =
+    taskVersion != TASK_CONTRACT_VERSION ||
+        (nextVersion != null && nextVersion != TASK_CONTRACT_VERSION)
 
 /**
  * The highest contract in a response batch, or 0 when no task spoke one.

@@ -281,7 +281,8 @@ class TasksApi(context: Context) {
     }
 
     /**
-     * Records the highest task contract a response batch spoke (#185).
+     * Records a task contract version: the running max of what this install
+     * has spoken (#185).
      *
      * A stale install is otherwise diagnosable only by guesswork: the symptom
      * of a contract mismatch is "the app is wrong", not "the versions
@@ -291,19 +292,22 @@ class TasksApi(context: Context) {
      * diagnosability, it is a write. Zeros are not recorded — absent is
      * "unknown", not a version.
      *
-     * Increment and store under one lock: this runs on Dispatchers.IO and two
-     * concurrent refreshes could otherwise interleave read-modify-write and
-     * land the older max last.
+     * Read-modify-write under one lock: this runs on Dispatchers.IO and two
+     * concurrent refreshes could otherwise interleave and land the older max
+     * last.
      */
-    private fun noteContractVersion(tasks: List<ServerTask>) {
-        val max = maxContractVersion(tasks)
-        if (max <= 0) return
+    private fun noteContractVersion(version: Int) {
+        if (version <= 0) return
         synchronized(versionLock) {
-            if (prefs.getInt(CONTRACT_VERSION_SEEN_KEY, 0) < max) {
-                prefs.edit { putInt(CONTRACT_VERSION_SEEN_KEY, max) }
+            if (prefs.getInt(CONTRACT_VERSION_SEEN_KEY, 0) < version) {
+                prefs.edit { putInt(CONTRACT_VERSION_SEEN_KEY, version) }
             }
         }
     }
+
+    /** Records the highest contract a response batch spoke. */
+    private fun noteContractVersion(tasks: List<ServerTask>) =
+        noteContractVersion(maxContractVersion(tasks))
 
     /**
      * Lists tasks by state (`open`, `done`, `all`); unknown states fail fast.
@@ -445,10 +449,9 @@ class TasksApi(context: Context) {
         // actually sent, and the CI drift step asserts this set equals the
         // server's taskCreateFields (#185 review).
         //
-        // getValue, not get: JSONObject.put silently DROPS a null, so a key
-        // with no value must fail LOUDLY here rather than send a short body.
-        // Unreachable today — the guard above rejects any null first — which
-        // is exactly when such a guard is cheapest to keep.
+        // A missing key fails IN-CHANNEL, like the null-guard above: the
+        // callers fold Result.failure into a snackbar, while a throw (require,
+        // getValue) would escape the coroutine and show nothing at all.
         val values: Map<String, Any?> = mapOf(
             "name" to sent.name,
             "description" to sent.description,
@@ -462,7 +465,14 @@ class TasksApi(context: Context) {
             "repeat_rule" to sent.repeatRule,
         )
         val body = JSONObject()
-        for (k in TASK_CREATE_KEYS) body.put(k, values.getValue(k))
+        for (k in TASK_CREATE_KEYS) {
+            // A null value would be silently DROPPED by put, sending a short
+            // body — so null fails here, the same as a missing key.
+            val v = values[k] ?: return@withContext Result.failure(
+                IllegalStateException("create: no value for key $k"),
+            )
+            body.put(k, v)
+        }
         call("POST", "/api/tasks", body).map { parseOne(it) }
             .also { r ->
                 r.getOrNull()?.let {
@@ -577,28 +587,25 @@ class TasksApi(context: Context) {
                 val task = parseTask(root.optJSONObject("task") ?: root)
                     ?: throw RuntimeException("Unexpected response shape")
                 val next = root.optJSONObject("next")
-                // Version the NEXT occurrence too (#185 review): it is a
-                // task-shaped doc from the same store, and the half most
-                // likely to change shape on its own — it already did once
-                // (#180). Read leniently, like the top-level version: this
-                // must never fail a completion, only version it.
+                // Each half versioned on its own (#185 review): maxOf would
+                // collapse task=1 + pre-version next=0 to 1 and hide the
+                // half-disagreement — in both directions — and next is the
+                // half that already broke once (#180). Handled here rather
+                // than in an also below, which would only ever see the task
+                // half. Read leniently, like the top-level version: this must
+                // never fail a completion, only version it.
                 val nextVersion =
-                    next?.let { parseContractVersion(it.opt("contract_version")) } ?: 0
-                val done = if (next == null) {
+                    next?.let { parseContractVersion(it.opt("contract_version")) }
+                if (completeVersionMismatch(task.contractVersion, nextVersion)) {
+                    ContractWarnings.report(listOf("contract_version"), task.name)
+                }
+                noteContractVersion(maxOf(task.contractVersion, nextVersion ?: 0))
+                if (next == null) {
                     task
                 } else {
                     // optStr, not optString: a JSON null would arrive as the
                     // literal string "null" and reach the snackbar.
                     task.copy(nextDueDate = optStr(next, "due_date"))
-                }
-                // The response speaks the highest contract any of its docs
-                // spoke, so the check and the recording below see the whole
-                // response, not just its first half.
-                done.copy(contractVersion = maxOf(done.contractVersion, nextVersion))
-            }.also { r ->
-                r.getOrNull()?.let {
-                    noteContractVersion(listOf(it))
-                    checkVersion(it)
                 }
             }
         }

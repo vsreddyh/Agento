@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
@@ -880,6 +881,16 @@ class ParseContractVersionTest {
         assertEquals(0, parseContractVersion(""))
         assertEquals(0, parseContractVersion(true))
     }
+
+    @Test
+    fun `negatives clamp to predates versions`() {
+        // -5 fits neither bucket (0 = pre-version, >0 = real), so it must
+        // not pass through as a version that can never equal
+        // TASK_CONTRACT_VERSION yet reads as one.
+        assertEquals(0, parseContractVersion(-5))
+        assertEquals(0, parseContractVersion("-5"))
+        assertEquals(0, parseContractVersion(-5.5))
+    }
 }
 
 /** One number per response batch, not one prefs write per row (#185 review). */
@@ -907,5 +918,40 @@ class MaxContractVersionTest {
     @Test
     fun `zeros are unknown, not a version`() {
         assertEquals(0, maxContractVersion(listOf(task(0), task(0))))
+    }
+}
+
+/** A complete response is two docs, each asserted on its own (#185 review). */
+class CompleteVersionMismatchTest {
+
+    @Test
+    fun `agreement on both halves warns nothing`() {
+        assertFalse(completeVersionMismatch(TASK_CONTRACT_VERSION, TASK_CONTRACT_VERSION))
+    }
+
+    @Test
+    fun `no next occurrence means nothing more to assert`() {
+        // One-shots roll over to nothing: a null next is absence, not a
+        // pre-version doc.
+        assertFalse(completeVersionMismatch(TASK_CONTRACT_VERSION, null))
+    }
+
+    @Test
+    fun `a pre-version next warns even when the task agrees`() {
+        // The maxOf version of this collapsed task=1 + next=0 to 1 and hid
+        // the half-disagreement — in both directions.
+        assertTrue(completeVersionMismatch(TASK_CONTRACT_VERSION, 0))
+    }
+
+    @Test
+    fun `a disagreeing task warns even when next agrees`() {
+        assertTrue(completeVersionMismatch(0, TASK_CONTRACT_VERSION))
+    }
+
+    @Test
+    fun `a newer server warns on either half`() {
+        val newer = TASK_CONTRACT_VERSION + 1
+        assertTrue(completeVersionMismatch(newer, TASK_CONTRACT_VERSION))
+        assertTrue(completeVersionMismatch(TASK_CONTRACT_VERSION, newer))
     }
 }
