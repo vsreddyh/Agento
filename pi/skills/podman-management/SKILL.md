@@ -36,7 +36,9 @@ Retention prunes money > 90d, `hc_meals`/`hc_days` > 30d, never `hc_weight`.
 
 Chat turns need `model_options.reasoning_effort` (required — an unrecognised
 level is silently accepted, so a default would be indistinguishable). Wrong or
-missing bearer token = `401`; malformed body = `400` naming the field.
+missing bearer token = `401`; malformed body = `400` naming the field. Host
+only, from the repo root (`source .env` elsewhere silently sources nothing) —
+there is no `.env` in-container.
 
 ## Rules
 

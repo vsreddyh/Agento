@@ -14,9 +14,9 @@ Not baked into the image; fetch it yourself:
 Never a bare `pull`. On failure report `git status`, `git log --oneline -3`,
 and the exact error, then stop.
 
-All paths below are under `resume/`: master `resume/Main_Resume.tex`, JDs in
-`resume/JD's/`, tailored resumes in `resume/Custom_Resumes/`, cover letters in
-`resume/CV/`, PDFs in `resume/exports/`.
+All paths below are relative to `resume/`: master `Main_Resume.tex`, JDs in
+`JD's/`, tailored resumes in `Custom_Resumes/`, cover letters in
+`CV/`, PDFs in `exports/`.
 
 ## Scope
 

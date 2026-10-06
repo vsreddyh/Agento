@@ -37,6 +37,8 @@ Ambiguous rule: ask the user for the next due date, never guess. Empty
 `due_time` (`""` on old tasks): ask for a time, never invent one — `create_task`
 rejects it.
 
+## Everyday use
+
 - Capture fast: collect name + description + due date/time + estimate +
   parallelable BEFORE calling `create_task` — it rejects missing fields.
   ("takes about an hour" → `estimated_minutes: 60`; "I can do it alongside
