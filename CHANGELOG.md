@@ -8,6 +8,22 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.14.9]
+- **The model picker now selects; unknown models fail loudly** (#251). The
+  gateway ran its startup model no matter what the app asked for, and the
+  response echoed the running model while the app stamped the requested one,
+  so the substitution was invisible end to end. A turn that names a different
+  model now switches the profile's process first (`set_model` — in-process,
+  transcripts survive, audited by Pi itself), then reads that model's thinking
+  levels before validating effort — so the ladder is checked against the
+  model that answers, not the one that happened to be running. Unknown models
+  and providers 400 naming the value; a Pi-side refusal mid-switch reads as
+  unknown when it names a model, wedged otherwise. The MiMo effort rows are
+  corrected to the live-probed graded ladder (the toggle claim came from
+  files that no longer exist) and the fallback drops "ultra", which no model
+  recognises. No contract break: stricter 400s on previously-silent garbage,
+  additive behavior otherwise.
+
 ## [4.14.8]
 - **A dropped turn can now come back; a resend never replays the fragment**
   (#214). Flagging the drop (4.14.6) made it visible but still lost the

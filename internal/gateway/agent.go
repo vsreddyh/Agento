@@ -223,9 +223,8 @@ type agentRunner struct {
 // history intact.
 // It also returns the agent state it read along the way, so a caller can report
 // the model that is actually answering without a second RPC. That matters because
-// the client's own `model` field is only a claim: the gateway never selects on it,
-// Pi's model is fixed when the process starts. Echoing the claim would be both
-// unbounded and wrong.
+// the client's own `model` field is a request, not a fact: the frames must carry
+// what Pi runs after selection, never the unchecked claim.
 func (a agentRunner) resolveSession(ctx context.Context, conversationID string) (*state, error) {
 	// No conversation id means an untracked turn. Use whatever session is current.
 	//
@@ -443,6 +442,128 @@ func supportedList(set levelSet) string {
 // so an unbounded tail turns one bad agent into an unbounded log. 2000 characters
 // is enough to see the last error and not enough to matter.
 const StderrTailLimit = 2000
+
+// Selection failures, as sentinels. The handler needs to tell "you named
+// something that does not exist" (400, the caller's value is wrong) from "Pi
+// broke mid-switch" (502, nothing about the request is wrong), and comparing
+// error strings for that distinction would break the first time either
+// message is reworded.
+type unknownModelError struct{ model string }
+
+func (e *unknownModelError) Error() string { return "unknown model: " + e.model }
+
+type unknownProviderError struct{ provider string }
+
+func (e *unknownProviderError) Error() string { return "unknown provider: " + e.provider }
+
+// modelInventory is the agent's advertised id → providers mapping, plus the
+// provider set, learned from Pi rather than hardcoded. One local IPC round
+// trip per turn — same class as thinkingLevels, which also reads fresh rather
+// than caching, because a stale cache turns a newly added model into a 400
+// until the gateway restarts.
+func (a agentRunner) modelInventory(ctx context.Context) (map[string][]string, map[string]bool, error) {
+	rec, err := a.agent.Call(ctx, "get_available_models", nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var payload struct {
+		Models []struct {
+			ID       string `json:"id"`
+			Provider string `json:"provider"`
+		} `json:"models"`
+	}
+	if len(rec.Data) > 0 {
+		if err := json.Unmarshal(rec.Data, &payload); err != nil {
+			return nil, nil, fmt.Errorf("gateway: decode model list: %w", err)
+		}
+	}
+	byID := map[string][]string{}
+	providers := map[string]bool{}
+	for _, m := range payload.Models {
+		id := strings.TrimSpace(m.ID)
+		slug := strings.TrimSpace(m.Provider)
+		if id == "" || slug == "" {
+			continue
+		}
+		providers[slug] = true
+		known := false
+		for _, p := range byID[id] {
+			if p == slug {
+				known = true
+				break
+			}
+		}
+		if !known {
+			byID[id] = append(byID[id], slug)
+		}
+	}
+	return byID, providers, nil
+}
+
+// selectModel applies the client's provider/model selection to the profile's
+// process (#251). Before this the gateway never selected on those fields — Pi
+// ran its startup model no matter what the pickers said, and the response
+// echoed the running model while the app stamped the requested one, so the
+// substitution was invisible end to end.
+//
+// Switching is in-process (set_model), never a restart: transcripts live in
+// session files Pi keeps across switches (it records model_change itself),
+// while a restart would drop the in-memory conversation bindings and kill
+// in-flight turns. resolveSession runs after this, so everything it reads is
+// already post-switch; the thinking levels are read after too, because they
+// are per-model and validating effort against the previous model's ladder is
+// the mismatch this issue was written about.
+//
+// A bad selection costs nothing: validation runs against the inventory before
+// any RPC that mutates state, so unknown values 400 without touching the
+// process. (Effort cannot join that guarantee — its validation needs the
+// post-switch levels — so a bad-effort request switches the model and then
+// 400s. The switch is the caller's own selection, audited by Pi, with no
+// tokens spent; the alternative, validating against the previous model's
+// ladder, reintroduces the exact wrong-model refusal being fixed.)
+func (a agentRunner) selectModel(ctx context.Context, provider, model string) (bool, error) {
+	if strings.TrimSpace(model) == "" {
+		// Unset: legacy callers that never heard of selection keep today's
+		// behaviour — the running model, validated effort and all.
+		return false, nil
+	}
+	byID, providers, err := a.modelInventory(ctx)
+	if err != nil {
+		return false, err
+	}
+	if provider != "" && !providers[provider] {
+		return false, &unknownProviderError{provider: provider}
+	}
+	candidates, ok := byID[model]
+	if !ok {
+		return false, &unknownModelError{model: model}
+	}
+	if provider == "" {
+		if len(candidates) != 1 {
+			return false, &unknownModelError{model: model + " (available from several providers; name one)"}
+		}
+		provider = candidates[0]
+	}
+	target := provider + "/" + model
+	st, err := a.getState(ctx)
+	if err != nil {
+		return false, err
+	}
+	if st.Model.Provider+"/"+st.Model.ID == target {
+		return false, nil
+	}
+	if _, err := a.agent.Call(ctx, "set_model", map[string]any{"model": target}); err != nil {
+		// The inventory said this model exists and Pi still refused it: the
+		// registry moved between the two calls. Pi names the model in that
+		// refusal (measured), so it reads as unknown, not wedged — anything
+		// else is a broken agent.
+		if strings.Contains(strings.ToLower(err.Error()), "model") {
+			return false, &unknownModelError{model: target}
+		}
+		return false, err
+	}
+	return true, nil
+}
 
 // Tail returns the END of s, which is where an error message is.
 //
