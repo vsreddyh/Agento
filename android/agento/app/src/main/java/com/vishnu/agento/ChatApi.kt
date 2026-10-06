@@ -663,7 +663,12 @@ internal fun readSseStreamLenient(
 } catch (e: IOException) {
     // Logged, not silent: a mid-body reset that never reaches logcat is
     // undebuggable in the field, and this is the path real drops take.
-    Log.w("ChatApi", "mid-stream read failed after ${full.length} chars; treating as drop", e)
+    // runCatching, not bare: unit tests run against a stubbed android.jar
+    // whose Log methods throw, and this catch path is directly tested
+    // (same trap as the stubbed org.json, see build.gradle.kts).
+    runCatching {
+        Log.w("ChatApi", "mid-stream read failed after ${full.length} chars; treating as drop", e)
+    }
     SseEnd.EndOfStream
 }
 

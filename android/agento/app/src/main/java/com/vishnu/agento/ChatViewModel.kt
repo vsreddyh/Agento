@@ -674,7 +674,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         addTokens(event.usage)
                         upsertActive(finished)
                         persist()
-                        backfillUsage(path, stableSessionId, finishedAt, final, finished.size - 1)
+                        // Skipped when the empty bubble was dropped: there is
+                        // no message at finished.size - 1 to attach tools to
+                        // (it points at the previous user row), and the ts
+                        // lookup would miss anyway.
+                        if (!(event.interrupted && nothingArrived)) {
+                            backfillUsage(path, stableSessionId, finishedAt, final, finished.size - 1)
+                        }
                         refreshServerTotals(path, stableSessionId)
                         if (event.interrupted && !nothingArrived) {
                             // The stream died but the turn may have completed
@@ -974,12 +980,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             }
             delay(RECOVERY_SECOND_DELAY_MS)
             val second = fetchRecoveryText(path, sessionId) ?: return@launch
-            // Compare the two POLLS, not the adopted current: poll 1 shorter
-            // than the fragment + poll 2 echoing the fragment disagree with
-            // each other even though current==second, and clearing on that
-            // would bless a single stable sample. (When the first poll was
-            // adopted, current IS firstSeen, so the adopted case is unchanged.)
-            if (firstSeen != null && recoveryTextSettled(firstSeen, second)) {
+            // Clearing needs the adopted value too, not just two agreeing
+            // polls: both polls stable-but-SHORTER than the fragment
+            // (transcript lagging, wrong slice) agree with each other while
+            // saying nothing about the fragment — blessing it finished would
+            // be the exact misreport #214 exists to stop. In the adopted
+            // case current IS firstSeen, so that path is unchanged.
+            if (firstSeen != null && recoveryTextSettled(firstSeen, second) && second == current) {
                 patchRecovery(threadAtKick, finishedAt, current, clearFlag = true)
             } else if (recoveryAdoptable(current, second)) {
                 patchRecovery(threadAtKick, finishedAt, second, clearFlag = false)
