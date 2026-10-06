@@ -177,14 +177,16 @@ internal fun ChatMessage.asInterruptedDrop(): ChatMessage =
  * resend replayed its own truncated reply as context — against a server-side
  * turn that may still be running, that is a second execution primed with its
  * own partial output. Like `regenerate`, a resend goes out without the
- * trailing assistant message; unlike `regenerate` this also applies to
- * `unreported` error fragments, which are cut-off turns by the same rule as
- * [asInterruptedDrop]. A clean trailing reply is kept: only flagged
- * fragments are ever removed, never real answers.
+ * trailing assistant message.
+ *
+ * Stripped on `interrupted` ONLY, never on `unreported`: a clean reply whose
+ * stream carried no `usage` is still a real answer, and dropping it would
+ * delete work the user already has. Cut-off error fragments are covered
+ * because the Error path flags them via [asInterruptedDrop].
  */
 internal fun stripTrailingFragmentForResend(messages: List<ChatMessage>): List<ChatMessage> {
     val last = messages.lastOrNull()
-    if (last?.role == "assistant" && (last.interrupted || last.unreported)) {
+    if (last?.role == "assistant" && last.interrupted) {
         return messages.dropLast(1)
     }
     return messages

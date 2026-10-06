@@ -40,10 +40,21 @@ class StripTrailingFragmentTest {
     }
 
     @Test
-    fun `an unreported error fragment is stripped too`() {
-        // An Error carrying partial text is a cut-off turn by the same rule
-        // (asInterruptedDrop) — resending it replays the fragment either way.
-        val history = listOf(user("hi"), assistant("half an ans", unreported = true))
+    fun `an unreported-but-finished reply is kept`() {
+        // msgsDropLastPlusAssistant marks every usage-less Done unreported —
+        // including clean replies. Only `interrupted` strips, never that.
+        val history = listOf(user("hi"), assistant("full answer", unreported = true))
+        assertEquals(history, stripTrailingFragmentForResend(history))
+    }
+
+    @Test
+    fun `a flagged error fragment is stripped`() {
+        // The Error path flags partials via asInterruptedDrop, so they still
+        // strip — through `interrupted`, not through `unreported`.
+        val history = listOf(
+            user("hi"),
+            assistant("half an ans", interrupted = true, unreported = true),
+        )
         assertEquals(listOf(user("hi")), stripTrailingFragmentForResend(history))
     }
 

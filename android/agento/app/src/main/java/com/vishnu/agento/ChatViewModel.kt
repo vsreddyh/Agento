@@ -135,6 +135,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * new send or a stop: recovery must never resurrect text behind a turn
      * the user has already moved past. */
     private var recoveryJob: Job? = null
+
+    /** Drops a pending recovery, if any. Called on every active-thread
+     * change (switch/new/delete/fork), send, and stop — recovery belongs
+     * to one tail of one thread, and anything that moves past it ends it
+     * rather than letting an IO coroutine linger ~21s per drop. */
+    private fun cancelRecovery() {
+        recoveryJob?.cancel()
+        recoveryJob = null
+    }
     /** Send generation: incremented on every doSend/stop so a late
      * buffered Done/Error/Delta (callbackFlow is UNLIMITED) from a
      * cancelled turn can never overwrite a newer turn's state. */
@@ -222,6 +231,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (id == threadId || _state.value.streaming || !_state.value.ready) return
         val target = threads.firstOrNull { it.id == id } ?: return
         threadId = id
+        cancelRecovery()
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
@@ -246,6 +256,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
         threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
         threadId = fresh.id
+        cancelRecovery()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
@@ -281,6 +292,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 ?: ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
             if (threads.none { it.id == next.id }) threads = listOf(next) + threads
             threadId = next.id
+            cancelRecovery()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
@@ -366,8 +378,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         streamJob = null
         // A pending recovery belongs to the turn just stopped: it must not
         // resurrect text behind whatever the user does next.
-        recoveryJob?.cancel()
-        recoveryJob = null
+        cancelRecovery()
         // Mark the in-flight reply as stopped (#122): the partial text
         // stays with an explicit interrupted flag (Continue/Regenerate
         // offered in the UI). A queued send is restored to the composer
@@ -527,6 +538,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
         threads = listOf(fresh) + threads
         threadId = fresh.id
+        cancelRecovery()
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
@@ -571,8 +583,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val liveTools = mutableListOf<String>()
         streamJob?.cancel()
         // A new turn supersedes any pending recovery of the previous one.
-        recoveryJob?.cancel()
-        recoveryJob = null
+        cancelRecovery()
         // Fresh generation: events from any older turn still buffered go
         // stale (see stop()). Captured below; every handler checks it.
         sendGen++
@@ -944,11 +955,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     ) {
         if (sessionId.isBlank()) return
         val threadAtKick = threadId
-        recoveryJob?.cancel()
+        cancelRecovery()
         recoveryJob = viewModelScope.launch(Dispatchers.IO) {
             delay(RECOVERY_FIRST_DELAY_MS)
             var current = fragment
+            // Whether the first poll returned TEXT (even short text). Clearing
+            // the flag needs two successful samples: poll 1 failed + poll 2
+            // echoing the fragment is a single sample, not stability.
+            var firstSeen: String? = null
             fetchRecoveryText(path, sessionId)?.let { first ->
+                firstSeen = first
                 if (recoveryAdoptable(current, first)) {
                     current = first
                     if (!patchRecovery(threadAtKick, finishedAt, current, clearFlag = false)) {
@@ -961,7 +977,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // Settled (same text twice, even if it equals the fragment) means
             // the orphan stopped producing: the turn finished, flag cleared.
             // Still growing means a longer fragment: adopt it, flag kept.
-            if (recoveryTextSettled(current, second)) {
+            if (firstSeen != null && recoveryTextSettled(current, second)) {
                 patchRecovery(threadAtKick, finishedAt, current, clearFlag = true)
             } else if (recoveryAdoptable(current, second)) {
                 patchRecovery(threadAtKick, finishedAt, second, clearFlag = false)
@@ -1006,6 +1022,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         fresh[idx] = prev.copy(
             content = text,
             interrupted = !clearFlag,
+            // Cleared keeps USER, not DROP, on purpose: toUi derives
+            // `interrupted` from `interruptedBy == DROP` on load, so
+            // persisting DROP would resurrect the cleared flag on next
+            // start. `interruptedBy` is only ever read under
+            // `if (msg.interrupted)` (ChatScreen), so on a cleared message
+            // the value is inert display detail, never a visible claim.
             interruptedBy = if (clearFlag) InterruptedBy.USER else prev.interruptedBy,
         )
         _state.value = _state.value.copy(messages = fresh)

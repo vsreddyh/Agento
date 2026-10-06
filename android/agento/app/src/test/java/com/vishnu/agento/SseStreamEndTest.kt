@@ -1,10 +1,12 @@
 package com.vishnu.agento
 
 import okio.Buffer
+import okio.buffer
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 /**
  * #214: a dropped connection must not be reported as a completed turn.
@@ -379,7 +381,7 @@ class MidStreamIoFailureTest {
         // reader and the test fails here rather than at the assert.
         val full = StringBuilder()
         val end = readSseStreamLenient(
-            source = okio.buffer(ExplodingSource(partial)),
+            source = ExplodingSource(partial).buffer(),
             full = full,
             reasoned = StringBuilder(),
             onUsage = {},
@@ -394,7 +396,7 @@ class MidStreamIoFailureTest {
         // would have to guess what the agent had already said.
         val full = StringBuilder()
         readSseStreamLenient(
-            source = okio.buffer(ExplodingSource(partial)),
+            source = ExplodingSource(partial).buffer(),
             full = full,
             reasoned = StringBuilder(),
             onUsage = {},
