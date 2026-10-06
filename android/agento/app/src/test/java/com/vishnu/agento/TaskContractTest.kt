@@ -852,3 +852,58 @@ class ContractVersionTest {
         )
     }
 }
+
+/** Version parsing is lenient on type but strict on meaning (#185 review). */
+class ParseContractVersionTest {
+
+    @Test
+    fun `numbers read as their int value`() {
+        assertEquals(1, parseContractVersion(1))
+        assertEquals(2, parseContractVersion(2L))
+        assertEquals(3, parseContractVersion(3.0))
+    }
+
+    @Test
+    fun `a numeric string reads as its number, not as pre-version`() {
+        // A string "1" warning as an old server would be a false positive of
+        // exactly the class this check exists to remove.
+        assertEquals(1, parseContractVersion("1"))
+        assertEquals(2, parseContractVersion("  2  "))
+    }
+
+    @Test
+    fun `absent null and garbage all mean predates versions`() {
+        assertEquals(0, parseContractVersion(null))
+        assertEquals(0, parseContractVersion("latest"))
+        assertEquals(0, parseContractVersion(""))
+        assertEquals(0, parseContractVersion(true))
+    }
+}
+
+/** One number per response batch, not one prefs write per row (#185 review). */
+class MaxContractVersionTest {
+
+    private fun task(version: Int) = ServerTask(
+        id = "6abf0000000000000000abcd",
+        name = "Take meds",
+        contractVersion = version,
+    )
+
+    @Test
+    fun `the highest version in the batch wins`() {
+        assertEquals(
+            3,
+            maxContractVersion(listOf(task(1), task(3), task(2))),
+        )
+    }
+
+    @Test
+    fun `an empty batch records nothing`() {
+        assertEquals(0, maxContractVersion(emptyList()))
+    }
+
+    @Test
+    fun `zeros are unknown, not a version`() {
+        assertEquals(0, maxContractVersion(listOf(task(0), task(0))))
+    }
+}

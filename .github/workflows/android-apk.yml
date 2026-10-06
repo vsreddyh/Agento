@@ -114,6 +114,26 @@ jobs:
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
 
+      # The task response contract is versioned on BOTH sides (#185): the
+      # server's TaskContractVersion (internal/tasks/store.go) and the app's
+      # TASK_CONTRACT_VERSION (TaskDomain.kt). The runtime version check warns
+      # on a mismatch, but a bump on one side without the other should fail
+      # HERE — at review time — rather than warn on users' screens. Cheap
+      # static step, placed with the other fail-fast checks.
+      - name: Verify task contract versions match
+        run: |
+          GO=$(sed -n 's/^const TaskContractVersion = \([0-9][0-9]*\)/\1/p' ../../internal/tasks/store.go)
+          KT=$(sed -n 's/^internal const val TASK_CONTRACT_VERSION = \([0-9][0-9]*\)/\1/p' app/src/main/java/com/vishnu/agento/TaskDomain.kt)
+          if [ -z "$GO" ] || [ -z "$KT" ]; then
+            echo "::error::could not read both contract versions (go='$GO' kotlin='$KT')"
+            exit 1
+          fi
+          if [ "$GO" != "$KT" ]; then
+            echo "::error::task contract drift: server TaskContractVersion=$GO but app TASK_CONTRACT_VERSION=$KT — bump both in the same change (#185)"
+            exit 1
+          fi
+          echo "Task contract versions match: $GO"
+
       - name: Upload unit test report
         if: always()
         uses: actions/upload-artifact@v4

@@ -210,6 +210,15 @@ class TasksApi(context: Context) {
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .build()
         }
+
+        /**
+         * Guards the read-modify-write in [TasksApi.noteContractVersion].
+         * On the companion, not the instance: there is one TasksApi per
+         * screen, so an instance lock would not order two concurrent
+         * refreshes against each other — which is the interleaving that
+         * could land the older max last.
+         */
+        private val versionLock = Any()
     }
 
     private val appCtx = context.applicationContext
@@ -244,11 +253,12 @@ class TasksApi(context: Context) {
         if (name.isEmpty()) return null
         // estimated_minutes may encode as int, long, or double.
         val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
-        // contract_version likewise: int today, long or double tomorrow.
-        // 0 = absent = a server that predates versions, which the write paths
-        // report rather than silently default past (#185).
-        val version = (o.opt("contract_version") as? Number)?.toInt() ?: 0
-        noteContractVersion(version)
+        // Pure: no prefs here. list() parses up to 200 rows per refresh, so a
+        // read-modify-write per row is 200 I/Os for one fact — and a
+        // read-then-write that is not atomic can regress (sees v3, then a late
+        // v2 write wins). The callers record the batch max once, under one
+        // lock, instead (#185 review).
+        val version = parseContractVersion(o.opt("contract_version"))
         return ServerTask(
             id = id,
             name = name,
@@ -271,18 +281,27 @@ class TasksApi(context: Context) {
     }
 
     /**
-     * Records the highest task contract ever seen (#185).
+     * Records the highest task contract a response batch spoke (#185).
      *
      * A stale install is otherwise diagnosable only by guesswork: the symptom
      * of a contract mismatch is "the app is wrong", not "the versions
      * disagree". The stored max says which contracts this install has actually
-     * spoken, without a new endpoint to ask. Zeros are not recorded — absent
-     * is "unknown", not a version.
+     * spoken, without a new endpoint to ask — and it is surfaced in
+     * Settings → About diagnostics, because a value nothing reads is not
+     * diagnosability, it is a write. Zeros are not recorded — absent is
+     * "unknown", not a version.
+     *
+     * Increment and store under one lock: this runs on Dispatchers.IO and two
+     * concurrent refreshes could otherwise interleave read-modify-write and
+     * land the older max last.
      */
-    private fun noteContractVersion(v: Int) {
-        if (v <= 0) return
-        if (prefs.getInt("contract_version_seen", 0) < v) {
-            prefs.edit { putInt("contract_version_seen", v) }
+    private fun noteContractVersion(tasks: List<ServerTask>) {
+        val max = maxContractVersion(tasks)
+        if (max <= 0) return
+        synchronized(versionLock) {
+            if (prefs.getInt(CONTRACT_VERSION_SEEN_KEY, 0) < max) {
+                prefs.edit { putInt(CONTRACT_VERSION_SEEN_KEY, max) }
+            }
         }
     }
 
@@ -316,7 +335,7 @@ class TasksApi(context: Context) {
                     parseTask(o)?.let { out.add(it) }
                 }
                 TaskList(out, root.optBoolean("truncated", false))
-            }
+            }.also { r -> r.getOrNull()?.let { noteContractVersion(it.tasks) } }
         }
 
     /**
@@ -340,6 +359,7 @@ class TasksApi(context: Context) {
                 parseOne(body)
             }.fold(
                 onSuccess = { task ->
+                    task?.let { noteContractVersion(listOf(it)) }
                     Result.success(task)
                 },
                 onFailure = { e ->
@@ -432,7 +452,12 @@ class TasksApi(context: Context) {
             .put("repeat_custom", sent.repeatCustom)
             .put("repeat_rule", sent.repeatRule)
         call("POST", "/api/tasks", body).map { parseOne(it) }
-            .also { r -> r.getOrNull()?.let { checkContract(it, sent) } }
+            .also { r ->
+                r.getOrNull()?.let {
+                    noteContractVersion(listOf(it))
+                    checkContract(it, sent)
+                }
+            }
     }
 
     /**
@@ -521,6 +546,7 @@ class TasksApi(context: Context) {
                     // carrying a DIFFERENT id is detectable — a server answering with
                     // the wrong record is otherwise invisible when every field matches.
                     checkContract(task, sent, expectedId = id)
+                    noteContractVersion(listOf(task))
                 }
             }
     }
@@ -546,7 +572,12 @@ class TasksApi(context: Context) {
                     // literal string "null" and reach the snackbar.
                     task.copy(nextDueDate = optStr(next, "due_date"))
                 }
-            }.also { r -> r.getOrNull()?.let { checkVersion(it) } }
+            }.also { r ->
+                r.getOrNull()?.let {
+                    noteContractVersion(listOf(it))
+                    checkVersion(it)
+                }
+            }
         }
 
     /** Reopens a done task. */
@@ -557,7 +588,12 @@ class TasksApi(context: Context) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
             call("POST", "/api/tasks/$clean/reopen", JSONObject()).map { parseOne(it) }
-                .also { r -> r.getOrNull()?.let { checkVersion(it) } }
+                .also { r ->
+                    r.getOrNull()?.let {
+                        noteContractVersion(listOf(it))
+                        checkVersion(it)
+                    }
+                }
         }
 
     /** Permanently deletes a task. */

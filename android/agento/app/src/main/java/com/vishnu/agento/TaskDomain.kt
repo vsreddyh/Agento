@@ -258,6 +258,35 @@ internal fun ServerTaskDraft.repeatOrNull(): Triple<Int, String, String>? {
  */
 internal const val TASK_CONTRACT_VERSION = 1
 
+/** Prefs key for the highest task contract this install has spoken (#185). */
+internal const val CONTRACT_VERSION_SEEN_KEY = "contract_version_seen"
+
+/**
+ * Reads a contract version out of a decoded JSON value (#185).
+ *
+ * Lenient on the TYPE, strict on the meaning: int, long and double all
+ * arrive as [Number], and a numeric string reads as its number — but
+ * anything else (absent, null, `"latest"`) is 0, "predates versions",
+ * which the write paths report rather than silently default past. A string
+ * `"1"` warning as an old server would be a false positive of exactly the
+ * class this check exists to remove.
+ */
+internal fun parseContractVersion(raw: Any?): Int = when (raw) {
+    is Number -> raw.toInt()
+    is String -> raw.trim().toIntOrNull() ?: 0
+    else -> 0
+}
+
+/**
+ * The highest contract in a response batch, or 0 when no task spoke one.
+ *
+ * One number per RESPONSE, not per row: `list` parses up to 200 tasks, and
+ * a prefs read-modify-write per row is 200 I/Os per refresh for a single
+ * fact. The callers record this once per batch instead.
+ */
+internal fun maxContractVersion(tasks: List<ServerTask>): Int =
+    tasks.maxOfOrNull { it.contractVersion } ?: 0
+
 /**
  * The task fields the app asserts after a write (#185).
  *
