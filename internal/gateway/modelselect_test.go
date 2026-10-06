@@ -234,3 +234,93 @@ func TestModelSubstringInUnrelatedErrorIs502(t *testing.T) {
 		t.Fatalf("got %d, want 502. body=%s", rec.Code, rec.Body)
 	}
 }
+
+func TestProviderModelPairIsValidated(t *testing.T) {
+	// Both halves exist but never together: provider-a never offered
+	// muse-spark, so the 400 must name where it actually lives rather than
+	// the composed pair Pi never advertised.
+	agent := newFakeAgent()
+	agent.models = []fakeModel{
+		{id: "mimo-v2.6-flash", provider: "provider-a"},
+		{id: "muse-spark-1.3-contributor", provider: "provider-b"},
+	}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"provider":"provider-a","model":"muse-spark-1.3-contributor",`+
+			`"model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400. body=%s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "provider-b") {
+		t.Fatalf("the 400 does not name the model's real provider: %s", rec.Body)
+	}
+	if agent.sawCommand("set_model") {
+		t.Fatal("a mismatched pair still switched the model")
+	}
+}
+
+func TestRefusedEffortRevertsTheSwitch(t *testing.T) {
+	// The switch applies before effort is judged, so a refused effort must
+	// put the previous model back: otherwise one bad request silently
+	// repoints every following turn.
+	agent := newFakeAgent()
+	agent.events = []pi.Record{{Type: pi.TypeAgentSettled}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"model":"muse-spark-1.3-contributor",`+
+			`"model_options":{"reasoning_effort":"ultra"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400. body=%s", rec.Code, rec.Body)
+	}
+	if got := switchedModel(t, agent); got != "mimo-v2.6-flash" {
+		t.Fatalf("refused effort left the agent on %q instead of reverting", got)
+	}
+}
+
+func TestDashedModelSpellingFindsDottedInventoryID(t *testing.T) {
+	// The app normalizes dots/dashes/underscores for lookup; the gateway must
+	// match the same way — while sending Pi the inventory's canonical
+	// spelling, never the normalized guess.
+	agent := newFakeAgent()
+	agent.events = []pi.Record{{Type: pi.TypeAgentSettled}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"model":"muse-spark-1-3-contributor","model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if got := switchedModel(t, agent); got != "muse-spark-1.3-contributor" {
+		t.Fatalf("Pi received %q, want the canonical inventory spelling", got)
+	}
+}
+
+func TestProviderAloneIsValidated(t *testing.T) {
+	// A provider with no model selects nothing — but an unknown one is still
+	// refused rather than silently ignored.
+	agent := newFakeAgent()
+	agent.events = []pi.Record{{Type: pi.TypeAgentSettled}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"provider":"no-such-provider","model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400. body=%s", rec.Code, rec.Body)
+	}
+
+	rec = post(t, srv, "/v1/chat/completions", "test-token",
+		`{"provider":"opencode-go","model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("known provider alone: got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if agent.sawCommand("set_model") {
+		t.Fatal("a provider-only request switched the model")
+	}
+}

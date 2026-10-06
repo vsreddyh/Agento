@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -521,36 +522,60 @@ func (a agentRunner) modelInventory(ctx context.Context) (map[string][]string, m
 // 400s. The switch is the caller's own selection, audited by Pi, with no
 // tokens spent; the alternative, validating against the previous model's
 // ladder, reintroduces the exact wrong-model refusal being fixed.)
-func (a agentRunner) selectModel(ctx context.Context, provider, model string) (bool, error) {
-	if strings.TrimSpace(model) == "" {
-		// Unset: legacy callers that never heard of selection keep today's
+func (a agentRunner) selectModel(ctx context.Context, provider, model string) (string, bool, error) {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if model == "" && provider == "" {
+		// Legacy callers that never heard of selection keep today's
 		// behaviour — the running model, validated effort and all.
-		return false, nil
+		return "", false, nil
 	}
 	byID, providers, err := a.modelInventory(ctx)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	if provider != "" && !providers[provider] {
-		return false, &unknownProviderError{provider: provider}
+		return "", false, &unknownProviderError{provider: provider}
 	}
-	candidates, ok := byID[model]
-	if !ok {
-		return false, &unknownModelError{model: model}
+	if model == "" {
+		// Provider alone selects nothing, but an unknown provider is still
+		// refused rather than silently ignored (#251 review): otherwise
+		// {"provider":"no-such"} with no model 200s on whatever runs.
+		return "", false, nil
+	}
+	var cand modelCandidates
+	if ps, ok := byID[model]; ok {
+		cand = modelCandidates{canonical: model, providers: ps}
+	} else if nc, ok := a.normalizedCandidates(byID, model); ok {
+		cand = nc
+		model = nc.canonical
+	} else {
+		return "", false, &unknownModelError{model: model}
 	}
 	if provider == "" {
-		if len(candidates) != 1 {
-			return false, &unknownModelError{model: model + " (available from several providers; name one)"}
+		if len(cand.providers) != 1 {
+			return "", false, &unknownModelError{model: model + " (available from several providers; name one)"}
 		}
-		provider = candidates[0]
+		provider = cand.providers[0]
+	} else if !slices.Contains(cand.providers, provider) {
+		// Both halves exist but never together: naming the composed target
+		// would report a model Pi never offered, so the refusal names where
+		// the model actually lives.
+		return "", false, &unknownModelError{model: model +
+			" (not offered by " + provider +
+			"; available from " + strings.Join(cand.providers, ", ") + ")"}
 	}
 	target := provider + "/" + model
 	st, err := a.getState(ctx)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	if st.Model.Provider+"/"+st.Model.ID == target {
-		return false, nil
+		return "", false, nil
+	}
+	prev := ""
+	if st.Model.ID != "" {
+		prev = st.Model.Provider + "/" + st.Model.ID
 	}
 	if _, err := a.agent.Call(ctx, "set_model", map[string]any{"model": target}); err != nil {
 		// The inventory said this model exists and Pi still refused it: the
@@ -558,11 +583,44 @@ func (a agentRunner) selectModel(ctx context.Context, provider, model string) (b
 		// refusal (measured), so it reads as unknown, not wedged — anything
 		// else is a broken agent.
 		if isUnknownModelRefusal(err) {
-			return false, &unknownModelError{model: target}
+			return "", false, &unknownModelError{model: target}
 		}
-		return false, err
+		return "", false, err
 	}
-	return true, nil
+	return prev, true, nil
+}
+
+// modelCandidates is one inventory id plus every provider offering it.
+type modelCandidates struct {
+	canonical string
+	providers []string
+}
+
+// normalizedCandidates resolves a model id the way the app looks it up:
+// dots, dashes and underscores unified, case folded (#251 review). The app's
+// catalog normalizes the same way, so "mimo-v2-6-flash" must find inventory
+// id "mimo-v2.6-flash" rather than 400. Comparison only — Pi always receives
+// the inventory's canonical spelling, never the normalized guess.
+func (a agentRunner) normalizedCandidates(byID map[string][]string, model string) (modelCandidates, bool) {
+	want := normModelID(model)
+	var hits []modelCandidates
+	for id, ps := range byID {
+		if normModelID(id) == want {
+			hits = append(hits, modelCandidates{canonical: id, providers: ps})
+		}
+	}
+	if len(hits) != 1 {
+		return modelCandidates{}, false
+	}
+	return hits[0], true
+}
+
+func normModelID(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, ".", "-")
+	s = strings.ReplaceAll(s, "_", "-")
+	return s
 }
 
 // isUnknownModelRefusal reports whether Pi refused a switch because the model

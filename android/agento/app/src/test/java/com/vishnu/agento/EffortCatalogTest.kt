@@ -27,6 +27,24 @@ class EffortCatalogTest {
     }
 
     @Test
+    fun `muse-spark offers none`() {
+        // The default model must be able to turn reasoning off. Unverified on
+        // the real model, but consistent with every graded row — and a wrong
+        // offering 400s naming the real levels rather than running wrong.
+        assertTrue(EffortCatalog.optionsFor("muse-spark-1.3-contributor").contains("none"))
+    }
+
+    @Test
+    fun `sibling mimo rows follow the probed ladder`() {
+        // Only v2.6-flash was live-probed; the siblings extrapolate it (see
+        // the KDoc). If a sibling diverges, its 400 names its real levels and
+        // the row gets corrected — this test makes that correction land here.
+        for (m in listOf("mimo-v2-5", "mimo-v2-6-pro", "mimo-v2-pro", "mimo-v2-omni")) {
+            assertEquals(EffortCatalog.MIMO_GRADED, EffortCatalog.optionsFor(m))
+        }
+    }
+
+    @Test
     fun `no row offers ultra`() {
         // "ultra" is not a recognised level name on any model — offering it
         // 400s the turn. It used to sit in FALLBACK and the mimo rows.

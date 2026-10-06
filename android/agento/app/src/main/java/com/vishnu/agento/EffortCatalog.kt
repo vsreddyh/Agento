@@ -32,8 +32,9 @@ object EffortCatalog {
     /** Toggle-only families (reasoning off/on): "none" = off, "high" = on. */
     private val TOGGLE: List<String> = listOf("none", "high")
 
-    /** MiMo graded ladder, as live-probed on v2.6-flash (#251). */
-    private val MIMO_GRADED: List<String> = listOf(
+    /** MiMo graded ladder, as live-probed on v2.6-flash (#251). Internal (not
+     * private) so the test pins the sibling-row extrapolation this discloses. */
+    internal val MIMO_GRADED: List<String> = listOf(
         "none", "minimal", "low", "medium", "high",
     )
 

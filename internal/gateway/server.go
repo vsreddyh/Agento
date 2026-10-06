@@ -544,28 +544,27 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// the effort check below used to carry alone.
 	wantProvider := strings.TrimSpace(req.Provider)
 	wantModel := strings.TrimSpace(req.Model)
-	if wantModel != "" {
-		if _, err := h.runner.selectModel(turnCtx, wantProvider, wantModel); err != nil {
-			var um *unknownModelError
-			var up *unknownProviderError
-			switch {
-			case errors.As(err, &um):
-				// Echo um.model, not wantModel: the multi-provider case
-				// appends a "name one" hint to the value, and rebuilding
-				// from the request would drop it.
-				apiError(w, http.StatusBadRequest, "invalid_request_error", "model",
-					"unknown model "+strconv.Quote(bounded(um.model)))
-				return
-			case errors.As(err, &up):
-				apiError(w, http.StatusBadRequest, "invalid_request_error", "provider",
-					"unknown provider "+strconv.Quote(bounded(wantProvider)))
-				return
-			default:
-				s.cfg.Logf("gateway: selecting model: %v", err)
-				apiError(w, http.StatusBadGateway, "upstream_error", "",
-					"could not switch the agent's model")
-				return
-			}
+	prevModel, switched, err := h.runner.selectModel(turnCtx, wantProvider, wantModel)
+	if err != nil {
+		var um *unknownModelError
+		var up *unknownProviderError
+		switch {
+		case errors.As(err, &um):
+			// Echo um.model, not wantModel: the multi-provider case
+			// appends a "name one" hint to the value, and rebuilding
+			// from the request would drop it.
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "model",
+				"unknown model "+strconv.Quote(bounded(um.model)))
+			return
+		case errors.As(err, &up):
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "provider",
+				"unknown provider "+strconv.Quote(bounded(wantProvider)))
+			return
+		default:
+			s.cfg.Logf("gateway: selecting model: %v", err)
+			apiError(w, http.StatusBadGateway, "upstream_error", "",
+				"could not switch the agent's model")
+			return
 		}
 	}
 
@@ -581,11 +580,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// per-model: validating effort against the previous model's ladder is the
 	// wrong-model refusal #251 was written about. This used to run before the
 	// session resolve so a bad request cost nothing; the model gate above keeps
-	// that property for selections, but effort can only be judged against the
-	// applied model's levels — so a bad-effort request switches the model and
-	// then 400s. That mutation is the caller's own selection, audited by Pi as
-	// a model_change with no tokens spent, which is strictly better than
-	// refusing against the wrong ladder.
+	// that property for selections. Effort can only be judged against the
+	// applied model's levels, so a bad-effort request is refused after the
+	// switch — and the refusal path reverts to the pre-switch model, or one
+	// bad request would silently repoint every following turn.
 	levels, err := h.runner.thinkingLevels(turnCtx)
 	if err != nil {
 		// Tail, not verbatim: a wedged agent can emit megabytes of stderr and this
@@ -599,6 +597,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	}
 	level, effortErr := resolveEffort(req.ModelOptions.ReasoningEffort, levels)
 	if effortErr != nil {
+		// The switch above already applied: a refused effort must not
+		// silently repoint the profile for the next turn, or one bad
+		// request changes what every following blank-model turn runs on.
+		// Best-effort revert to the pre-switch model; if the revert itself
+		// fails, log and still 400 the turn's error, not the cleanup's.
+		if switched && prevModel != "" {
+			if _, rerr := h.runner.agent.Call(turnCtx, "set_model",
+				map[string]any{"model": prevModel}); rerr != nil {
+				s.cfg.Logf("gateway: reverting model after refused effort: %v", rerr)
+			}
+		}
 		detail := "unrecognised value"
 		if errors.Is(effortErr, errEffortUnsupported) {
 			detail = "not supported by this model; supported levels: " + supportedList(levels)
