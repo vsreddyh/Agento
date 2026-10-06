@@ -37,12 +37,6 @@ import java.util.Locale
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-/** Origin filter for the Tools section (custom = project MCP servers). */
-internal enum class ToolsOrigin(val title: String) {
-    All("All"),
-    Default("Default"),
-    CustomMcp("Custom MCP"),
-}
 /** Sort order for the Tools section lists. */
 internal enum class ToolsSort(val title: String) {
     NameAz("Name A–Z"),
@@ -173,11 +167,9 @@ internal fun McpCard(profile: String, server: McpServer) {
         }
     }
 }
-/** Read-only tools inventory per assistant — Default vs Custom MCP — with
- * Tasks-style search filtering, origin FilterChips and a sort dropdown.
- * Origin rule: in-the-box Hermes toolsets are default, everything else
- * (in-repo MCP servers, `mcp-*`) is custom. Split out of SkillsScreen
- * into its own sidebar section (#106).
+/** Read-only tools inventory per assistant — with
+ * Tasks-style search filtering and a sort dropdown.
+ * Split out of SkillsScreen into its own sidebar section (#106).
  */
 @Composable
 internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
@@ -233,9 +225,8 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         dedupMcpServers(listedToolsets, mcpServersFrom(listedToolsets))
     }
 
-    // Search + origin filter + sort (Tasks-style).
+    // Search + sort (Tasks-style).
     var query by remember { mutableStateOf("") }
-    var toolsOrigin by remember { mutableStateOf(ToolsOrigin.All) }
     var toolsSort by remember { mutableStateOf(ToolsSort.NameAz) }
     var toolsSortOpen by remember { mutableStateOf(false) }
 
@@ -247,13 +238,10 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         )
         ToolsSort.NameAz -> list.sortedBy { it.label.ifEmpty { it.name }.lowercase(Locale.ROOT) }
     }
-    val defaultTools = remember(listedToolsets, query, toolsSort) {
-        sortToolsets(listedToolsets.filter { !it.isCustomMcp() && it.matches(query) })
+    val shownToolsets = remember(listedToolsets, query, toolsSort) {
+        sortToolsets(listedToolsets.filter { it.matches(query) })
     }
-    val customMcpToolsets = remember(listedToolsets, query, toolsSort) {
-        sortToolsets(listedToolsets.filter { it.isCustomMcp() && it.matches(query) })
-    }
-    val customMcpServers = remember(mcp, query, toolsSort) {
+    val shownMcpServers = remember(mcp, query, toolsSort) {
         val filtered = mcp.filter { it.matches(query) }
         if (toolsSort == ToolsSort.NameZa) {
             filtered.sortedByDescending { it.name.lowercase(Locale.ROOT) }
@@ -264,12 +252,6 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             )
         }
     }
-    val shownDefaultTools = if (toolsOrigin == ToolsOrigin.CustomMcp) emptyList() else defaultTools
-    val shownCustomMcpToolsets =
-        if (toolsOrigin == ToolsOrigin.Default) emptyList() else customMcpToolsets
-    val shownCustomMcpServers =
-        if (toolsOrigin == ToolsOrigin.Default) emptyList() else customMcpServers
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -344,7 +326,7 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                     }
-                    // ── Tools (Default vs Custom MCP) ──
+                    // ── Tools ──
                     item {
                         Text(
                             "Tools",
@@ -370,13 +352,6 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            ToolsOrigin.entries.forEach { o ->
-                                FilterChip(
-                                    selected = toolsOrigin == o,
-                                    onClick = { toolsOrigin = o },
-                                    label = { Text(o.title) },
-                                )
-                            }
                             Box {
                                 TextButton(onClick = { toolsSortOpen = true }) {
                                     Text("Sort: ${toolsSort.title}")
@@ -395,26 +370,12 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             }
                         }
                     }
-                    if (shownDefaultTools.isNotEmpty()) {
-                        item {
-                            Text(
-                                "Default tools (${shownDefaultTools.size})",
-                                style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                            )
-                        }
-                        items(shownDefaultTools, key = { "dt:" + it.name }) { ts ->
+                    if (shownToolsets.isNotEmpty()) {
+                        items(shownToolsets, key = { "ts:" + it.name }) { ts ->
                             ToolsetCard(profile, ts)
                         }
                     }
-                    if (shownCustomMcpToolsets.isNotEmpty() || shownCustomMcpServers.isNotEmpty()) {
-                        item {
-                            Text(
-                                "Custom MCP (${shownCustomMcpToolsets.size + shownCustomMcpServers.size})",
-                                style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                            )
-                        }
+                    if (shownMcpServers.isNotEmpty()) {
                         item {
                             Text(
                                 "Read-only — servers are configured on the gateway.",
@@ -422,16 +383,13 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        items(shownCustomMcpToolsets, key = { "cm:" + it.name }) { ts ->
-                            ToolsetCard(profile, ts)
-                        }
-                        items(shownCustomMcpServers, key = { "ms:" + it.name }) { server ->
+                        items(shownMcpServers, key = { "ms:" + it.name }) { server ->
                             McpCard(profile, server)
                         }
                     }
                     if (loaded && listedToolsets.isNotEmpty()
-                        && shownDefaultTools.isEmpty()
-                        && shownCustomMcpToolsets.isEmpty() && shownCustomMcpServers.isEmpty()
+                        && shownToolsets.isEmpty()
+                        && shownMcpServers.isEmpty()
                         && toolsError.isEmpty()
                     ) {
                         item {

@@ -15,7 +15,6 @@ import java.util.Locale
 data class SkillInfo(
     val name: String,
     val description: String = "",
-    val category: String = "",
     /** Null when the server doesn't report toggle state. */
     val enabled: Boolean? = null,
 )
@@ -115,7 +114,6 @@ class ServerApi(context: Context) {
                     out.add(SkillInfo(
                         name = name,
                         description = o.optString("description", "").trim(),
-                        category = o.optString("category", "").trim(),
                         enabled = optFlag(o, "enabled", "active"),
                     ))
                 }
@@ -503,28 +501,7 @@ fun mcpServersFrom(toolsets: List<ToolsetInfo>): List<McpServer> {
 }
 
 /**
- * Origin split for the Skills screen's two sections.
- *
- * Assumption: in-the-box Hermes skills always carry a `category`
- * (e.g. "creative", "web"); project skills (podman-management,
- * git-remote-preflight, …) report null/empty. So non-blank category =
- * default, blank = custom. Bare-string server shapes have no category and
- * always land in Custom; if the gateway ever omits categories entirely,
- * the screen falls back to treating every skill as default (see
- * SkillsScreen's anyCategorized guard) rather than emptying Default.
- */
-fun SkillInfo.isDefault(): Boolean = category.isNotBlank()
-
-/** Toolset names that are project MCP servers rather than built-ins. */
-private val CUSTOM_MCP_TOOLSET_NAMES = setOf(
-    "miser-money", "miser_money",
-    "mcp-miser-money", "mcp-cookbook", "mcp-health-check",
-    "mcp-task-manager", "mcp_task_manager",
-    "cookbook", "health-check", "health_check", "money",
-    "task-manager", "task_manager",
-)
-
-/** Normalizes a toolset or derived-server name to one MCP server key:
+ * Normalizes a toolset or derived-server name to one MCP server key:
  * lowercase, `mcp-`/`mcp_` prefix stripped, `_` treated as `-`. Pure. */
 fun normalizeMcpServerKey(name: String): String {
     var n = name.trim().lowercase(Locale.ROOT).replace('_', '-')
@@ -545,33 +522,17 @@ fun dedupMcpServers(
     servers: List<McpServer>,
 ): List<McpServer> {
     val covered = toolsets
-        .filter { it.isCustomMcp() }
         .map { normalizeMcpServerKey(it.name) }
         .toSet()
     return servers.filter { normalizeMcpServerKey(it.name) !in covered }
 }
 
-/**
- * Tools: built-in Hermes toolsets (web, browser, terminal, …) are the
- * default group; project MCP servers (money/cookbook/health-check, any
- * `mcp-*` toolset, or toolsets carrying `mcp__` tools) are custom MCP.
- * Derived [McpServer] rows are always custom.
- */
-fun ToolsetInfo.isCustomMcp(): Boolean {
-    val n = name.trim().lowercase(Locale.ROOT)
-    if (n == "mcp" || n.startsWith("mcp-") || n.startsWith("mcp_")) return true
-    if (n in CUSTOM_MCP_TOOLSET_NAMES) return true
-    if (tools.any { it.lowercase(Locale.ROOT).startsWith("mcp__") }) return true
-    return false
-}
-
-/** Case-insensitive search across name + description (+ category/tools). */
+/** Case-insensitive search across name + description (+ tools). */
 fun SkillInfo.matches(query: String): Boolean {
     val q = query.trim().lowercase(Locale.ROOT)
     if (q.isEmpty()) return true
     return name.lowercase(Locale.ROOT).contains(q)
         || description.lowercase(Locale.ROOT).contains(q)
-        || category.lowercase(Locale.ROOT).contains(q)
 }
 
 fun ToolsetInfo.matches(query: String): Boolean {

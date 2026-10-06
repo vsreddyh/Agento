@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.15.0]
+- **Skills and Tools screens drop the Default/Custom split.** Both screens
+  now show a single searchable, sortable list instead of Default vs Custom
+  sections with origin filter chips — the `category`-based skill split and
+  the custom-MCP toolset split (plus the Category sort) are gone, and the
+  totals header just reports the inventory size.
+
 ## [4.14.10]
 - **God chat works again: the tab now hits the `god` profile.** The app
   mapped the God tab to the old Hermes-era `default` profile path

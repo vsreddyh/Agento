@@ -36,20 +36,12 @@ import java.util.Locale
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-/** Origin filter for the Skills section (default = bundled Hermes). */
-internal enum class SkillsOrigin(val title: String) {
-    All("All"),
-    Default("Default"),
-    Custom("Custom"),
-}
-
-/** Sort order for the Skills section lists. */
+/** Sort order for the Skills section list. */
 internal enum class SkillsSort(val title: String) {
     NameAz("Name A–Z"),
     NameZa("Name Z–A"),
-    Category("Category"),
 }
-/** One skill row: name + description/category + On/Off badge. Tap expands
+/** One skill row: name + description + On/Off badge. Tap expands
  * the full description (#123); collapsed text caps at 3 lines. Expansion
  * is keyed by profile+name so switching assistants never leaks open rows. */
 @Composable
@@ -65,10 +57,9 @@ internal fun SkillCard(profile: String, s: SkillInfo) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(s.name, style = MaterialTheme.typography.bodyLarge)
-                val blurb = s.description.ifEmpty { s.category }
-                if (blurb.isNotEmpty()) {
+                if (s.description.isNotEmpty()) {
                     Text(
-                        blurb,
+                        s.description,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = if (open) Int.MAX_VALUE else 3,
@@ -98,10 +89,8 @@ internal fun SkillCard(profile: String, s: SkillInfo) {
         }
     }
 }
-/** Read-only skills inventory per assistant — Default vs Custom — with
- * Tasks-style search filtering, origin FilterChips and a sort dropdown.
- * Origin rule: in-the-box Hermes skills carry a category, project skills
- * don't — so non-blank category means default.
+/** Read-only skills inventory per assistant — with
+ * Tasks-style search filtering and a sort dropdown.
  */
 @Composable
 internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
@@ -146,36 +135,18 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
 
     val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Resume and Portfolio")
 
-    // Search + origin filter + sort (Tasks-style).
+    // Search + sort (Tasks-style).
     var query by remember { mutableStateOf("") }
-    var skillsOrigin by remember { mutableStateOf(SkillsOrigin.All) }
     var skillsSort by remember { mutableStateOf(SkillsSort.NameAz) }
     var skillsSortOpen by remember { mutableStateOf(false) }
 
     fun sortSkills(list: List<SkillInfo>): List<SkillInfo> = when (skillsSort) {
         SkillsSort.NameZa -> list.sortedByDescending { it.name.lowercase(Locale.ROOT) }
-        SkillsSort.Category -> list.sortedWith(
-            // Empty category sorts last so custom skills trail defaults.
-            compareBy({ it.category.ifEmpty { "\uFFFF" }.lowercase(Locale.ROOT) }, { it.name.lowercase(Locale.ROOT) })
-        )
         SkillsSort.NameAz -> list.sortedBy { it.name.lowercase(Locale.ROOT) }
     }
-    // Origin rule (see ServerApi): bundled Hermes skills carry a category,
-    // project skills don't — so non-blank category means default. If the
-    // server omits categories entirely, everything counts as default
-    // rather than silently emptying the Default section.
-    val anyCategorized = remember(skills) { skills.any { it.category.isNotBlank() } }
-    val defaultSkills = remember(skills, query, skillsSort, anyCategorized) {
-        sortSkills(skills.filter { (it.isDefault() || !anyCategorized) && it.matches(query) })
+    val shownSkills = remember(skills, query, skillsSort) {
+        sortSkills(skills.filter { it.matches(query) })
     }
-    val customSkills = remember(skills, query, skillsSort, anyCategorized) {
-        // Mirrors the defaultSkills fallback: with no categories anywhere,
-        // everything is default, so Custom stays empty (never duplicated).
-        if (!anyCategorized) emptyList()
-        else sortSkills(skills.filter { !it.isDefault() && it.matches(query) })
-    }
-    val shownDefaultSkills = if (skillsOrigin == SkillsOrigin.Custom) emptyList() else defaultSkills
-    val shownCustomSkills = if (skillsOrigin == SkillsOrigin.Default) emptyList() else customSkills
 
     Scaffold(
         topBar = {
@@ -251,7 +222,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                         }
                     }
-                    // ── Skills (Default vs Custom) ──
+                    // ── Skills ──
                     item {
                         Text(
                             "Skills",
@@ -263,14 +234,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     // context-load proxy for this assistant.
                     if (loaded && skillsError.isEmpty()) {
                         item {
-                            val totalDefault =
-                                if (!anyCategorized) skills.size
-                                else skills.count { it.isDefault() }
-                            HintLine(
-                                "${skills.size} skills · " +
-                                    "$totalDefault default · " +
-                                    "${skills.size - totalDefault} custom"
-                            )
+                            HintLine("${skills.size} skills")
                         }
                     }
                     item {
@@ -280,13 +244,6 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            SkillsOrigin.entries.forEach { o ->
-                                FilterChip(
-                                    selected = skillsOrigin == o,
-                                    onClick = { skillsOrigin = o },
-                                    label = { Text(o.title) },
-                                )
-                            }
                             Box {
                                 TextButton(onClick = { skillsSortOpen = true }) {
                                     Text("Sort: ${skillsSort.title}")
@@ -305,32 +262,13 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             }
                         }
                     }
-                    if (shownDefaultSkills.isNotEmpty()) {
-                        item {
-                            Text(
-                                "Default skills (${shownDefaultSkills.size})",
-                                style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                            )
-                        }
-                        items(shownDefaultSkills, key = { "ds:" + it.name }) { s ->
-                            SkillCard(profile, s)
-                        }
-                    }
-                    if (shownCustomSkills.isNotEmpty()) {
-                        item {
-                            Text(
-                                "Custom skills (${shownCustomSkills.size})",
-                                style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                            )
-                        }
-                        items(shownCustomSkills, key = { "cs:" + it.name }) { s ->
+                    if (shownSkills.isNotEmpty()) {
+                        items(shownSkills, key = { "s:" + it.name }) { s ->
                             SkillCard(profile, s)
                         }
                     }
                     if (loaded && skills.isNotEmpty()
-                        && shownDefaultSkills.isEmpty() && shownCustomSkills.isEmpty()
+                        && shownSkills.isEmpty()
                         && skillsError.isEmpty()
                     ) {
                         item {
