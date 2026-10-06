@@ -401,3 +401,26 @@ func TestQualifiedModelClaimResolves(t *testing.T) {
 		t.Fatalf("Pi received %q, want the canonical inventory spelling", got)
 	}
 }
+
+func TestMixedCaseInventorySlugStillSelects(t *testing.T) {
+	// Slugs are folded at inventory build, so a mixed-case row Pi returns
+	// still matches a lowercase request — instead of 400ing every selection.
+	agent := newFakeAgent()
+	agent.models = []fakeModel{
+		{id: "mimo-v2.6-flash", provider: "OpenCode-Go"},
+		{id: "muse-spark-1.3-contributor", provider: "OpenCode-Go"},
+	}
+	agent.events = []pi.Record{{Type: pi.TypeAgentSettled}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"provider":"opencode-go","model":"muse-spark-1.3-contributor",`+
+			`"model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if got := switchedModel(t, agent); got != "muse-spark-1.3-contributor" {
+		t.Fatalf("agent runs %q after the switch", got)
+	}
+}

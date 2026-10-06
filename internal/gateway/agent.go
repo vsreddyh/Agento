@@ -482,7 +482,12 @@ func (a agentRunner) modelInventory(ctx context.Context) (map[string][]string, m
 	providers := map[string]bool{}
 	for _, m := range payload.Models {
 		id := strings.TrimSpace(m.ID)
-		slug := strings.TrimSpace(m.Provider)
+		// Lowercased at build, not just at lookup: selectModel folds the
+		// request the same way, so keys, membership checks and the composed
+		// target all agree. Slugs are lowercase by convention today, which
+		// makes this a no-op in practice — and if a mixed-case slug ever
+		// appears, the worst case is a loud 400, never a silent mismatch.
+		slug := strings.ToLower(strings.TrimSpace(m.Provider))
 		if id == "" || slug == "" {
 			continue
 		}
