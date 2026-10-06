@@ -305,23 +305,16 @@ internal fun contractMismatches(
     expectedId: String? = null,
 ): List<String> {
     val out = mutableListOf<String>()
-    // An id is the one field with no sensible default: without it there is no record to
-    // point at, so a write cannot be reported as successful.
+    // Identity, two ways — an id is the one field with no sensible default.
     //
-    // DEFENCE IN DEPTH, not a reachable warning on the wired path. `parseTask` returns
-    // null on a blank id, so `parseOne` throws "Unexpected response shape" before
-    // `checkContract` ever runs — a create or update can never reach this arm. It stays
-    // because `contractMismatches` is also called directly (tests, and any future caller
-    // that already holds a ServerTask), and a comparator that silently skipped the one
-    // field that makes a record unusable would be the wrong default.
-    // Identity is checked two ways, and both matter:
-    //
-    //   - blank id: `parseTask` already rejects those, so this is defence in depth.
-    //   - WRONG id: a server answering with a different, perfectly valid record. Nothing
-    //     else here would notice — every field could match and the app would store a
-    //     result for a task it never touched. `expectedId` is set on `update`, where the
-    //     app already knows which task it asked to change; `create` has none, because the
-    //     server assigns the id.
+    //   - BLANK: `parseTask` already rejects those, so `parseOne` throws before this
+    //     runs. Defence in depth, kept because `contractMismatches` is also called
+    //     directly, and a comparator that skipped the one field making a record
+    //     unusable would be the wrong default.
+    //   - WRONG: a server answering with a different, perfectly valid record. Nothing
+    //     else here notices — every field can match and the app stores a result for a
+    //     task it never touched. `update` passes the id it asked to change; `create`
+    //     passes none, because the server assigns it.
     if (got.id.isBlank()) out += "id"
     if (expectedId != null && expectedId.trim().isNotEmpty() &&
         expectedId.trim() != got.id.trim()
