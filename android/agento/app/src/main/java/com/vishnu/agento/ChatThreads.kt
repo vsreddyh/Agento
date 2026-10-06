@@ -112,6 +112,7 @@ object ChatThreads {
     // addition that triggers this.
     fun toUi(messages: List<StoredMessage>): List<ChatMessage> =
         messages.map {
+            val by = interruptedBy(it.interruptedBy)
             ChatMessage(
                 role = it.role,
                 content = it.content,
@@ -125,8 +126,14 @@ object ChatThreads {
                 unreported = it.unreported,
                 model = it.model,
                 reasoning = it.reasoning,
-                interrupted = it.interrupted,
-                interruptedBy = interruptedBy(it.interruptedBy),
+                // Normalised on load, not trusted as stored: the two fields can disagree
+                // (a hand-edited backup, or a bug in an older writer) and `interrupted`
+                // alone decides whether the UI offers "Continue". A `DROP` record stored
+                // with `interrupted=false` would render as a finished reply — the exact
+                // thing #214 exists to prevent — so the marker that says *why* wins.
+                // `interruptedBy` stays exactly as stored; it is only ever display detail.
+                interrupted = it.interrupted || by == InterruptedBy.DROP,
+                interruptedBy = by,
             )
         }
 
@@ -150,3 +157,56 @@ object ChatThreads {
             )
         }
 }
+
+/**
+ * Marks a message as cut off by a dead connection (#214).
+ *
+ * An `Error` carrying partial text/reasoning is a turn that ran and was cut
+ * off, not a clean failure — without the flag it renders as a finished reply
+ * and offers retry instead of Continue, which is the same misreport as the
+ * dropped-stream case one layer down. Everything else is preserved: the
+ * fragment, its tools, and `unreported` all still describe what happened.
+ */
+internal fun ChatMessage.asInterruptedDrop(): ChatMessage =
+    copy(interrupted = true, interruptedBy = InterruptedBy.DROP)
+
+/**
+ * Strips a trailing fragment before a resend (#214).
+ *
+ * `retry()` used to resend the interrupted fragment as part of history, so a
+ * resend replayed its own truncated reply as context — against a server-side
+ * turn that may still be running, that is a second execution primed with its
+ * own partial output. Like `regenerate`, a resend goes out without the
+ * trailing assistant message; unlike `regenerate` this also applies to
+ * `unreported` error fragments, which are cut-off turns by the same rule as
+ * [asInterruptedDrop]. A clean trailing reply is kept: only flagged
+ * fragments are ever removed, never real answers.
+ */
+internal fun stripTrailingFragmentForResend(messages: List<ChatMessage>): List<ChatMessage> {
+    val last = messages.lastOrNull()
+    if (last?.role == "assistant" && (last.interrupted || last.unreported)) {
+        return messages.dropLast(1)
+    }
+    return messages
+}
+
+/**
+ * Whether recovered server-side text should replace the local fragment
+ * (#214). The orphaned turn keeps running after a drop, so a later poll of
+ * the session transcript can hold MORE of the reply than the stream
+ * delivered. Adopt only a strictly longer, non-blank text: equal-or-shorter
+ * means the server has nothing the client does not, and adopting it would
+ * throw away the stream's fragment for no gain.
+ */
+internal fun recoveryAdoptable(fragment: String, recovered: String?): Boolean =
+    !recovered.isNullOrBlank() && recovered.length > fragment.length
+
+/**
+ * Whether the recovered text has settled (#214). Two polls that return the
+ * same text mean the orphaned turn stopped producing — the only completion
+ * signal available without a server resume primitive — so the flag can be
+ * cleared and the turn reported as finished. Still-growing text stays
+ * flagged: it is a longer fragment, not a completed reply.
+ */
+internal fun recoveryTextSettled(first: String?, second: String?): Boolean =
+    first != null && first == second

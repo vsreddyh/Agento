@@ -223,6 +223,20 @@ class ServerApi(context: Context) {
             }
         }
 
+    /** Latest assistant text in one conversation, for post-drop recovery
+     * (#214). Same endpoint and leniency as [fetchSessionUsage] (unknown
+     * session reads as null, never as an error); the parsing itself lives in
+     * [parseLastAssistantText] so it is unit-tested without HTTP. */
+    suspend fun fetchLastAssistantText(path: String, sessionId: String): Result<String?> =
+        withContext(Dispatchers.IO) {
+            if (sessionId.isBlank()) {
+                return@withContext Result.failure(IllegalStateException("Session id not set"))
+            }
+            get(path, "api/sessions/${urlEncode(sessionId)}/messages").map { body ->
+                parseLastAssistantText(body)
+            }
+        }
+
     /** Server-side totals for one conversation (#121 reconciliation).
      * Lenient: the wrapped `{"session":{...}}` shape is the Hermes one, verified
      * live at the time, with
@@ -261,27 +275,74 @@ class ServerApi(context: Context) {
         }
         return null
     }
+}
 
-    /**
-     * Response root as an array: the documented shape is a bare top-level
-     * array, with object-wrapped variants (`{skills:[...]}` etc.) as fallback.
-     * Null when the body is neither.
-     */
-    private fun rootArray(body: String, vararg keys: String): JSONArray? {
-        try {
-            return JSONArray(body)
-        } catch (_: JSONException) {
-        }
-        val o = try {
-            JSONObject(body)
-        } catch (_: JSONException) {
-            return null
-        }
-        for (k in keys) {
-            o.optJSONArray(k)?.let { return it }
-        }
+/**
+ * Response root as an array: the documented shape is a bare top-level
+ * array, with object-wrapped variants (`{skills:[...]}` etc.) as fallback.
+ * Null when the body is neither.
+ *
+ * Top-level (not a member) so the pure transcript parsers below — and
+ * their unit tests — can use it without a Context-bound ServerApi.
+ */
+internal fun rootArray(body: String, vararg keys: String): JSONArray? {
+    try {
+        return JSONArray(body)
+    } catch (_: JSONException) {
+    }
+    val o = try {
+        JSONObject(body)
+    } catch (_: JSONException) {
         return null
     }
+    for (k in keys) {
+        o.optJSONArray(k)?.let { return it }
+    }
+    return null
+}
+
+/**
+ * The latest assistant text in a session transcript (#214).
+ *
+ * The orphaned turn keeps running server-side after a drop, so polling this
+ * endpoint can return MORE of the reply than the stream delivered. Only rows
+ * after the last `user`/`human` row count — earlier turns must not bleed in
+ * — and the result is null when no such assistant text exists (unknown
+ * session included: like its sibling fetchers, absence reads as empty, and
+ * only transport/parse failures are errors). Throws on an unreadable body,
+ * same contract as the other transcript readers.
+ */
+internal fun parseLastAssistantText(body: String): String? {
+    val arr = rootArray(body, "messages", "data", "items")
+        ?: throw RuntimeException("Unexpected response shape")
+    var text: String? = null
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i) ?: continue
+        when (o.optString("role", "").trim().lowercase(Locale.ROOT)) {
+            "user", "human" -> text = null
+            "assistant" -> messageText(o)?.takeIf { it.isNotBlank() }?.let { text = it }
+        }
+    }
+    return text
+}
+
+/** Assistant message text across encodings: a plain string, or content blocks
+ * carrying `text` (skipped otherwise — never coerced, so a weird shape reads
+ * as absent rather than as the literal string "null"). */
+private fun messageText(o: JSONObject): String? {
+    if (o.isNull("content")) return null
+    when (val c = o.opt("content")) {
+        is String -> return c.trim()
+        is JSONArray -> {
+            val parts = mutableListOf<String>()
+            for (i in 0 until c.length()) {
+                val t = c.optJSONObject(i)?.optString("text", "")?.trim().orEmpty()
+                if (t.isNotEmpty()) parts.add(t)
+            }
+            if (parts.isNotEmpty()) return parts.joinToString("\n")
+        }
+    }
+    return null
 }
 
 /** One tool call recorded on a conversation message. */

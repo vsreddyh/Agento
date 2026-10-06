@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -20,6 +21,12 @@ data class ThreadSummary(
 
 /** Fallback title for threads without a custom title. */
 private const val UNTITLED = "New conversation"
+/** First recovery poll after a drop: the orphaned turn needs a moment to
+ * produce text worth adopting (#214). */
+private const val RECOVERY_FIRST_DELAY_MS = 6_000L
+/** Second poll: two polls returning the same text means the orphan stopped
+ * producing, the only completion signal without a server resume primitive. */
+private const val RECOVERY_SECOND_DELAY_MS = 15_000L
 
 data class ChatUiState(
     val provider: String = "",
@@ -123,6 +130,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     val state: State<ChatUiState> = _state
 
     private var streamJob: Job? = null
+    /** A post-drop recovery poll in flight (null otherwise). Cancelled by a
+     * new send or a stop: recovery must never resurrect text behind a turn
+     * the user has already moved past. */
+    private var recoveryJob: Job? = null
     /** Send generation: incremented on every doSend/stop so a late
      * buffered Done/Error/Delta (callbackFlow is UNLIMITED) from a
      * cancelled turn can never overwrite a newer turn's state. */
@@ -352,6 +363,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         sendGen++
         streamJob?.cancel()
         streamJob = null
+        // A pending recovery belongs to the turn just stopped: it must not
+        // resurrect text behind whatever the user does next.
+        recoveryJob?.cancel()
+        recoveryJob = null
         // Mark the in-flight reply as stopped (#122): the partial text
         // stays with an explicit interrupted flag (Continue/Regenerate
         // offered in the UI). A queued send is restored to the composer
@@ -392,10 +407,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
-    /** Resends the current history (used after a failed request). */
+    /** Resends the current history (used after a failed request).
+     *
+     * A trailing fragment never goes back out (#214): retry used to resend
+     * the interrupted reply as part of history, priming a new turn with its
+     * own truncated output while the orphaned turn might still be running.
+     * Like regenerate, the resend drops it; the visible thread keeps it
+     * until the new turn's Done replaces it (doSend rebuilds from history).
+     */
     fun retry() {
         if (_state.value.streaming || !_state.value.ready) return
-        val history = _state.value.messages.filter { it.content.isNotBlank() }
+        val history = stripTrailingFragmentForResend(_state.value.messages)
+            .filter { it.content.isNotBlank() }
         if (history.none { it.role == "user" }) return
         doSend(history)
     }
@@ -546,6 +569,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val stableSessionId = threadId
         val liveTools = mutableListOf<String>()
         streamJob?.cancel()
+        // A new turn supersedes any pending recovery of the previous one.
+        recoveryJob?.cancel()
+        recoveryJob = null
         // Fresh generation: events from any older turn still buffered go
         // stale (see stop()). Captured below; every handler checks it.
         sendGen++
@@ -601,7 +627,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     is ChatEvent.Done -> {
                         val final = event.fullText.ifEmpty { acc.toString() }
                         val finishedAt = ChatThreads.now()
-                        val finished = msgsDropLastPlusAssistant(
+                        // A dropped turn that produced NOTHING leaves an empty assistant
+                        // bubble carrying only the "Connection lost" label. The `Error` and
+                        // user-stop paths both drop an empty placeholder instead, so this
+                        // one was the odd case out — and an empty persisted message is
+                        // worse than no message: it enters history and the next turn's
+                        // prompt as a blank assistant turn.
+                        //
+                        // Only when interrupted: a FINISHED reply that happens to be empty
+                        // is a real (if useless) answer, and dropping it would hide that
+                        // the server responded at all.
+                        val nothingArrived = final.isBlank() && racc.toString().isBlank()
+                        val finished = if (event.interrupted && nothingArrived) {
+                            msgs.dropLast(1)
+                        } else msgsDropLastPlusAssistant(
                             final, finishedAt, liveTools.toList(), event.usage,
                             racc.toString(), model,
                             // #214: the stream ended without `[DONE]`, so this
@@ -625,6 +664,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         persist()
                         backfillUsage(path, stableSessionId, finishedAt, final, finished.size - 1)
                         refreshServerTotals(path, stableSessionId)
+                        if (event.interrupted && !nothingArrived) {
+                            // The stream died but the turn may have completed
+                            // server-side: go try to return it (#214). Skipped
+                            // when the bubble was dropped — there is no
+                            // message to attach recovered text to.
+                            recoverInterruptedTurn(path, stableSessionId, finishedAt, final)
+                        }
                         // #58: ping the user when a reply lands while the app
                         // is backgrounded (gateway has no cronjobs to report).
                         // An empty body that dropped before a single frame yields
@@ -666,6 +712,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // marked unreported (the turn ran but carried no
                         // usable `usage`); drop the placeholder only when it
                         // is still empty.
+                        //
+                        // A kept partial is also flagged as a DROP (#214): an
+                        // Error carrying content is a turn that ran and was
+                        // cut off, not a clean failure, and without the flag
+                        // it renders as a finished reply offering retry
+                        // instead of Continue. A user stop never reaches this
+                        // branch (stop() patches USER directly and stales the
+                        // buffered events), so the flag cannot mislabel one.
                         val msgs = _state.value.messages
                         val last = msgs.lastOrNull()
                         val kept = if (last?.role == "assistant" &&
@@ -674,7 +728,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             msgs.dropLast(1) + last.copy(
                                 tools = (last.tools + liveTools).distinct().take(20),
                                 unreported = true,
-                            )
+                            ).asInterruptedDrop()
                         } else if (last?.role == "assistant") {
                             msgs.dropLast(1)
                         } else {
@@ -862,5 +916,96 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 persist()
             }
         }
+    }
+
+    /**
+     * Best-effort return of a dropped turn's completed text (#214).
+     *
+     * The orphaned turn keeps running server-side after the stream dies, so
+     * a later read of the session transcript can hold MORE of the reply than
+     * the stream delivered. Two bounded polls, never a loop: the first adopts
+     * a longer text (flag kept — longer is not finished), the second clears
+     * the flag only when the text stopped growing between polls, which is the
+     * only completion signal available without a server resume primitive.
+     *
+     * Every patch re-checks that the flagged message is still the tail of the
+     * thread (same ts, still last, still flagged, same thread): a resend, a
+     * thread switch, or a user edit in between aborts the recovery rather
+     * than writing into a turn the user has moved past. Deliberately no
+     * auto-resend anywhere here — firing a new turn on top of a possibly
+     * still-running orphan is the duplicate execution #214 exists to stop.
+     */
+    private fun recoverInterruptedTurn(
+        path: String,
+        sessionId: String,
+        finishedAt: Long,
+        fragment: String,
+    ) {
+        if (sessionId.isBlank()) return
+        val threadAtKick = threadId
+        recoveryJob?.cancel()
+        recoveryJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(RECOVERY_FIRST_DELAY_MS)
+            if (!isActive) return@launch
+            var current = fragment
+            fetchRecoveryText(path, sessionId)?.let { first ->
+                if (recoveryAdoptable(current, first)) {
+                    current = first
+                    if (!patchRecovery(threadAtKick, finishedAt, current, clearFlag = false)) {
+                        return@launch
+                    }
+                }
+            }
+            delay(RECOVERY_SECOND_DELAY_MS)
+            if (!isActive) return@launch
+            val second = fetchRecoveryText(path, sessionId) ?: return@launch
+            // Settled (same text twice, even if it equals the fragment) means
+            // the orphan stopped producing: the turn finished, flag cleared.
+            // Still growing means a longer fragment: adopt it, flag kept.
+            if (recoveryTextSettled(current, second)) {
+                patchRecovery(threadAtKick, finishedAt, current, clearFlag = true)
+            } else if (recoveryAdoptable(current, second)) {
+                patchRecovery(threadAtKick, finishedAt, second, clearFlag = false)
+            }
+        }
+    }
+
+    /** One transcript read for recovery: null on any failure (transport,
+     * unknown session, unparseable body) — recovery is best-effort, and a
+     * failed poll must end the attempt, never fail the turn. */
+    private suspend fun fetchRecoveryText(path: String, sessionId: String): String? =
+        runCatching {
+            serverApi.fetchLastAssistantText(path, sessionId).getOrNull()
+        }.getOrNull()
+
+    /**
+     * Writes recovered text into the flagged tail message. False when the
+     * message is no longer the flagged tail (resent, switched, edited) —
+     * the caller stops polling then, rather than writing into a turn the
+     * user has moved past.
+     */
+    private suspend fun patchRecovery(
+        threadAtKick: String,
+        finishedAt: Long,
+        text: String,
+        clearFlag: Boolean,
+    ): Boolean = withContext(Dispatchers.Main) {
+        if (_state.value.streaming) return@withContext false
+        if (threadId != threadAtKick) return@withContext false
+        val msgs = _state.value.messages
+        val idx = msgs.indexOfLast { it.role == "assistant" && it.ts == finishedAt }
+        if (idx < 0 || idx != msgs.lastIndex) return@withContext false
+        val prev = msgs[idx]
+        if (!prev.interrupted) return@withContext false
+        val fresh = msgs.toMutableList()
+        fresh[idx] = prev.copy(
+            content = text,
+            interrupted = !clearFlag,
+            interruptedBy = if (clearFlag) InterruptedBy.USER else prev.interruptedBy,
+        )
+        _state.value = _state.value.copy(messages = fresh)
+        upsertActive(fresh)
+        persist()
+        true
     }
 }

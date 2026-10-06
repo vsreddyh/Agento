@@ -2,6 +2,7 @@ package com.vishnu.agento
 
 import android.content.Context
 import androidx.core.content.edit
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -543,7 +544,7 @@ class ChatApi(context: Context) {
                     var seenUsage: TokenUsage? = null
                     // OkHttp in this project has no sse module; parse SSE lines manually.
                     // `: keepalive` comments and `event:` lines carry no payload.
-                    when (val end = readSseStream(
+                    when (val end = readSseStreamLenient(
                         source, full, reasoned,
                         onUsage = { seenUsage = it },
                         emit = { trySend(it) },
@@ -631,6 +632,37 @@ internal sealed interface SseEnd {
  * decides what that means. Emitting `Done` from in here is what made EOF and a
  * completed turn indistinguishable.
  */
+/**
+ * [readSseStream], with an [IOException] raised mid-body mapped to [SseEnd.EndOfStream].
+ *
+ * Extracted rather than inlined so it can be tested: an inline `try`/`catch` inside the
+ * 70-line `streamChat` body cannot be reached from a unit test without a live socket, and
+ * the behaviour it fixes was untested for exactly that reason.
+ *
+ * A socket reset or read timeout MID-BODY is the same event as a clean EOF — the turn was
+ * cut off — but it arrives as a thrown exception rather than a return value, so it used to
+ * escape to `streamChat`'s outer handler and become `ChatEvent.Error`. That branch keeps the
+ * partial text and never sets `interrupted`, so the fragment was persisted as a COMPLETE
+ * assistant reply: #214's exact defect, surviving on the path that actually happens in the
+ * field, since a mid-turn reset is far likelier than a clean EOF.
+ *
+ * A failure BEFORE the first byte raises from `call.execute()` or the body open, above this
+ * call, and stays an `Error` — nothing was received, so there is no fragment to misreport.
+ * The distinction is positional and cannot be made from the exception type at the outer
+ * handler: "failed to connect" and "died halfway through" are both `IOException`.
+ */
+internal fun readSseStreamLenient(
+    source: BufferedSource,
+    full: StringBuilder,
+    reasoned: StringBuilder,
+    onUsage: (TokenUsage) -> Unit,
+    emit: (ChatEvent) -> Unit,
+): SseEnd = try {
+    readSseStream(source, full, reasoned, onUsage, emit)
+} catch (_: IOException) {
+    SseEnd.EndOfStream
+}
+
 internal fun readSseStream(
     source: BufferedSource,
     full: StringBuilder,

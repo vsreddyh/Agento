@@ -8,6 +8,23 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.14.8]
+- **A dropped turn can now come back; a resend never replays the fragment**
+  (#214). Flagging the drop (4.14.6) made it visible but still lost the
+  turn's text: the orphaned turn keeps running server-side, so after an
+  interrupted reply the app polls the session transcript twice and adopts a
+  longer text when it finds one. Two identical polls mean the orphan stopped
+  producing — the only completion signal without a server resume primitive —
+  so the flag clears only then; still-growing text stays flagged. A poll that
+  finds nothing, a resend, a thread switch, or any edit in between ends the
+  attempt rather than writing into a turn the user moved past. Separately, an
+  `Error` carrying partial text is now flagged as a drop (it was a cut-off
+  turn rendering as finished), `retry()` strips a trailing flagged fragment
+  instead of resending it as context, and a mid-body socket reset maps to the
+  drop path rather than a generic error. Deliberately no auto-resend:
+  re-POSTing starts a second server turn while the orphan may still run,
+  which is the duplicate execution this issue exists to stop.
+
 ## Unreleased
 - **Read-back rule for writes** (#210). An agent closed a 33-write task
   reporting "verified against a fresh list (39 open = 33 + 6 clones)". The count
