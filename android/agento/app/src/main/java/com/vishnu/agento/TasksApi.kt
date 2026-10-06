@@ -2,6 +2,10 @@ package com.vishnu.agento
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -144,6 +148,51 @@ fun ServerTask.isOpen(): Boolean = completedAt.isBlank()
 class TasksApi(context: Context) {
 
     companion object {
+        /**
+         * Builds the "what the app asked the server to store" record from write arguments.
+         *
+         * ONE builder for `create` and `update`, and `internal` so the tests call the real
+         * thing rather than reimplementing it.
+         *
+         * That last part is the point. `UpdateContractWiringTest` originally hand-wrote its
+         * own copy of this construction, which tested a COPY: if production drifted — an
+         * untrimmed value, a field left null that should be asserted — every test stayed
+         * green while the wiring rotted. It is the fixture-duplication trap one level up
+         * from the one this PR already fixed for `TaskContractSent` itself, and it was mine
+         * to walk into immediately after fixing the original.
+         *
+         * On the companion, not the instance: `TasksApi` takes a `Context`, so an instance
+         * member is not callable from a plain JVM unit test — which is exactly where this
+         * has to be callable from to be worth anything.
+         *
+         * Null in means null out: `update` passes only what it sent, and those stay null so
+         * `contractMismatches` skips them. Strings are trimmed HERE, once, so the app sends
+         * exactly what it asserts.
+         */
+        internal fun buildTaskContractSent(
+            name: String? = null,
+            description: String? = null,
+            dueDate: String? = null,
+            dueTime: String? = null,
+            estimatedMinutes: Int? = null,
+            repeatEvery: Int? = null,
+            repeatUnit: String? = null,
+            repeatCustom: Boolean? = null,
+            repeatRule: String? = null,
+            parallelable: Boolean? = null,
+        ): TaskContractSent = TaskContractSent(
+            name = name?.trim(),
+            description = description?.trim(),
+            dueDate = dueDate?.trim(),
+            dueTime = dueTime?.trim(),
+            estimatedMinutes = estimatedMinutes,
+            repeatEvery = repeatEvery,
+            repeatUnit = repeatUnit?.trim(),
+            repeatCustom = repeatCustom,
+            repeatRule = repeatRule?.trim(),
+            parallelable = parallelable,
+        )
+
         // One shared client: each OkHttpClient owns a connection pool and
         // dispatcher threads, so per-call instances would leak both.
         private val sharedHttp: OkHttpClient by lazy {
@@ -306,23 +355,74 @@ class TasksApi(context: Context) {
         if (estimatedMinutes < 0) {
             return@withContext Result.failure(IllegalArgumentException("Estimated minutes must be 0 or above"))
         }
+        // #185: trimmed once, and the SAME values are asserted and sent. Trimming only
+        // in the comparison would leave the two able to disagree on padding, which the
+        // trim-insensitive compare then hides — so the app would depend on the server
+        // cleaning up before they agree.
+        val sent = buildTaskContractSent(
+            name = name,
+            description = description,
+            dueDate = dueDate,
+            dueTime = dueTime,
+            estimatedMinutes = estimatedMinutes,
+            repeatEvery = repeatEvery,
+            repeatUnit = repeatUnit,
+            repeatCustom = repeatCustom,
+            repeatRule = repeatRule,
+            parallelable = parallelable,
+        )
+        // The body reads its strings back OUT of `sent`: two trims are two rules, and the
+        // one that drifts is the one the trim-insensitive compare hides.
+        //
+        // Unreachable by the types — `create` takes non-null parameters, so the shared
+        // builder cannot return null for any of them. Kept anyway, and kept IN-CHANNEL:
+        // `JSONObject.put(String, Object?)` silently DROPS a null key, so if these
+        // parameters ever become nullable the create would quietly lose a field instead
+        // of failing. A `require` here would throw out of this suspend, and callers use
+        // `.fold(onFailure = ::fail)` with no try/catch — so the failure would escape the
+        // coroutine and show no snackbar at all.
+        if (sent.name == null || sent.description == null || sent.dueDate == null ||
+            sent.dueTime == null || sent.estimatedMinutes == null || sent.parallelable == null ||
+            sent.repeatEvery == null || sent.repeatUnit == null || sent.repeatCustom == null ||
+            sent.repeatRule == null
+        ) {
+            return@withContext Result.failure(
+                IllegalStateException("create: builder dropped a required field"),
+            )
+        }
         val body = JSONObject()
-            .put("name", name.trim())
-            .put("description", description.trim())
-            .put("due_date", dueDate.trim())
-            .put("due_time", dueTime.trim())
-            .put("estimated_minutes", estimatedMinutes)
-            .put("parallelable", parallelable)
-            .put("repeat_every", repeatEvery)
-            .put("repeat_unit", repeatUnit)
-            .put("repeat_custom", repeatCustom)
-            .put("repeat_rule", repeatRule.trim())
+            .put("name", sent.name)
+            .put("description", sent.description)
+            .put("due_date", sent.dueDate)
+            .put("due_time", sent.dueTime)
+            .put("estimated_minutes", sent.estimatedMinutes)
+            .put("parallelable", sent.parallelable)
+            .put("repeat_every", sent.repeatEvery)
+            .put("repeat_unit", sent.repeatUnit)
+            .put("repeat_custom", sent.repeatCustom)
+            .put("repeat_rule", sent.repeatRule)
         call("POST", "/api/tasks", body).map { parseOne(it) }
+            .also { r -> r.getOrNull()?.let { checkContract(it, sent) } }
     }
 
-    /** Partial edit: only non-null keys are sent. The repeat keys are sent
-     * together or not at all, so the server can validate the recurrence as
-     * a whole instead of merging half of it. */
+    /**
+     * Partial edit: only non-null keys are sent.
+     *
+     * The four repeat keys are CONVENTIONALLY sent together or not at all, so the server
+     * validates the recurrence as a whole rather than merging half of it. That is a
+     * convention, not an invariant of this signature: each key is an independent nullable
+     * parameter and each is written to the body independently, so a caller CAN send
+     * `repeat_every` alone and the server will merge it into the stored recurrence.
+     *
+     * The comment used to say "sent together or not at all" as though the method
+     * guaranteed it. It never did, and a comment asserting a guarantee the code does not
+     * make is worse than no comment — it is the stale-prose shape that ships wrong advice,
+     * the same defect as the `exhausted` sentence in #180 that told users to re-enter an
+     * intact repeat.
+     *
+     * Enforcing it would mean rejecting a half-repeat update outright, which changes the
+     * API contract and belongs with the other deferred parts of #185, not in a KDoc fix.
+     */
     suspend fun update(
         id: String,
         name: String? = null,
@@ -343,19 +443,56 @@ class TasksApi(context: Context) {
         if (clean.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Missing task id"))
         }
+        // ONE record, built once, and the body is written from it — exactly what
+        // `create` does. This used to trim here AND inside `buildTaskContractSent`,
+        // which is the same value today and two rules tomorrow: change the builder's
+        // trimming and the body silently diverges, and the trim-insensitive compare
+        // hides it, so the drift is invisible until a server stops trimming for us.
+        //
+        // A null field means "not sent", so it is omitted from the body entirely rather
+        // than sent as a JSON null — which the server would read as an explicit clear.
+        val sent = buildTaskContractSent(
+            name = name,
+            description = description,
+            dueDate = dueDate,
+            dueTime = dueTime,
+            estimatedMinutes = estimatedMinutes,
+            repeatEvery = repeatEvery,
+            repeatUnit = repeatUnit,
+            repeatCustom = repeatCustom,
+            repeatRule = repeatRule,
+            parallelable = parallelable,
+        )
         val body = JSONObject()
-        if (name != null) body.put("name", name)
-        if (description != null) body.put("description", description)
-        if (dueDate != null) body.put("due_date", dueDate)
-        if (dueTime != null) body.put("due_time", dueTime)
-        if (estimatedMinutes != null) body.put("estimated_minutes", estimatedMinutes)
-        if (repeatEvery != null) body.put("repeat_every", repeatEvery)
-        if (repeatUnit != null) body.put("repeat_unit", repeatUnit)
-        if (repeatCustom != null) body.put("repeat_custom", repeatCustom)
-        if (repeatRule != null) body.put("repeat_rule", repeatRule)
-        if (parallelable != null) body.put("parallelable", parallelable)
+        sent.name?.let { body.put("name", it) }
+        sent.description?.let { body.put("description", it) }
+        sent.dueDate?.let { body.put("due_date", it) }
+        sent.dueTime?.let { body.put("due_time", it) }
+        sent.estimatedMinutes?.let { body.put("estimated_minutes", it) }
+        sent.repeatEvery?.let { body.put("repeat_every", it) }
+        sent.repeatUnit?.let { body.put("repeat_unit", it) }
+        sent.repeatCustom?.let { body.put("repeat_custom", it) }
+        sent.repeatRule?.let { body.put("repeat_rule", it) }
+        sent.parallelable?.let { body.put("parallelable", it) }
         if (expectedRevision != null) body.put("expected_revision", expectedRevision)
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
+            .also { r ->
+                r.getOrNull()?.let { task ->
+                    // Only the fields this call actually sent are asserted; the rest stay
+                    // null, which contractMismatches skips. The previous version built
+                    // the expected value FROM the response and copied the sent fields
+                    // over it — correct, because the unsent fields then matched
+                    // themselves, but fragile: a field added to one side and not the
+                    // other becomes silently "asserted" as whatever the server said.
+                    // Nulls put the decision at this call site, where it is visible —
+                    // and `sent` is the SAME record the body was written from, so what
+                    // is asserted is what was sent rather than a second construction of it.
+                    // The app knows which task it asked to change, so a response
+                    // carrying a DIFFERENT id is detectable — a server answering with
+                    // the wrong record is otherwise invisible when every field matches.
+                    checkContract(task, sent, expectedId = id)
+                }
+            }
     }
 
     /** Marks a task done (server starts the 3-day retention clock). The
@@ -402,6 +539,30 @@ class TasksApi(context: Context) {
             call("DELETE", "/api/tasks/$clean").map { }
         }
 
+    /**
+     * Compares a write's response against what was asked for, and surfaces any field
+     * the server stored differently.
+     *
+     * A snackbar, not an exception: the write genuinely succeeded, so failing it would
+     * tell the user their task was not saved when it was. That is the same class of lie
+     * as #214 — reporting an outcome that did not happen — and it is the reason this
+     * warns instead of throws. The user needs to know the app and the server disagree
+     * while the task is still on screen; silently keeping the app's belief is what made
+     * the 4.6.0 and 4.7.0 response-shape changes look like bugs in the app.
+     */
+    private fun checkContract(
+        task: ServerTask,
+        sent: TaskContractSent,
+        expectedId: String? = null,
+    ) {
+        val mismatched = contractMismatches(sent, task, expectedId)
+        if (mismatched.isEmpty()) return
+        // Not thrown. The write succeeded — the task IS stored — so failing it would
+        // tell the user their work was lost when it was not, and they would enter it
+        // again. Reporting an outcome that did not happen is the exact class of lie
+        // #214 is about, so this warns and leaves the stored task authoritative.
+        ContractWarnings.report(mismatched, task.name)
+    }
     private fun parseOne(body: String): ServerTask =
         parseTask(JSONObject(body))
             ?: throw RuntimeException("Unexpected response shape")
@@ -463,3 +624,162 @@ fun serverDetail(message: String): String {
     }.getOrDefault("")
     return detail.trim().ifEmpty { message }
 }
+
+/**
+ * Where a task-response contract mismatch goes (#185).
+ *
+ * A [StateFlow] rather than a plain `var` for two reasons, and the second is the one
+ * that matters:
+ *
+ * 1. **Correctness.** `report()` runs on `Dispatchers.IO` and the screen reads on the
+ *    main thread. Plain `var`s have no happens-before edge between those, so a UI read
+ *    could miss the write — or see a half-published value. A `StateFlow` carries the
+ *    value across the boundary correctly.
+ * 2. **Reachability.** A sink nothing collects records the mismatch and shows nobody,
+ *    which is the bug this whole PR exists to fix. A `StateFlow` has one obvious
+ *    collector and the compiler-visible type says where the value goes.
+ *
+ * Only the NEWEST mismatch is held: a burst of editor autosaves would otherwise queue a
+ * stack of stale warnings the user never dismisses, and only the newest describes the
+ * current state. [consume] clears it once shown, so it is not re-displayed on
+ * recomposition.
+ */
+internal object ContractWarnings {
+    /** Longest task name shown in the warning before it is elided. */
+    const val NAME_DISPLAY_MAX = 40
+
+    private val _mismatched = MutableStateFlow<ContractMismatch?>(null)
+
+    /**
+     * Newest mismatch, or null when there is nothing pending. Null rather than an empty
+     * list so "nothing to show" and "a mismatch with no fields" cannot be confused —
+     * [report] rejects the latter anyway, but the type should not have to carry that.
+     *
+     * NEWEST WINS, deliberately. `StateFlow` holds one value, so three reports arriving
+     * while a single snackbar is up coalesce to the last one. That is a policy rather
+     * than a second loss path: the pending warnings all describe the same underlying
+     * disagreement with the same server, and stacking three identical snackbars in a
+     * queue the user must dismiss before reaching the conversation would be worse than
+     * showing the most recent one. What must never happen is the newest being WIPED by
+     * the cleanup of an older one — hence [consume] matching on the generation.
+     */
+    val mismatched: StateFlow<ContractMismatch?> = _mismatched.asStateFlow()
+
+    /**
+     * Advances on every report.
+     *
+     * An [AtomicInteger] rather than a plain counter: `report()` runs on
+     * `Dispatchers.IO` and `generation++` is a read-modify-write, so two concurrent
+     * autosaves could each read the same value and one increment would vanish.
+     *
+     * This is LOAD-BEARING, not observability: [consume] matches on it, so a lost
+     * increment would let one warning clear another — which is why [report] increments and
+     * stores under one lock rather than as two steps.
+     */
+    private val _generation = AtomicInteger(0)
+
+    /** The current generation. Exposed for tests and diagnostics. */
+    val generation: Int get() = _generation.get()
+
+    /**
+     * Guards the increment-and-set below. Private rather than locking on `this`, which is
+     * a public singleton, and rather than synchronising the object so nothing outside can
+     * lock it by accident.
+     */
+    private val reportLock = Any()
+
+    fun report(fields: List<String>, taskName: String = "") {
+        if (fields.isEmpty()) return
+        // Increment and set together, under one lock.
+        //
+        // As two operations they can reorder across threads: A takes gen5, B takes gen6, B
+        // writes first, A writes last — so the stale gen5 lands last and the NEWER warning
+        // is the one that disappears. `report()` runs on Dispatchers.IO and two concurrent
+        // autosaves are ordinary, not exotic.
+        //
+        // The lock is uncontended in practice (one write per mismatch, not per frame), so
+        // it costs nothing; the alternative — a compare-and-set retry loop — is more code
+        // for the same guarantee and harder to read.
+        synchronized(reportLock) {
+            _mismatched.value =
+                ContractMismatch(_generation.incrementAndGet(), fields, taskName)
+        }
+    }
+
+    /**
+     * Clears the warning **only if it is still the one that was shown**.
+     *
+     * [shown] is the generation passed to [message], not the field list, and that
+     * distinction is the whole fix.
+     *
+     * The first version compared the LISTS:
+     *
+     *     collect[A] -> showSnackbar(A)      // suspends as long as the snackbar shows
+     *     report(B)  -> value = [B]          // a second write lands meanwhile
+     *     consume(A) -> clears iff value == A
+     *
+     * which holds only while A != B. Two reports of the SAME fields break it:
+     * `report([X])`, `showSnackbar([X])`, `report([X])`, `consume([X])` clears the second
+     * one — and same-fields is the COMMON case, not the exotic one, because both writes
+     * are hitting the same broken server and get the same answer from it.
+     *
+     * Matching on a monotonic generation instead makes the two reports distinct values,
+     * so clearing the first cannot touch the second however alike they look.
+     */
+    fun consume(shown: Int) {
+        val current = _mismatched.value ?: return
+        if (current.generation != shown) return
+        // CAS, not a plain assignment. The read above and the write here are two
+        // operations, and `showSnackbar` suspends for its whole duration, so a
+        // `report()` can land BETWEEN them: the check passes against gen1, the new gen2
+        // is stored, and the assignment then wipes it — the exact lost-warning shape the
+        // generation exists to prevent, with the window narrowed rather than closed.
+        //
+        // `compareAndSet` only writes if the value is still `current`, so a report that
+        // arrived in the meantime survives and is collected next.
+        _mismatched.compareAndSet(current, null)
+    }
+
+    /**
+     * The user-facing text. Names the fields: "something differs" sends them hunting.
+     *
+     * Deliberately does not say "reopen the task" — `reopen` is a real verb in this API
+     * meaning the opposite (it un-completes a task), so telling a user to reopen a task
+     * that is already saved reads as an instruction to undo it.
+     *
+     * It asks the user to RELOAD rather than claiming a reload happened. The collector
+     * does bump `refreshTick`, which starts an async `api.list` — and that load can fail,
+     * offline being the obvious case. "The list is refreshing" would be a claim about
+     * something that may not have occurred, sitting on top of the stale row the user was
+     * trying to fix. Asking keeps the sentence true either way.
+     */
+    fun message(fields: List<String>, taskName: String = ""): String {
+        // Name the task. Without it the warning is not actionable on a list screen:
+        // "Saved, but the server stored different values for due_date" could belong to any
+        // row, and the user has to guess which one to open. Autosave makes that worse —
+        // several edits can land between the snackbar and the user's attention.
+        // Truncate for DISPLAY only; the full name stays in the record. A 200-character
+        // task name would push the field list — the actionable half — off a `Long`
+        // snackbar, which is the opposite of what the longer duration bought.
+        val shown = taskName.trim().let { if (it.length > NAME_DISPLAY_MAX) it.take(NAME_DISPLAY_MAX - 1) + "\u2026" else it }
+        val forWhich = shown.takeIf { it.isNotEmpty() }?.let { " for \u201c$it\u201d" }.orEmpty()
+        return "Saved, but the server stored different values$forWhich: " +
+            fields.joinToString(", ") +
+            ". Your app and the server may be on different versions — reload the " +
+            "list to see what was actually stored."
+    }
+}
+
+/**
+ * One reported contract mismatch.
+ *
+ * Carries the generation so two reports of identical fields are distinguishable values.
+ * Without it the pair collapses to the same list, and clearing one clears the other —
+ * see [ContractWarnings.consume].
+ */
+internal data class ContractMismatch(
+    val generation: Int,
+    val fields: List<String>,
+    /** Name of the task the mismatch is about; "" when unknown. */
+    val taskName: String = "",
+)

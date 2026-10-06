@@ -246,3 +246,109 @@ internal fun ServerTaskDraft.repeatOrNull(): Triple<Int, String, String>? {
     if (repeatUnit !in REPEAT_UNITS) return null
     return Triple(every, repeatUnit, "")
 }
+
+/**
+ * The task fields the app asserts after a write (#185).
+ *
+ * Every field is **nullable, and null means "not asserted"** — not "absent from the
+ * server" and not "zero". That distinction is the whole design:
+ *
+ * - A `create` asserts every field, so nothing is null.
+ * - A partial `update` asserts only what it sent. A field the app never sent is
+ *   UNKNOWN, not unchanged, and asserting it would report a mismatch on every edit.
+ *
+ * The earlier shape of this built the expected value from the response and then copied
+ * the sent fields over it. That compares trivially for the unsent fields, which is
+ * correct but fragile: a field added to one side and not the other is silently
+ * "asserted" as whatever the server said. Nulls make the assertion explicit at the
+ * call site instead of implied by a merge.
+ *
+ * Zero and empty string are REAL values and are compared as such —
+ * `estimated_minutes: 0` means "no estimate", and a check written on falsy defaults
+ * reports it missing on every one-shot task, so it fires constantly and gets ignored.
+ */
+internal data class TaskContractSent(
+    val name: String? = null,
+    val description: String? = null,
+    val dueDate: String? = null,
+    val dueTime: String? = null,
+    val estimatedMinutes: Int? = null,
+    val repeatEvery: Int? = null,
+    val repeatUnit: String? = null,
+    val repeatCustom: Boolean? = null,
+    val repeatRule: String? = null,
+    val parallelable: Boolean? = null,
+)
+
+/**
+ * Names the task fields the server stored that differ from what the app asked it to
+ * store. Empty means the round trip agreed.
+ *
+ * #185: every field used to be read with a default, so a response from an older server
+ * — or one where a field failed to persist — was indistinguishable from a genuine zero.
+ * After the 4.6.0 structured-repeat change that meant an un-updated client read every
+ * structured cadence as a one-shot and rendered the task with no repeat at all, with
+ * nothing warning. During the 4.7.0 review the complete-response shape changed and the
+ * old client read `nextDueDate = ""`, decided the task had not rolled over, and opened
+ * a recreate draft asking for a date that already existed. Silent, and plausible enough
+ * to look like a bug in the rollover rather than a disagreement between versions.
+ *
+ * Text is compared TRIMMED, because the app trims before sending and the server trims
+ * before storing: a padded value that agrees after trimming IS agreement, and flagging
+ * it would teach people to ignore this warning, defeating the mechanism.
+ *
+ * A null in [sent] skips that field — see [TaskContractSent].
+ */
+internal fun contractMismatches(
+    sent: TaskContractSent,
+    got: ServerTask,
+    expectedId: String? = null,
+): List<String> {
+    val out = mutableListOf<String>()
+    // Identity, two ways — an id is the one field with no sensible default.
+    //
+    //   - BLANK: `parseTask` already rejects those, so `parseOne` throws before this
+    //     runs. Defence in depth, kept because `contractMismatches` is also called
+    //     directly, and a comparator that skipped the one field making a record
+    //     unusable would be the wrong default.
+    //   - WRONG: a server answering with a different, perfectly valid record. Nothing
+    //     else here notices — every field can match and the app stores a result for a
+    //     task it never touched. `update` passes the id it asked to change; `create`
+    //     passes none, because the server assigns it.
+    // `else if`, not two `if`s: a blank `got.id` with a non-blank `expectedId` also fails
+    // the comparison, and two arms reported "id" twice — the message read "id, id".
+    // Unreachable through the wired path (parseOne throws on a blank id first) but the
+    // comparator is also called directly, and it should not depend on its caller.
+    if (got.id.isBlank()) {
+        out += "id"
+    } else if (expectedId != null && expectedId.trim().isNotEmpty() &&
+        expectedId.trim() != got.id.trim()
+    ) {
+        out += "id"
+    }
+    if (sent.name != null && sent.name.trim() != got.name.trim()) out += "name"
+    if (sent.description != null &&
+        sent.description.trim() != got.description.trim()
+    ) out += "description"
+    if (sent.dueDate != null && sent.dueDate.trim() != got.dueDate.trim()) out += "due_date"
+    if (sent.dueTime != null && sent.dueTime.trim() != got.dueTime.trim()) out += "due_time"
+    if (sent.estimatedMinutes != null && sent.estimatedMinutes != got.estimatedMinutes) {
+        out += "estimated_minutes"
+    }
+    if (sent.repeatEvery != null && sent.repeatEvery != got.repeatEvery) {
+        out += "repeat_every"
+    }
+    if (sent.repeatUnit != null && sent.repeatUnit.trim() != got.repeatUnit.trim()) {
+        out += "repeat_unit"
+    }
+    if (sent.repeatCustom != null && sent.repeatCustom != got.repeatCustom) {
+        out += "repeat_custom"
+    }
+    if (sent.repeatRule != null && sent.repeatRule.trim() != got.repeatRule.trim()) {
+        out += "repeat_rule"
+    }
+    if (sent.parallelable != null && sent.parallelable != got.parallelable) {
+        out += "parallelable"
+    }
+    return out
+}

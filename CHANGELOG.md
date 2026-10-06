@@ -21,6 +21,52 @@ see GitHub Releases for older notes.
   compare the field that was supposed to change, and report the fields verified
   rather than the calls made. No app code, no VERSION bump.
 
+## [4.14.5]
+
+- **The app now checks what the server actually stored** (#185). Every task
+  field was parsed with a default, so a response from an older server — or one
+  where a field failed to persist — was indistinguishable from a genuine zero,
+  empty or false. After the 4.6.0 structured-repeat change that meant an
+  un-updated client read every structured cadence as a one-shot and rendered
+  the task with no repeat at all, with nothing warning. During the 4.7.0 review
+  the complete-response shape changed and the old client read `nextDueDate = ""`,
+  decided the task had not rolled over, and opened a recreate draft asking for a
+  date that already existed.
+  `contractMismatches` compares the repeat and due fields the app sent against
+  the ones that came back, and names every field that differs.
+  It **warns rather than throws**: the write did succeed, so failing it would
+  tell the user their task was not saved when it was — the same class of lie as
+  #214, and reporting an outcome that did not happen is worse than a
+  missing feature. Text is compared trimmed, and zeros are compared as real
+  values, because `estimated_minutes: 0` is a legal answer and a falsy-default
+  check would report it missing on every one-shot task.
+  A partial edit asserts only the fields it actually sent — a field the app
+  never sent is unknown, not unchanged, so it is skipped rather than compared.
+  An `update` also checks the id came back: a server answering with a
+  different, perfectly valid record is otherwise invisible when every field
+  matches.
+  Both write paths build that record once through one shared, testable
+  constructor, and the request body is written from that same record — every
+  field, not just the trimmed strings — so what is asserted is literally the
+  value that was sent, rather than a second construction of it that could
+  drift.
+  `description` is asserted too, and every string is trimmed at the send site so
+  the app sends exactly what it asserts. The warning reaches the user as a
+  snackbar naming the task (elided past 40 characters) and the fields, shown
+  long enough to read them — without the task it is unactionable on a list
+  screen. It is a warning to act on, not a confirmation. It is a `StateFlow` so the IO-thread
+  write and the main-thread read are ordered correctly, and so there is exactly
+  one obvious collector. Each mismatch carries a generation, so clearing one
+  warning cannot eat a second one that arrived while the snackbar was still up —
+  including a second warning about the same fields, which is what happens
+  against one broken server. The clear is a compare-and-set, so a warning that
+  lands mid-cleanup is still shown; when several arrive at once only the newest
+  is kept, on purpose. Reporting increments and stores under one lock, so two
+  concurrent writes cannot land out of order and drop the newer warning.
+  The list is refreshed BEFORE the warning is shown, and the message asks the user to
+  reload rather than claiming a reload — that load is async and can fail, and a claim is
+  not something to make about it.
+
 ## [4.14.3]
 
 - **Unit tests, and a CI step that runs them** (#162). The app had no tests at

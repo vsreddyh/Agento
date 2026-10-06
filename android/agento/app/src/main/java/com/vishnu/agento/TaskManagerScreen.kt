@@ -69,6 +69,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import java.util.Locale
 import kotlinx.coroutines.delay
+// REQUIRED, do not remove as an unused import: `collect { }` on a Flow with a lambda is
+// the kotlinx.coroutines.flow EXTENSION, not the FlowCollector member. Removing it fails to
+// compile. Flagged as redundant in review twice; it is load-bearing.
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 /** Task Manager: the user's own tasks from the shared `tasks` collection
@@ -85,6 +88,7 @@ internal fun TaskManagerScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+
     // One client for the screen (its OkHttpClient is shared process-wide).
     val api = remember(context) { TasksApi(context) }
     var tasks by remember { mutableStateOf<List<ServerTask>>(emptyList()) }
@@ -106,6 +110,41 @@ internal fun TaskManagerScreen(
     var error by remember { mutableStateOf("") }
     // Bumped after every load/mutation so the loader below reruns.
     var refreshTick by remember { mutableIntStateOf(0) }
+
+    // #185: surface a task-response contract mismatch. Without this collector the
+    // warning was recorded and shown to nobody, which is the bug the check exists to
+    // fix — the user needs to know the app and the server disagree while the task is
+    // still on screen. consume() inside the collector clears the value, so a
+    // recomposition does not re-show the same warning — but only if it is still the one
+    // that was shown, or a warning that arrived meanwhile would be lost.
+    LaunchedEffect(Unit) {
+        ContractWarnings.mismatched.collect { mismatch ->
+            if (mismatch == null) return@collect
+            // Long, not the default Short: this is not a confirmation, it is a warning
+            // the user has to act on (their app and the server disagree, and the stored
+            // values differ from what they asked for). Four seconds is long enough to read
+            // three field names; the default is not.
+            // Refresh FIRST, then show. The message says the list is refreshing, and the
+            // task list is cached state the detail sheet reads from — so the user must
+            // not be looking at the stale row for the whole time the snackbar is up.
+            //
+            // This ordering was wrong until now, and `SnackbarDuration.Long` made it
+            // worse: `showSnackbar` SUSPENDS for the full duration, so bumping afterwards
+            // meant the refresh happened ~10s after the warning appeared, with a
+            // present-tense message sitting over a stale list the whole time.
+            refreshTick++
+            snackbar.showSnackbar(
+                message = ContractWarnings.message(mismatch.fields, mismatch.taskName),
+                duration = SnackbarDuration.Long,
+            )
+            // Clear by GENERATION, not by the field list: showSnackbar suspends for its
+            // full duration, so another report can land while it is up. Matching on the
+            // list would still wipe that one whenever the fields happen to be the same —
+            // which, against one broken server, they usually are.
+            ContractWarnings.consume(mismatch.generation)
+        }
+    }
+
     // Editor draft (id empty = new task) and delete target.
     var editing by remember { mutableStateOf<ServerTaskDraft?>(null) }
     var deleting by remember { mutableStateOf<ServerTask?>(null) }
