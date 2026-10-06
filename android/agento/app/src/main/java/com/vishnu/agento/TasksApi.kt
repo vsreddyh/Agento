@@ -374,38 +374,20 @@ class TasksApi(context: Context) {
         // The body reads its strings back OUT of `sent`: two trims are two rules, and the
         // one that drifts is the one the trim-insensitive compare hides.
         //
-        // Fail loud AND stay in-channel.
-        //
-        // These ten cannot be null — `create` takes non-null parameters and validates the
-        // four required strings as non-blank above — so this is a guard against a future
-        // relaxation, not a runtime path. `JSONObject.put(String, Object?)` given a null
-        // silently REMOVES the key, so a relaxed validation would become a create missing
-        // `name` and a server-side "field required" instead of a local failure.
-        //
-        // It returns `Result.failure` rather than throwing. Callers do
-        // `api.create(...).fold(onSuccess = …, onFailure = ::fail)` inside `scope.launch`
-        // with no try/catch, so an exception thrown out of this suspend would escape the
-        // coroutine and NO SNACKBAR WOULD APPEAR — the exact silent-failure shape this
-        // whole PR exists to remove. An earlier version used `requireNotNull` and
-        // reintroduced it.
-        val missing = buildList {
-            if (sent.name == null) add("name")
-            if (sent.description == null) add("description")
-            if (sent.dueDate == null) add("due_date")
-            if (sent.dueTime == null) add("due_time")
-            if (sent.estimatedMinutes == null) add("estimated_minutes")
-            if (sent.parallelable == null) add("parallelable")
-            if (sent.repeatEvery == null) add("repeat_every")
-            if (sent.repeatUnit == null) add("repeat_unit")
-            if (sent.repeatCustom == null) add("repeat_custom")
-            if (sent.repeatRule == null) add("repeat_rule")
-        }
-        if (missing.isNotEmpty()) {
+        // Unreachable by the types — `create` takes non-null parameters, so the shared
+        // builder cannot return null for any of them. Kept anyway, and kept IN-CHANNEL:
+        // `JSONObject.put(String, Object?)` silently DROPS a null key, so if these
+        // parameters ever become nullable the create would quietly lose a field instead
+        // of failing. A `require` here would throw out of this suspend, and callers use
+        // `.fold(onFailure = ::fail)` with no try/catch — so the failure would escape the
+        // coroutine and show no snackbar at all.
+        if (sent.name == null || sent.description == null || sent.dueDate == null ||
+            sent.dueTime == null || sent.estimatedMinutes == null || sent.parallelable == null ||
+            sent.repeatEvery == null || sent.repeatUnit == null || sent.repeatCustom == null ||
+            sent.repeatRule == null
+        ) {
             return@withContext Result.failure(
-                IllegalStateException(
-                    "create: builder dropped ${missing.joinToString()}; " +
-                        "create asserts every field it sends",
-                ),
+                IllegalStateException("create: builder dropped a required field"),
             )
         }
         val body = JSONObject()
@@ -505,7 +487,10 @@ class TasksApi(context: Context) {
                     // Nulls put the decision at this call site, where it is visible —
                     // and `sent` is the SAME record the body was written from, so what
                     // is asserted is what was sent rather than a second construction of it.
-                    checkContract(task, sent)
+                    // The app knows which task it asked to change, so a response
+                    // carrying a DIFFERENT id is detectable — a server answering with
+                    // the wrong record is otherwise invisible when every field matches.
+                    checkContract(task, sent, expectedId = id)
                 }
             }
     }
@@ -565,8 +550,12 @@ class TasksApi(context: Context) {
      * while the task is still on screen; silently keeping the app's belief is what made
      * the 4.6.0 and 4.7.0 response-shape changes look like bugs in the app.
      */
-    private fun checkContract(task: ServerTask, sent: TaskContractSent) {
-        val mismatched = contractMismatches(sent, task)
+    private fun checkContract(
+        task: ServerTask,
+        sent: TaskContractSent,
+        expectedId: String? = null,
+    ) {
+        val mismatched = contractMismatches(sent, task, expectedId)
         if (mismatched.isEmpty()) return
         // Not thrown. The write succeeded — the task IS stored — so failing it would
         // tell the user their work was lost when it was not, and they would enter it
@@ -656,6 +645,9 @@ fun serverDetail(message: String): String {
  * recomposition.
  */
 internal object ContractWarnings {
+    /** Longest task name shown in the warning before it is elided. */
+    const val NAME_DISPLAY_MAX = 40
+
     private val _mismatched = MutableStateFlow<ContractMismatch?>(null)
 
     /**
@@ -766,7 +758,11 @@ internal object ContractWarnings {
         // "Saved, but the server stored different values for due_date" could belong to any
         // row, and the user has to guess which one to open. Autosave makes that worse —
         // several edits can land between the snackbar and the user's attention.
-        val forWhich = taskName.trim().takeIf { it.isNotEmpty() }?.let { " for \u201c$it\u201d" }.orEmpty()
+        // Truncate for DISPLAY only; the full name stays in the record. A 200-character
+        // task name would push the field list — the actionable half — off a `Long`
+        // snackbar, which is the opposite of what the longer duration bought.
+        val shown = taskName.trim().let { if (it.length > NAME_DISPLAY_MAX) it.take(NAME_DISPLAY_MAX - 1) + "\u2026" else it }
+        val forWhich = shown.takeIf { it.isNotEmpty() }?.let { " for \u201c$it\u201d" }.orEmpty()
         return "Saved, but the server stored different values$forWhich: " +
             fields.joinToString(", ") +
             ". Your app and the server may be on different versions — reload the " +

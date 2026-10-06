@@ -309,25 +309,18 @@ class ContractWarningsTest {
     /**
      * Two reports of the same fields must both reach a real collector.
      *
-     * **No `consume` between them** — that is the whole point, and it took three attempts
-     * to get a version of this test that could fail when the fix is absent.
+     * **No `consume` between them, and each emission rendezvoused** — report, wait for the
+     * collector to have seen it, report again. Both halves are load-bearing:
      *
-     * 1. `report -> consume -> report`: the second report set against `null` rather than
-     *    `[X]`, so it passed even with the buggy bare-`List<String>` payload it claimed to
-     *    guard. It asserted something that was never at risk.
-     * 2. Two back-to-back reports and one `yield()`: right about the conflation, wrong
-     *    about the timing. `StateFlow` holds only the NEWEST value, so a collector
-     *    suspended across both wakes once and sees only the second — the test would fail
-     *    on a CORRECT implementation. Passing depended on the dispatcher, not an assertion.
-     * 3. This one. Each emission is rendezvoused — report, wait for the collector to have
-     *    seen it, report again — so the result is independent of scheduling.
+     * - Without the rendezvous, `StateFlow` holds only the NEWEST value, so a collector
+     *   suspended across both reports wakes once and sees only the second. The test would
+     *   fail on a CORRECT implementation.
+     * - The rendezvous cannot return until a delivery has happened, which also covers a
+     *   collector that subscribes LATE — `StateFlow` replays its current value to one.
      *
-     * `StateFlow` replays its current value to a collector that subscribes late, so the
-     * pre-subscription side needs no yield: the rendezvous cannot return until a delivery
-     * has actually happened.
-     *
-     * All three failures shared one cause — asserting a property of the code without ever
-     * establishing that the test could distinguish the property from its absence.
+     * Earlier versions of this test failed both ways and passed while doing so; the
+     * reasoning is in the PR thread rather than here, because the invariant above is what
+     * the next reader needs.
      */
     @Test
     fun `two identical reports both reach a collector`() = runBlocking {
@@ -629,5 +622,88 @@ class SingleSourceOfTruthTest {
     @Test
     fun `padding is trimmed once so body and assertion cannot diverge`() {
         assertEquals("Take meds", sent(name = "  Take meds  ").name)
+    }
+}
+
+/**
+ * Identity: a wrong-but-valid id is worse than a blank one.
+ *
+ * `parseTask` already rejects a blank id, so the blank arm is defence in depth. A server
+ * answering with a DIFFERENT record is the case nothing else catches — every field can
+ * match and the app stores a result for a task it never touched.
+ */
+class ContractIdentityTest {
+
+    private val sent = TasksApi.buildTaskContractSent(name = "Take meds", dueDate = "2026-10-06")
+
+    private fun stored(id: String) = ServerTask(
+        id = id,
+        name = "Take meds",
+        dueDate = "2026-10-06",
+        dueTime = "09:00",
+    )
+
+    @Test
+    fun `a different id is reported`() {
+        assertTrue(
+            contractMismatches(sent, stored("6abf0000000000000000aaaa"), expectedId = "6abf0000000000000000bbbb")
+                .contains("id"),
+        )
+    }
+
+    @Test
+    fun `the same id is not reported`() {
+        val id = "6abf0000000000000000bbbb"
+        assertEquals(
+            emptyList<String>(),
+            contractMismatches(sent, stored(id), expectedId = id),
+        )
+    }
+
+    @Test
+    fun `no expected id means identity is not asserted`() {
+        // `create` has no id to expect — the server assigns it — so a mismatch must not
+        // fire just because nothing was passed.
+        assertEquals(emptyList<String>(), contractMismatches(sent, stored("6abf0000000000000000aaaa")))
+    }
+
+    @Test
+    fun `a blank expected id is not asserted`() {
+        // Defends against a caller passing "" and getting a permanent false mismatch.
+        assertEquals(
+            emptyList<String>(),
+            contractMismatches(sent, stored("6abf0000000000000000aaaa"), expectedId = "  "),
+        )
+    }
+
+    @Test
+    fun `a blank returned id is still reported without an expected id`() {
+        assertTrue(contractMismatches(sent, stored("")).contains("id"))
+    }
+}
+
+/** A long task name must not push the field list off the snackbar. */
+class TaskNameDisplayTest {
+
+    @Test
+    fun `a long name is elided for display`() {
+        val name = "A".repeat(200)
+        val msg = ContractWarnings.message(listOf("due_date"), name)
+        assertTrue("the full 200-char name was shown verbatim", msg.length < 200)
+        assertTrue("the actionable field list must survive", msg.contains("due_date"))
+    }
+
+    @Test
+    fun `a short name is shown in full`() {
+        val msg = ContractWarnings.message(listOf("due_date"), "Take meds")
+        assertTrue(msg.contains("Take meds"))
+        assertTrue("nothing should be elided", !msg.contains("\u2026"))
+    }
+
+    @Test
+    fun `elision keeps the name readable`() {
+        val name = "B".repeat(ContractWarnings.NAME_DISPLAY_MAX + 50)
+        val msg = ContractWarnings.message(listOf("due_date"), name)
+        assertTrue(msg, msg.contains("\u2026"))
     }
 }

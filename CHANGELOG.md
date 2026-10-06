@@ -42,6 +42,9 @@ see GitHub Releases for older notes.
   check would report it missing on every one-shot task.
   A partial edit asserts only the fields it actually sent — a field the app
   never sent is unknown, not unchanged, so it is skipped rather than compared.
+  An `update` also checks the id came back: a server answering with a
+  different, perfectly valid record is otherwise invisible when every field
+  matches.
   Both write paths build that record once through one shared, testable
   constructor, and the request body is written from that same record — every
   field, not just the trimmed strings — so what is asserted is literally the
@@ -49,9 +52,9 @@ see GitHub Releases for older notes.
   drift.
   `description` is asserted too, and every string is trimmed at the send site so
   the app sends exactly what it asserts. The warning reaches the user as a
-  snackbar naming the task and the fields, shown long enough to read them —
-  without the task it is unactionable on a list screen, and autosave makes
-  that worse. It is a warning to act on, not a confirmation. It is a `StateFlow` so the IO-thread
+  snackbar naming the task (elided past 40 characters) and the fields, shown
+  long enough to read them — without the task it is unactionable on a list
+  screen. It is a warning to act on, not a confirmation. It is a `StateFlow` so the IO-thread
   write and the main-thread read are ordered correctly, and so there is exactly
   one obvious collector. Each mismatch carries a generation, so clearing one
   warning cannot eat a second one that arrived while the snackbar was still up —
