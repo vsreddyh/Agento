@@ -574,7 +574,9 @@ func (a agentRunner) selectModel(ctx context.Context, provider, model string) (s
 		return "", false, nil
 	}
 	prev := ""
-	if st.Model.ID != "" {
+	if st.Model.ID != "" && st.Model.Provider != "" {
+		// Both parts, or nothing: a half-composed "provider/" id would make
+		// the revert itself a malformed switch.
 		prev = st.Model.Provider + "/" + st.Model.ID
 	}
 	if _, err := a.agent.Call(ctx, "set_model", map[string]any{"model": target}); err != nil {

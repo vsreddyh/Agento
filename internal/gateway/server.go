@@ -558,7 +558,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 			return
 		case errors.As(err, &up):
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "provider",
-				"unknown provider "+strconv.Quote(bounded(wantProvider)))
+				"unknown provider "+strconv.Quote(bounded(up.provider)))
 			return
 		default:
 			s.cfg.Logf("gateway: selecting model: %v", err)
@@ -568,8 +568,24 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		}
 	}
 
+	// A failed pre-prompt turn must not silently repoint the profile: the
+	// switch above already applied, so every failure below that returns
+	// before prompting reverts to the pre-switch model first. Best-effort —
+	// if the revert itself fails, log and still report the turn's error,
+	// not the cleanup's. No-op when nothing switched (or the previous
+	// model could not be named).
+	revertModel := func() {
+		if switched && prevModel != "" {
+			if _, rerr := h.runner.agent.Call(turnCtx, "set_model",
+				map[string]any{"model": prevModel}); rerr != nil {
+				s.cfg.Logf("gateway: reverting model after failed turn: %v", rerr)
+			}
+		}
+	}
+
 	agentState, err := h.runner.resolveSession(turnCtx, conversationID)
 	if err != nil {
+		revertModel()
 		s.cfg.Logf("gateway: resolving session: %v", err)
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not resolve the agent session")
@@ -591,23 +607,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		// bound. The last lines are the ones that say what went wrong.
 		s.cfg.Logf("gateway: reading thinking levels: %v (stderr: %s)", err,
 			Tail(h.runner.agent.Stderr(), StderrTailLimit))
+		revertModel()
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not read the agent's supported reasoning levels")
 		return
 	}
 	level, effortErr := resolveEffort(req.ModelOptions.ReasoningEffort, levels)
 	if effortErr != nil {
-		// The switch above already applied: a refused effort must not
-		// silently repoint the profile for the next turn, or one bad
-		// request changes what every following blank-model turn runs on.
-		// Best-effort revert to the pre-switch model; if the revert itself
-		// fails, log and still 400 the turn's error, not the cleanup's.
-		if switched && prevModel != "" {
-			if _, rerr := h.runner.agent.Call(turnCtx, "set_model",
-				map[string]any{"model": prevModel}); rerr != nil {
-				s.cfg.Logf("gateway: reverting model after refused effort: %v", rerr)
-			}
-		}
+		revertModel()
 		detail := "unrecognised value"
 		if errors.Is(effortErr, errEffortUnsupported) {
 			detail = "not supported by this model; supported levels: " + supportedList(levels)
@@ -667,6 +674,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// reason: prefer a provably-correct state over a saved local call.
 	if _, err := h.runner.agent.Call(turnCtx, "set_thinking_level",
 		map[string]any{"level": level}); err != nil {
+		revertModel()
 		s.cfg.Logf("gateway: set_thinking_level(%s): %v", level, err)
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not apply the requested reasoning level")

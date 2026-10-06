@@ -324,3 +324,42 @@ func TestProviderAloneIsValidated(t *testing.T) {
 		t.Fatal("a provider-only request switched the model")
 	}
 }
+
+func TestThinkingLevelFailureRevertsTheSwitch(t *testing.T) {
+	// Only the effort-400 revert is not enough: any pre-prompt failure after
+	// a switch must put the previous model back, or one failed turn repoints
+	// every following blank-model turn.
+	agent := newFakeAgent()
+	agent.failCommands["set_thinking_level"] = errors.New("agent wedged")
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"model":"muse-spark-1.3-contributor","model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("got %d, want 502. body=%s", rec.Code, rec.Body)
+	}
+	if got := switchedModel(t, agent); got != "mimo-v2.6-flash" {
+		t.Fatalf("failed turn left the agent on %q instead of reverting", got)
+	}
+}
+
+func TestUnnameablePreviousModelStaysSwitched(t *testing.T) {
+	// A running model Pi reports without a provider cannot be composed back
+	// into a set_model id, so there is nothing to revert to: the turn still
+	// 400s, and the switch stands, documented rather than half-reverted.
+	agent := newFakeAgent()
+	agent.modelProvider = ""
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"model":"muse-spark-1.3-contributor",`+
+			`"model_options":{"reasoning_effort":"ultra"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400. body=%s", rec.Code, rec.Body)
+	}
+	if got := switchedModel(t, agent); got != "muse-spark-1.3-contributor" {
+		t.Fatalf("agent runs %q; without a nameable previous model the switch stands", got)
+	}
+}
