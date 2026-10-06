@@ -730,8 +730,17 @@ class ContractNoDuplicateFieldsTest {
     fun `a blank id with an expected id is reported once`() {
         // Both arms used to fire: blank `got.id` added "id", and a non-blank `expectedId`
         // that differs from a blank one added it again — so the message read "id, id".
-        val got = contractMismatches(sent, ServerTask(id = ""), expectedId = "6abfabc")
+        //
+        // The fixture's name must MATCH `sent`, or `name` is a second genuine mismatch and
+        // the assertion fails for a second reason. It did: `expected:<[id]> but
+        // was:<[id, name]>` — the duplicate was fixed and my fixture was wrong.
+        val got = contractMismatches(
+            sent,
+            ServerTask(id = "", name = "Take meds"),
+            expectedId = "6abfabc",
+        )
         assertEquals(listOf("id"), got)
+        assertEquals(1, got.count { it == "id" })
     }
 
     @Test
