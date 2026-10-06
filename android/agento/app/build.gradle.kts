@@ -128,4 +128,17 @@ dependencies {
     // pure function, so nothing here needs Robolectric, an emulator, or a
     // device — which is the only reason the suite can gate a merge cheaply.
     testImplementation("junit:junit:4.13.2")
+    // The real org.json, because the android.jar on the unit-test classpath has every
+    // org.json method stubbed to throw "not mocked".
+    //
+    // This cost a confusing debugging round on #214: `readSseStream` wraps each frame
+    // in `runCatching`, so the stubbed throw was swallowed and the parse looked like it
+    // was dropping good frames — empty text, zero tool-progress events, no error frame.
+    // The `[DONE]` check still worked, because that one is a plain string compare and
+    // touches no JSON, so the failure had a shape that read as a parser bug rather than
+    // a missing dependency.
+    //
+    // Any test that exercises code parsing JSON needs this. Tests that only exercise
+    // pure functions do not, which is why the suite went a long time without it.
+    testImplementation("org.json:json:20231013")
 }

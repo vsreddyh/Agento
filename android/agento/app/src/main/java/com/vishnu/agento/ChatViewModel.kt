@@ -360,7 +360,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val last = msgs.lastOrNull()
         val patched = if (wasStreaming && last?.role == "assistant") {
             if (last.content.isNotBlank() || last.reasoning.isNotBlank()) {
-                msgs.dropLast(1) + last.copy(interrupted = true)
+                msgs.dropLast(1) + last.copy(
+                    interrupted = true,
+                    interruptedBy = InterruptedBy.USER,
+                )
             } else {
                 // Stopped before anything arrived: drop the empty
                 // placeholder so it never enters history or counts.
@@ -601,6 +604,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         val finished = msgsDropLastPlusAssistant(
                             final, finishedAt, liveTools.toList(), event.usage,
                             racc.toString(), model,
+                            // #214: the stream ended without `[DONE]`, so this
+                            // reply is a fragment of a turn that is still
+                            // executing server-side. The text is kept — it is
+                            // real output — but flagged, because reporting a
+                            // dropped turn as a finished one is what made the
+                            // user resend and duplicate work that had already
+                            // been done by the agent's tool calls.
+                            interrupted = event.interrupted,
                         )
                         _state.value = _state.value.copy(
                             messages = finished,
@@ -616,16 +627,38 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         refreshServerTotals(path, stableSessionId)
                         // #58: ping the user when a reply lands while the app
                         // is backgrounded (gateway has no cronjobs to report).
+                        // An empty body that dropped before a single frame yields
+                        // Done("", interrupted = true) (#214). Notifying on that puts an
+                        // empty notification on the lock screen, which reads as a bug in
+                        // the app rather than the connection failing — the user has no
+                        // reply to look at, so the ping tells them nothing actionable.
                         if (!ForegroundTracker.isForeground) {
                             val snippet = final.ifEmpty { acc.toString() }.trim()
                                 .replace(Regex("\\s+"), " ").take(160)
-                            ChatNotifications.notifyDone(appCtx, tabTitle(tab), snippet)
+                            if (snippet.isNotEmpty()) {
+                                ChatNotifications.notifyDone(appCtx, tabTitle(tab), snippet)
+                            }
                         }
                         // This turn is over: release the job before flushing
                         // so the queued send's doSend never "cancels" the
                         // just-finished collection it runs inside of.
                         streamJob = null
-                        flushQueued(gen)
+                        if (event.interrupted) {
+                            // A dropped stream does NOT auto-fire the queued send.
+                            //
+                            // The turn is a fragment: the reply is truncated and the
+                            // server-side turn may still be running with its tool calls
+                            // half done. Firing the next message straight on top of that
+                            // sends it against a context the agent never finished
+                            // building — the same class of mistake as #214 itself, where
+                            // the user resent into a turn that had not actually ended.
+                            // The Error path already parks queued text for exactly this
+                            // reason, and a drop is closer to a failure than to a
+                            // success, so it parks too.
+                            parkQueued()
+                        } else {
+                            flushQueued(gen)
+                        }
                     }
                     is ChatEvent.Error -> {
                         // Terminal (see streamChat): nothing follows. Keep any
@@ -650,18 +683,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         _state.value = _state.value.copy(
                             messages = kept, streaming = false, error = event.message,
                             activeTools = emptyList(), activeToolLabel = "",
-                            // A queued send never auto-fires after a failure
-                            // (no failure cascades): hand it back to the
-                            // composer instead.
-                            pending = if (_state.value.queued.isNotBlank() &&
-                                _state.value.pending.isBlank()
-                            ) {
-                                _state.value.queued
-                            } else {
-                                _state.value.pending
-                            },
-                            queued = "",
                         )
+                        // A queued send never auto-fires after a failure (no failure
+                        // cascades): hand it back to the composer instead.
+                        parkQueued()
                         if (kept.size == msgs.size) upsertActive(kept)
                         persist()
                         checkReachability()
@@ -684,6 +709,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         usage: TokenUsage?,
         reasoning: String,
         model: String,
+        /** Stream ended without `[DONE]` — see #214. */
+        interrupted: Boolean = false,
     ): List<ChatMessage> {
         val msgs = _state.value.messages
         return msgs.dropLast(1) + ChatMessage(
@@ -698,6 +725,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             unreported = usage == null,
             model = model.trim(),
             reasoning = reasoning,
+            interrupted = interrupted,
+            // Derived rather than passed: a Done that is interrupted is interrupted
+            // BY A DROP, and the only other way a message ends up flagged is the
+            // user pressing stop, which sets its own copy() directly. Passing this in
+            // as a second parameter would be a second place to keep in step with the
+            // flag — the rule written twice, which is how the two producers of
+            // `interrupted` drifted apart in the first place.
+            interruptedBy = if (interrupted) InterruptedBy.DROP else InterruptedBy.USER,
         )
     }
 
@@ -766,6 +801,28 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * index captured at Done time (verified by timestamp, with a timestamp
      * search fallback) so a send made mid-fetch is never clobbered; a thread
      * switch simply finds no match. */
+    /**
+     * Hands a queued send back to the composer instead of firing it.
+     *
+     * Used by BOTH terminal paths that must not cascade — a failed turn and a dropped
+     * stream. They were two copies of the same ten-line `pending`/`queued` dance, and two
+     * copies is how this class of bug starts: the second one differs from the first by
+     * accident and nobody notices until the two disagree about what happens to a queued
+     * message after a half-finished turn.
+     *
+     * Queued text never overwrites what the user is already typing — if `pending` is
+     * occupied, the queued text is dropped rather than displacing live input. That
+     * asymmetry is deliberate and is the one thing worth remembering about this function.
+     */
+    private fun parkQueued() {
+        val s = _state.value
+        if (s.queued.isBlank()) return
+        _state.value = s.copy(
+            pending = if (s.pending.isBlank()) s.queued else s.pending,
+            queued = "",
+        )
+    }
+
     private fun backfillUsage(
         path: String,
         sessionId: String,
