@@ -3,45 +3,58 @@ package com.vishnu.agento
 /**
  * Reasoning-effort options per model.
  *
- * The gateway accepts a per-request `model_options.reasoning_effort` override
- * (full ladder: none/minimal/low/medium/high/xhigh/max/ultra, unknown values
- * ignored server-side, provider vocabulary clamped downstream). Each model
- * family, however, only understands its own subset — e.g. MiMo Flash is a
- * reasoning toggle (off/on) while Muse Spark takes graded levels. This
- * catalog maps a model name to the effort values the UI should offer, so the
- * picker never shows levels the model can't speak.
+ * The gateway validates `model_options.reasoning_effort` per request against
+ * the levels the APPLIED model advertises, and applies the requested model
+ * first — so this table is keyed on the model the turn will actually run,
+ * and a level it offers that the model lacks fails loudly (400 naming the
+ * real levels) instead of running silently at the wrong depth. Unknown values
+ * are refused, not ignored.
  *
- * Sources: gateway `models_dev_cache.json` `reasoning_options` per model
- * family + the gateway's accepted ladder (`_REASONING_EFFORTS` in
- * `gateway/platforms/api_server.py`). Unknown models fall back to
- * [FALLBACK], which is always safe: the server ignores what it can't use.
+ * Measured 2026-10-04: mimo-v2.6-flash advertises off/minimal/low/medium/high
+ * (graded — the old toggle claim came from Hermes-era files that no longer
+ * exist). Sibling mimo rows follow the same shape but were NOT live-probed;
+ * if one differs, the server's 400 names its real levels and the row gets
+ * corrected then. The app sends "none" for off (the server aliases it).
+ * Unknown models fall back to [FALLBACK].
  */
 object EffortCatalog {
 
     /** Server default when no override is sent (matches gateway default). */
     const val DEFAULT = "medium"
 
-    /** Full-ladder fallback for models with no specific entry. */
+    /** Full-ladder fallback for models with no specific entry. "ultra" is
+     * deliberately absent: no model recognises it, so offering it would 400
+     * every turn on an unknown model. */
     val FALLBACK: List<String> = listOf(
-        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        "none", "minimal", "low", "medium", "high", "xhigh", "max",
     )
 
     /** Toggle-only families (reasoning off/on): "none" = off, "high" = on. */
     private val TOGGLE: List<String> = listOf("none", "high")
+
+    /** MiMo graded ladder, as live-probed on v2.6-flash (#251). Internal (not
+     * private) so the test pins the sibling-row extrapolation this discloses. */
+    internal val MIMO_GRADED: List<String> = listOf(
+        "none", "minimal", "low", "medium", "high",
+    )
 
     /**
      * Normalized model key (lowercase, dots↔dashes unified, provider prefix
      * stripped) → offered effort values. First match wins on prefix.
      */
     private val TABLE: List<Pair<String, List<String>>> = listOf(
-        // MiMo Flash / Pro / Omni: toggle (off/on).
-        "mimo-v2-6-flash" to TOGGLE,
-        "mimo-v2-5" to TOGGLE,
-        "mimo-v2-6-pro" to TOGGLE,
-        "mimo-v2-pro" to TOGGLE,
-        "mimo-v2-omni" to TOGGLE,
-        // Muse Spark 1.x: graded levels.
-        "muse-spark" to listOf("minimal", "low", "medium", "high", "xhigh", "max"),
+        // MiMo Flash: graded, not a toggle (live probe, #251). Pro/Omni/v2.5
+        // follow the same shape unprobed — see the object KDoc.
+        "mimo-v2-6-flash" to MIMO_GRADED,
+        "mimo-v2-5" to MIMO_GRADED,
+        "mimo-v2-6-pro" to MIMO_GRADED,
+        "mimo-v2-pro" to MIMO_GRADED,
+        "mimo-v2-omni" to MIMO_GRADED,
+        // Muse Spark 1.x: graded levels. "none" (= off) is unverified on the
+        // real model but consistent with every other graded row, FALLBACK,
+        // and the gateway fake — and if it is wrong the server 400s naming
+        // the real levels rather than running silently wrong.
+        "muse-spark" to listOf("none", "minimal", "low", "medium", "high", "xhigh", "max"),
         // GLM: 5/5.1 toggle; 5.2/5.3 graded.
         "glm-5-3" to listOf("low", "high", "max"),
         "glm-5-2" to listOf("low", "medium", "high", "xhigh", "max"),

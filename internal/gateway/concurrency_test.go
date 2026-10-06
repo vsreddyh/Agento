@@ -1186,10 +1186,9 @@ func TestBoundedSlicesByRuneNotByte(t *testing.T) {
 }
 
 // Frames must report the model that actually ANSWERED, not the client's claim.
-// The gateway never selects on `model` — Pi's model is fixed when its process
-// starts — so echoing the claim reports a model that never ran. It was also
-// unbounded: the value arrives in a body capped at 4 MiB and was repeated on
-// every streamed delta.
+// Since #251 the gateway applies valid selections, so a claim that names a
+// real model IS the running model by the time frames emit; the invariant that
+// remains is that every frame carries the applied id, never anything else.
 func TestFramesReportTheModelThatAnswered(t *testing.T) {
 	agent := newFakeAgent()
 	agent.events = []pi.Record{
@@ -1198,32 +1197,25 @@ func TestFramesReportTheModelThatAnswered(t *testing.T) {
 	}
 	srv := newTestServer(t, agent, Config{})
 
-	// A wildly wrong and oversized client claim.
-	claim := strings.Repeat("not-the-real-model", 200)
-	body := fmt.Sprintf(
-		`{"model":%q,"model_options":{"reasoning_effort":"low"},`+
-			`"messages":[{"role":"user","content":"hi"}],"stream":true}`, claim)
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
+	body := `{"provider":"opencode-go","model":"muse-spark-1.3-contributor",` +
+		`"model_options":{"reasoning_effort":"low"},` +
+		`"messages":[{"role":"user","content":"hi"}],"stream":true}`
+	rec := post(t, srv, "/v1/chat/completions", "test-token", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
 
 	payloads, _ := sseFrames(t, rec.Body.String())
 	if len(payloads) == 0 {
 		t.Fatal("no frames emitted")
-	}
-	if strings.Contains(rec.Body.String(), "not-the-real-model") {
-		t.Fatal("the client's model claim was echoed into the stream")
 	}
 	for _, p := range payloads {
 		var frame chunk
 		if err := json.Unmarshal([]byte(p), &frame); err != nil {
 			continue
 		}
-		if frame.Model != "" && frame.Model != "mimo-v2.6-flash" {
-			t.Fatalf("frame reported model %q, want the agent's own", frame.Model)
+		if frame.Model != "" && frame.Model != "muse-spark-1.3-contributor" {
+			t.Fatalf("frame reported model %q, want the applied model", frame.Model)
 		}
 	}
 }
@@ -1384,15 +1376,15 @@ func TestBareProfileSegmentNamesTheProfile(t *testing.T) {
 	}
 }
 
-// When Pi reports no model, the frame's model must not go out blank AND must not
-// go out as the raw client claim. Blank is a wire shape no client can act on; the
-// raw claim arrives in a 4 MiB-capped body and is repeated on every streamed
-// delta. The fallback is the bounded claim.
-func TestMissingAgentModelFallsBackToBoundedClaim(t *testing.T) {
+// An unknown model claim is refused before anything streams, and the refusal
+// names only the bounded value: the claim arrives in a body capped at 4 MiB
+// and must never be repeated back unbounded — in a 400 any more than in the
+// frames this test's predecessor policed (#251 changed the 200-stream case
+// into a 400, not into an echo).
+func TestUnknownModelClaimIsBounded(t *testing.T) {
 	agent := newFakeAgent()
 	// A fake that reports no model at all — a field Pi may not send.
 	agent.modelID = ""
-	agent.events = []pi.Record{textDelta(t, "a"), {Type: pi.TypeAgentSettled}}
 	srv := newTestServer(t, agent, Config{})
 
 	claim := strings.Repeat("claimed-model", 5000)
@@ -1401,47 +1393,16 @@ func TestMissingAgentModelFallsBackToBoundedClaim(t *testing.T) {
 			`"messages":[{"role":"user","content":"hi"}],"stream":true}`, claim)
 	rec := post(t, srv, "/v1/chat/completions", "test-token", body)
 
-	payloads, _ := sseFrames(t, rec.Body.String())
-	if len(payloads) == 0 {
-		t.Fatal("no frames emitted")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400. body=%s", rec.Code, rec.Body)
 	}
 	// The full claim must not appear. (Checking for a short repeat would be wrong:
 	// the bounded value legitimately begins with many copies of it.)
 	if strings.Contains(rec.Body.String(), claim) {
-		t.Fatal("the full unbounded client claim was echoed into the stream")
+		t.Fatal("the full unbounded client claim was echoed into the refusal")
 	}
 	if rec.Body.Len() > 64*1024 {
-		t.Fatalf("stream is %d bytes for a 65 KB claim; it was not bounded", rec.Body.Len())
-	}
-	// Every frame carrying assistant content must still name a model: bounded,
-	// non-empty, and recognisable as the claim it came from.
-	//
-	// Checked on frames WITH choices rather than on the presence of the JSON key.
-	// Model is omitempty, so a blank model omits the field entirely and a
-	// "does the key exist" test would pass on exactly the broken case.
-	sawText := false
-	for _, p := range payloads {
-		var frame chunk
-		if err := json.Unmarshal([]byte(p), &frame); err != nil {
-			continue
-		}
-		if len(frame.Choices) == 0 {
-			continue
-		}
-		sawText = true
-		if frame.Model == "" {
-			t.Fatal("frame carrying content had no model at all")
-		}
-		if len([]rune(frame.Model)) > maxEchoedLen+32 {
-			t.Fatalf("frame model is %d runes; it must be bounded",
-				len([]rune(frame.Model)))
-		}
-		if !strings.HasPrefix(frame.Model, "claimed-model") {
-			t.Fatalf("frame model %q is not the (bounded) client claim", frame.Model)
-		}
-	}
-	if !sawText {
-		t.Fatal("no frame carried assistant content, so nothing was checked")
+		t.Fatalf("refusal is %d bytes for a 65 KB claim; it was not bounded", rec.Body.Len())
 	}
 }
 
