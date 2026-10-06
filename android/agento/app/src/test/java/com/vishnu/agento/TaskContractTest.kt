@@ -869,6 +869,8 @@ class ParseContractVersionTest {
         // exactly the class this check exists to remove.
         assertEquals(1, parseContractVersion("1"))
         assertEquals(2, parseContractVersion("  2  "))
+        // Double-encoded numbers get the same truncation Numbers do.
+        assertEquals(1, parseContractVersion("1.0"))
     }
 
     @Test

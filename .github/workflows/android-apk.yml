@@ -7,11 +7,16 @@ on:
       - "android/**"
       - "CHANGELOG.md"
       - ".github/workflows/android-apk.yml"
+      # The task-contract drift check below reads the server's
+      # TaskContractVersion: a server-only bump must start this workflow,
+      # or the mismatch fails nowhere until the app catches up (#185).
+      - "internal/tasks/store.go"
   pull_request:
     paths:
       - "android/**"
       - "CHANGELOG.md"
       - ".github/workflows/android-apk.yml"
+      - "internal/tasks/store.go"
   workflow_dispatch:
 
 # Publishing GitHub Releases (APKs under the repo's Releases page) needs this.

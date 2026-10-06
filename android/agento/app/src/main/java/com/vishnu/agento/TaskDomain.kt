@@ -273,7 +273,10 @@ internal const val CONTRACT_VERSION_SEEN_KEY = "contract_version_seen"
  */
 internal fun parseContractVersion(raw: Any?): Int = when (raw) {
     is Number -> raw.toInt()
-    is String -> raw.trim().toIntOrNull() ?: 0
+    // A double-encoded "1.0" gets the same leniency Numbers do (3.0 -> 3):
+    // without the toDouble fallback it warns as a pre-version server.
+    is String -> raw.trim().toIntOrNull()
+        ?: raw.trim().toDoubleOrNull()?.toInt() ?: 0
     else -> 0
 }
 

@@ -545,8 +545,8 @@ class TasksApi(context: Context) {
                     // The app knows which task it asked to change, so a response
                     // carrying a DIFFERENT id is detectable — a server answering with
                     // the wrong record is otherwise invisible when every field matches.
-                    checkContract(task, sent, expectedId = id)
                     noteContractVersion(listOf(task))
+                    checkContract(task, sent, expectedId = id)
                 }
             }
     }

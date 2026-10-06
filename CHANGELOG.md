@@ -19,6 +19,7 @@ see GitHub Releases for older notes.
   `pi/AGENTS.md` now carries a hard rule: read the specific records back by id,
   compare the field that was supposed to change, and report the fields verified
   rather than the calls made. No app code, no VERSION bump.
+
 ## [4.14.7]
 - **Task responses now carry their contract version, and the app asserts it**
   (#185). The 4.14.5 check compared the fields the app sent against the ones
