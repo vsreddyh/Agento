@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.14.10]
+- **God chat works again: the tab now hits the `god` profile.** The app
+  mapped the God tab to the old Hermes-era `default` profile path
+  (`/p/default/...`), but the server only serves `god`, `resumes`, and
+  `story` — so every God reachability probe and chat request 404'd as
+  "unknown profile default" and the tab sat on the offline banner with
+  saved conversations only. Story and Resume tabs were unaffected (their
+  paths already matched). One-line fix plus the comment that still
+  described the old mapping.
+
 ## [4.14.9]
 - **The model picker now selects; unknown models fail loudly** (#251). The
   gateway ran its startup model no matter what the app asked for, and the
