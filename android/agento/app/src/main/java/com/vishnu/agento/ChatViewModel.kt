@@ -761,6 +761,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         parkQueued()
                         if (kept.size == msgs.size) upsertActive(kept)
                         persist()
+                        // A kept partial is a flagged cut-off turn exactly
+                        // like an interrupted Done, so it gets the same
+                        // recovery poll (#214 review): for a server-sent error
+                        // frame the turn is dead and the polls find nothing,
+                        // for a mid-body transport failure the orphan may have
+                        // finished. Unlike Done the message keeps its
+                        // placeholder ts, which is what identifies it.
+                        val tail = kept.lastOrNull()
+                        if (tail?.role == "assistant" && tail.interrupted) {
+                            recoverInterruptedTurn(path, stableSessionId, tail.ts, tail.content)
+                        }
                         checkReachability()
                     }
                 }
