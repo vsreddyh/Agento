@@ -315,8 +315,13 @@ internal fun contractMismatches(
     //     else here notices — every field can match and the app stores a result for a
     //     task it never touched. `update` passes the id it asked to change; `create`
     //     passes none, because the server assigns it.
-    if (got.id.isBlank()) out += "id"
-    if (expectedId != null && expectedId.trim().isNotEmpty() &&
+    // `else if`, not two `if`s: a blank `got.id` with a non-blank `expectedId` also fails
+    // the comparison, and two arms reported "id" twice — the message read "id, id".
+    // Unreachable through the wired path (parseOne throws on a blank id first) but the
+    // comparator is also called directly, and it should not depend on its caller.
+    if (got.id.isBlank()) {
+        out += "id"
+    } else if (expectedId != null && expectedId.trim().isNotEmpty() &&
         expectedId.trim() != got.id.trim()
     ) {
         out += "id"

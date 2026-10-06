@@ -720,3 +720,27 @@ class TaskNameDisplayTest {
         assertTrue(msg, msg.contains("\u2026"))
     }
 }
+
+/** A field must be reported once, however many of its checks failed. */
+class ContractNoDuplicateFieldsTest {
+
+    private val sent = TasksApi.buildTaskContractSent(name = "Take meds")
+
+    @Test
+    fun `a blank id with an expected id is reported once`() {
+        // Both arms used to fire: blank `got.id` added "id", and a non-blank `expectedId`
+        // that differs from a blank one added it again — so the message read "id, id".
+        val got = contractMismatches(sent, ServerTask(id = ""), expectedId = "6abfabc")
+        assertEquals(listOf("id"), got)
+    }
+
+    @Test
+    fun `every reported field appears once`() {
+        val got = contractMismatches(
+            sent,
+            ServerTask(id = "", name = "Something else"),
+            expectedId = "6abfabc",
+        )
+        assertEquals("a field must never be reported twice: $got", got.size, got.distinct().size)
+    }
+}
