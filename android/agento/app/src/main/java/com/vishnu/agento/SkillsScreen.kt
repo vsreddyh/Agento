@@ -272,7 +272,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         && skillsError.isEmpty()
                     ) {
                         item {
-                            HintLine("No skills match this search or filter.")
+                            HintLine("No skills match this search.")
                         }
                     }
                 }

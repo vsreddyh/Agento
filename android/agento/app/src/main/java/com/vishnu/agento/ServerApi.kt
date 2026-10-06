@@ -510,11 +510,11 @@ fun normalizeMcpServerKey(name: String): String {
 }
 
 /**
- * Drops derived [McpServer] rows already covered by an explicit custom
+ * Drops derived [McpServer] rows already covered by an explicit
  * toolset row (e.g. `mcp-miser-money` toolset + derived `miser-money`
  * parsed from its `mcp__miser-money__*` tools would otherwise render the
  * same server twice). Derived rows remain as fallback for servers with no
- * explicit row (older gateways, MCP tools bundled in a default toolset).
+ * explicit row (older gateways, MCP tools bundled inside another toolset).
  * Pure for testability.
  */
 fun dedupMcpServers(

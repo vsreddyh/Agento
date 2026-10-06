@@ -393,7 +393,7 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         && toolsError.isEmpty()
                     ) {
                         item {
-                            HintLine("No tools match this search or filter.")
+                            HintLine("No tools match this search.")
                         }
                     }
                 }
