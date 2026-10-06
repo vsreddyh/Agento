@@ -76,6 +76,10 @@ rejects the mix:
   X" → `parallelable: true`; no repeat mentioned → send no repeat keys.)
 - Morning check: `list_tasks` with `overdue: true`, then state=open.
 - Done for now but not finished: leave open. Only `complete_task` finishes.
+- "Not tonight" / "skip it" means the work did NOT happen: never `complete_task`
+  it — leave it open, or push `due_date`/`due_time` via `update_task` when the
+  user names another time. A completion is a claim the work is done, and
+  completed rows vanish after 3 days, so a false one is erased, not corrected.
 
 ## Mistake
 
