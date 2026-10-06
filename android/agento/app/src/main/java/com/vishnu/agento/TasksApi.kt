@@ -440,17 +440,29 @@ class TasksApi(context: Context) {
                 IllegalStateException("create: builder dropped a required field"),
             )
         }
+        // The body is written from TASK_CREATE_KEYS, not from a second literal
+        // list of puts: one key list means the list cannot drift from what is
+        // actually sent, and the CI drift step asserts this set equals the
+        // server's taskCreateFields (#185 review).
+        //
+        // getValue, not get: JSONObject.put silently DROPS a null, so a key
+        // with no value must fail LOUDLY here rather than send a short body.
+        // Unreachable today — the guard above rejects any null first — which
+        // is exactly when such a guard is cheapest to keep.
+        val values: Map<String, Any?> = mapOf(
+            "name" to sent.name,
+            "description" to sent.description,
+            "due_date" to sent.dueDate,
+            "due_time" to sent.dueTime,
+            "estimated_minutes" to sent.estimatedMinutes,
+            "parallelable" to sent.parallelable,
+            "repeat_every" to sent.repeatEvery,
+            "repeat_unit" to sent.repeatUnit,
+            "repeat_custom" to sent.repeatCustom,
+            "repeat_rule" to sent.repeatRule,
+        )
         val body = JSONObject()
-            .put("name", sent.name)
-            .put("description", sent.description)
-            .put("due_date", sent.dueDate)
-            .put("due_time", sent.dueTime)
-            .put("estimated_minutes", sent.estimatedMinutes)
-            .put("parallelable", sent.parallelable)
-            .put("repeat_every", sent.repeatEvery)
-            .put("repeat_unit", sent.repeatUnit)
-            .put("repeat_custom", sent.repeatCustom)
-            .put("repeat_rule", sent.repeatRule)
+        for (k in TASK_CREATE_KEYS) body.put(k, values.getValue(k))
         call("POST", "/api/tasks", body).map { parseOne(it) }
             .also { r ->
                 r.getOrNull()?.let {
@@ -565,13 +577,24 @@ class TasksApi(context: Context) {
                 val task = parseTask(root.optJSONObject("task") ?: root)
                     ?: throw RuntimeException("Unexpected response shape")
                 val next = root.optJSONObject("next")
-                if (next == null) {
+                // Version the NEXT occurrence too (#185 review): it is a
+                // task-shaped doc from the same store, and the half most
+                // likely to change shape on its own — it already did once
+                // (#180). Read leniently, like the top-level version: this
+                // must never fail a completion, only version it.
+                val nextVersion =
+                    next?.let { parseContractVersion(it.opt("contract_version")) } ?: 0
+                val done = if (next == null) {
                     task
                 } else {
                     // optStr, not optString: a JSON null would arrive as the
                     // literal string "null" and reach the snackbar.
                     task.copy(nextDueDate = optStr(next, "due_date"))
                 }
+                // The response speaks the highest contract any of its docs
+                // spoke, so the check and the recording below see the whole
+                // response, not just its first half.
+                done.copy(contractVersion = maxOf(done.contractVersion, nextVersion))
             }.also { r ->
                 r.getOrNull()?.let {
                     noteContractVersion(listOf(it))

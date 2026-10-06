@@ -262,6 +262,29 @@ internal const val TASK_CONTRACT_VERSION = 1
 internal const val CONTRACT_VERSION_SEEN_KEY = "contract_version_seen"
 
 /**
+ * Every key `TasksApi.create` sends (#185).
+ *
+ * The body is BUILT from this (one map, iterated in order), so the list
+ * cannot drift from what is actually sent — and the CI drift step asserts
+ * this set equals the server's `taskCreateFields`, so neither side can add,
+ * rename or drop a field without the other noticing. That is the mechanical
+ * form of the "kept key-for-key" mirror the Go round-trip test used to rely
+ * on prose alone to maintain.
+ */
+internal val TASK_CREATE_KEYS = listOf(
+    "name",
+    "description",
+    "due_date",
+    "due_time",
+    "estimated_minutes",
+    "parallelable",
+    "repeat_every",
+    "repeat_unit",
+    "repeat_custom",
+    "repeat_rule",
+)
+
+/**
  * Reads a contract version out of a decoded JSON value (#185).
  *
  * Lenient on the TYPE, strict on the meaning: int, long and double all

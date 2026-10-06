@@ -13,12 +13,10 @@ import (
 //
 // TasksApi.create builds ONE JSONObject with exactly these ten keys, and
 // TasksApi.update sends a subset of the same keys (plus expected_revision).
-// These literals are a mirror of that Kotlin, kept key-for-key: when the app
-// adds, renames or drops a field, update these bodies in the same change, or
-// the next shape change sails through exactly like the 4.6.0 and 4.7.0 ones
-// did — parsed with defaults on one side and silently wrong on the other.
-//
-// What they pin, without a database:
+// These literals mirror the bodies the app builds from TASK_CREATE_KEYS, and
+// the CI drift step asserts that key set equals taskCreateFields — so when the
+// app adds, renames or drops a field, these bodies move in the same change or
+// the key-set check fails first. What THEY pin, without a database:
 //  1. the app's create body passes this layer's validation (checkTaskFields)
 //     and reads back as the Repeat the app meant;
 //  2. every key the app sends is covered by the idempotency fingerprint

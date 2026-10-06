@@ -35,10 +35,14 @@ see GitHub Releases for older notes.
   Settings → About diagnostics ("seen" vs "speaks"), so a stale install is
   diagnosable instead of guesswork. The version is parsed leniently (numeric
   strings read as their number) but strictly in meaning: anything
-  unparseable is "predates versions", never a silent pass. A Go round-trip
+  unparseable is "predates versions", never a silent pass. `complete`
+  versions the rolled-over `next` occurrence as well as the task, and a CI
+  step asserts the app's create key set equals the server's fingerprint set,
+  so neither side can add, rename or drop a field without the other. A Go round-trip
   test pins the literal bodies the app sends through validation and the
   idempotency fingerprint, so the next shape change fails a test instead of
   waiting for a reviewer to happen to look.
+
 ## [4.14.6]
 
 - **A dropped stream is no longer reported as a finished reply** (#214). The SSE
