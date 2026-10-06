@@ -689,8 +689,21 @@ class TaskNameDisplayTest {
     fun `a long name is elided for display`() {
         val name = "A".repeat(200)
         val msg = ContractWarnings.message(listOf("due_date"), name)
-        assertTrue("the full 200-char name was shown verbatim", msg.length < 200)
-        assertTrue("the actionable field list must survive", msg.contains("due_date"))
+        // Assert the NAME is elided, not that the whole message fits some budget: the
+        // sentence around it is legitimately long, and a total-length assertion fails for
+        // reasons that have nothing to do with eliding — which is exactly what it did
+        // before (expected < 200, got ~210, with the name correctly elided).
+        assertTrue(
+            "the 200-char name was shown verbatim",
+            !msg.contains(name),
+        )
+        assertTrue("the name should be truncated to the display cap", msg.contains("\u2026"))
+        assertTrue(
+            "the elided name must still be roughly the cap, not the whole 200",
+            msg.contains("A".repeat(ContractWarnings.NAME_DISPLAY_MAX - 1)),
+        )
+        // The whole point of the cap: the actionable half must survive.
+        assertTrue("the field list must survive elision", msg.contains("due_date"))
     }
 
     @Test
