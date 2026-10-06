@@ -27,10 +27,15 @@ Structured XOR custom, never both:
 On `complete_task`, read `rollover`:
 
 - `created` — structured, server already made the next occurrence. Do nothing.
+  (Month ends clamp and stay: 31st → Feb 28th stays there, not drift to correct.)
 - `none` — one-shot. Do nothing.
 - `custom` — YOU create the next occurrence: copy all fields verbatim, advance
   only `due_date` per the rule. Keep `due_time` unless the rule names a time.
 - `exhausted`/`failed` — repeat stopped. Tell the user; do not silently recreate.
+
+Ambiguous rule: ask the user for the next due date, never guess. Empty
+`due_time` (`""` on old tasks): ask for a time, never invent one — `create_task`
+rejects it.
 
 - Capture fast: collect name + description + due date/time + estimate +
   parallelable BEFORE calling `create_task` — it rejects missing fields.

@@ -41,7 +41,7 @@ god+story+resumes
         └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model mimo-v2.6-flash)
 proxy (:8080, single app URL: /p/* → pi chat, /api/* → health sync)  •  health-api (:8001)
 MongoDB (Atlas)  •  retention (one-shot container)
-workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo vsreddyh/Resume) — separate git repos
+workspace/portals (lore vault, repo vsreddyh/portals) + workspace/portfolio-resume (repo vsreddyh/portfolio-resume, scope resume/) — separate git repos
 ```
 
 ## Repo facts

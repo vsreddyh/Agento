@@ -17,10 +17,13 @@ the vault first.
 
 ## Rules
 
-- Repo is the single source of truth. Search it before answering.
+- Repo is the single source of truth. Search it before answering. Point out
+  contradictions when you find them.
 - Never invent facts unless asked for lore expansion. Say when info is missing.
 - `Timeline.md` is major events only, mapped to saga/arc with `[[wikilinks]]`.
 - New character → new file in the right subfolder; existing → update in place.
+  A page rename requires updating every inbound `[[link]]`, committed as
+  `refactor(links):` under the same request — no second ask needed.
 - Magic system is strict canon: `Slope.md`, `Prompt.md`, `Portas.md`. Check
   claims against them before writing.
 

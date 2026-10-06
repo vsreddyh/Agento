@@ -16,7 +16,8 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8643/healthz
 ```
 
 200 = gateway up. Nothing more. MCP calls succeeding = that server + MongoDB
-reachable.
+reachable. `FATAL: one or more MCP servers failed to connect` in the pi log =
+crash-loop, usually `MONGODB_URI` unset.
 
 ## Host-side (repo root on the VPS)
 
@@ -30,6 +31,12 @@ podman-compose -f docker/docker-compose.yml run --rm retention --dry-run  # safe
 ```
 
 Retention prunes money > 90d, `hc_meals`/`hc_days` > 30d, never `hc_weight`.
+
+## Talking to the gateway
+
+Chat turns need `model_options.reasoning_effort` (required — an unrecognised
+level is silently accepted, so a default would be indistinguishable). Wrong or
+missing bearer token = `401`; malformed body = `400` naming the field.
 
 ## Rules
 

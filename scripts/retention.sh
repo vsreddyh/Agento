@@ -10,7 +10,7 @@ set -euo pipefail
 # The actual policy logic lives in cmd/retention/main.go.
 #
 #   story       git repo (workspace/portals)   — no-op
-#   resumes     git repo (workspace/resumes)   — no-op
+#   resumes     git repo (workspace/portfolio-resume) — no-op
 #   money       transactions autowiped when the oldest entry is >90 days old
 #   health-check hc_meals + hc_days pruned after 30 days; hc_weight is NEVER touched
 #   cookbook    permanent — no-op

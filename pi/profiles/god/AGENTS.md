@@ -22,13 +22,16 @@ Batch with `Promise.allSettled()`.
 - **miser-money** (11): `create_account`, `list_accounts`, `archive_account`,
   `get_balances`, `log_transaction`, `log_text`, `query_transactions`,
   `summarize`, `fix_last_transaction`, `delete_transactions`, `prune_old`.
-- **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`,
+- **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
+  (`cooking_note` = what differed, `aftertaste_note` = what to improve),
   `update_recipe` (only on approval), `scale_recipe` (pure arithmetic),
   `list_ingredients`, `list_recipes`, `get_recipe`, `list_cooks`,
   `delete_ingredient`, `delete_recipe`.
-- **health-check** (9): `log_meal` (user-supplied macros only, never estimate),
-  `log_weight` (never pruned), `log_sleep`, `log_workout`, `daily_summary`,
-  `query_meals`, `fix_last_meal`, `delete_meals`, `prune_old`.
+- **health-check** (9): `log_meal` takes user-supplied macros only —
+  `items[{name, qty?, kcal, protein, carbs, fat, fiber}]`, never estimate, ask
+  for whatever is missing. `log_weight` (never pruned), `log_sleep`,
+  `log_workout`, `daily_summary`, `query_meals`, `fix_last_meal`,
+  `delete_meals`, `prune_old`.
 - **task-manager** (7): `create_task`, `list_tasks`, `get_task`,
   `update_task`, `complete_task`, `reopen_task`, `delete_task`.
 - **project-manager** (5): `create_project`, `list_projects`, `get_project`,

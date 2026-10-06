@@ -151,7 +151,7 @@ services:
       # The Pi agent dir: settings.json, mcp.json, AGENTS.md, profiles/<n>/.
       # Pi writes sessions/, auth.json and models-store.json here; all gitignored.
       - ../pi:/opt/pi
-      # Repos the agent works in: workspace/portals (story), workspace/resumes.
+      # Repos the agent works in: workspace/portals (story), workspace/portfolio-resume.
       - ../workspace:/workspace
       # VPS SSH keys, least-privilege file mounts (read-only): story and resumes
       # clone and pull their own repos as the VPS GitHub identity. Without these

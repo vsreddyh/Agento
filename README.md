@@ -34,7 +34,7 @@ Retention ───────────────► one-shot container (c
 |---|---|---|---|
 | `default` | God (main) | Money (`money_transactions`), cookbook (`cookbook_*`, permanent), health tracking (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync via `health-api` | Money >90d autowipe; `hc_meals`/`hc_days` >30d; `hc_weight` + `cookbook_*` **never pruned** |
 | `story` | Story (side) | Mana Revolution lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) | No DB retention (Git tracked) |
-| `resumes` | Resumes (side) | LaTeX resume tailoring & cover letters in Git repo (`workspace/resumes`, `vsreddyh/Resume`) | No DB retention (Git tracked) |
+| `resumes` | Resumes (side) | LaTeX resume tailoring & cover letters in Git repo (`workspace/portfolio-resume`, `vsreddyh/portfolio-resume`, scope `resume/`) | No DB retention (Git tracked) |
 
 ---
 
@@ -54,7 +54,7 @@ Retention ───────────────► one-shot container (c
 - **Podman** (4.0+) & **podman-compose** (`podman-compose`). Auto-installed by `./scripts/hermes.sh init` if missing. No daemon — Podman is daemonless.
 - **SSH Key Pair**: Configured in `~/.ssh` with read/write access to private GitHub repos for Git-backed bots:
   - `git@github.com:vsreddyh/portals.git` (Story bot lore vault)
-  - `git@github.com:vsreddyh/Resume.git` (Resumes bot CV repository)
+  - `git@github.com:vsreddyh/portfolio-resume.git` (Resumes bot CV repository, scope `resume/`)
   - Bootstrap order matters: the pi service bind-mounts `id_ed25519`(.pub) + `known_hosts` read-only and **fails to start without them** — provision keys before the first `./scripts/hermes.sh start` (set `VPS_SSH_DIR` in `.env` if the VPS user isn't root).
 
 ### Required External Services & API Keys
