@@ -424,3 +424,22 @@ func TestMixedCaseInventorySlugStillSelects(t *testing.T) {
 		t.Fatalf("agent runs %q after the switch", got)
 	}
 }
+
+func TestQualifiedClaimPrefixFoldsCase(t *testing.T) {
+	// The strip must fold like provider does: an explicit lowercase
+	// provider with a mixed-case qualified claim still resolves.
+	agent := newFakeAgent()
+	agent.events = []pi.Record{{Type: pi.TypeAgentSettled}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token",
+		`{"provider":"opencode-go","model":"OpenCode-Go/muse-spark-1.3-contributor",`+
+			`"model_options":{"reasoning_effort":"low"},`+
+			`"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200. body=%s", rec.Code, rec.Body)
+	}
+	if got := switchedModel(t, agent); got != "muse-spark-1.3-contributor" {
+		t.Fatalf("agent runs %q after the switch", got)
+	}
+}

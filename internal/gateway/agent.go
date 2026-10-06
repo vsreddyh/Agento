@@ -535,13 +535,15 @@ func (a agentRunner) selectModel(ctx context.Context, provider, model string) (s
 	model = strings.TrimSpace(model)
 	if i := strings.LastIndex(model, "/"); i >= 0 {
 		// A provider-qualified claim ("opencode-go/mimo-v2.6-flash"), split
-		// the way the app's own catalog lookup splits it. An explicit
+		// the way the app's own catalog lookup splits it. The prefix folds
+		// like provider does, so "OpenCode-Go/…" still strips. An explicit
 		// provider that disagrees with the prefix falls through to the
 		// inventory lookup, which fails as unknown — the slashed id names
-		// no real model.
+		// no real model. A trailing slash ("opencode-go/") is provider-only
+		// with an empty model: validated as such, selects nothing.
 		if pfx, rest := model[:i], model[i+1:]; provider == "" {
 			provider, model = strings.ToLower(strings.TrimSpace(pfx)), strings.TrimSpace(rest)
-		} else if pfx == provider {
+		} else if strings.ToLower(strings.TrimSpace(pfx)) == provider {
 			model = strings.TrimSpace(rest)
 		}
 	}
