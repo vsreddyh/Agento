@@ -592,14 +592,19 @@ func (a agentRunner) selectModel(ctx context.Context, provider, model string) (s
 	if err != nil {
 		return "", false, err
 	}
-	if st.Model.Provider+"/"+st.Model.ID == target {
+	// Folded for the comparison only: the target is already folded, and a
+	// mixed-case slug Pi reports must not force a redundant switch every
+	// turn. Pi always receives the inventory-canonical target, never either
+	// spelling variant.
+	if strings.ToLower(st.Model.Provider)+"/"+st.Model.ID == target {
 		return "", false, nil
 	}
 	prev := ""
 	if st.Model.ID != "" && st.Model.Provider != "" {
 		// Both parts, or nothing: a half-composed "provider/" id would make
-		// the revert itself a malformed switch.
-		prev = st.Model.Provider + "/" + st.Model.ID
+		// the revert itself a malformed switch. Folded like the comparison
+		// and the target, so the revert replays canonical spelling.
+		prev = strings.ToLower(st.Model.Provider) + "/" + st.Model.ID
 	}
 	if _, err := a.agent.Call(ctx, "set_model", map[string]any{"model": target}); err != nil {
 		// The inventory said this model exists and Pi still refused it: the
