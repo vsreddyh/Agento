@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import android.util.Log
 import androidx.core.content.edit
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -659,7 +660,10 @@ internal fun readSseStreamLenient(
     emit: (ChatEvent) -> Unit,
 ): SseEnd = try {
     readSseStream(source, full, reasoned, onUsage, emit)
-} catch (_: IOException) {
+} catch (e: IOException) {
+    // Logged, not silent: a mid-body reset that never reaches logcat is
+    // undebuggable in the field, and this is the path real drops take.
+    Log.w("ChatApi", "mid-stream read failed after ${full.length} chars; treating as drop", e)
     SseEnd.EndOfStream
 }
 

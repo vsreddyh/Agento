@@ -974,10 +974,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             }
             delay(RECOVERY_SECOND_DELAY_MS)
             val second = fetchRecoveryText(path, sessionId) ?: return@launch
-            // Settled (same text twice, even if it equals the fragment) means
-            // the orphan stopped producing: the turn finished, flag cleared.
-            // Still growing means a longer fragment: adopt it, flag kept.
-            if (firstSeen != null && recoveryTextSettled(current, second)) {
+            // Compare the two POLLS, not the adopted current: poll 1 shorter
+            // than the fragment + poll 2 echoing the fragment disagree with
+            // each other even though current==second, and clearing on that
+            // would bless a single stable sample. (When the first poll was
+            // adopted, current IS firstSeen, so the adopted case is unchanged.)
+            if (firstSeen != null && recoveryTextSettled(firstSeen, second)) {
                 patchRecovery(threadAtKick, finishedAt, current, clearFlag = true)
             } else if (recoveryAdoptable(current, second)) {
                 patchRecovery(threadAtKick, finishedAt, second, clearFlag = false)
