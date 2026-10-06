@@ -9,7 +9,6 @@ Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
 ## Unreleased
-
 - **Read-back rule for writes** (#210). An agent closed a 33-write task
   reporting "verified against a fresh list (39 open = 33 + 6 clones)". The count
   was right and the claim was false: three of the six records were dated the
@@ -20,9 +19,31 @@ see GitHub Releases for older notes.
   `pi/AGENTS.md` now carries a hard rule: read the specific records back by id,
   compare the field that was supposed to change, and report the fields verified
   rather than the calls made. No app code, no VERSION bump.
+## [4.14.6]
+
+- **A dropped stream is no longer reported as a finished reply** (#214). The SSE
+  read loop exited on EOF exactly as it did on the `[DONE]` terminal frame, and
+  both paths fell through to a single `ChatEvent.Done`. So a turn cut off
+  mid-flight — after its tool calls had already executed server-side — reached
+  the UI as a completed reply with nothing marking it as incomplete, and the
+  user resent it. In the reported session that happened 3 times in 27 calls and
+  forced 2 duplicate submissions.
+  `readSseStream` now returns *how* the stream ended (`Terminal` / `EndOfStream` /
+  `ErrorFrame`) and `Done` carries `interrupted`, which the existing
+  interrupted-reply UI already knew how to render — the field and its "Continue"
+  affordance were already there, only the producer never set it.
+  The partial text is still kept: it is real output, and discarding it would
+  throw away something the user can see.
+  The label says *Connection lost* rather than *Stopped*, because a boolean
+  cannot tell a user-initiated stop from a dropped stream and "Stopped" blames
+  the user for a failure they did not cause. Queued text is handed back to the
+  composer instead of auto-firing: a dropped turn is a fragment, and the
+  server-side turn may still be running with its tool calls half done. A
+  connection that dies before a single frame no longer raises an empty
+  notification either — there is no reply to look at, so a blank ping on the
+  lock screen only reads as a bug.
 
 ## [4.14.5]
-
 - **The app now checks what the server actually stored** (#185). Every task
   field was parsed with a default, so a response from an older server — or one
   where a field failed to persist — was indistinguishable from a genuine zero,

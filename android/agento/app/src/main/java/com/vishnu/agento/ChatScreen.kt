@@ -1319,7 +1319,18 @@ internal fun ChatScreen(
                                             if (msg.interrupted) {
                                                 Spacer(modifier = Modifier.height(4.dp))
                                                 Text(
-                                                    "Stopped — reply incomplete.",
+                                                    // The two causes mean opposite
+                                                    // things to the reader, and one
+                                                    // string cannot serve both:
+                                                    // "Stopped" blames the user for a
+                                                    // network failure they did not
+                                                    // cause and cannot act on.
+                                                    when (msg.interruptedBy) {
+                                                        InterruptedBy.DROP ->
+                                                            "Connection lost — reply may be incomplete."
+                                                        InterruptedBy.USER ->
+                                                            "Stopped — reply incomplete."
+                                                    },
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.error,
                                                 )
