@@ -9,7 +9,7 @@ import (
 )
 
 // The mutation log exists to answer "who changed this task", and the agent is a PRIMARY
-// mutator — it creates, completes, skips and reopens tasks through this server all day.
+// mutator — it creates, completes and reopens tasks through this server all day.
 // Logging only the HTTP path would answer the question for the app and stay silent for
 // the agent, which is exactly the case the log was added for: the two are
 // indistinguishable at the auth layer, sharing one password and one collection.
@@ -50,7 +50,7 @@ func TestChangedFieldNamesSharedByBothCallers(t *testing.T) {
 func TestMcpOpConstantsAreAllNamed(t *testing.T) {
 	for name, op := range map[string]string{
 		"create": tasks.OpCreate, "update": tasks.OpUpdate,
-		"complete": tasks.OpComplete, "skip": tasks.OpSkip,
+		"complete": tasks.OpComplete,
 		"reopen": tasks.OpReopen, "delete": tasks.OpDelete,
 	} {
 		if op == "" {
