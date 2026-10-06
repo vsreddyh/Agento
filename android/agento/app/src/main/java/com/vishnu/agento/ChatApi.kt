@@ -257,7 +257,7 @@ class ChatApi(context: Context) {
      * removed from Settings (defaults are always correct); this stays
      * centralized so every sender resolves identically. */
     fun pathFor(tab: String): String =
-        // Tab keys don't all match profile dir names (god tab -> default profile).
+        // Tab keys match profile dir names (god tab -> god profile).
         "/p/" + defaultProfileFor(tab)
 
     /** Provider slug for a tab; blank means not configured (legacy: omitted). */
@@ -766,9 +766,9 @@ internal fun readSseStream(
     return SseEnd.EndOfStream
 }
 
-/** Profile dir name backing an app tab (tab keys differ from profile names). */
+/** Profile dir name backing an app tab (kept central so every sender resolves identically). */
 fun defaultProfileFor(tab: String): String = when (tab) {
-    "god" -> "default"
+    "god" -> "god"
     else -> tab
 }
 
