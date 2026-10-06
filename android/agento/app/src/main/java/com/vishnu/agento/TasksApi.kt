@@ -372,21 +372,8 @@ class TasksApi(context: Context) {
             parallelable = parallelable,
         )
         // The body reads its strings back OUT of `sent`: two trims are two rules, and the
-        // one that drifts is the one the trim-insensitive compare hides. `sent` is
-        // all-non-null here because create validates every field above.
-        // `requireNotNull` on every field, deliberately.
+        // one that drifts is the one the trim-insensitive compare hides.
         //
-        // `create` takes NON-NULL parameters and validates the four required strings as
-        // non-blank above, so `sent.*` cannot be null here — the builder is only nullable
-        // because `update` shares it. But `JSONObject.put(String, Object?)` given a null
-        // silently REMOVES the key rather than storing a null, so a future relaxation of
-        // those validations would turn a create into a request missing `name`, and the
-        // server's answer would be a confusing "field required" rather than a local
-        // failure naming the cause.
-        //
-        // These make the invariant FAIL LOUDLY at the point it breaks. They are not
-        // defensive noise: each one pins "create asserts every field it sends", which is
-        // exactly what the wiring test asserts.
         // Fail loud AND stay in-channel.
         //
         // These ten cannot be null — `create` takes non-null parameters and validates the
@@ -585,7 +572,7 @@ class TasksApi(context: Context) {
         // tell the user their work was lost when it was not, and they would enter it
         // again. Reporting an outcome that did not happen is the exact class of lie
         // #214 is about, so this warns and leaves the stored task authoritative.
-        ContractWarnings.report(mismatched)
+        ContractWarnings.report(mismatched, task.name)
     }
     private fun parseOne(body: String): ServerTask =
         parseTask(JSONObject(body))
@@ -709,7 +696,7 @@ internal object ContractWarnings {
      */
     private val reportLock = Any()
 
-    fun report(fields: List<String>) {
+    fun report(fields: List<String>, taskName: String = "") {
         if (fields.isEmpty()) return
         // Increment and set together, under one lock.
         //
@@ -722,7 +709,8 @@ internal object ContractWarnings {
         // it costs nothing; the alternative — a compare-and-set retry loop — is more code
         // for the same guarantee and harder to read.
         synchronized(reportLock) {
-            _mismatched.value = ContractMismatch(_generation.incrementAndGet(), fields)
+            _mismatched.value =
+                ContractMismatch(_generation.incrementAndGet(), fields, taskName)
         }
     }
 
@@ -773,11 +761,17 @@ internal object ContractWarnings {
      * something that may not have occurred, sitting on top of the stale row the user was
      * trying to fix. Asking keeps the sentence true either way.
      */
-    fun message(fields: List<String>): String =
-        "Saved, but the server stored different values for " +
+    fun message(fields: List<String>, taskName: String = ""): String {
+        // Name the task. Without it the warning is not actionable on a list screen:
+        // "Saved, but the server stored different values for due_date" could belong to any
+        // row, and the user has to guess which one to open. Autosave makes that worse —
+        // several edits can land between the snackbar and the user's attention.
+        val forWhich = taskName.trim().takeIf { it.isNotEmpty() }?.let { " for \u201c$it\u201d" }.orEmpty()
+        return "Saved, but the server stored different values$forWhich: " +
             fields.joinToString(", ") +
             ". Your app and the server may be on different versions — reload the " +
             "list to see what was actually stored."
+    }
 }
 
 /**
@@ -790,4 +784,6 @@ internal object ContractWarnings {
 internal data class ContractMismatch(
     val generation: Int,
     val fields: List<String>,
+    /** Name of the task the mismatch is about; "" when unknown. */
+    val taskName: String = "",
 )

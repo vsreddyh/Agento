@@ -49,8 +49,9 @@ see GitHub Releases for older notes.
   drift.
   `description` is asserted too, and every string is trimmed at the send site so
   the app sends exactly what it asserts. The warning reaches the user as a
-  snackbar naming the fields, shown long enough to read them — this is a
-  warning to act on, not a confirmation. It is a `StateFlow` so the IO-thread
+  snackbar naming the task and the fields, shown long enough to read them —
+  without the task it is unactionable on a list screen, and autosave makes
+  that worse. It is a warning to act on, not a confirmation. It is a `StateFlow` so the IO-thread
   write and the main-thread read are ordered correctly, and so there is exactly
   one obvious collector. Each mismatch carries a generation, so clearing one
   warning cannot eat a second one that arrived while the snackbar was still up —

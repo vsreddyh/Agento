@@ -134,7 +134,7 @@ internal fun TaskManagerScreen(
             // present-tense message sitting over a stale list the whole time.
             refreshTick++
             snackbar.showSnackbar(
-                message = ContractWarnings.message(mismatch.fields),
+                message = ContractWarnings.message(mismatch.fields, mismatch.taskName),
                 duration = SnackbarDuration.Long,
             )
             // Clear by GENERATION, not by the field list: showSnackbar suspends for its

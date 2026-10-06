@@ -210,6 +210,31 @@ class ContractWarningsTest {
     }
 
     @Test
+    fun `the message names the task`() {
+        // Without it the warning is unactionable on a list screen: "Saved, but the server
+        // stored different values for due_date" could belong to any row.
+        val msg = ContractWarnings.message(listOf("due_date"), "Take meds")
+        assertTrue(msg, msg.contains("Take meds"))
+        assertTrue(msg, msg.contains("due_date"))
+    }
+
+    @Test
+    fun `the message degrades when the task name is unknown`() {
+        // checkContract always has a parsed ServerTask, so "" should not happen in
+        // practice — but a name-less warning must still read as a sentence.
+        val msg = ContractWarnings.message(listOf("due_date"))
+        assertTrue(msg, msg.contains("due_date"))
+        assertTrue(msg, !msg.contains("  "))
+    }
+
+    @Test
+    fun `the task name rides along with the mismatch`() {
+        reset()
+        ContractWarnings.report(listOf("due_date"), "Take meds")
+        assertEquals("Take meds", ContractWarnings.mismatched.value?.taskName)
+    }
+
+    @Test
     fun `the message names every field`() {
         // "Something differs" tells the user nothing they can act on.
         val msg = ContractWarnings.message(listOf("due_date", "repeat_every"))
