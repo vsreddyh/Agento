@@ -122,6 +122,15 @@ func TestChangesRouteRegistration(t *testing.T) {
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("changes/ route not resolved: got %d (%s)", w.Code, w.Body.String())
 	}
+	// Anything deeper is not the marker: the subtree registration must not
+	// turn /api/tasks/changes/anything into a marker answer.
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks/changes/anything", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("changes/anything: got %d (%s), want 404", w.Code, w.Body.String())
+	}
 }
 
 func TestTaskItemGuard(t *testing.T) {

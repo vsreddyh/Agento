@@ -686,6 +686,14 @@ func changesSince(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, bson.M{"detail": detail})
 		return
 	}
+	// The trailing-slash registration is a subtree pattern, so anything under
+	// /api/tasks/changes/ reaches this handler. Only the two exact paths are
+	// the marker; the rest 404 rather than answering for a URL that is not
+	// the marker.
+	if r.URL.Path != "/api/tasks/changes" && r.URL.Path != "/api/tasks/changes/" {
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
 		return
