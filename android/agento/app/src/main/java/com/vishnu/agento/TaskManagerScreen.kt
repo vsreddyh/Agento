@@ -264,12 +264,17 @@ internal fun TaskManagerScreen(
     // finishes does nothing at all — that load is already fetching, and it
     // owns the cursor.
     LifecycleResumeEffect(Unit) {
-        if (!hasLoaded) return@LifecycleResumeEffect
-        val job = scope.launch {
-            val marker = api.changes(lastSeenChangeRevision(context)).getOrNull()
-            if (marker == null || marker.changed) refreshTick++
+        // The block must end in onPauseOrDispose, so the pre-first-load
+        // no-op takes the empty handler rather than an early return.
+        if (hasLoaded) {
+            val job = scope.launch {
+                val marker = api.changes(lastSeenChangeRevision(context)).getOrNull()
+                if (marker == null || marker.changed) refreshTick++
+            }
+            onPauseOrDispose { job.cancel() }
+        } else {
+            onPauseOrDispose { }
         }
-        onPauseOrDispose { job.cancel() }
     }
 
     // Open the deep-linked row as soon as it is in the list. A later
