@@ -36,7 +36,7 @@ profile_home() {
 # shellcheck source=scripts/lib/common.sh
 . "$REPO/scripts/lib/common.sh"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*"; }
@@ -410,10 +410,14 @@ cmd_start() {
         local pf
         for pf in "$RUN_DIR"/bots/*.pid; do
             [[ -f "$pf" ]] || continue
-            if kill -0 "$(cat "$pf")" 2>/dev/null; then
-                kill "$(cat "$pf")" 2>/dev/null || true
+            local pid
+            pid="$(cat "$pf")"
+            if kill -0 "$pid" 2>/dev/null; then
+                kill "$pid" 2>/dev/null || true
                 sleep 2
-                kill -0 "$(cat "$pf")" 2>/dev/null && kill -9 "$(cat "$pf")" 2>/dev/null || true
+                if kill -0 "$pid" 2>/dev/null; then
+                    kill -9 "$pid" 2>/dev/null || true
+                fi
                 info "  stopped native bot $(basename "$pf")"
             fi
         done

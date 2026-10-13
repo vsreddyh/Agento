@@ -67,6 +67,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import java.util.Locale
 import kotlinx.coroutines.delay
 // REQUIRED, do not remove as an unused import: `collect { }` on a Flow with a lambda is
@@ -110,6 +111,11 @@ internal fun TaskManagerScreen(
     var error by remember { mutableStateOf("") }
     // Bumped after every load/mutation so the loader below reruns.
     var refreshTick by remember { mutableIntStateOf(0) }
+    // True once the loader below has completed at least once (success or
+    // failure). The resume check below must not refetch on the very first
+    // resume: the initial load is already in flight, and re-bumping the tick
+    // would fetch the whole list twice for one screen opening.
+    var hasLoaded by remember { mutableStateOf(false) }
 
     // #185: surface a task-response contract mismatch. Without this collector the
     // warning was recorded and shown to nobody, which is the bug the check exists to
@@ -199,7 +205,9 @@ internal fun TaskManagerScreen(
     LaunchedEffect(filter, refreshTick) {
         loading = true
         error = ""
-        api.list(filter.state).fold(
+        // fold's lambdas are not suspend, so the cursor read below runs after
+        // the fold, not inside onSuccess.
+        val loaded = api.list(filter.state).fold(
             onSuccess = { page ->
                 tasks = page.tasks
                 listTruncated = page.truncated
@@ -207,6 +215,7 @@ internal fun TaskManagerScreen(
                     scheduledOnce = true
                     TaskReminders.refresh(context)
                 }
+                true
             },
             // The flag describes the rows on screen, so it resets with
             // them: a failed fetch leaves yesterday's rows up, and they
@@ -214,9 +223,58 @@ internal fun TaskManagerScreen(
             onFailure = { e ->
                 error = serverDetail(e.message ?: e.javaClass.simpleName)
                 listTruncated = false
+                false
             },
         )
+        // The cursor describes what is on screen (#178): recorded after the
+        // rows land, never ahead of them. Best-effort — if the marker is
+        // unreachable the cursor keeps its old value, so the next resume does
+        // one redundant refetch and then converges (stale is the failure
+        // direction that is never allowed; redundant is always safe).
+        if (loaded) {
+            api.changes(lastSeenChangeRevision(context)).getOrNull()?.let {
+                noteChangeRevision(context, it.revision)
+            }
+        }
         loading = false
+        hasLoaded = true
+    }
+
+    // Coming back to a screen the agent may have written to while we were away
+    // (#178).
+    //
+    // The marker, not a timer: the tasks store advances ONE revision on every
+    // task write, whichever side made it, so "is it different from what I last
+    // saw" is a one-call question. Refetching unconditionally on resume would
+    // cost a full list on every re-entry for something that changes a few
+    // times a day — and never refetching is exactly the bug this replaces,
+    // because a task the agent created over MCP while the app sat in the
+    // background never reached the open list at all.
+    //
+    // A marker that cannot be read refreshes anyway. "Cannot answer" must
+    // never degrade to "nothing changed", or the undecided case would be the
+    // one that goes stale.
+    //
+    // The cursor is recorded by the loader, not here (#178): this effect and
+    // the list fetch race, and recording a revision the in-flight rows do not
+    // contain yet would leave a pre-write screen behind a post-write cursor —
+    // equal on every later resume, stale until the next write. So a resume
+    // that finds new data only bumps the tick; the loader records the cursor
+    // once the fresh rows actually land. A resume before the first load
+    // finishes does nothing at all — that load is already fetching, and it
+    // owns the cursor.
+    LifecycleResumeEffect(Unit) {
+        // The block must end in onPauseOrDispose, so the pre-first-load
+        // no-op takes the empty handler rather than an early return.
+        if (hasLoaded) {
+            val job = scope.launch {
+                val marker = api.changes(lastSeenChangeRevision(context)).getOrNull()
+                if (marker == null || marker.changed) refreshTick++
+            }
+            onPauseOrDispose { job.cancel() }
+        } else {
+            onPauseOrDispose { }
+        }
     }
 
     // Open the deep-linked row as soon as it is in the list. A later
@@ -1507,4 +1565,26 @@ internal fun DueTimePickerDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+// ── The change marker this device last saw (#178) ────────────────────────────
+//
+// Deliberately NOT in SettingsBackup. A restored backup would claim a
+// revision the new device has never observed, and the first resume would
+// then compare the server against a number imported from another phone —
+// concluding "changed" and refetching, at best, or "unchanged" and showing a
+// list that has never been fetched here, at worst. The cursor is this
+// install's own business, so it starts at 0 on every install.
+private const val CHANGE_CURSOR_KEY = "task_change_revision"
+
+private fun changePrefs(context: Context) =
+    context.applicationContext.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+
+/** The revision this device last observed, or 0 if it has never looked. */
+private fun lastSeenChangeRevision(context: Context): Long =
+    changePrefs(context).getLong(CHANGE_CURSOR_KEY, 0L)
+
+/** Remember the revision we have now seen. */
+private fun noteChangeRevision(context: Context, revision: Long) {
+    changePrefs(context).edit().putLong(CHANGE_CURSOR_KEY, revision).apply()
 }

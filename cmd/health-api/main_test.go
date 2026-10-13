@@ -78,6 +78,61 @@ func TestListTasksGuard(t *testing.T) {
 	}
 }
 
+func TestChangesSinceGuard(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	// No token → 401 without touching MongoDB.
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/changes?since=3", nil)
+	w := httptest.NewRecorder()
+	changesSince(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token: got %d", w.Code)
+	}
+	// Wrong method → 405 without touching MongoDB.
+	req = httptest.NewRequest(http.MethodPost, "/api/tasks/changes", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	changesSince(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("post: got %d", w.Code)
+	}
+}
+
+// The changes route must resolve as its own path, not as a task id: /api/tasks/
+// is the catch-all, and a registration that lost to it would answer "unknown
+// task 'changes'" instead of the revision (#178).
+func TestChangesRouteRegistration(t *testing.T) {
+	mux := http.NewServeMux()
+	registerTasks(mux)
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	// Authenticated + wrong method reaches the handler, and the handler's own
+	// 405 — not the id path's — proves which one the mux picked.
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/changes", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("changes route not resolved: got %d (%s)", w.Code, w.Body.String())
+	}
+	// The trailing-slash variant must reach the same handler, not the task-id
+	// catch-all (which would 422 "unknown task 'changes'").
+	req = httptest.NewRequest(http.MethodPost, "/api/tasks/changes/", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("changes/ route not resolved: got %d (%s)", w.Code, w.Body.String())
+	}
+	// Anything deeper is not the marker: the subtree registration must not
+	// turn /api/tasks/changes/anything into a marker answer.
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks/changes/anything", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("changes/anything: got %d (%s), want 404", w.Code, w.Body.String())
+	}
+}
+
 func TestTaskItemGuard(t *testing.T) {
 	t.Setenv("PASSWORD", "test-secret-12345678")
 	// No token → 401 without touching MongoDB.

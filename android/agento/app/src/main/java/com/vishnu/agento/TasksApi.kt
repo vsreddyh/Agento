@@ -62,6 +62,20 @@ data class TaskList(
     val truncated: Boolean = false,
 )
 
+/**
+ * The collection-wide change marker (#178): the revision the server is at, and
+ * whether it is different from the one this device last saw.
+ *
+ * It is not a task, and it carries no task data on purpose. The question it
+ * answers — "did anything change, including a write the agent made?" — used to
+ * have no answer short of refetching the list and diffing it by eye, so the
+ * only honest option was to refetch and hope.
+ */
+data class ChangeMarker(
+    val revision: Long,
+    val changed: Boolean,
+)
+
 /** The deadline as an instant, or null when it cannot be parsed. */
 fun ServerTask.dueMillisOrNull(): Long? = dueMillisOrNull(dueDate, dueTime)
 
@@ -340,6 +354,29 @@ class TasksApi(context: Context) {
                 }
                 TaskList(out, root.optBoolean("truncated", false))
             }.also { r -> r.getOrNull()?.let { noteContractVersion(it.tasks) } }
+        }
+
+    /**
+     * The change marker as the server sees it right now (#178).
+     *
+     * [since] is the revision this device last observed — 0 if it has never
+     * looked. The answer's `changed` is the honest one for a server that
+     * predates this endpoint: a call that cannot be answered comes back as a
+     * failure, and every caller treats that as "assume changed" rather than
+     * as "nothing happened", because a fetch the user did not need is
+     * cheaper than a screen nobody updated.
+     */
+    suspend fun changes(since: Long): Result<ChangeMarker> =
+        withContext(Dispatchers.IO) {
+            call("GET", "/api/tasks/changes?since=$since").map { body ->
+                val root = JSONObject(body)
+                // optBoolean defaults to true for the same reason as above:
+                // a marker that cannot say "no" must not imply one.
+                ChangeMarker(
+                    revision = root.optLong("revision", 0L),
+                    changed = root.optBoolean("changed", true),
+                )
+            }
         }
 
     /**

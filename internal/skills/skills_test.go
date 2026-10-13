@@ -89,10 +89,30 @@ var hostOnlyTools = []struct {
 // check. `[ -]` covers the spaced and hyphenated spellings in one pattern, since prose
 // writes "host only" and a heading writes "Host-only:", and a list covering only one
 // leaves an author using the other wondering why it was ignored.
+//
+// Emphasis-tolerant via markerEmph: `for the **human**` is the phrase "for the human"
+// wearing bold, which is how the podman-management skill actually writes it — and a
+// marker that cannot see through `**` fails a correctly-labelled file over its
+// formatting, which is the same class of bug as matching "ghost only" in the other
+// direction: the rule is about words, and the asterisks are not the words.
 var hostSplitMarkers = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bnot on the host\b`),
-	regexp.MustCompile(`(?i)\bfor the human\b`),
-	regexp.MustCompile(`(?i)\bhost[ -]only\b`),
+	markerEmph("not on the host"),
+	markerEmph("for the human"),
+	markerEmph("host only"),
+	markerEmph("host-only"),
+}
+
+// markerEmph compiles a phrase into its word-boundary pattern, allowing plain
+// whitespace or whitespace wrapped in markdown emphasis between the words:
+// `for the human`, `for the  **human**` and `for the *human*` are one phrase, and a
+// prose rule has to read them as one.
+func markerEmph(phrase string) *regexp.Regexp {
+	words := strings.Fields(phrase)
+	for i, w := range words {
+		words[i] = regexp.QuoteMeta(w)
+	}
+	const sep = `(?:[ \t]*[*_]+[ \t]*|[ \t]+)`
+	return regexp.MustCompile(`(?i)\b` + strings.Join(words, sep) + `\b`)
 }
 
 var (

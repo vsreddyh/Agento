@@ -665,9 +665,78 @@ func tasksRoot(w http.ResponseWriter, r *http.Request) {
 	listTasks(w, r)
 }
 
+// changesSince answers "did the agent change anything?" (#178).
+//
+// The store maintains one collection-wide counter that every task write
+// advances, both writers included — the app's own mutations advance it too, so
+// the question is not "did the agent change something" but "did anything",
+// which is the only form that needs no per-writer bookkeeping. `?since=` is the
+// revision the caller last observed; the answer says whether that is still
+// current, so a phone can decide whether to re-render without pulling the
+// whole list first.
+//
+// A missing `?since=` reports changed=true: the safest answer to a caller that
+// cannot say what it has seen is "assume something did", because that is the
+// direction that costs a fetch rather than a stale screen. A malformed
+// `?since=` falls back to 0 — a value that changes as soon as the collection
+// has ever been written — for the same reason, and never becomes a 422: a poll
+// that can 422 on a mangled cursor 422s forever.
+func changesSince(w http.ResponseWriter, r *http.Request) {
+	if code, detail := authorize(r); code != 0 {
+		writeJSON(w, code, bson.M{"detail": detail})
+		return
+	}
+	// The trailing-slash registration is a subtree pattern, so anything under
+	// /api/tasks/changes/ reaches this handler. Only the two exact paths are
+	// the marker; the rest 404 rather than answering for a URL that is not
+	// the marker.
+	if r.URL.Path != "/api/tasks/changes" && r.URL.Path != "/api/tasks/changes/" {
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+		return
+	}
+	since := int64(0)
+	seen := false
+	if raw, ok := r.URL.Query()["since"]; ok {
+		seen = true
+		// Non-numeric falls back to 0 rather than erroring, exactly like
+		// ?limit= does: a stray value should never nuke the answer.
+		if len(raw) > 0 {
+			if n, err := strconv.ParseInt(strings.TrimSpace(raw[0]), 10, 64); err == nil {
+				since = n
+			}
+		}
+	}
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	revision, at, err := store.ChangeRevision(ctx)
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	out := bson.M{"revision": revision, "changed": !seen || revision != since}
+	if !at.IsZero() {
+		out["at"] = at.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // registerTasks wires this domain's routes. One function per file so main stays a
 // list of domains, not a list of paths (#171).
 func registerTasks(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tasks", tasksRoot)
+	// Longest match wins, so this sub-path resolves here rather than being
+	// read as a task id by the taskItem catch-all below it. The trailing-slash
+	// variant is registered too: without it /api/tasks/changes/ falls through
+	// to the catch-all and answers 422 "unknown task 'changes'".
+	mux.HandleFunc("/api/tasks/changes", changesSince)
+	mux.HandleFunc("/api/tasks/changes/", changesSince)
 	mux.HandleFunc("/api/tasks/", taskItem)
 }

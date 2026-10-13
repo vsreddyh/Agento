@@ -898,6 +898,12 @@ func TestPromotedGapSaysWhatShouldHaveExisted(t *testing.T) {
 	ctx := context.Background()
 	defer cleanupFixtures(t, s, ctx)
 
+	// Captured once at the top: the store derives the same date from its own
+	// clock at reconcile time, so sharing one instant narrows a UTC-midnight
+	// straddle to this test's own millisecond runtime instead of the whole
+	// run up to the assertion.
+	today := time.Now().UTC().Format("2006-01-02")
+
 	// A completed structured repeat whose successor was removed behind the reconciler's
 	// back, so the plan succeeds but nothing links back.
 	id := mustCreate(t, s, "Orphaned parent", map[string]any{
@@ -948,8 +954,17 @@ func TestPromotedGapSaysWhatShouldHaveExisted(t *testing.T) {
 	}
 	// It must name the date that should have been minted, not just that something was
 	// missing — that is what makes it actionable rather than a restatement.
-	if !strings.Contains(gap.Detail, "2026-10-06") {
-		t.Errorf("Detail = %q, want it to name the expected next date 2026-10-06", gap.Detail)
+	//
+	// The expected date is TODAY, not the day after the due date: NextDueDate steps
+	// forward from the due date until it is not before today (#157), so a daily
+	// repeat that was completed six days late lands on the day it was completed.
+	// This assertion used to hard-code one calendar date and therefore passed on
+	// exactly one day in 2026 — the day it was written — after which it failed for
+	// every later run while looking like a rollover regression. Deriving the date
+	// keeps the check honest about the rule it is checking.
+	want := today
+	if !strings.Contains(gap.Detail, want) {
+		t.Errorf("Detail = %q, want it to name the expected next date %s", gap.Detail, want)
 	}
 	if !strings.Contains(gap.Detail, "no successor") {
 		t.Errorf("Detail = %q, want it to say the successor is missing", gap.Detail)

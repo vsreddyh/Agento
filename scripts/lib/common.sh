@@ -30,7 +30,7 @@ load_root_env() {
                 val="${val:1:-1}"
             fi
             printf -v "$key" '%s' "$val"
-            export "$key"
+            export "${key?}"
         done < "$REPO/.env"
     fi
     # All data consumers use MONGODB_URI as-is (remote Atlas) — there is no

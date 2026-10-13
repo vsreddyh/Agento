@@ -1,4 +1,4 @@
-name: Go tests
+name: Go tests and shell checks
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
     paths:
       - "cmd/**"
       - "internal/**"
+      - "scripts/**"
       - "go.mod"
       - "go.sum"
       - ".github/workflows/mcps-test.yml"
@@ -13,6 +14,7 @@ on:
     paths:
       - "cmd/**"
       - "internal/**"
+      - "scripts/**"
       - "go.mod"
       - "go.sum"
       - ".github/workflows/mcps-test.yml"
@@ -38,3 +40,49 @@ jobs:
 
       - name: Run tests (DB tests skip without MONGODB_URI)
         run: go test ./...
+
+  # scripts/hermes.sh and friends are the documented entry point for the whole
+  # stack, and the repo's own convention is "verify shell with `bash -n
+  # scripts/*.sh`" — that convention was never a gate. This is the gate (#182):
+  # every shell script under scripts/ must parse, and must survive shellcheck.
+  # The list is discovered, so a new script is covered the day it lands. Only
+  # *.sh is collected: a non-shell file (README, notes) must never fail the
+  # build with a confusing syntax error just for sitting in that directory.
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect shell scripts
+        id: scripts
+        run: |
+          mapfile -t files < <(find scripts -type f -name '*.sh' | sort)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no scripts found under scripts/"; exit 1
+          fi
+          printf 'found %d script(s): %s\n' "${#files[@]}" "${files[*]}"
+          {
+            echo "list<<EOF"
+            printf '%s\n' "${files[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Parse every shell script (bash -n)
+        run: |
+          mapfile -t files <<< "${{ steps.scripts.outputs.list }}"
+          bash -n "${files[@]}"
+
+      # shellcheck ships on the GitHub-hosted Ubuntu images; install it if that
+      # ever stops being true. The check itself is the non-negotiable part.
+      - name: Install shellcheck if absent
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y shellcheck
+          fi
+          shellcheck --version | head -2
+
+      - name: shellcheck every shell script
+        run: |
+          mapfile -t files <<< "${{ steps.scripts.outputs.list }}"
+          shellcheck "${files[@]}"
