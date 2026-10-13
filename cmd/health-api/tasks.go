@@ -725,7 +725,10 @@ func changesSince(w http.ResponseWriter, r *http.Request) {
 func registerTasks(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tasks", tasksRoot)
 	// Longest match wins, so this sub-path resolves here rather than being
-	// read as a task id by the taskItem catch-all below it.
+	// read as a task id by the taskItem catch-all below it. The trailing-slash
+	// variant is registered too: without it /api/tasks/changes/ falls through
+	// to the catch-all and answers 422 "unknown task 'changes'".
 	mux.HandleFunc("/api/tasks/changes", changesSince)
+	mux.HandleFunc("/api/tasks/changes/", changesSince)
 	mux.HandleFunc("/api/tasks/", taskItem)
 }

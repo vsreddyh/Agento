@@ -42,6 +42,30 @@ class SettingsBackupTest {
     }
 
     @Test
+    fun `non-numeric suffixes do not match`() {
+        // Widget ids are ints; a non-numeric tail is either a typo or a
+        // hand-edited injection, and neither may enter the backup.
+        assertFalse(SettingsBackup.isWidgetDisplayKey("task_widget_view_evil"))
+        assertFalse(SettingsBackup.isWidgetDisplayKey("task_widget_due_1x"))
+        assertFalse(SettingsBackup.isWidgetDisplayKey("task_widget_scroll_-4"))
+    }
+
+    @Test
+    fun `string and boolean prefixes are told apart`() {
+        // Import accepts each prefix only in its own type, so the split the
+        // importer relies on is pinned here: view/density are strings,
+        // due/scroll are booleans, and neither side claims the other's keys.
+        assertTrue(SettingsBackup.isStringWidgetKey("task_widget_view_12"))
+        assertTrue(SettingsBackup.isStringWidgetKey("task_widget_density_12"))
+        assertFalse(SettingsBackup.isStringWidgetKey("task_widget_due_12"))
+        assertFalse(SettingsBackup.isStringWidgetKey("task_widget_scroll_12"))
+        assertTrue(SettingsBackup.isBooleanWidgetKey("task_widget_due_12"))
+        assertTrue(SettingsBackup.isBooleanWidgetKey("task_widget_scroll_12"))
+        assertFalse(SettingsBackup.isBooleanWidgetKey("task_widget_view_12"))
+        assertFalse(SettingsBackup.isBooleanWidgetKey("task_widget_density_12"))
+    }
+
+    @Test
     fun `reminder bookkeeping is not a display key`() {
         // task_reminders_enabled travels via BOOLEAN_KEYS; the armed set and
         // the budget snapshot travel at all — restoring either would corrupt

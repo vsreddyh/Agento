@@ -99,9 +99,12 @@ object SettingsBackup {
      *
      * Same shape as the effort-memory keys — enumerated live because the
      * suffix is a runtime id, and shaped tight so a hand-edited backup cannot
-     * inject arbitrary `task_widget_*` prefs. Values are mixed: `view` and
-     * `density` are enum names, `due` and `scroll` are booleans, so export
-     * writes each by its own type.
+     * inject arbitrary `task_widget_*` prefs: four prefixes, each with its own
+     * value type, and a numeric suffix (widget ids are ints — anything else
+     * matches nothing). Values are mixed: `view` and `density` are enum names,
+     * `due` and `scroll` are booleans, so export writes, and import accepts,
+     * each by its own type. A mistyped value in a hand-edited backup is
+     * skipped rather than coerced, exactly like every other key.
      *
      * Deliberately NOT backed up, and the reason matters: the two other
      * `task_reminder_*` prefs are device-local alarm bookkeeping, not settings.
@@ -111,16 +114,31 @@ object SettingsBackup {
      * last refresh's six counts, recomputed on every refresh. The one reminder
      * key that is a setting is `task_reminders_enabled` in [BOOLEAN_KEYS].
      */
-    private val WIDGET_PREFIXES = listOf(
+    private val STRING_WIDGET_PREFIXES = listOf(
         "task_widget_view_",
         "task_widget_density_",
+    )
+    private val BOOLEAN_WIDGET_PREFIXES = listOf(
         "task_widget_due_",
         "task_widget_scroll_",
     )
 
     /** True for a per-widget display key `task_widget_{view,density,due,scroll}_<id>`. */
     fun isWidgetDisplayKey(k: String): Boolean =
-        WIDGET_PREFIXES.any { k.startsWith(it) && k.length > it.length }
+        isStringWidgetKey(k) || isBooleanWidgetKey(k)
+
+    /** True for a `task_widget_{view,density}_<numeric id>` key (string-valued). */
+    fun isStringWidgetKey(k: String): Boolean =
+        STRING_WIDGET_PREFIXES.any { hasNumericSuffix(k, it) }
+
+    /** True for a `task_widget_{due,scroll}_<numeric id>` key (boolean-valued). */
+    fun isBooleanWidgetKey(k: String): Boolean =
+        BOOLEAN_WIDGET_PREFIXES.any { hasNumericSuffix(k, it) }
+
+    private fun hasNumericSuffix(k: String, prefix: String): Boolean {
+        if (!k.startsWith(prefix) || k.length == prefix.length) return false
+        return k.substring(prefix.length).all { it.isDigit() }
+    }
 
     /** Serializes all known prefs plus app files; absent keys are omitted (not nulled). */
     fun export(context: Context): JSONObject {
@@ -202,16 +220,16 @@ object SettingsBackup {
                     }
                 }
                 // Per-widget display settings (#169): the export allowlist
-                // mirrored — string fields (view/density) and boolean fields
-                // (due/scroll), nothing else. A mistyped value in a
-                // hand-edited backup is skipped rather than coerced, exactly
-                // like every other key above.
+                // mirrored per prefix — view/density take strings only,
+                // due/scroll take booleans only. A cross-typed value in a
+                // hand-edited backup (e.g. {"task_widget_due_12": "yes"})
+                // is skipped, because the widget reads those keys with
+                // getBoolean and a stored String would throw there.
                 for (k in names) {
-                    if (!isWidgetDisplayKey(k)) continue
-                    if (values.opt(k) is String) {
+                    if (isStringWidgetKey(k) && values.opt(k) is String) {
                         putString(k, values.optString(k, ""))
                         applied++
-                    } else if (values.opt(k) is Boolean) {
+                    } else if (isBooleanWidgetKey(k) && values.opt(k) is Boolean) {
                         putBoolean(k, values.optBoolean(k))
                         applied++
                     }

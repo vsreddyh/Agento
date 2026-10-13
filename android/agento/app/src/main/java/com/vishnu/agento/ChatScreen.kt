@@ -68,6 +68,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -920,9 +921,14 @@ internal fun ChatScreen(
                     // it a plain button and never says it toggles. The
                     // description stays the label — the role is what says
                     // "this is a toggle" — so the two are not redundant.
+                    // stateDescription carries the value separately from the
+                    // label, which is the slot a switch's state belongs in.
                     IconButton(
                         onClick = { onAutoSpeak(!autoSpeak) },
-                        modifier = Modifier.semantics { role = Role.Switch },
+                        modifier = Modifier.semantics {
+                            role = Role.Switch
+                            stateDescription = if (autoSpeak) "On" else "Off"
+                        },
                     ) {
                         Icon(
                             if (autoSpeak) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff,

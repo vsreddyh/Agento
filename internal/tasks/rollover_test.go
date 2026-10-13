@@ -898,6 +898,12 @@ func TestPromotedGapSaysWhatShouldHaveExisted(t *testing.T) {
 	ctx := context.Background()
 	defer cleanupFixtures(t, s, ctx)
 
+	// Captured once at the top: the store derives the same date from its own
+	// clock at reconcile time, so sharing one instant narrows a UTC-midnight
+	// straddle to this test's own millisecond runtime instead of the whole
+	// run up to the assertion.
+	today := time.Now().UTC().Format("2006-01-02")
+
 	// A completed structured repeat whose successor was removed behind the reconciler's
 	// back, so the plan succeeds but nothing links back.
 	id := mustCreate(t, s, "Orphaned parent", map[string]any{
@@ -956,7 +962,7 @@ func TestPromotedGapSaysWhatShouldHaveExisted(t *testing.T) {
 	// exactly one day in 2026 — the day it was written — after which it failed for
 	// every later run while looking like a rollover regression. Deriving the date
 	// keeps the check honest about the rule it is checking.
-	want := time.Now().UTC().Format("2006-01-02")
+	want := today
 	if !strings.Contains(gap.Detail, want) {
 		t.Errorf("Detail = %q, want it to name the expected next date %s", gap.Detail, want)
 	}

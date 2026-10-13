@@ -113,6 +113,15 @@ func TestChangesRouteRegistration(t *testing.T) {
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("changes route not resolved: got %d (%s)", w.Code, w.Body.String())
 	}
+	// The trailing-slash variant must reach the same handler, not the task-id
+	// catch-all (which would 422 "unknown task 'changes'").
+	req = httptest.NewRequest(http.MethodPost, "/api/tasks/changes/", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("changes/ route not resolved: got %d (%s)", w.Code, w.Body.String())
+	}
 }
 
 func TestTaskItemGuard(t *testing.T) {

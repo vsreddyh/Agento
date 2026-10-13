@@ -44,9 +44,10 @@ jobs:
   # scripts/hermes.sh and friends are the documented entry point for the whole
   # stack, and the repo's own convention is "verify shell with `bash -n
   # scripts/*.sh`" — that convention was never a gate. This is the gate (#182):
-  # every file under scripts/ must parse, and must survive shellcheck. The list
-  # is discovered, so a new script is covered the day it lands; a non-shell file
-  # in there fails loudly rather than being skipped silently.
+  # every shell script under scripts/ must parse, and must survive shellcheck.
+  # The list is discovered, so a new script is covered the day it lands. Only
+  # *.sh is collected: a non-shell file (README, notes) must never fail the
+  # build with a confusing syntax error just for sitting in that directory.
   shellcheck:
     runs-on: ubuntu-latest
     steps:
@@ -55,7 +56,7 @@ jobs:
       - name: Collect shell scripts
         id: scripts
         run: |
-          mapfile -t files < <(find scripts -type f | sort)
+          mapfile -t files < <(find scripts -type f -name '*.sh' | sort)
           if [ ${#files[@]} -eq 0 ]; then
             echo "no scripts found under scripts/"; exit 1
           fi

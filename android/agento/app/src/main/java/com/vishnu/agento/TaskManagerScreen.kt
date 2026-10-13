@@ -205,7 +205,9 @@ internal fun TaskManagerScreen(
     LaunchedEffect(filter, refreshTick) {
         loading = true
         error = ""
-        api.list(filter.state).fold(
+        // fold's lambdas are not suspend, so the cursor read below runs after
+        // the fold, not inside onSuccess.
+        val loaded = api.list(filter.state).fold(
             onSuccess = { page ->
                 tasks = page.tasks
                 listTruncated = page.truncated
@@ -213,6 +215,7 @@ internal fun TaskManagerScreen(
                     scheduledOnce = true
                     TaskReminders.refresh(context)
                 }
+                true
             },
             // The flag describes the rows on screen, so it resets with
             // them: a failed fetch leaves yesterday's rows up, and they
@@ -220,8 +223,19 @@ internal fun TaskManagerScreen(
             onFailure = { e ->
                 error = serverDetail(e.message ?: e.javaClass.simpleName)
                 listTruncated = false
+                false
             },
         )
+        // The cursor describes what is on screen (#178): recorded after the
+        // rows land, never ahead of them. Best-effort — if the marker is
+        // unreachable the cursor keeps its old value, so the next resume does
+        // one redundant refetch and then converges (stale is the failure
+        // direction that is never allowed; redundant is always safe).
+        if (loaded) {
+            api.changes(lastSeenChangeRevision(context)).getOrNull()?.let {
+                noteChangeRevision(context, it.revision)
+            }
+        }
         loading = false
         hasLoaded = true
     }
@@ -241,15 +255,19 @@ internal fun TaskManagerScreen(
     // never degrade to "nothing changed", or the undecided case would be the
     // one that goes stale.
     //
-    // ...unless the initial load has not finished yet: it is already fetching
-    // the list this resume would re-fetch, so the first resume only records
-    // the cursor. Without the hasLoaded guard every screen opening costs two
-    // full list fetches for one screenful of rows.
+    // The cursor is recorded by the loader, not here (#178): this effect and
+    // the list fetch race, and recording a revision the in-flight rows do not
+    // contain yet would leave a pre-write screen behind a post-write cursor —
+    // equal on every later resume, stale until the next write. So a resume
+    // that finds new data only bumps the tick; the loader records the cursor
+    // once the fresh rows actually land. A resume before the first load
+    // finishes does nothing at all — that load is already fetching, and it
+    // owns the cursor.
     LifecycleResumeEffect(Unit) {
+        if (!hasLoaded) return@LifecycleResumeEffect
         val job = scope.launch {
             val marker = api.changes(lastSeenChangeRevision(context)).getOrNull()
-            if (marker != null) noteChangeRevision(context, marker.revision)
-            if (hasLoaded && (marker == null || marker.changed)) refreshTick++
+            if (marker == null || marker.changed) refreshTick++
         }
         onPauseOrDispose { job.cancel() }
     }
