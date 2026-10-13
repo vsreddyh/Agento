@@ -8,6 +8,36 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.16.0]
+- **Agent-made task changes now reach the app** (#178). A task the agent
+  created or completed over MCP used to stay invisible until something else
+  forced a reload — the store kept no record that *anything* had changed.
+  Every task write now advances one collection-wide counter
+  (`tasks_changes`), the server answers `GET /api/tasks/changes?since=`, and
+  the open Task Manager list re-reads on resume when the marker moved. A
+  marker that cannot be read refreshes rather than going stale.
+- **Settings backup finally covers reminders and widget display** (#169).
+  `task_reminders_enabled` and the per-widget view/density/due/scroll
+  settings are exported and restored; the armed-alarm set and the refresh
+  budget stay out on purpose — they are device-local bookkeeping, not
+  settings, and restoring them would make a new phone believe alarms it
+  never scheduled are armed.
+- **Chat accessibility pass** (#283). The four message-action buttons were
+  28dp targets and are back to the standard 48dp; each bubble is one
+  TalkBack unit instead of four disconnected fragments; streaming and tool
+  activity announce politely; the auto-read toggle carries a switch role.
+- **Shell is now gated in CI** (#182). Every script under `scripts/` must
+  pass `bash -n` and `shellcheck`, and the five findings the first run
+  reported are fixed (two dead variables, an `A && B || C`, an `export`
+  idiom, one unused colour).
+- **The one-time migration binary is gone** (#172). `cmd/migrate-repeat`
+  ran once, is a documented no-op on re-run, and no longer ships.
+- **Two red tests fixed.** A rollover test hard-coded one calendar date and
+  could only pass on the day it was written; it now derives the expected
+  date. A skill-labelling test could not see emphasis through `**`, so a
+  correctly-labelled skill failed; the matcher is emphasis-tolerant without
+  accepting unrelated words.
+
 ## [4.15.0]
 - **Skills and Tools screens drop the Default/Custom split.** Both screens
   now show a single searchable, sortable list instead of Default vs Custom

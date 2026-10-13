@@ -52,7 +52,15 @@ object SettingsBackup {
     }
 
     /** Boolean prefs the app reads. */
-    val BOOLEAN_KEYS: List<String> = listOf("first_sync_done", "notify_reply_done")
+    val BOOLEAN_KEYS: List<String> = listOf(
+        "first_sync_done",
+        "notify_reply_done",
+        // Reminders on/off — the one task_reminder_* key that is a user
+        // setting rather than device-local alarm bookkeeping (#169). The
+        // armed set and the budget snapshot are excluded on purpose; see the
+        // note under [isWidgetDisplayKey].
+        "task_reminders_enabled",
+    )
 
     /**
      * Cumulative real token totals per assistant (see UsageStore). Longs are
@@ -84,6 +92,36 @@ object SettingsBackup {
             isEffortMemoryKey(k) && prefs.all[k] is String
         }.sorted()
 
+    /**
+     * Per-widget display settings, keyed by the widget id the user configured:
+     * `task_widget_{view,density,due,scroll}_<appWidgetId>`, written by
+     * `TaskWidgetConfigActivity.onSave` and read by the widget rows (#169).
+     *
+     * Same shape as the effort-memory keys — enumerated live because the
+     * suffix is a runtime id, and shaped tight so a hand-edited backup cannot
+     * inject arbitrary `task_widget_*` prefs. Values are mixed: `view` and
+     * `density` are enum names, `due` and `scroll` are booleans, so export
+     * writes each by its own type.
+     *
+     * Deliberately NOT backed up, and the reason matters: the two other
+     * `task_reminder_*` prefs are device-local alarm bookkeeping, not settings.
+     * `task_reminder_armed` is the set of currently-scheduled alarms — restoring
+     * it would make a new device believe alarms it never scheduled are armed,
+     * and the refresh diff would skip arming them. `task_reminder_budget` is the
+     * last refresh's six counts, recomputed on every refresh. The one reminder
+     * key that is a setting is `task_reminders_enabled` in [BOOLEAN_KEYS].
+     */
+    private val WIDGET_PREFIXES = listOf(
+        "task_widget_view_",
+        "task_widget_density_",
+        "task_widget_due_",
+        "task_widget_scroll_",
+    )
+
+    /** True for a per-widget display key `task_widget_{view,density,due,scroll}_<id>`. */
+    fun isWidgetDisplayKey(k: String): Boolean =
+        WIDGET_PREFIXES.any { k.startsWith(it) && k.length > it.length }
+
     /** Serializes all known prefs plus app files; absent keys are omitted (not nulled). */
     fun export(context: Context): JSONObject {
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
@@ -93,6 +131,16 @@ object SettingsBackup {
         }
         for (k in effortKeys(prefs)) {
             values.put(k, prefs.getString(k, "") ?: "")
+        }
+        // Per-widget display settings (#169): enumerated live because the key
+        // ends in an appWidgetId, and written by type because the four fields
+        // are not all one type. Sorted, so two exports of the same prefs are
+        // byte-identical and can be diffed.
+        for (k in prefs.all.keys.filter { isWidgetDisplayKey(it) }.sorted()) {
+            when (val v = prefs.all[k]) {
+                is String -> values.put(k, v)
+                is Boolean -> values.put(k, v)
+            }
         }
         for (k in BOOLEAN_KEYS) {
             if (prefs.contains(k)) values.put(k, prefs.getBoolean(k, false))
@@ -150,6 +198,21 @@ object SettingsBackup {
                 for (k in names) {
                     if (isEffortMemoryKey(k) && values.opt(k) is String) {
                         putString(k, values.optString(k, ""))
+                        applied++
+                    }
+                }
+                // Per-widget display settings (#169): the export allowlist
+                // mirrored — string fields (view/density) and boolean fields
+                // (due/scroll), nothing else. A mistyped value in a
+                // hand-edited backup is skipped rather than coerced, exactly
+                // like every other key above.
+                for (k in names) {
+                    if (!isWidgetDisplayKey(k)) continue
+                    if (values.opt(k) is String) {
+                        putString(k, values.optString(k, ""))
+                        applied++
+                    } else if (values.opt(k) is Boolean) {
+                        putBoolean(k, values.optBoolean(k))
                         applied++
                     }
                 }

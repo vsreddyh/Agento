@@ -194,6 +194,13 @@ Two additions beside it:
   which defeats counting creates to answer "how many tasks exist". An update that wrote
   nothing (`PATCH` with no field the store will set) is likewise not recorded.
 
+- **A change counter** (`tasks_changes`) holding one document with the collection-wide
+  revision every write advances (#178). Unlike the log it is maintained by the store
+  itself — `insert` (which also covers the rollover successor), update, complete,
+  reopen and delete — so no writer can forget it, and no-op writes (replayed creates,
+  empty patches, deletes that matched nothing) do not advance it. The app polls it via
+  `GET /api/tasks/changes?since=` and re-reads the list on resume when it moved.
+
 ### What the nightly reconciliation cannot see
 
 It scans for completed **structured** repeats, so a row whose repeat fields have

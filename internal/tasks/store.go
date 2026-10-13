@@ -520,6 +520,9 @@ func (s *Store) insert(ctx context.Context, doc bson.M) (map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
+	// The one funnel: Create, CreateWithKey AND rollOver's successor all land
+	// here, so one bump covers every way a new row can appear (#178).
+	s.bumpChanges(ctx)
 	doc["_id"] = res.InsertedID
 	return toDoc(doc), nil
 }
@@ -777,6 +780,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		now, _ := mongostore.ToInt(latest["revision"])
 		return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, now)
 	}
+	s.bumpChanges(ctx)
 	return s.Get(ctx, id)
 }
 
@@ -910,6 +914,7 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 	if err != nil {
 		return nil, nil, "", "", err
 	}
+	s.bumpChanges(ctx)
 	next, reason, rerr := s.rollOver(ctx, done)
 	if rerr != nil {
 		// The task is already marked done, so a failed rollover must not
@@ -995,6 +1000,7 @@ func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 		}
 		return nil, fail("task '%s' is already open", id)
 	}
+	s.bumpChanges(ctx)
 	return s.Get(ctx, id)
 }
 
@@ -1008,5 +1014,11 @@ func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return res.DeletedCount > 0, nil
+	// Only a real deletion: a Delete that matched nothing changed nothing, and
+	// bumping for it would tell every poller there was news forever (#178).
+	if res.DeletedCount == 0 {
+		return false, nil
+	}
+	s.bumpChanges(ctx)
+	return true, nil
 }

@@ -27,6 +27,16 @@ import kotlinx.coroutines.awaitAll
  * Both calls are no-ops when they have nothing to do: `refresh` returns at
  * once if reminders are off, and the widget's push returns if no placement
  * is installed. A user with neither still pays one no-op wakeup.
+ *
+ * Neither call is gated on the task change marker (#178), and that is
+ * deliberate. The marker answers "did the DATA change", but these two
+ * surfaces also have to re-render because TIME moved: the widget's rows print
+ * "Today"/"Tomorrow" from a date that ages, and reminder alarms are armed
+ * against a horizon that advances with the clock. Gating on the marker would
+ * leave an untouched list showing yesterday's labels and tomorrow's alarms
+ * unarmed for a day. The change marker gates the other path — the open Task
+ * Manager list re-reads on resume when it changed — where the question
+ * really is "did anything happen while I was away".
  */
 class TaskSyncWorker(
     context: Context,

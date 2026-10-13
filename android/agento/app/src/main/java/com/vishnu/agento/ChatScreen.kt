@@ -63,6 +63,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -909,7 +914,16 @@ internal fun ChatScreen(
                         Icon(Icons.Filled.History, contentDescription = "Conversations")
                     }
                     // Auto-read: speak each finished reply aloud.
-                    IconButton(onClick = { onAutoSpeak(!autoSpeak) }) {
+                    //
+                    // role = Switch (#283): the icon's description already
+                    // carries "on"/"off", but without a role TalkBack calls
+                    // it a plain button and never says it toggles. The
+                    // description stays the label — the role is what says
+                    // "this is a toggle" — so the two are not redundant.
+                    IconButton(
+                        onClick = { onAutoSpeak(!autoSpeak) },
+                        modifier = Modifier.semantics { role = Role.Switch },
+                    ) {
                         Icon(
                             if (autoSpeak) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff,
                             contentDescription = if (autoSpeak) {
@@ -933,7 +947,16 @@ internal fun ChatScreen(
             Surface(tonalElevation = 2.dp, modifier = Modifier.imePadding()) {
                 Column {
                     if (state.streaming) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        // Polite live region (#283): a reply being generated
+                        // was otherwise silent to TalkBack — the bar is
+                        // decorative and the tool line below it is optional,
+                        // so a screen-reader user got no signal at all that a
+                        // turn was in flight.
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics { liveRegion = LiveRegionMode.Polite },
+                        )
                     }
                     if (state.streaming && state.activeTools.isNotEmpty()) {
                         val shown = state.activeTools.take(3).joinToString(", ") +
@@ -948,7 +971,10 @@ internal fun ChatScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 2.dp),
+                                .padding(horizontal = 16.dp, vertical = 2.dp)
+                                // Each tool the agent picks up is announced as
+                                // it happens (#283), for the same reason.
+                                .semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
                     // Queue-or-send (#122): the composer stays live while
@@ -1160,29 +1186,54 @@ internal fun ChatScreen(
                                             modifier = Modifier.fillMaxWidth(),
                                             verticalAlignment = Alignment.CenterVertically,
                                         ) {
-                                            Text(
-                                                if (isUser) "You" else "Assistant",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.weight(1f),
-                                            )
-                                            val ts = shortTime(msg.ts)
-                                            if (ts.isNotEmpty()) {
+                                            // Author + time read as one unit
+                                            // (#283): without the merge a
+                                            // swipe-walker hears "Assistant"
+                                            // and "14:32" as two detached
+                                            // stops before the message.
+                                            // Merging stops at the text —
+                                            // the action buttons below stay
+                                            // separate nodes, because folding
+                                            // clickable children into a
+                                            // merged parent would take the
+                                            // buttons out of swipe order.
+                                            Row(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .semantics(mergeDescendants = true) {},
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
                                                 Text(
-                                                    ts,
+                                                    if (isUser) "You" else "Assistant",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.weight(1f),
                                                 )
+                                                val ts = shortTime(msg.ts)
+                                                if (ts.isNotEmpty()) {
+                                                    Text(
+                                                        ts,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
                                             }
                                             // Edit & resubmit (#122): pencil opens an
                                             // inline editor (Replace / Fork).
+                                            //
+                                            // No size override (#283): a
+                                            // 28dp Button pins the node and
+                                            // coerces away IconButton's own
+                                            // 48dp reservation, so the target
+                                            // was 28dp. The standard 48dp
+                                            // with a 24dp icon is what every
+                                            // other icon button here uses.
                                             if (isUser && !state.streaming) {
                                                 IconButton(
                                                     onClick = {
                                                         editingIndex = index
                                                         editDraft = msg.content
                                                     },
-                                                    modifier = Modifier.size(28.dp),
                                                 ) {
                                                     Icon(Icons.Filled.Edit, contentDescription = "Edit and resend")
                                                 }
@@ -1195,7 +1246,6 @@ internal fun ChatScreen(
                                                 IconButton(
                                                     onClick = { speakMessage(key, msg.content) },
                                                     enabled = !state.streaming,
-                                                    modifier = Modifier.size(28.dp),
                                                 ) {
                                                     Icon(
                                                         if (speaking) Icons.Filled.Stop else Icons.Filled.PlayArrow,
@@ -1206,9 +1256,13 @@ internal fun ChatScreen(
                                                         },
                                                     )
                                                 }
+                                                // Copy, and regenerate on the
+                                                // latest reply. Both lose their
+                                                // size override for the same
+                                                // reason as the pencil above
+                                                // (#283).
                                                 IconButton(
                                                     onClick = { clipboard.setText(AnnotatedString(msg.content)) },
-                                                    modifier = Modifier.size(28.dp),
                                                 ) {
                                                     Icon(Icons.Filled.ContentCopy, contentDescription = "Copy")
                                                 }
@@ -1218,7 +1272,6 @@ internal fun ChatScreen(
                                                 if (isLast && !state.streaming) {
                                                     IconButton(
                                                         onClick = stopThen(onRegenerate),
-                                                        modifier = Modifier.size(28.dp),
                                                     ) {
                                                         Icon(Icons.Filled.Refresh, contentDescription = "Regenerate reply")
                                                     }

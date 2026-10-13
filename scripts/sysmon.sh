@@ -26,7 +26,7 @@ command -v info >/dev/null 2>&1 || info() { echo -e "\033[0;32m[INFO]\033[0m  $*
 
 # ── Sample one row ─────────────────────────────────────
 sample() {
-    local cpu load1 now mem_pct used_mem swap_pct disk_pct
+    local cpu load1 now mem_pct swap_pct disk_pct
     local pre_total pre_idle post_total post_idle dtotal didle
 
     load1="$(cut -d' ' -f1 /proc/loadavg)"
@@ -48,9 +48,8 @@ sample() {
     total_mem="${total_mem:-0}"; free_mem="${free_mem:-0}"
     if (( total_mem > 0 )); then
         mem_pct=$(( (total_mem - free_mem) * 100 / total_mem ))
-        used_mem=$(( (total_mem - free_mem) / 1024 ))
     else
-        mem_pct=0; used_mem=0
+        mem_pct=0
     fi
 
     read -r swap_total swap_free < <(awk '/SwapTotal/{t=$2} /SwapFree/{f=$2} END{print t, f}' /proc/meminfo)
@@ -78,9 +77,6 @@ stats() {
     local date="${1:-$(date +%F)}" f
     f="$TSV_DIR/$date.tsv"
     [[ -f "$f" ]] || { warn "no samples for $date ($f)"; exit 1; }
-
-    local n
-    n=$(wc -l < "$f")
 
     local body
     body="$(python3 - "$f" "$date" <<'PY'
