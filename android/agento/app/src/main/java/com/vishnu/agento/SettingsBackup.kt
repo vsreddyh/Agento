@@ -17,12 +17,16 @@ import org.json.JSONObject
  */
 object SettingsBackup {
 
-    // NOTE: stays 1 — the prefs schema gains only additive optional keys
-    // (usage totals, per-model effort memory) and old readers ignore the
-    // additive "files" section, so no MAJOR bump is required.
+    // NOTE: stays 1 — import skips unknown keys and never reads the
+    // version, so removing the retired story/resumes keys (#289) neither
+    // breaks old-backup import (their keys are skipped) nor requires a bump.
+    // Old readers ignore the additive "files" section for the same reason.
     const val VERSION = 1
 
-    private val TABS = listOf("story", "resumes", "god")
+    // Single chat tab since #289; retired story/resumes keys stay out of
+    // the allowlists, so their values are neither exported nor imported —
+    // orphaned, like the thread files below.
+    private val TABS = listOf("chat")
 
     /** App files mirrored into backups (chat threads, tasks). */
     private fun backupFiles(): List<String> = buildList {

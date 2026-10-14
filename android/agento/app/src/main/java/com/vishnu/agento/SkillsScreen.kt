@@ -89,20 +89,21 @@ internal fun SkillCard(profile: String, s: SkillInfo) {
         }
     }
 }
-/** Read-only skills inventory per assistant — with
+/** Read-only skills inventory for the chat profile — with
  * Tasks-style search filtering and a sort dropdown.
  */
 @Composable
 internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var profile by remember { mutableStateOf("god") }
+    // Single profile since #289.
+    val profile = "chat"
     var skills by remember { mutableStateOf<List<SkillInfo>>(emptyList()) }
     var skillsError by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
-    // Cancelled + replaced on every load() so rapid profile taps can't
-    // let a stale response win; only the latest job may clear busy.
+    // Cancelled + replaced on every load() so a stale response can't
+    // win; only the latest job may clear busy.
     var loadJob by remember { mutableStateOf<Job?>(null) }
 
     fun load() {
@@ -131,9 +132,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         loadJob = job
     }
 
-    LaunchedEffect(profile) { load() }
-
-    val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Resume and Portfolio")
+    LaunchedEffect(Unit) { load() }
 
     // Search + sort (Tasks-style).
     var query by remember { mutableStateOf("") }
@@ -170,19 +169,6 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(modifier = Modifier.contentWidth(wc)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    tabs.forEach { (key, label) ->
-                        FilterChip(
-                            selected = profile == key,
-                            onClick = { profile = key },
-                            label = { Text(label) },
-                        )
-                    }
-                }
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },

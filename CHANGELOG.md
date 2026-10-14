@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.0.0]
+- **BREAKING: one Chat tab** (#289). The Story and Resume tabs are gone
+  and God is now Chat, backed by the single `chat` profile (`/p/chat`).
+  Provider/model/effort prefs moved to `provider_chat`, `model_chat`,
+  `effort_chat[_<model>]` — the old `god` keys are read once as fallback
+  so configured installs keep working, then never written again; `story`
+  and `resumes` keys and thread files (`chat_threads_story.json`,
+  `chat_threads_resumes.json`) are orphaned on disk. Skills/Tools show the
+  one profile with no tab picker; usage totals and Settings backup/export
+  cover Chat only (backup format version stays 1 — import skips unknown
+  keys). Scheduler jobs resolve against `/p/chat`.
+
 ## [4.17.0]
 - **Task Manager no longer freezes on slow connections** (#288).
   Completing, editing, deleting, duplicating or creating a task applies

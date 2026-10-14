@@ -24,7 +24,7 @@ data class UsageTotals(
  */
 object UsageStore {
 
-    private val TABS = listOf("god", "story", "resumes")
+    private val TABS = listOf("chat")
 
     private fun promptKey(tab: String) = "usage_prompt_$tab"
     private fun completionKey(tab: String) = "usage_completion_$tab"

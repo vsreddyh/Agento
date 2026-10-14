@@ -497,10 +497,10 @@ internal fun UsageSection() {
     LaunchedEffect(Unit) {
         val data = withContext(Dispatchers.IO) {
             UsageStore.clearLegacy(context)
+            // Single chat tab since #289 (retired god/story/resumes thread
+            // files stay on disk, orphaned — only chat is read).
             listOf(
-                "god" to "God",
-                "story" to "Story",
-                "resumes" to "Resume and Portfolio",
+                "chat" to "Chat",
             ).map { (tab, label) ->
                 val threads = ChatThreads.load(context, tab)
                 val t = UsageStore.load(context, tab)

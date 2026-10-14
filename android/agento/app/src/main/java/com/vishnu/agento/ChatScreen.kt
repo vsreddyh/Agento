@@ -80,7 +80,7 @@ import com.mikepenz.markdown.m3.Markdown
 import java.util.Locale
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-/** Builds per-tab chat ViewModels so story/resumes/god keep isolated history. */
+/** Builds the Chat ViewModel so the single tab keeps isolated history. */
 class ChatViewModelFactory(
     internal val app: android.app.Application,
     internal val tab: String,
@@ -91,7 +91,7 @@ class ChatViewModelFactory(
     }
 }
 
-/** Scopes one chat ViewModel per tab key so drafts/history survive tab switches. */
+/** Scopes the chat ViewModel to the tab key so drafts/history survive recomposition. */
 @Composable
 internal fun ChatTab(
     app: android.app.Application,
@@ -106,7 +106,7 @@ internal fun ChatTab(
     onConfigChanged: () -> Unit = {},
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
-    // Keyed per tab — otherwise all three tabs would share one ViewModel.
+    // Keyed by tab — the ViewModel survives recomposition.
     val vm: ChatViewModel = viewModel(key = "chat_$tab", factory = factory)
     val state by vm.state
     val context = LocalContext.current
@@ -321,7 +321,7 @@ internal fun ThreadSheet(
 internal fun ttsKeyFor(msg: ChatMessage): String = "${msg.ts}:${msg.content.hashCode()}"
 
 /**
- * Per-tab provider/model picker (#18: model selection lives on each
+ * Chat provider/model picker (#18: model selection lives on the chat
  * profile's own page). Saves immediately on pick; blanks mean not set.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -669,8 +669,7 @@ internal fun ChatScreen(
     }
     // Reply/TTS loop effects are defined after startVoice below (they call it).
     // Built-in Android speech-to-text (RecognizerIntent — no extra
-    // permission or dependency). Shared by God/Story/Resume and Portfolio: all three
-    // tabs render this one ChatScreen, so one mic covers all chats.
+    // permission or dependency) for the Chat tab.
     val voiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -1609,9 +1608,9 @@ internal fun OptionMenu(
     }
 }
 
-/** Providers are gateway-global; one catalog fetch covers all tabs. */
+/** Providers are gateway-global; one catalog fetch covers the Chat tab. */
 internal fun catalogPath(api: ChatApi): String =
-    listOf(api.pathFor("story"), api.pathFor("resumes"), api.pathFor("god")).distinct().first()
+    api.pathFor("chat")
 
 /** Display name for a provider slug. The wire value stays the gateway slug
  * (`opencode-go` per the gateway config); the catalog label is preferred. */

@@ -109,7 +109,7 @@ fun threadUsageOf(messages: List<ChatMessage>): ThreadUsage {
 }
 
 /**
- * One instance per chat tab (story / resumes / god). Conversations per tab
+ * The Chat tab's ViewModel. Conversations
  * persist to disk (`ChatThreads`, up to 20 threads) so history survives
  * restarts; the switcher picks the active one and + starts a new thread
  * without deleting the rest. The full active history is sent per request.

@@ -45,7 +45,7 @@ internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<CronJob?>(null) }
 
-    fun path(): String = ChatApi(context).pathFor("god")
+    fun path(): String = ChatApi(context).pathFor("chat")
 
     fun load(silent: Boolean = false) {
         if (!silent) { busy = true; error = "" }
