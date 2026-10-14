@@ -167,12 +167,19 @@ func run() error {
 					profile, exitErr, tail)
 				detail := fmt.Sprintf("component: agent %s\nexit: %v\nstderr tail:\n%s",
 					profile, exitErr, tail)
-				path, err := crashlog.WriteCrash(crashDir, detail,
-					password, os.Getenv("MONGODB_URI"))
+				secrets := []string{password}
+				for _, t := range strings.Split(os.Getenv("PASSWORD"), ",") {
+					if t = strings.TrimSpace(t); t != "" {
+						secrets = append(secrets, t)
+					}
+				}
+				secrets = append(secrets, os.Getenv("MONGODB_URI"))
+				path, err := crashlog.WriteCrash(crashDir, detail, secrets...)
 				if err != nil {
 					logger.Printf("profile %s: crash log write failed: %v", profile, err)
 				} else {
 					logger.Printf("profile %s: crash log: %s", profile, path)
+					_ = crashlog.Prune(crashDir)
 				}
 			}
 		}(profile, client)

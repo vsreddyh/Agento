@@ -22,8 +22,9 @@ import java.util.Locale
  *
  * Contents are the enumerated fields below: timestamp, app version, model +
  * effort, device + Android version, thread name, full stack trace. No bearer
- * token, no app password, no server URL is ever written — the writer only
- * emits these fields, so there is nothing to redact.
+ * token, no app password is ever written — the writer only emits these
+ * fields. (An exception message can echo the server host, which carries no
+ * credential; the URL itself is never stored as a field.)
  *
  * Internal storage needs no permission and nothing that can fail on a
  * locked-down device. TTL pruning runs at startup and after each write, so
@@ -77,11 +78,18 @@ object CrashLogs {
         }
     }
 
-    /** Write one crash file; null when the write itself failed. */
+    /** Write one crash file; null when the write itself failed. Same-second
+     * collisions get a numeric suffix so no crash overwrites another. */
     fun writeCrash(appCtx: Context, thread: Thread, e: Throwable): File? =
         runCatching {
             val dir = crashDir(appCtx).apply { mkdirs() }
-            val file = File(dir, fileName(LocalDateTime.now(IST), Process.myPid()))
+            val stamp = LocalDateTime.now(IST)
+            var file = File(dir, fileName(stamp, Process.myPid()))
+            var n = 0
+            while (file.exists()) {
+                n++
+                file = File(dir, fileName(stamp, Process.myPid()).removeSuffix(".log") + "-$n.log")
+            }
             file.writeText(reportText(appCtx, thread, e))
             file
         }.getOrNull()

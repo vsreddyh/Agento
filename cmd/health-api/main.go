@@ -69,9 +69,15 @@ func recoverCrash(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				route := r.Method + " " + r.URL.EscapedPath()
+				secrets := []string{}
+				for _, t := range strings.Split(os.Getenv("PASSWORD"), ",") {
+					if t = strings.TrimSpace(t); t != "" {
+						secrets = append(secrets, t)
+					}
+				}
+				secrets = append(secrets, os.Getenv("MONGODB_URI"))
 				fmt.Fprintf(os.Stdout, "crash route=%s panic=%v\nstack:\n%s\n",
-					route, rec, crashlog.Redact(string(debug.Stack()),
-						os.Getenv("PASSWORD"), os.Getenv("MONGODB_URI")))
+					route, rec, crashlog.Redact(string(debug.Stack()), secrets...))
 				writeJSON(w, http.StatusInternalServerError,
 					map[string]string{"error": "internal server error"})
 			}

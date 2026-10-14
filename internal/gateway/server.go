@@ -237,13 +237,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			route := r.Method + " " + r.URL.EscapedPath()
 			detail := fmt.Sprintf("component: pi-gateway\nroute: %s\npanic: %v\nstack:\n%s",
 				route, rec, debug.Stack())
+			// PASSWORD may be a comma-separated token list: redact every
+			// token, not just the whole string.
+			secrets := []string{s.cfg.Password}
+			for _, t := range strings.Split(os.Getenv("PASSWORD"), ",") {
+				if t = strings.TrimSpace(t); t != "" {
+					secrets = append(secrets, t)
+				}
+			}
+			secrets = append(secrets, os.Getenv("MONGODB_URI"))
 			if s.cfg.CrashDir != "" {
-				path, err := crashlog.WriteCrash(s.cfg.CrashDir, detail,
-					s.cfg.Password, os.Getenv("MONGODB_URI"))
+				path, err := crashlog.WriteCrash(s.cfg.CrashDir, detail, secrets...)
 				if err != nil {
 					s.cfg.Logf("panic on %s: crash log write failed: %v", route, err)
 				} else {
 					s.cfg.Logf("panic on %s: wrote %s", route, path)
+					// Self-cleaning like startup: a long-lived process
+					// must not accumulate files between restarts.
+					_ = crashlog.Prune(s.cfg.CrashDir)
 				}
 			} else {
 				s.cfg.Logf("panic on %s: %v", route, rec)
