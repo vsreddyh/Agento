@@ -259,7 +259,7 @@ cmd_init() {
     # workspace/portfolio-resume) stay on disk, orphaned and unmanaged:
     # init neither clones nor deletes them (#289). An empty orphan dir
     # would later read as deliberate, so nothing is created here either.
-    # Fix ownership before cloning: when run via sudo, dirs are root-owned and
+    # Fix ownership: when run via sudo, dirs are root-owned and
     # clone as $SUDO_USER would get Permission denied. Do it now, not after.
     if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
         chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$REPO/workspace" "$PI_HOME" 2>/dev/null || true
