@@ -41,18 +41,7 @@ class CronSyncWorker(
         private const val TAG = "CronSyncWorker"
         const val WORK_NAME = "agento_cron_sync"
         const val INTERVAL_MINUTES = 30L
-    }
 
-    override suspend fun doWork(): Result = try {
-        CronCheck.check(applicationContext)
-        Result.success()
-    } catch (e: Exception) {
-        if (e is CancellationException) throw e
-        Log.w(TAG, "cron check failed", e)
-        Result.retry()
-    }
-
-    companion object {
         /** Unique periodic work with UPDATE policy, like the task sync. */
         fun schedule(context: Context) {
             val request = PeriodicWorkRequestBuilder<CronSyncWorker>(
