@@ -1,7 +1,13 @@
 package com.vishnu.agento
 
 import android.os.Build
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,6 +20,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
@@ -31,6 +38,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +52,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Shared design system for the Agento UI overhaul (#64).
@@ -201,7 +216,7 @@ fun friendlyError(raw: String): FriendlyError {
     }
 }
 
-/** Status-line copy for transient confirmations (snackbars, never raw dumps). */
+/** Status-line copy for transient confirmations (toasts, never raw dumps). */
 object Toasts {
     const val SAVED = "Saved."
     const val SERVER_SAVED = "Server saved."
@@ -212,6 +227,129 @@ object Toasts {
     const val COPIED = "Copied."
     const val TEST_SENT = "Test sent — check the notification shade."
     const val UP_TO_DATE = "You're up to date."
+}
+
+/** Severity of a transient toast: tints the [ToastHost] card. */
+enum class ToastKind { Info, Success, Error }
+
+/** One queued toast: the text plus how it renders. */
+data class ToastMsg(val id: Long, val text: String, val kind: ToastKind)
+
+/**
+ * Non-suspending, queued toast center (#288).
+ *
+ * Replaces `SnackbarHostState` everywhere: `showSnackbar` SUSPENDS its
+ * caller for the full display duration, which froze the ContractWarnings
+ * collector dance and forced every plain button callback through a
+ * `scope.launch`. `toast()` only enqueues and returns — one toast shows
+ * at a time, top-end, auto-dismissing after [TOAST_MS] with an instant
+ * X dismiss.
+ *
+ * Main-thread only, like every caller (button callbacks and
+ * `LaunchedEffect` collectors all run on the main dispatcher).
+ */
+class ToastCenter(private val scope: CoroutineScope) {
+    private val _current = MutableStateFlow<ToastMsg?>(null)
+    val current: StateFlow<ToastMsg?> = _current.asStateFlow()
+    private val queue = ArrayDeque<ToastMsg>()
+    private var nextId = 0L
+    private var dismissJob: Job? = null
+
+    /** Enqueue a toast; blank text is dropped, never shown empty. */
+    fun toast(text: String, kind: ToastKind = ToastKind.Info) {
+        val clean = text.trim()
+        if (clean.isEmpty()) return
+        queue.addLast(ToastMsg(nextId++, clean, kind))
+        pump()
+    }
+
+    /** Dismiss the visible toast now and show the next queued one. */
+    fun dismiss() {
+        dismissJob?.cancel()
+        dismissJob = null
+        _current.value = null
+        pump()
+    }
+
+    private fun pump() {
+        if (_current.value != null) return
+        val msg = queue.removeFirstOrNull() ?: return
+        _current.value = msg
+        dismissJob = scope.launch {
+            delay(TOAST_MS)
+            _current.value = null
+            dismissJob = null
+            pump()
+        }
+    }
+
+    companion object {
+        /** Auto-dismiss delay: long enough to read, short enough to leave. */
+        const val TOAST_MS = 4_500L
+    }
+}
+
+/**
+ * Top-end slide-in toast card with a dismiss button (#288).
+ *
+ * Overlay it in a `Box` over the screen (not the Scaffold `snackbarHost`
+ * slot, which is bottom-anchored): the card floats above the content
+ * without shifting the layout, one at a time, newest queued behind.
+ */
+@Composable
+fun ToastHost(center: ToastCenter, modifier: Modifier = Modifier) {
+    val current by center.current.collectAsState()
+    Box(
+        modifier = modifier.fillMaxWidth().padding(top = 8.dp, start = 16.dp, end = 16.dp),
+        contentAlignment = Alignment.TopEnd,
+    ) {
+        AnimatedVisibility(
+            visible = current != null,
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+        ) {
+            val msg = current
+            if (msg != null) {
+                val container = when (msg.kind) {
+                    ToastKind.Success -> MaterialTheme.colorScheme.secondaryContainer
+                    ToastKind.Error -> MaterialTheme.colorScheme.errorContainer
+                    ToastKind.Info -> MaterialTheme.colorScheme.surfaceVariant
+                }
+                val onContainer = when (msg.kind) {
+                    ToastKind.Success -> MaterialTheme.colorScheme.onSecondaryContainer
+                    ToastKind.Error -> MaterialTheme.colorScheme.onErrorContainer
+                    ToastKind.Info -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                val icon = when (msg.kind) {
+                    ToastKind.Success -> Icons.Filled.Check
+                    ToastKind.Error -> Icons.Filled.Warning
+                    ToastKind.Info -> Icons.Filled.Info
+                }
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = container),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(icon, contentDescription = null, tint = onContainer)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            msg.text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = onContainer,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = center::dismiss) {
+                            Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = onContainer)
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -86,7 +86,7 @@ internal enum class TaskSort(val title: String) {
 internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val snackbar = remember { SnackbarHostState() }
+    val toasts = remember { ToastCenter(scope) }
     // One client for the screen (its OkHttpClient is shared process-wide).
     val api = remember(context) { ProjectsApi(context) }
     var projects by remember { mutableStateOf<List<ServerProject>>(emptyList()) }
@@ -101,13 +101,11 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var busy by remember { mutableStateOf(false) }
 
     fun fail(e: Throwable) {
-        scope.launch {
-            snackbar.showSnackbar(serverDetail(e.message ?: e.javaClass.simpleName))
-        }
+        toasts.toast(serverDetail(e.message ?: e.javaClass.simpleName), ToastKind.Error)
     }
 
-    fun toast(msg: String) {
-        scope.launch { snackbar.showSnackbar(msg) }
+    fun toast(msg: String, kind: ToastKind = ToastKind.Info) {
+        toasts.toast(msg, kind)
     }
 
     fun cycleStatus(t: ServerProject): String {
@@ -174,7 +172,7 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 val msg = serverDetail(e.message ?: e.javaClass.simpleName)
                 // A failed refresh over cached rows still surfaces: stale
                 // data with no error affordance hides outages.
-                if (projects.isEmpty()) error = msg else toast(msg)
+                if (projects.isEmpty()) error = msg else toast(msg, ToastKind.Error)
             },
         )
         loading = false
@@ -184,7 +182,7 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         busy = true
         scope.launch {
             api.update(t.id, status = cycleStatus(t)).fold(
-                onSuccess = { refreshTick++; toast(Toasts.TASK_SAVED) },
+                onSuccess = { refreshTick++; toast(Toasts.TASK_SAVED, ToastKind.Success) },
                 onFailure = ::fail,
             )
             busy = false
@@ -195,7 +193,7 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         busy = true
         scope.launch {
             api.delete(t.id).fold(
-                onSuccess = { refreshTick++; toast(Toasts.TASK_DELETED) },
+                onSuccess = { refreshTick++; toast(Toasts.TASK_DELETED, ToastKind.Success) },
                 onFailure = ::fail,
             )
             busy = false
@@ -214,8 +212,10 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             }
         }
 
+    // The toast card floats top-end over the content (Box overlay, not
+    // the bottom-anchored Scaffold slot) so it never shifts the layout.
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -336,6 +336,8 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 }
             }
         }
+        ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
+    }
     }
 
     val draft = editing
@@ -349,12 +351,12 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 scope.launch {
                     if (saved.id.isEmpty()) {
                         api.create(saved.name, saved.status, saved.note).fold(
-                            onSuccess = { editing = null; refreshTick++; toast(Toasts.TASK_SAVED) },
+                            onSuccess = { editing = null; refreshTick++; toast(Toasts.TASK_SAVED, ToastKind.Success) },
                             onFailure = ::fail,
                         )
                     } else {
                         api.update(saved.id, saved.name, saved.status, saved.note).fold(
-                            onSuccess = { editing = null; refreshTick++; toast(Toasts.TASK_SAVED) },
+                            onSuccess = { editing = null; refreshTick++; toast(Toasts.TASK_SAVED, ToastKind.Success) },
                             onFailure = ::fail,
                         )
                     }

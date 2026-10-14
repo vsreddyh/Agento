@@ -36,7 +36,7 @@ import kotlinx.coroutines.launch
 internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val snackbar = remember { SnackbarHostState() }
+    val toasts = remember { ToastCenter(scope) }
     var jobs by remember { mutableStateOf<List<CronJob>>(emptyList()) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -66,10 +66,10 @@ internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
             work().fold(
                 onSuccess = {
                     load(silent = true)
-                    snackbar.showSnackbar(okToast)
+                    toasts.toast(okToast, ToastKind.Success)
                 },
                 onFailure = { e ->
-                    snackbar.showSnackbar(friendlyError(e.message ?: "").title)
+                    toasts.toast(friendlyError(e.message ?: "").title, ToastKind.Error)
                 },
             )
         }
@@ -77,8 +77,10 @@ internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
 
     LaunchedEffect(Unit) { load() }
 
+    // The toast card floats top-end over the content (Box overlay, not
+    // the bottom-anchored Scaffold slot) so it never shifts the layout.
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("Scheduler") },
@@ -196,6 +198,8 @@ internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
                 }
             }
         }
+        ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
+    }
     }
 
     if (creating) {

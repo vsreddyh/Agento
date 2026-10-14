@@ -101,7 +101,7 @@ internal fun SettingsScreen(
     val state by viewModel.state
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val snackbar = remember { SnackbarHostState() }
+    val toasts = remember { ToastCenter(scope) }
     var error by remember { mutableStateOf("") }
     // Bumped on every resume so the hub's widget count reflects a
     // placement added (or removed) while the app was in the background —
@@ -138,8 +138,10 @@ internal fun SettingsScreen(
         }
     }
 
+    // The toast card floats top-end over the content (Box overlay, not
+    // the bottom-anchored Scaffold slot) so it never shifts the layout.
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -254,7 +256,7 @@ internal fun SettingsScreen(
                                     remove("server_url")
                                 }
                                 error = ""
-                                scope.launch { snackbar.showSnackbar(Toasts.SERVER_SAVED) }
+                                toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
                                 scope.launch {
                                     api.fetchCatalog(catalogPath(api), refresh = true).fold(
                                         onSuccess = { list -> catalog = list },
@@ -465,7 +467,7 @@ internal fun SettingsScreen(
                         SettingsBackupSection(onImported = {
                             viewModel.refresh()
                             settingsRefresh++
-                            scope.launch { snackbar.showSnackbar(Toasts.SAVED) }
+                            toasts.toast(Toasts.SAVED, ToastKind.Success)
                         })
                     }
                     SettingSection.Usage -> {
@@ -474,6 +476,8 @@ internal fun SettingsScreen(
                 }
             }
         }
+        ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
+    }
     }
 }
 

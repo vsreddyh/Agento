@@ -8,6 +8,25 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.17.0]
+- **Task Manager no longer freezes on slow connections** (#288).
+  Completing, editing, deleting, duplicating or creating a task applies
+  instantly to the local list and dismisses the sheet/dialog, with the
+  request running in the background. Success patches the row with the
+  server answer (revision included); failure reverts and toasts. Only the
+  row with an in-flight request is disabled — the bell, New, Refresh and
+  every other row stay live. A 409 (someone else wrote first) reverts,
+  reloads and says so. Rollover completions still take a full reload,
+  because the next occurrence is a new row this response does not carry.
+- **The count line shows when the list was last synced** (#288).
+  E.g. "12 of 12 · synced 2m ago" ("just now" under a minute), set on
+  successful loads, persisted across restarts, left untouched by failures.
+- **Toasts replace snackbars on every screen** (#288). One top-end
+  slide-in card with a dismiss button, auto-dismissing after ~4.5s,
+  queued one at a time behind a non-suspending `toast(msg, kind)` API —
+  so plain button callbacks call it directly and the contract-warning
+  collector no longer suspends for the toast duration.
+
 ## [4.16.1]
 - **Reminder notifications say the moment, overdue names the delay**
   (#287). The collapsed line is the bare fact — "Starting in 5 minutes",
