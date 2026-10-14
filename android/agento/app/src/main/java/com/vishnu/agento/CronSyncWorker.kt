@@ -37,6 +37,15 @@ class CronSyncWorker(
     params: WorkerParameters,
 ) : CoroutineWorker(context, params) {
 
+    override suspend fun doWork(): Result = try {
+        CronCheck.check(applicationContext)
+        Result.success()
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        Log.w(TAG, "cron check failed", e)
+        Result.retry()
+    }
+
     companion object {
         private const val TAG = "CronSyncWorker"
         const val WORK_NAME = "agento_cron_sync"
