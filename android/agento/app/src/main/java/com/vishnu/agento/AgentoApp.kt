@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
  */
 class AgentoApp : Application() {
 
-    /** Re-enqueues both periodic jobs on every cold start; safe to call repeatedly. */
+    /** Re-enqueues all periodic jobs on every cold start; safe to call repeatedly. */
     override fun onCreate() {
         super.onCreate()
         // First: a crash later in this method must still be recorded.
@@ -24,6 +24,7 @@ class AgentoApp : Application() {
         ForegroundTracker.install(this)
         scheduleSync(this)
         scheduleTaskSync(this)
+        CronSyncWorker.schedule(this)
     }
 
     companion object {

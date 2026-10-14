@@ -21,6 +21,16 @@ data class CronJob(
     val lastRun: String = "",
     val nextRun: String = "",
     val delivery: String = "",
+    /** Short stored history, oldest first (capped server-side). */
+    val runs: List<CronRun> = emptyList(),
+)
+
+/** One firing of a cron job: when it ran and what the model said. */
+data class CronRun(
+    /** Fire instant, Unix millis. 0 when the server doesn't report it. */
+    val at: Long = 0L,
+    val text: String = "",
+    val missed: Boolean = false,
 )
 
 /**
@@ -110,6 +120,20 @@ class JobsApi(context: Context) {
                 .ifEmpty { o.optString("nextRun", "") }.trim(),
             delivery = o.optString("delivery", "")
                 .ifEmpty { o.optString("deliver", "") }.trim(),
+            runs = o.optJSONArray("runs")?.let { arr ->
+                buildList {
+                    for (i in 0 until arr.length()) {
+                        val r = arr.optJSONObject(i) ?: continue
+                        add(
+                            CronRun(
+                                at = r.optLong("at", 0L),
+                                text = r.optString("text", "").trim(),
+                                missed = r.optBoolean("missed", false),
+                            )
+                        )
+                    }
+                }
+            }.orEmpty(),
         )
     }
 
