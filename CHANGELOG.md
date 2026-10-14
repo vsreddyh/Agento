@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [4.16.1]
+- **Reminder notifications say the moment, overdue names the delay**
+  (#287). The collapsed line is the bare fact — "Starting in 5 minutes",
+  "Start now", "Due now" — with the description and the start-to-due
+  window in the expanded view only. Overdue reads "Overdue for x hr y
+  min" (minutes alone under an hour) instead of "Overdue since …", and
+  the inline action is labelled "Completed". `[Skip]` and
+  `[Instruct Agent]` stay out: Skip has no server endpoint and Instruct
+  has no receiver-to-chat path yet — both need design.
+
 ## [4.16.0]
 - **Agent-made task changes now reach the app** (#178). A task the agent
   created or completed over MCP used to stay invisible until something else
