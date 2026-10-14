@@ -110,6 +110,14 @@ class MainActivity : ComponentActivity() {
      */
     private val tasksTargetId = mutableStateOf<String?>(null)
 
+    /**
+     * Cron notification tap (#289). Generation counter like tasksGen so
+     * retaps renavigate; SchedulerScreen consumes the job id and clears it
+     * once the list loads.
+     */
+    private val schedulerGen = mutableIntStateOf(0)
+    private val schedulerTargetId = mutableStateOf<String?>(null)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -120,6 +128,12 @@ class MainActivity : ComponentActivity() {
             tasksGen.intValue++
             intent.getStringExtra(TaskWidget.EXTRA_TASK_ID)?.let {
                 tasksTargetId.value = it
+            }
+        }
+        if (intent.action == CronIntents.ACTION_CRON) {
+            schedulerGen.intValue++
+            intent.getStringExtra(CronIntents.EXTRA_JOB_ID)?.let {
+                schedulerTargetId.value = it
             }
         }
     }
@@ -137,6 +151,13 @@ class MainActivity : ComponentActivity() {
             tasksGen.intValue = 1
             intent.getStringExtra(TaskWidget.EXTRA_TASK_ID)?.let {
                 tasksTargetId.value = it
+            }
+        }
+        // Cron notification tap: same redelivery guard.
+        if (savedInstanceState == null && intent?.action == CronIntents.ACTION_CRON && schedulerGen.intValue == 0) {
+            schedulerGen.intValue = 1
+            intent.getStringExtra(CronIntents.EXTRA_JOB_ID)?.let {
+                schedulerTargetId.value = it
             }
         }
         setContent {
@@ -170,6 +191,12 @@ class MainActivity : ComponentActivity() {
                     LaunchedEffect(tasksGen.intValue) {
                         if (tasksGen.intValue > 0) {
                             dest = Destination.TaskManager
+                        }
+                    }
+                    // Cron notification tap (#289): land on the Scheduler screen.
+                    LaunchedEffect(schedulerGen.intValue) {
+                        if (schedulerGen.intValue > 0) {
+                            dest = Destination.Scheduler
                         }
                     }
                     // Null section = the settings hub overview; a non-null
@@ -259,6 +286,8 @@ class MainActivity : ComponentActivity() {
                                 )
                                 Destination.Scheduler -> SchedulerScreen(
                                     onMenu = { scope.launch { drawerState.open() } },
+                                    deepLinkJobId = schedulerTargetId.value,
+                                    onDeepLinkConsumed = { schedulerTargetId.value = null },
                                 )
                                 Destination.Skills -> SkillsScreen(
                                     wc = wc,

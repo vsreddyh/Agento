@@ -10,6 +10,8 @@ package com.vishnu.agento
  * list, which carries exactly what this file uses.
  */
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -27,13 +29,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 /** Gateway scheduler: native cron jobs over the Jobs API (same auth as
- * chat, through the proxy's /p/ route — no server changes needed). */
+ * chat, through the proxy's /p/ route — no server changes needed).
+ * Each job is a stored cron chat: one prompt, one response per fire, short
+ * history per job (#289). */
 @Composable
-internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
+internal fun SchedulerScreen(
+    onMenu: () -> Unit = {},
+    deepLinkJobId: String? = null,
+    onDeepLinkConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val toasts = remember(scope) { ToastCenter(scope) }
@@ -44,6 +53,8 @@ internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
     var editing by remember { mutableStateOf<CronJob?>(null) }
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<CronJob?>(null) }
+    // Stored cron chat: the tapped job's prompt plus its short history.
+    var detail by remember { mutableStateOf<CronJob?>(null) }
 
     fun path(): String = ChatApi(context).pathFor("chat")
 
@@ -51,7 +62,14 @@ internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
         if (!silent) { busy = true; error = "" }
         scope.launch {
             JobsApi(context).list(path()).fold(
-                onSuccess = { jobs = it; loaded = true },
+                onSuccess = {
+                    jobs = it
+                    loaded = true
+                    // Same discovery as the background worker, over the
+                    // rows just fetched rather than a second fetch: a
+                    // response that landed while away notifies on open.
+                    CronCheck.notifyFresh(context, it)
+                },
                 onFailure = { e ->
                     error = e.message ?: e.javaClass.simpleName
                     loaded = true
@@ -76,6 +94,16 @@ internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
     }
 
     LaunchedEffect(Unit) { load() }
+
+    // Notification deep-link into one job's stored chat: opened once the
+    // list carries the row, then cleared upstream.
+    LaunchedEffect(jobs, loaded, deepLinkJobId) {
+        val id = deepLinkJobId ?: return@LaunchedEffect
+        jobs.firstOrNull { it.id == id }?.let {
+            detail = it
+            onDeepLinkConsumed()
+        }
+    }
 
     // The toast card floats top-end over the content (Box overlay, not
     // the bottom-anchored Scaffold slot) so it never shifts the layout.
@@ -122,7 +150,10 @@ internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
             ) {
                 items(jobs, key = { it.id }) { job ->
                     var menu by remember(job.id) { mutableStateOf(false) }
-                    Card(modifier = Modifier.fillMaxWidth()) {
+                    Card(
+                        onClick = { detail = job },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
                         Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(modifier = Modifier.weight(1f)) {
@@ -193,6 +224,17 @@ internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
+                            // Latest stored response, so the row reads as
+                            // the cron chat it is — tap opens the history.
+                            job.runs.lastOrNull { it.text.isNotEmpty() }?.let { last ->
+                                Text(
+                                    (if (last.missed) "Missed: " else "") + last.text,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
@@ -246,7 +288,69 @@ internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
             },
         )
     }
+    // Stored cron chat: the prompt plus the short run history, re-resolved
+    // against the live list so a run that lands while open appears.
+    val detailJob = detail?.let { d -> jobs.firstOrNull { it.id == d.id } ?: d }
+    if (detailJob != null) {
+        AlertDialog(
+            onDismissRequest = { detail = null },
+            title = { Text(detailJob.name.ifEmpty { "Scheduled job" }) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "Schedule: ${detailJob.schedule.ifEmpty { "—" }}" +
+                            (detailJob.nextRun.takeIf { it.isNotEmpty() }?.let { " · next $it" } ?: ""),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (detailJob.prompt.isNotEmpty()) {
+                        Text(detailJob.prompt, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    val history = detailJob.runs.asReversed()
+                    if (history.isEmpty()) {
+                        HintLine("No responses yet — the next fire stores one here.")
+                    } else {
+                        history.forEach { run ->
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    (if (run.missed) "Missed" else "Responded") +
+                                        (run.at.takeIf { it > 0 }?.let { " · ${formatCronRunAt(it)}" } ?: ""),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (run.text.isNotEmpty()) {
+                                    Text(run.text, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { detail = null }) { Text("Close") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = {
+                        mutate({ JobsApi(context).runNow(path(), detailJob.id) }, "Job started.")
+                    }) { Text("Run now") }
+                    TextButton(onClick = {
+                        detail = null
+                        editing = detailJob
+                    }) { Text("Edit") }
+                }
+            },
+        )
+    }
 }
+
+/** "14 Oct, 09:00" for a run instant, IST-pinned like every displayed time. */
+internal fun formatCronRunAt(at: Long): String =
+    java.time.Instant.ofEpochMilli(at).atZone(IST)
+        .format(java.time.format.DateTimeFormatter.ofPattern("d MMM, HH:mm", java.util.Locale.ENGLISH))
 
 /** Create/edit dialog for one scheduled job. */
 @Composable

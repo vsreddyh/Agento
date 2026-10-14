@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.2.0]
+- **Scheduler hosts stored cron chats** (#289). Each job row shows its
+  latest stored response; tap opens the prompt plus the short history
+  (capped at 10 server-side, newest first, misses labelled). A new half-
+  hourly worker plus every Scheduler refresh compare stored runs against
+  a device-local seen cursor and post one notification per job on the
+  replies channel — tap deep-links into that job's history. First check
+  records without notifying, so installing over old history never blasts;
+  the cursor is device-local bookkeeping, not backed up.
+
 ## [5.1.0]
 - **Crash logs, client and server, 5-day TTL** (#290). Fatal crashes only,
   never swallowed: the app writes one file per crash to internal storage

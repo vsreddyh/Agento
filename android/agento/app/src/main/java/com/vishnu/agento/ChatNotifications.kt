@@ -10,6 +10,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.core.net.toUri
 
 /**
  * Hermes reply notifications (issue #58).
@@ -59,8 +60,7 @@ object ChatNotifications {
     }
 
     /** Posts a reply-finished notification; no-ops when disabled or not permitted. */
-    fun notifyDone(context: Context, tabTitle: String, snippet: String) {
-        if (!isEnabled(context) || !canPost(context)) return
+    fun notifyDone(context: Context, tabTitle: String, snippet: String) {        if (!isEnabled(context) || !canPost(context)) return
         ensureChannel(context)
         val open = PendingIntent.getActivity(
             context, tabTitle.hashCode(),
@@ -83,6 +83,46 @@ object ChatNotifications {
         // Stable per-tab ID (no 0xFF bucketing) so tabs never overwrite
         // each other; successive replies on one tab replace the previous.
         nm.notify(NOTIFICATION_ID + tabTitle.hashCode(), notification)
+    }
+
+    /**
+     * Posts a cron-response notification on the same replies channel; tap
+     * opens the stored cron chat. Returns whether anything posted, so the
+     * caller only advances its seen cursor past runs actually delivered.
+     */
+    fun notifyCron(
+        context: Context,
+        jobId: String,
+        jobName: String,
+        snippet: String,
+        moreCount: Int = 0,
+    ): Boolean {
+        if (!isEnabled(context) || !canPost(context)) return false
+        ensureChannel(context)
+        val title = jobName.trim().ifEmpty { "Scheduled job" }
+        val text = if (moreCount > 0) "$snippet (+$moreCount more)" else snippet
+        val open = PendingIntent.getActivity(
+            context, ("cron:$jobId").hashCode(),
+            Intent(context, MainActivity::class.java)
+                .setAction(CronIntents.ACTION_CRON)
+                .putExtra(CronIntents.EXTRA_JOB_ID, jobId)
+                .setData("agento://cron/${android.net.Uri.encode(jobId)}".toUri()),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        // One slot per job: successive responses on a job replace the
+        // previous, so the shade never stacks one card per fire.
+        nm.notify(NOTIFICATION_ID + ("cron:$jobId").hashCode(), notification)
+        return true
     }
 
     /**
