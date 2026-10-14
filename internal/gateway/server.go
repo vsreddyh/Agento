@@ -4,13 +4,17 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"path"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"agento/internal/crashlog"
 	"agento/internal/pi"
 )
 
@@ -82,6 +86,12 @@ type Config struct {
 	// replaced with the default; set it to KeepaliveDisabled to turn the comments
 	// off deliberately.
 	KeepaliveInterval time.Duration
+
+	// CrashDir is where handler-panic crash files go
+	// ($PI_CODING_AGENT_DIR/logs). Empty means stdout-only: the panic is
+	// still logged and answered 500, but no file is written. Tests
+	// construct Servers directly and leave this empty.
+	CrashDir string
 
 	// Logf receives operational messages. Nil discards them.
 	Logf func(format string, args ...any)
@@ -216,7 +226,33 @@ func New(cfg Config, agents map[string]Agent) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Last-resort panic guard (#290): a panicking handler answers 500
+	// instead of killing the process, and the stack lands in a crash
+	// file (when CrashDir is set) plus the log. Only the method and the
+	// path are recorded — never headers or the query, so no credential
+	// can reach the file that way; WriteCrash redacts the rest.
+	defer func() {
+		if rec := recover(); rec != nil {
+			route := r.Method + " " + r.URL.EscapedPath()
+			detail := fmt.Sprintf("component: pi-gateway\nroute: %s\npanic: %v\nstack:\n%s",
+				route, rec, debug.Stack())
+			if s.cfg.CrashDir != "" {
+				path, err := crashlog.WriteCrash(s.cfg.CrashDir, detail,
+					s.cfg.Password, os.Getenv("MONGODB_URI"))
+				if err != nil {
+					s.cfg.Logf("panic on %s: crash log write failed: %v", route, err)
+				} else {
+					s.cfg.Logf("panic on %s: wrote %s", route, path)
+				}
+			} else {
+				s.cfg.Logf("panic on %s: %v", route, rec)
+			}
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}
+	}()
+	s.mux.ServeHTTP(w, r)
+}
 
 // Profiles lists the configured profile names.
 func (s *Server) Profiles() []string {

@@ -12,11 +12,15 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
+
+	"agento/internal/crashlog"
 )
 
 // IST is the user timezone (UTC+5:30, no DST) as a fixed offset.
@@ -55,6 +59,27 @@ func authorize(r *http.Request) (int, string) {
 	return 0, ""
 }
 
+// recoverCrash turns a handler panic into a 500 plus a stack trace with
+// the same detail as the file logs. health-api has no log bind mount, so
+// crashes go to stdout — podman logs — instead of a file (#290). Only the
+// method and path are recorded, never headers or the query; the stack is
+// redacted the same way before printing.
+func recoverCrash(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				route := r.Method + " " + r.URL.EscapedPath()
+				fmt.Fprintf(os.Stdout, "crash route=%s panic=%v\nstack:\n%s\n",
+					route, rec, crashlog.Redact(string(debug.Stack()),
+						os.Getenv("PASSWORD"), os.Getenv("MONGODB_URI")))
+				writeJSON(w, http.StatusInternalServerError,
+					map[string]string{"error": "internal server error"})
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	mux := http.NewServeMux()
 	registerHealth(mux)
@@ -70,6 +95,7 @@ func main() {
 	// Wrapping the mux rather than each handler is deliberate: a per-handler limit is
 	// a limit someone forgets to add to the next route.
 	h := rateLimit(newLimiter(defaultBurst, defaultRefill), mux)
+	h = recoverCrash(h)
 	// Timeouts, for the same "one choke point" reason. A slow client on a read must
 	// not hold a connection open indefinitely, and without these a handler that
 	// blocks keeps its goroutine forever.

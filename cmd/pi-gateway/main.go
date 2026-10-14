@@ -27,6 +27,7 @@
 package main
 
 import (
+	"agento/internal/crashlog"
 	"context"
 	"errors"
 	"fmt"
@@ -77,6 +78,14 @@ func run() error {
 
 	logger := log.New(os.Stderr, "[gateway] ", log.LstdFlags|log.Lmsgprefix)
 	logger.Printf("profiles: %s", strings.Join(profiles, ", "))
+
+	// Crash files live under the bind-mounted agent dir, so they survive
+	// container restarts (#290). Self-cleaning: files older than the TTL
+	// are deleted here, at startup, and after each write.
+	crashDir := filepath.Join(agentDir, "logs")
+	if err := crashlog.Prune(crashDir); err != nil {
+		logger.Printf("crash log prune failed: %v", err)
+	}
 
 	readyTimeout := secondsEnv("PI_READY_TIMEOUT", 60)
 	defaultModel := envOr("PI_DEFAULT_MODEL", "opencode-go/mimo-v2.6-flash")
@@ -147,12 +156,24 @@ func run() error {
 		closers = append(closers, func() { _ = c.Close() })
 
 		// Surface an agent that dies later, which otherwise looks like a gateway
-		// that has silently gone quiet.
+		// that has silently gone quiet. The stderr tail already captured
+		// for the log line is also written to a crash file (#290), so a
+		// mid-turn death leaves a trace with the same TTL as the rest.
 		go func(profile string, c *pi.Client) {
 			<-c.Done()
 			if exitErr := c.ExitError(); exitErr != nil {
+				tail := gateway.Tail(c.Stderr(), gateway.StderrTailLimit)
 				logger.Printf("profile %s: agent exited: %v (stderr tail: %s)",
-					profile, exitErr, gateway.Tail(c.Stderr(), gateway.StderrTailLimit))
+					profile, exitErr, tail)
+				detail := fmt.Sprintf("component: agent %s\nexit: %v\nstderr tail:\n%s",
+					profile, exitErr, tail)
+				path, err := crashlog.WriteCrash(crashDir, detail,
+					password, os.Getenv("MONGODB_URI"))
+				if err != nil {
+					logger.Printf("profile %s: crash log write failed: %v", profile, err)
+				} else {
+					logger.Printf("profile %s: crash log: %s", profile, path)
+				}
 			}
 		}(profile, client)
 	}
@@ -183,7 +204,7 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, logger.Printf), agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, logger.Printf), agents)
 	if err != nil {
 		return err
 	}
@@ -383,7 +404,7 @@ func skillArgs(skillsDir string) []string {
 // InventoryTimeout line left every test green, because the test exercised secondsEnv
 // directly and never the wiring. A budget that cannot be shown to reach its field is
 // not configurable in any useful sense.
-func gatewayConfig(password, agentDir, defaultProfile string, logf func(string, ...any)) gateway.Config {
+func gatewayConfig(password, agentDir, defaultProfile, crashDir string, logf func(string, ...any)) gateway.Config {
 	return gateway.Config{
 		Password: password,
 		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
@@ -391,6 +412,10 @@ func gatewayConfig(password, agentDir, defaultProfile string, logf func(string, 
 		// and it defaults to /opt/pi.
 		AgentDir:       agentDir,
 		DefaultProfile: defaultProfile,
+		// Crash files land under the agent dir (bind-mounted, so they
+		// survive container restarts). Resolved in run(), not derived in
+		// New, so the mapping stays testable like every other field.
+		CrashDir: crashDir,
 		// Each budget is configurable for the same reason: the right value depends on
 		// the host, and changing it should not mean rebuilding the binary.
 		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),

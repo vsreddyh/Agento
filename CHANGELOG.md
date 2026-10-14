@@ -8,6 +8,21 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.1.0]
+- **Crash logs, client and server, 5-day TTL** (#290). Fatal crashes only,
+  never swallowed: the app writes one file per crash to internal storage
+  (`filesDir/crashlogs/crash-<timestamp>-<pid>.log` — timestamp, app
+  version, model + effort, device + Android version, thread, full stack;
+  no tokens or URLs) and chains to the previous handler so the app still
+  dies normally. `pi-gateway` turns a handler panic into a 500 plus a stack
+  file under `$PI_CODING_AGENT_DIR/logs/` (survives restarts, gitignored),
+  and a Pi agent dying mid-turn leaves a crash file with its stderr tail.
+  `health-api` has no log mount, so its panics go to stdout with the same
+  detail instead. Server files redact `PASSWORD`, `MONGODB_URI` and bearer
+  headers; everything prunes files older than 5 days at startup (and the
+  app prunes after each write too). Crash files are adb-pullable and
+  appended to the Settings → About diagnostics export — no new screen.
+
 ## [5.0.0]
 - **BREAKING: one Chat tab** (#289). The Story and Resume tabs are gone
   and God is now Chat, backed by the single `chat` profile (`/p/chat`).
