@@ -100,7 +100,7 @@ object CrashLogs {
         val effort = api.effortFor("chat", model)
         return buildList {
             add("timestamp: ${LocalDateTime.now(IST)}")
-            add("app: ${BuildConfig.VERSION_NAME}")
+            add("app: ${UpdateManager.currentVersion(appCtx).first}")
             add("model: ${model.ifEmpty { "(not set)" }}")
             add("effort: ${effort.ifEmpty { "(default)" }}")
             add("device: ${Build.MANUFACTURER} ${Build.MODEL}")
