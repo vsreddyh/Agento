@@ -108,8 +108,8 @@ services:
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────
-  # Pi — the agent host. One container, one Pi process per profile (god, story,
-  # resumes), fronted by the pi-gateway binary which serves the OpenAI-compatible
+  # Pi — the agent host. One container, one Pi process for the single chat
+  # profile, fronted by the pi-gateway binary which serves the OpenAI-compatible
   # surface the Android app already speaks.
   #
   # This is the only agent host. It was the second one: `gateway` (the Hermes
@@ -148,17 +148,14 @@ services:
       # The app should go through the proxy (:8080) once nginx is pointed here.
       - "${PI_HOST_PORT:-8643}:8643"
     volumes:
-      # The Pi agent dir: settings.json, mcp.json, AGENTS.md, profiles/<n>/.
+      # The Pi agent dir: settings.json, mcp.json, AGENTS.md, profiles/chat/.
       # Pi writes sessions/, auth.json and models-store.json here; all gitignored.
       - ../pi:/opt/pi
-      # Repos the agent works in: workspace/portals (story), workspace/portfolio-resume.
+      # Workspace checkouts from the retired side profiles (portals,
+      # portfolio-resume) stay mounted but unmanaged (#289).
       - ../workspace:/workspace
-      # VPS SSH keys, least-privilege file mounts (read-only): story and resumes
-      # clone and pull their own repos as the VPS GitHub identity. Without these
-      # both profiles fail closed on the first clone with Permission denied
-      # (publickey) — which is why their AGENTS.md says stop and report rather than
-      # retry. Same mounts and same GIT_SSH_COMMAND the gateway service used, which
-      # is what story/resumes' instructions were written against.
+      # VPS SSH keys, least-privilege file mounts (read-only): kept for host-side
+      # git by hand. No profile clones or pulls on its own any more.
       - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519:/root/.ssh/id_ed25519:ro
       - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519.pub:/root/.ssh/id_ed25519.pub:ro
       - ${VPS_SSH_DIR:-/root/.ssh}/known_hosts:/root/.ssh/known_hosts:ro
@@ -201,6 +198,10 @@ services:
       PI_INVENTORY_TIMEOUT: "30"
       PI_CODING_AGENT_DIR: /opt/pi
       PI_PROFILE_DIR: /opt/pi/profiles
+      # Single chat profile (#289): the only directory under PI_PROFILE_DIR.
+      # Explicit rather than the binary's "default", which names a profile
+      # that does not exist.
+      PI_DEFAULT_PROFILE: chat
       # OPENCODE_API_KEY is NOT repeated here: it arrives from *mongo-env, and saying
       # it twice is exactly the drift the anchor comment warns about — two places to
       # change when the provider key's name does. `OPENCODE_API_KEY` is also the name

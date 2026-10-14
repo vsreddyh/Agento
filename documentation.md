@@ -21,16 +21,15 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 
 ## System Architecture
 
-The stack runs god (main) + story/resumes (sides), a health sync API, and a scheduled retention job — **fully in containers**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](docker/docker-compose.yml)).
+The stack runs one chat profile, a health sync API, and a scheduled retention job — **fully in containers**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](docker/docker-compose.yml)).
 
 ```
                                Remote MongoDB (money, health, cookbook)
                                             ▲
                              Containers
-  god ────┐               │
-  story   ┤ ONE pi host   │  agent dir   ▼   OpenCode Go Direct
-  resumes ┘ 3 pi processes│   /opt/pi     │  (https://opencode.ai/zen/go/v1)
-           (one per profile)└─ API :8643 ─┤
+  chat ───  ONE pi host   │  agent dir   ▼   OpenCode Go Direct
+          1 pi process    │   /opt/pi     │  (https://opencode.ai/zen/go/v1)
+                          └─ API :8643 ─┤
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► pi ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
@@ -38,9 +37,9 @@ Retention ───────────────► one-shot container (c
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.6-flash`).
 - **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process per profile (god, story, resumes) with that profile's directory as its working directory, which is how each loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of them. The entrypoint refuses to start if any of the five MCP servers fails to connect.
+- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any of the five MCP servers fails to connect.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
-- **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` — the chat backend for the custom Android app (3 tabs, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
+- **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **browser**: Web automation via the native built-in browser toolset (`browser_*` tools); no MCP server needed.
 - **retention**: One-shot retention job executing the `retention` Go binary (`cmd/retention/main.go`) via cron or on stack start.
 - **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched.
@@ -87,15 +86,20 @@ Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered con
 
 ---
 
-## Bot Profiles
+## Bot Profile
 
-Each profile is a directory under [`pi/profiles/`](pi/profiles) — god, story and resumes alike, with no asymmetry between them. Each runs as its own `pi` process with that directory as its working directory, which is how Pi loads its `AGENTS.md`, so a profile *is* a directory rather than a runtime option. `pi-gateway` starts one process per profile and routes `/p/<profile>/…` to it:
+One profile directory under [`pi/profiles/`](pi/profiles) — `chat`. It runs as
+its own `pi` process with that directory as its working directory, which is how
+Pi loads its `AGENTS.md`, so a profile *is* a directory rather than a runtime
+option. `pi-gateway` routes `/p/<profile>/…` to it (`PI_DEFAULT_PROFILE=chat`):
 
 | Profile | App Tab | Workspace & Domain Data |
 |---|---|---|
-| `god` (main) | God | Money (`money_transactions`), cookbook (`cookbook_*`), health (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync — `pi/profiles/god/`, same shape as the other two |
-| `story` (side) | Story | Lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) |
-| `resumes` (side) | Resumes | LaTeX CV workspace in Git repo (`workspace/portfolio-resume`, `vsreddyh/portfolio-resume`, scope `resume/`) |
+| `chat` | Chat | Money (`money_transactions`), cookbook (`cookbook_*`), health (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync — `pi/profiles/chat/` |
+
+(Retired in #289: the `story` and `resumes` side profiles — lore vault
+`workspace/portals` and LaTeX workspace `workspace/portfolio-resume` stay on
+disk, orphaned and unmanaged.)
 
 ### Environment & Token Injection
 - All tokens and channel IDs reside in the root `.env`.
@@ -148,7 +152,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `task_mutations` | > 90 days | Pruned when `at < today - 90d` — the task audit log (#176) |
 | `tasks_changes` | Permanent | **Never pruned** — one single-document counter, not a log (#178) |
 | `tasks` (repeats) | n/a | **Reconciled, not pruned**: completed structured repeats with no successor are reported (#180) |
-| `story` / `resumes` | Git history | No database retention operations |
+| `story` / `resumes` (retired #289) | Git history | No database retention operations |
 
 Run manual dry-runs via:
 ```bash
@@ -178,24 +182,24 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► 
 
 ## Android App API (Chat)
 
-The custom Android app (`android/agento/`, sidebar: God/Story/Resumes chats + Tasks + Storage + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`). There is no Hermes gateway any more — `:8642` is neither published nor proxied:
+The custom Android app (`android/agento/`, sidebar: Chat + Tasks + Storage + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`). There is no Hermes gateway any more — `:8642` is neither published nor proxied:
 
 ```bash
-curl http://<host>:8080/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
+curl http://<host>:8080/p/chat/v1/models -H "Authorization: Bearer <PASSWORD>"
 ```
 
 Direct (bypassing the proxy):
 
 ```bash
-curl http://<host>:8643/p/story/v1/models -H "Authorization: Bearer <PASSWORD>"
-curl http://<host>:8643/p/story/v1/chat/completions \
+curl http://<host>:8643/p/chat/v1/models -H "Authorization: Bearer <PASSWORD>"
+curl http://<host>:8643/p/chat/v1/chat/completions \
   -H "Authorization: Bearer <PASSWORD>" -H "Content-Type: application/json" \
   -d '{"provider": "opencode-go", "model": "mimo-v2.6-flash", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
 
-- One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/god`). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth for which models that profile can actually switch to.
-- Provider + model are picked per tab from its own model sheet (top-bar button) backed by live dropdowns from `GET /p/<profile>/api/model/options` (explicit selection required — pi-gateway has no default). The provider key lives ONLY in the git-ignored root `.env` on the VPS — never in git.
-- Chat history is threaded per tab and persisted on-device (survives restarts; the switcher revisits/deletes threads). Tasks, reminders, and threads are included in Settings backup exports.
+- One port, one profile path (`/p/chat`). **Verify live via `GET /p/chat/v1/models`**, the source of truth for which models the profile can actually switch to.
+- Provider + model are picked from the Chat tab's own model sheet (top-bar button) backed by live dropdowns from `GET /p/chat/api/model/options` (explicit selection required — pi-gateway has no default). The provider key lives ONLY in the git-ignored root `.env` on the VPS — never in git.
+- Chat history is threaded and persisted on-device (survives restarts; the switcher revisits/deletes threads). Tasks, reminders, and threads are included in Settings backup exports.
 - Config lives in the `pi` service (`docker/docker-compose.yml`): the bearer token is `PASSWORD` and the bind port is `PI_SERVER_PORT` (`8643`), published as `${PI_HOST_PORT:-8643}:8643`. Through the proxy the same `PASSWORD` authenticates, which is why the cutover needed no app change.
 
 ---
@@ -229,10 +233,10 @@ All settings are configured in the single root `.env` file:
 ## Extending the Stack
 
 ### Adding a New Bot Profile
-1. Create a plan in `profile-plans/<bot>-plan.md`.
-2. Create the profile directory `pi/profiles/<name>/` with its `AGENTS.md` and `skills/`.
-3. Add the profile name to the `PROFILES` array in `scripts/hermes.sh`.
-4. Rebuild and restart the pi container:
+Single-profile since #289 — the stack serves `chat` only. To add a profile back:
+1. Create the profile directory `pi/profiles/<name>/` with its `AGENTS.md` and `skills/`.
+2. Add the profile name to the `PROFILES` array in `scripts/hermes.sh`.
+3. Rebuild and restart the pi container:
    ```bash
    ./scripts/hermes.sh restart
    ```

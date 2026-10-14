@@ -10,8 +10,8 @@ state (see `.gitignore`).
 |---|---|---|
 | `settings.json` | yes | Pi's own knobs — tool selection, retry, cache warming. **Not** personality. |
 | `mcp.json` | yes | the five in-repo Go MCP servers: miser-money, cookbook, health-check, task-manager, project-manager. |
-| `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all three. |
-| `profiles/<name>/AGENTS.md` | yes | one per profile (god / story / resumes). Each profile's own instructions and personality. |
+| `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all of them. |
+| `profiles/<name>/AGENTS.md` | yes | one per profile (`chat` only since #289). Each profile's own instructions and personality. |
 | `profiles/<name>/skills/` | yes | Per-profile skills. **Not discovered as laid out** — see the profile-skills finding below; loaded by an explicit `--skill` path per profile. |
 | `extensions/` | yes | Pi extensions loaded by every profile. Currently one: `subagent.ts`, the `spawn_subagent` delegation tool. See the subagent section below. |
 | `auth.json` | **no** | provider credentials. `OPENCODE_API_KEY` is injected by compose. |
@@ -24,7 +24,7 @@ Pi loads context files from the agent directory, the working directory, **and ev
 parent directory of the working directory**. Each profile runs with its cwd set to
 `/opt/pi/profiles/<name>/`, so in practice:
 
-- `/opt/pi/AGENTS.md` — the shared layer, loaded for all three profiles
+- `/opt/pi/AGENTS.md` — the shared layer, loaded for every profile
 - `/opt/pi/profiles/<name>/AGENTS.md` — that profile's layer
 - `/opt/pi/profiles/AGENTS.md` and `/workspace/AGENTS.md` — **would also load**, for
   every profile, if either existed. Neither is committed. This is worth knowing
@@ -66,7 +66,7 @@ needs its own `build` and `user`, and the anchor is not where they come from.**
     environment:
       <<: *mongo-env              # provider key + Mongo
       PASSWORD: ${PASSWORD:-}     # the app's bearer token
-      GIT_SSH_COMMAND: "..."      # needed for the story/resumes clones
+      PI_DEFAULT_PROFILE: chat  # the single profile (#289)
 ```
 
 Omitting the Mongo variables produces a container that exits at boot rather than one
@@ -97,7 +97,8 @@ things about it are deliberate, and both were got wrong while writing it:
   `PI_SERVER_PORT`, so setting it would move the listener off the mapped port and out
   from under the healthcheck, which probes a fixed in-container `:8643`.
 
-Verified end to end in the real container: the entrypoint registers three repos as
+Verified end to end in the real container (three-profile era; single-profile
+since #289 — kept as the method record): the entrypoint registers three repos as
 `safe.directory`, `pi mcp list` connects all five MCP servers (11/11/9/7/5), all
 three profiles are discovered, `/healthz` answers 200, auth rejects both a missing
 and a wrong bearer token with 401, and each profile answers from its own
@@ -122,7 +123,7 @@ read — or pointing `XDG_CACHE_HOME` into the bind-mounted `pi/` tree, which pu
 and a slow first compile is the better failure. Add a cache volume if the latency
 bothers you, and clear it when bumping the version.
 
-### `tectonic` is installed — this was the one blocking gap
+### `tectonic` is installed — this was the one blocking gap (retired #289)
 
 The `resumes` profile compiles every tailored `.tex` to `exports/` with `tectonic`.
 `docker/pi/Dockerfile` installs `git`, `ca-certificates`, `curl`, `findutils` and
@@ -183,7 +184,9 @@ no PDF and no error, which is worse than a compile that fails loudly.
 Swept all four instruction files for external binaries the profiles tell the agent to
 run: only `git` and `tectonic` appear, and both are now in the image. `curl` was added
 at the same time as tectonic, not for the profiles but for the compose healthcheck,
-which needs an HTTP client in the container and previously had none.
+which needs an HTTP client in the container and previously had none. (Tectonic is
+dead weight since the resumes profile retired in #289; removing it from the image
+is a separate line item.)
 
 ### Tool exposure
 
@@ -195,8 +198,8 @@ every request, which is most of the token saving available here.
 
 The cost is that the model has to write JavaScript to call a tool, and the model
 instructions must say so — a profile file that told the agent to call `log_meal`
-directly would describe a tool that does not exist in that form. `god`'s
-`AGENTS.md` documents the real call shape instead.
+directly would describe a tool that does not exist in that form. The chat
+profile's `AGENTS.md` documents the real call shape instead.
 
 ## Why no HTTP server here
 
@@ -239,7 +242,8 @@ with `Allow: GET` on the wrong verb.
   true.
 
 `/v1/skills` reports what Pi actually loaded, per profile, with the path and scope it
-came from — verified live:
+came from — verified live (three-profile era; the story-only skill row is gone
+with #289):
 
 ```
 podman-management  user       /opt/pi/skills/podman-management/SKILL.md
@@ -290,7 +294,7 @@ It is not a security boundary. The agent runs `bash` as root, and session files
 live a couple of directories above its working directory:
 
 ```
-/opt/pi/profiles/god      <- agent cwd
+/opt/pi/profiles/chat     <- agent cwd
 /opt/pi/sessions/...      <- ../../sessions, readable
 ```
 
@@ -345,10 +349,10 @@ compose service; the fifth landed with the cutover.
 | item | status |
 |---|---|
 | **Auth** | done. The `pi` service takes `PASSWORD=${PASSWORD:-}`, the same value the Hermes gateway did, so a tab can be repointed without re-entering it. Verified: both a missing and a wrong bearer token answer 401. |
-| **SSH mounts** | done. Same three keypair mounts and the same fail-closed `GIT_SSH_COMMAND` as `gateway`, so story/resumes push their repos unchanged. |
+| **SSH mounts** | done (retired #289 with the side profiles). Same three keypair mounts and the same fail-closed `GIT_SSH_COMMAND` as `gateway`, so story/resumes pushed their repos unchanged while they existed. |
 | **Healthcheck** | done. `curl -fsS http://localhost:8643/healthz` inside the container, with a 60s `start_period` because the entrypoint connects all five MCP servers first. The entrypoint's `pi mcp list` is the connectivity gate; this is the port check on top of it. |
 | **`depends_on`** | done, in the short list form (`- pi`). The long form is not available on this stack at all: podman-compose builds its dependency graph with `deps = {x: {} for x in deps}`, so any `condition:` value is an unhashable dict and it dies with `TypeError: cannot use 'dict' as a dict key` before reading a service. Verified in both spellings. The short form still means *start pi first* — podman-compose's own `config` output renders it as `condition: service_started` — and ordering is all this needs, because nginx re-resolves `pi` per request. Deliberately **not** gated on pi's *health*: that healthcheck fails whenever its MCP check does, and a proxy held back by it would take health-api's `/api/*` routes down too — health sync has nothing to do with the agent. |
-| **nginx prefix stripping** | done, in the cutover PR. `rewrite ^/p(/.*)$ $1 break;` before `proxy_pass $chat`, and it is load-bearing rather than tidying. Measured against nginx 1.27 with echo upstreams: with the rewrite `/p/god/v1/chat/completions` arrives as `/god/v1/chat/completions`; without it the original path arrives unchanged, and pi-gateway reads the first segment `p` as a profile name and 404s. |
+| **nginx prefix stripping** | done, in the cutover PR. `rewrite ^/p(/.*)$ $1 break;` before `proxy_pass $chat`, and it is load-bearing rather than tidying. Measured against nginx 1.27 with echo upstreams: with the rewrite `/p/chat/v1/chat/completions` arrives as `/chat/v1/chat/completions`; without it the original path arrives unchanged, and pi-gateway reads the first segment `p` as a profile name and 404s. |
 
 The unprefixed `/api/model/options` needs no rewrite: pi-gateway serves that path
 itself, with `api` a reserved first segment rather than a profile name.
@@ -470,7 +474,7 @@ comment:
    The app reads it optionally, so this is already handled — but a "label" that can
    never be present is wire surface that will read as a bug to the next person.
 
-### Both parity questions, answered
+### Both parity questions, answered (Hermes→Pi migration record; paths pre-date #289)
 
 **Personality survived.** Checked rather than assumed: `git show f6feafc:gateway/SOUL.md`
 — pinned, because the path stops existing once this stack merges — opens "You are

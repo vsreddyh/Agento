@@ -25,8 +25,8 @@
 
 ## What this project is
 
-Runs god + story + resumes against OpenCode Go directly (no LLM proxy).
-ONE pi container runs one `pi` process per profile — a profile is a directory
+Runs one chat profile against OpenCode Go directly (no LLM proxy).
+ONE pi container runs one `pi` process for the profile — a profile is a directory
 with its own `AGENTS.md`, not a runtime option — fronted by `pi-gateway`, an
 OpenAI-compatible API server (:8643) for the custom Android app, with remote
 MongoDB for domain data (money, health, cookbook, notes). **The live stack is fully
@@ -36,12 +36,12 @@ a one-shot retention job. Development runs the SAME single compose file against
 Atlas. No host agent install, no native processes.
 
 ```
-god+story+resumes
-   └─► ONE `pi` container (PI_CODING_AGENT_DIR=/opt/pi = pi/, one pi process per profile)
+chat
+   └─► ONE `pi` container (PI_CODING_AGENT_DIR=/opt/pi = pi/, one pi process for the profile)
         └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model mimo-v2.6-flash)
 proxy (:8080, single app URL: /p/* → pi chat, /api/* → health sync)  •  health-api (:8001)
 MongoDB (Atlas)  •  retention (one-shot container)
-workspace/portals (lore vault, repo vsreddyh/portals) + workspace/portfolio-resume (repo vsreddyh/portfolio-resume, scope resume/) — separate git repos
+workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired story/resumes checkouts, unmanaged)
 ```
 
 ## Repo facts
@@ -80,8 +80,8 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/portfolio-resu
    silently falls back empty/default).
 - LLM: direct to OpenCode (`https://opencode.ai/zen/go/v1`, model `mimo-v2.6-flash`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` goes to OpenCode Go.
 - App API: `pi-gateway` (`cmd/pi-gateway`), the OpenAI-compatible server in the pi
-  container (`:8643`, single-password `PASSWORD`); one port, each app tab uses its
-  profile path (`/p/story|resumes|god`) and sends per-request provider `opencode-go` +
+  container (`:8643`, single-password `PASSWORD`); one port, the app's Chat tab uses
+  profile path (`/p/chat`) and sends per-request provider `opencode-go` +
   model from app Settings, plus `model_options.reasoning_effort` (required — Pi
   accepts an unrecognised level silently). Provider key lives only in the VPS
   `.env`, never in git.
