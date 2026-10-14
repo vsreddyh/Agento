@@ -8,6 +8,62 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.1.0]
+- **Crash logs, client and server, 5-day TTL** (#290). Fatal crashes only,
+  never swallowed: the app writes one file per crash to internal storage
+  (`filesDir/crashlogs/crash-<timestamp>-<pid>.log` — timestamp, app
+  version, model + effort, device + Android version, thread, full stack;
+  no tokens or URLs) and chains to the previous handler so the app still
+  dies normally. `pi-gateway` turns a handler panic into a 500 plus a stack
+  file under `$PI_CODING_AGENT_DIR/logs/` (survives restarts, gitignored),
+  and a Pi agent dying mid-turn leaves a crash file with its stderr tail.
+  `health-api` has no log mount, so its panics go to stdout with the same
+  detail instead. Server files redact `PASSWORD`, `MONGODB_URI` and bearer
+  headers; everything prunes files older than 5 days at startup (and the
+  app prunes after each write too). Crash files are adb-pullable and
+  appended to the Settings → About diagnostics export — no new screen.
+
+## [5.0.0]
+- **BREAKING: one Chat tab** (#289). The Story and Resume tabs are gone
+  and God is now Chat, backed by the single `chat` profile (`/p/chat`).
+  Provider/model/effort prefs moved to `provider_chat`, `model_chat`,
+  `effort_chat[_<model>]` — the old `god` keys are read once as fallback
+  so configured installs keep working, then never written again; `story`
+  and `resumes` keys and thread files (`chat_threads_story.json`,
+  `chat_threads_resumes.json`) are orphaned on disk. Skills/Tools show the
+  one profile with no tab picker; usage totals and Settings backup/export
+  cover Chat only (backup format version stays 1 — import skips unknown
+  keys). Scheduler jobs resolve against `/p/chat`.
+
+## [4.17.0]
+- **Task Manager no longer freezes on slow connections** (#288).
+  Completing, editing, deleting, duplicating or creating a task applies
+  instantly to the local list and dismisses the sheet/dialog, with the
+  request running in the background. Success patches the row with the
+  server answer (revision included); failure reverts and toasts. Only the
+  row with an in-flight request is disabled — the bell, New, Refresh and
+  every other row stay live. A 409 (someone else wrote first) reverts,
+  reloads and says so. Rollover completions still take a full reload,
+  because the next occurrence is a new row this response does not carry.
+- **The count line shows when the list was last synced** (#288).
+  E.g. "12 of 12 · synced 2m ago" ("just now" under a minute), set on
+  successful loads, persisted across restarts, left untouched by failures.
+- **Toasts replace snackbars on every screen** (#288). One top-end
+  slide-in card with a dismiss button, auto-dismissing after ~4.5s,
+  queued one at a time behind a non-suspending `toast(msg, kind)` API —
+  so plain button callbacks call it directly and the contract-warning
+  collector no longer suspends for the toast duration.
+
+## [4.16.1]
+- **Reminder notifications say the moment, overdue names the delay**
+  (#287). The collapsed line is the bare fact — "Starting in 5 minutes",
+  "Start now", "Due now" — with the description and the start-to-due
+  window in the expanded view only. Overdue reads "Overdue for x hr y
+  min" (minutes alone under an hour) instead of "Overdue since …", and
+  the inline action is labelled "Completed". `[Skip]` and
+  `[Instruct Agent]` stay out: Skip has no server endpoint and Instruct
+  has no receiver-to-chat path yet — both need design.
+
 ## [4.16.0]
 - **Agent-made task changes now reach the app** (#178). A task the agent
   created or completed over MCP used to stay invisible until something else

@@ -19,6 +19,8 @@ class AgentoApp : Application() {
     /** Re-enqueues both periodic jobs on every cold start; safe to call repeatedly. */
     override fun onCreate() {
         super.onCreate()
+        // First: a crash later in this method must still be recorded.
+        CrashLogs.install(this)
         ForegroundTracker.install(this)
         scheduleSync(this)
         scheduleTaskSync(this)

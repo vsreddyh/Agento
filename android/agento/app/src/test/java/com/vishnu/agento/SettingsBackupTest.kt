@@ -80,9 +80,10 @@ class SettingsBackupTest {
 
     @Test
     fun `effort memory keys still match per tab and model`() {
-        assertTrue(SettingsBackup.isEffortMemoryKey("effort_god_mimo-v2-6-flash"))
-        assertTrue(SettingsBackup.isEffortMemoryKey("effort_story_x"))
-        assertFalse(SettingsBackup.isEffortMemoryKey("effort_god_"))
+        assertTrue(SettingsBackup.isEffortMemoryKey("effort_chat_mimo-v2-6-flash"))
+        assertFalse(SettingsBackup.isEffortMemoryKey("effort_god_mimo-v2-6-flash"))
+        assertFalse(SettingsBackup.isEffortMemoryKey("effort_story_x"))
+        assertFalse(SettingsBackup.isEffortMemoryKey("effort_chat_"))
         assertFalse(SettingsBackup.isEffortMemoryKey("effort_bogus-model_x"))
         assertFalse(SettingsBackup.isEffortMemoryKey("effort_"))
     }

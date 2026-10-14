@@ -154,43 +154,56 @@ internal fun reminderPoints(
 }
 
 /**
- * The one line each reminder says (issue #160).
+ * The one line each reminder says (issues #160, #287).
  *
- * A lock-screen line has one job: say what just happened, and the one time
- * that matters. The four types are written to be distinguishable at a
- * glance in a notification stack, because a "Start now" and a "Due now"
- * that read the same are worse than no reminder at all.
+ * A lock-screen line has one job: say what just happened. The collapsed
+ * text is the bare moment ("Starting in 5 minutes", "Start now",
+ * "Due now", "Overdue for …") — the times live in the expanded view, not
+ * in the lock-screen line, so a "Start now" and a "Due now" stay
+ * distinguishable at a glance in a notification stack.
  *
- * [dueLine] and [startLine] are already formatted ("Today, 09:00"). When
- * the task could not be fetched, [dueLine] is "" and [startLine] is null,
- * and the wording degrades to the bare fact rather than inventing a time.
+ * [dueLine] is retained for the overdue fallback when no elapsed duration
+ * is known; [startLine] is retained for signature stability (callers pass
+ * the window lines they already computed). When the task could not be
+ * fetched, [overdueElapsed] is null and the wording degrades to the bare
+ * fact rather than inventing a duration.
  */
-private fun reminderMessage(
+internal fun reminderMessage(
     kind: ReminderKind,
     dueLine: String,
     startLine: String?,
+    overdueElapsed: Long? = null,
 ): String = when (kind) {
-    // The actionable time differs per reminder, which is why each line is
-    // written separately rather than composed from one suffix: before the
-    // start, the start time is what you act on; once started, the deadline
-    // is what you are racing; at the deadline, there is nothing left to add.
     ReminderKind.BeforeStart ->
-        "Starting in ${TaskReminders.BEFORE_START_MINUTES} minutes" +
-            suffix(startLine, "starts")
+        "Starting in ${TaskReminders.BEFORE_START_MINUTES} minutes"
     ReminderKind.Start ->
-        "Start now" + suffix(dueLine, "due")
-    // No suffix on purpose: at the due moment the time *is* now, and "Due
-    // now · due 09:00" says the same thing twice. The expanded view below
-    // it still carries the window.
+        "Start now"
+    // No suffix on purpose: at the due moment the time *is* now, so the
+    // collapsed line stays "Due now" and the expanded view below carries
+    // the window.
     ReminderKind.Due ->
         "Due now"
     ReminderKind.Overdue ->
-        if (dueLine.isEmpty()) "Overdue" else "Overdue since $dueLine"
+        if (overdueElapsed != null) overdueText(overdueElapsed)
+        else if (dueLine.isEmpty()) "Overdue" else "Overdue since $dueLine"
 }
 
-/** " · due Today, 09:00", or nothing when there is no time to show. */
-private fun suffix(line: String?, label: String): String =
-    if (line.isNullOrEmpty()) "" else " \u00b7 $label $line"
+/**
+ * "Overdue for x hr y min" (#287). Zero hours show minutes alone
+ * ("Overdue for 5 min"); an exact hour shows no zero minutes
+ * ("Overdue for 2 hr"). Anything under a minute still reads "1 min" —
+ * the task IS overdue, and "Overdue for 0 min" reads as a bug.
+ */
+internal fun overdueText(elapsedMillis: Long): String {
+    val totalMin = (elapsedMillis / 60_000L).toInt().coerceAtLeast(1)
+    val h = totalMin / 60
+    val m = totalMin % 60
+    return when {
+        h == 0 -> "Overdue for $m min"
+        m == 0 -> "Overdue for $h hr"
+        else -> "Overdue for $h hr $m min"
+    }
+}
 
 private fun addIfFuture(
     out: MutableMap<ReminderKind, Long>,
@@ -722,26 +735,40 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             task?.startParts()?.let { (d, t) -> friendlyDue(d, t, today) }
                 ?.takeIf { it.isNotEmpty() }
         }
-        val message = reminderMessage(kind, dueLine, startLine)
+        val message = run {
+            // #287: the overdue line names how long past due, computed from
+            // the parsed due instant — never from rendered text. Null when
+            // the fetch failed or the due time is unparseable, and the
+            // message then degrades to the bare fact.
+            val dueAt = task?.let { dueMillisOrNull(it.dueDate, it.dueTime) }
+            val elapsed = if (kind == ReminderKind.Overdue && dueAt != null) {
+                (System.currentTimeMillis() - dueAt).coerceAtLeast(0L)
+            } else {
+                null
+            }
+            reminderMessage(kind, dueLine, startLine, elapsed)
+        }
         // Locals: task is nullable and conditions below don't smart-cast.
         val taskDesc = task?.description.orEmpty()
-        // Expanded view, at most three lines: the message, the task's own
-        // description, and the window it has to happen in. Deliberately not
-        // a dump of every field — the repeat rule, the parallel flag and
-        // the estimate are things to look up in the app, not to read on a
-        // lock screen (issue #160).
+        // Expanded view, at most three lines (#287): the message, the task's
+        // own description, and the window it has to happen in ("8:30 to
+        // 9:00" shape — start to due, or the due line alone when there is
+        // no separate start). Deliberately not a dump of every field — the
+        // repeat rule, the parallel flag and the estimate are things to look
+        // up in the app, not to read on a lock screen (issue #160).
         val big = buildList {
             add(message)
             if (taskDesc.isNotEmpty()) add(taskDesc)
             when {
-                startLine != null && dueLine.isNotEmpty() -> add("$startLine \u2192 $dueLine")
-                dueLine.isNotEmpty() -> add("Due $dueLine")
+                startLine != null && dueLine.isNotEmpty() -> add("$startLine to $dueLine")
+                dueLine.isNotEmpty() -> add(dueLine)
             }
         }.joinToString("\n")
         // Inline complete reuses the widget trampoline (no visible UI:
         // completes, refreshes widget/alarms, finishes). Data URI + own
         // request code: extras don't count for PendingIntent identity,
-        // so without these one task's Done could complete another.
+        // so without these one task's action could complete another.
+        // Labelled "Completed" per #287 (was "Done").
         val done = PendingIntent.getActivity(
             appCtx, ("done:$taskId").hashCode(),
             Intent(appCtx, TaskCompleteActivity::class.java)
@@ -779,7 +806,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             .setContentIntent(tap)
             // No icon (0): framework checkables render badly as action
             // icons on some OEMs.
-            .addAction(0, "Done", done)
+            // #287 follow-ups need design and are deliberately out of scope
+            // here: [Skip] has no server endpoint (complete/reopen only) and
+            // [Instruct Agent] has no receiver-to-chat path yet.
+            .addAction(0, "Completed", done)
         // Expanded view whenever it would add something: a task with no
         // description still carries its window, and "Due now" alone leaves
         // the time unsaid. When the body *is* just the message there is

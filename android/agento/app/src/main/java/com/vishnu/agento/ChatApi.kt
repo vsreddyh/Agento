@@ -213,9 +213,9 @@ data class ProviderOption(
 )
 
 /**
- * Minimal OpenAI-compatible chat client for the Hermes API server
- * (gateway :8642, via the single-URL proxy). One server URL + single app
- * password; each tab talks to its profile path (`/p/<profile>/...`) and
+ * Minimal OpenAI-compatible chat client for the pi-gateway server
+ * (via the single-URL proxy). One server URL + single app
+ * password; the Chat tab talks to its profile path (`/p/chat`) and
  * sends its own provider + model per request. Streaming via SSE.
  * Provider/model dropdown options come from `GET /api/model/options`.
  */
@@ -253,26 +253,31 @@ class ChatApi(context: Context) {
         return (prefs.getString("auth_token", "") ?: "").trim()
     }
 
-    /** Profile path prefix for a tab, e.g. `/p/story`. The path field was
-     * removed from Settings (defaults are always correct); this stays
-     * centralized so every sender resolves identically. */
+    /** Profile path prefix for the Chat tab: `/p/chat`. */
     fun pathFor(tab: String): String =
-        // Tab keys match profile dir names (god tab -> god profile).
         "/p/" + defaultProfileFor(tab)
 
-    /** Provider slug for a tab; blank means not configured (legacy: omitted). */
+    /**
+     * Provider slug for a tab; blank means not configured. Reads the `chat`
+     * keys, falling back to the retired `god` keys so installs configured
+     * before #289 keep working without re-entry (#289: old keys orphaned,
+     * never written again).
+     */
     fun providerFor(tab: String): String =
         (prefs.getString("provider_$tab", "") ?: "").trim()
+            .ifEmpty { (prefs.getString("provider_god", "") ?: "").trim() }
 
-    /** Model for a tab; blank means not configured (legacy: omitted). */
+    /** Model for a tab; blank means not configured (`god` fallback as above). */
     fun modelFor(tab: String): String =
         (prefs.getString("model_$tab", "") ?: "").trim()
+            .ifEmpty { (prefs.getString("model_god", "") ?: "").trim() }
 
     /**
      * Reasoning effort for a tab+model pair; blank means unset (the gateway
      * applies its own default). Per-model memory first
      * (`effort_<tab>_<model>`), falling back to the tab's last pick
-     * (`effort_<tab>`). The stored value is clamped to the model's own
+     * (`effort_<tab>`). Retired `god` keys are read as fallback, like
+     * provider/model above. The stored value is clamped to the model's own
      * vocabulary — a pick saved for a graded model (e.g. `max`) is invalid
      * on a toggle model (`none`/`high`) and reads back as blank so callers
      * fall through to the model's default instead of showing/sending a
@@ -283,9 +288,11 @@ class ChatApi(context: Context) {
         var stored = ""
         if (m.isNotEmpty()) {
             stored = (prefs.getString("effort_${tab}_$m", "") ?: "").trim().lowercase()
+                .ifEmpty { (prefs.getString("effort_god_$m", "") ?: "").trim().lowercase() }
         }
         if (stored.isEmpty()) {
             stored = (prefs.getString("effort_$tab", "") ?: "").trim().lowercase()
+                .ifEmpty { (prefs.getString("effort_god", "") ?: "").trim().lowercase() }
         }
         if (stored.isEmpty() || m.isEmpty()) return stored
         return stored.takeIf { it in EffortCatalog.optionsFor(m) } ?: ""
@@ -766,15 +773,10 @@ internal fun readSseStream(
     return SseEnd.EndOfStream
 }
 
-/** Profile dir name backing an app tab (kept central so every sender resolves identically). */
-fun defaultProfileFor(tab: String): String = when (tab) {
-    "god" -> "god"
-    else -> tab
-}
+/** Profile dir name backing an app tab: the single `chat` profile (#289). */
+@Suppress("UNUSED_PARAMETER")
+fun defaultProfileFor(tab: String): String = "chat"
 
-/** Display title for a chat tab key (tab keys differ from profile names). */
-fun tabTitle(tab: String): String = when (tab) {
-    "god" -> "God"
-    "story" -> "Story"
-    else -> "Resume and Portfolio"
-}
+/** Display title for the chat tab. */
+@Suppress("UNUSED_PARAMETER")
+fun tabTitle(tab: String): String = "Chat"

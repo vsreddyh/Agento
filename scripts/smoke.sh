@@ -27,7 +27,7 @@ set -a && . "$ENV_FILE" && set +a
 : "${PASSWORD:?smoke: PASSWORD is not set in .env}"
 : "${MONGODB_URI:?smoke: MONGODB_URI is not set in .env}"
 
-PROFILE="${SMOKE_PROFILE:-god}"
+PROFILE="${SMOKE_PROFILE:-chat}"
 # Overridable because the app lets a tab pick any model, and a model the provider has
 # retired would otherwise fail this check for the wrong reason.
 MODEL="${SMOKE_MODEL:-mimo-v2.6-flash}"

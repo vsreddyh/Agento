@@ -1,8 +1,12 @@
 # VPS sizing — the Pi stack
 
-Three profiles (god, story, resumes) plus a health-sync API, a reverse proxy and a
+One chat profile plus a health-sync API, a reverse proxy and a
 one-shot retention job, **fully containerized**. The agent host is **one `pi`
-container** running **one `pi` process per profile**, fronted by `pi-gateway`.
+container** running **one `pi` process for the profile**, fronted by `pi-gateway`.
+
+(Single-profile since #289 — the tables below were measured 2026-10-04 with
+three profiles and are kept as historical readings; re-measure per the method
+below, since the profile count changed.)
 
 MongoDB stays **remote** (Atlas) — no Mongo container or storage counted below.
 
@@ -103,16 +107,13 @@ these against the running stack and you should land within a few MiB of the tabl
 podman stats --no-stream --format '{{.Name}}\t{{.MemUsage}}' 
 
 # One turn in flight: stream a completion and sample while it is open.
-curl -sN http://127.0.0.1:8080/p/god/v1/chat/completions \
+curl -sN http://127.0.0.1:8080/p/chat/v1/chat/completions \
   -H "Authorization: Bearer $PASSWORD" -H 'Content-Type: application/json' \
   -d '{"provider":"opencode-go","model":"mimo-v2.6-flash",
        "model_options":{"reasoning_effort":"off"},
-       "messages":[{"role":"user","content":"Reply with exactly: god"}],"stream":true}' \
+       "messages":[{"role":"user","content":"Reply with exactly: chat"}],"stream":true}' \
   > /dev/null &
 sleep 15 && podman stats --no-stream --format '{{.Name}}\t{{.MemUsage}}'
-
-# Three at once: same request with /p/story and /p/resumes as well, then sample.
-# Verify all three answered before trusting the number.
 ```
 
 Disk and image figures come from `podman system df` and
@@ -164,8 +165,7 @@ Measured (`podman system df` + image sizes), not guessed:
   barely does**.
 - **100 Mbps is enough for every tier.** Only pay for more if the provider bundles it at
   no cost.
-- Outbound HTTPS to `opencode.ai`, MongoDB Atlas and GitHub (story/resumes push their
-  own repos over SSH).
+- Outbound HTTPS to `opencode.ai`, MongoDB Atlas and GitHub.
 
 ## Access
 

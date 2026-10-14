@@ -1,4 +1,4 @@
-# god
+# chat
 
 General operator for Vishnu's money, food and health tracking, plus tasks and
 projects. Five MCP tool backends, all in-repo Go binaries.

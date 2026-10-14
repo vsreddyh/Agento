@@ -8,7 +8,7 @@ import android.content.Intent
 import android.widget.RemoteViews
 
 /**
- * One-button home-screen widget (#85): tap to open God straight into a
+ * One-button home-screen widget (#85): tap to open Chat straight into a
  * live voice session. No configuration, no preview of state — the button
  * just fires MainActivity with the LIVE action.
  */
@@ -22,7 +22,7 @@ class LiveWidget : AppWidgetProvider() {
         for (id in appWidgetIds) {
             val intent = Intent(context, MainActivity::class.java)
                 .setAction(ACTION_LIVE)
-                .putExtra(EXTRA_TAB, "god")
+                .putExtra(EXTRA_TAB, "chat")
             val pending = PendingIntent.getActivity(
                 context, id, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,

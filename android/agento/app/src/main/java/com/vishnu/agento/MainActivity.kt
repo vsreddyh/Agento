@@ -20,13 +20,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
@@ -41,14 +39,9 @@ import androidx.core.content.edit
 import java.util.Locale
 import kotlinx.coroutines.launch
 
-/** Sidebar destinations; first three map 1:1 to gateway profiles.
- * Order is God, Story, Resume and Portfolio (#53); the resumes profile shows as
- * "Resume and Portfolio" (#54) but the tab key (prefs, files, profile path) is
- * unchanged so backend mapping never breaks. */
+/** Sidebar destinations; Chat maps to the single gateway profile (`chat`, #289). */
 private enum class Destination(val title: String) {
-    God("God"),
-    Story("Story"),
-    Portfolio("Resume and Portfolio"),
+    Chat("Chat"),
     Tasks("Projects"),
     TaskManager("Task Manager"),
     Storage("Storage"),
@@ -59,9 +52,7 @@ private enum class Destination(val title: String) {
 }
 
 private fun Destination.icon() = when (this) {
-    Destination.Story -> Icons.Filled.MenuBook
-    Destination.Portfolio -> Icons.Filled.Description
-    Destination.God -> Icons.Filled.Star
+    Destination.Chat -> Icons.Filled.Star
     Destination.Tasks -> Icons.Filled.List
     Destination.TaskManager -> Icons.Filled.Assignment
     Destination.Storage -> Icons.Filled.Folder
@@ -101,10 +92,9 @@ class MainActivity : ComponentActivity() {
     /**
      * Widget live-session requests (#85). Generation counter (not boolean)
      * so retaps while the app is open retrigger: singleTop delivers them
-     * via onNewIntent, and the God tab consumes each generation once.
+     * via onNewIntent, and the Chat tab consumes each generation once.
      */
     private val liveGen = mutableIntStateOf(0)
-    private val liveTab = mutableStateOf("god")
 
     /**
      * Task widget tap (#101). Generation counter like liveGen so retaps
@@ -124,7 +114,6 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == LiveWidget.ACTION_LIVE) {
-            liveTab.value = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
             liveGen.intValue++
         }
         if (intent.action == TaskWidget.ACTION_TASKS) {
@@ -141,7 +130,6 @@ class MainActivity : ComponentActivity() {
         // Widget live tap: same intent redelivered on rotation/recreation
         // must not start a second session — only a fresh launch counts.
         if (savedInstanceState == null && intent?.action == LiveWidget.ACTION_LIVE && liveGen.intValue == 0) {
-            liveTab.value = intent.getStringExtra(LiveWidget.EXTRA_TAB) ?: "god"
             liveGen.intValue = 1
         }
         // Task widget tap: same redelivery guard — only a fresh launch counts.
@@ -166,17 +154,16 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    var dest by remember { mutableStateOf(Destination.God) }
-                    // Widget live tap (#85): land on the requested tab; its
+                    var dest by remember { mutableStateOf(Destination.Chat) }
+                    // Widget live tap (#85): land on the Chat tab; its
                     // ChatTab consumes the liveGen generation and starts
                     // the session. Retaps renavigate (singleTop) and refire.
                     LaunchedEffect(liveGen.intValue) {
                         if (liveGen.intValue > 0) {
-                            dest = when (liveTab.value) {
-                                "story" -> Destination.Story
-                                "resumes" -> Destination.Portfolio
-                                else -> Destination.God
-                            }
+                            // Single tab since #289: any stored tab key
+                            // (including retired god/story/resumes) lands
+                            // on Chat.
+                            dest = Destination.Chat
                         }
                     }
                     // Widget task tap (#101): land on the Task Manager screen.
@@ -195,7 +182,7 @@ class MainActivity : ComponentActivity() {
                     // on every navigation so model picks show up immediately.
                     val prefs = context.getSharedPreferences(
                         AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-                    // Built-in TTS: one engine shared by God/Story/Resume and Portfolio,
+                    // Built-in TTS: one engine for the Chat tab,
                     // shut down with the activity. Auto-read is a single
                     // global toggle (prefs `tts_auto`) in each chat's bar.
                     val tts = remember { ChatTts(context) }
@@ -223,15 +210,11 @@ class MainActivity : ComponentActivity() {
                             return if (e.isEmpty()) m else "$m · $e"
                         }
                         mapOf(
-                            "god" to sub("god"),
-                            "story" to sub("story"),
-                            "resumes" to sub("resumes"),
+                            "chat" to sub("chat"),
                         )
                     }
                     fun drawerModel(d: Destination): String? = when (d) {
-                        Destination.God -> tabModels["god"]
-                        Destination.Story -> tabModels["story"]
-                        Destination.Portfolio -> tabModels["resumes"]
+                        Destination.Chat -> tabModels["chat"]
                         else -> null
                     }
                     fun go(d: Destination, s: SettingSection? = null) {
@@ -244,40 +227,14 @@ class MainActivity : ComponentActivity() {
                         val wc = windowClassFor(maxWidth)
                         val navContent: @Composable () -> Unit = {
                             when (dest) {
-                                Destination.God -> ChatTab(
-                                    app = application, tab = "god", title = "God", wc = wc,
+                                Destination.Chat -> ChatTab(
+                                    app = application, tab = "chat", title = "Chat", wc = wc,
                                     tts = tts, autoSpeak = autoSpeak,
                                     // Only the requested tab sees the gen:
                                     // per-tab consumed counters would
                                     // otherwise auto-start sessions on
                                     // tabs the user merely switches to.
-                                    autoLiveGen = if (liveTab.value == "god") liveGen.intValue else 0,
-                                    onAutoSpeak = {
-                                        autoSpeak = it
-                                        prefs.edit {
-                                            putBoolean("tts_auto", it)
-                                        }
-                                    },
-                                    onMenu = { scope.launch { drawerState.open() } },
-                                    onConfigChanged = { drawerTick++ },
-                                )
-                                Destination.Story -> ChatTab(
-                                    app = application, tab = "story", title = "Story", wc = wc,
-                                    tts = tts, autoSpeak = autoSpeak,
-                                    autoLiveGen = if (liveTab.value == "story") liveGen.intValue else 0,
-                                    onAutoSpeak = {
-                                        autoSpeak = it
-                                        prefs.edit {
-                                            putBoolean("tts_auto", it)
-                                        }
-                                    },
-                                    onMenu = { scope.launch { drawerState.open() } },
-                                    onConfigChanged = { drawerTick++ },
-                                )
-                                Destination.Portfolio -> ChatTab(
-                                    app = application, tab = "resumes", title = "Resume and Portfolio", wc = wc,
-                                    tts = tts, autoSpeak = autoSpeak,
-                                    autoLiveGen = if (liveTab.value == "resumes") liveGen.intValue else 0,
+                                    autoLiveGen = liveGen.intValue,
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit {
@@ -423,7 +380,7 @@ private fun DrawerList(
     onToggleSettings: () -> Unit,
     modelFor: (Destination) -> String? = { null },
 ) {
-    // Scrollable (#105): 9 destinations plus the settings subsections
+    // Scrollable (#105): 8 destinations plus the settings subsections
     // overflow short screens — without this the bottom items are cut off
     // with no way to reach them.
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {

@@ -471,7 +471,7 @@ class TasksApi(context: Context) {
         // parameters ever become nullable the create would quietly lose a field instead
         // of failing. A `require` here would throw out of this suspend, and callers use
         // `.fold(onFailure = ::fail)` with no try/catch — so the failure would escape the
-        // coroutine and show no snackbar at all.
+        // coroutine and show no toast at all.
         if (sent.name == null || sent.description == null || sent.dueDate == null ||
             sent.dueTime == null || sent.estimatedMinutes == null || sent.parallelable == null ||
             sent.repeatEvery == null || sent.repeatUnit == null || sent.repeatCustom == null ||
@@ -487,7 +487,7 @@ class TasksApi(context: Context) {
         // server's taskCreateFields (#185 review).
         //
         // A missing key fails IN-CHANNEL, like the null-guard above: the
-        // callers fold Result.failure into a snackbar, while a throw (require,
+        // callers fold Result.failure into a toast, while a throw (require,
         // getValue) would escape the coroutine and show nothing at all.
         val values: Map<String, Any?> = mapOf(
             "name" to sent.name,
@@ -641,7 +641,7 @@ class TasksApi(context: Context) {
                     task
                 } else {
                     // optStr, not optString: a JSON null would arrive as the
-                    // literal string "null" and reach the snackbar.
+                    // literal string "null" and reach the toast.
                     task.copy(nextDueDate = optStr(next, "due_date"))
                 }
             }
@@ -677,7 +677,7 @@ class TasksApi(context: Context) {
      * Compares a write's response against what was asked for, and surfaces any field
      * the server stored differently.
      *
-     * A snackbar, not an exception: the write genuinely succeeded, so failing it would
+     * A toast, not an exception: the write genuinely succeeded, so failing it would
      * tell the user their task was not saved when it was. That is the same class of lie
      * as #214 — reporting an outcome that did not happen — and it is the reason this
      * warns instead of throws. The user needs to know the app and the server disagree
@@ -812,9 +812,9 @@ internal object ContractWarnings {
      * [report] rejects the latter anyway, but the type should not have to carry that.
      *
      * NEWEST WINS, deliberately. `StateFlow` holds one value, so three reports arriving
-     * while a single snackbar is up coalesce to the last one. That is a policy rather
+     * while a single toast is up coalesce to the last one. That is a policy rather
      * than a second loss path: the pending warnings all describe the same underlying
-     * disagreement with the same server, and stacking three identical snackbars in a
+     * disagreement with the same server, and stacking three identical toasts in a
      * queue the user must dismiss before reaching the conversation would be worse than
      * showing the most recent one. What must never happen is the newest being WIPED by
      * the cleanup of an older one — hence [consume] matching on the generation.
@@ -870,12 +870,12 @@ internal object ContractWarnings {
      *
      * The first version compared the LISTS:
      *
-     *     collect[A] -> showSnackbar(A)      // suspends as long as the snackbar shows
-     *     report(B)  -> value = [B]          // a second write lands meanwhile
+     *     collect[A] -> toast(A)           // returns at once; a second report
+     *     report(B)  -> value = [B]          // can still land while it shows
      *     consume(A) -> clears iff value == A
      *
      * which holds only while A != B. Two reports of the SAME fields break it:
-     * `report([X])`, `showSnackbar([X])`, `report([X])`, `consume([X])` clears the second
+     * `report([X])`, `toast([X])`, `report([X])`, `consume([X])` clears the second
      * one — and same-fields is the COMMON case, not the exotic one, because both writes
      * are hitting the same broken server and get the same answer from it.
      *
@@ -886,10 +886,10 @@ internal object ContractWarnings {
         val current = _mismatched.value ?: return
         if (current.generation != shown) return
         // CAS, not a plain assignment. The read above and the write here are two
-        // operations, and `showSnackbar` suspends for its whole duration, so a
-        // `report()` can land BETWEEN them: the check passes against gen1, the new gen2
-        // is stored, and the assignment then wipes it — the exact lost-warning shape the
-        // generation exists to prevent, with the window narrowed rather than closed.
+        // operations, and a `report()` can land BETWEEN them: the check passes
+        // against gen1, the new gen2 is stored, and the assignment then wipes
+        // it — the exact lost-warning shape the generation exists to prevent,
+        // with the window narrowed rather than closed.
         //
         // `compareAndSet` only writes if the value is still `current`, so a report that
         // arrived in the meantime survives and is collected next.
@@ -913,10 +913,10 @@ internal object ContractWarnings {
         // Name the task. Without it the warning is not actionable on a list screen:
         // "Saved, but the server stored different values for due_date" could belong to any
         // row, and the user has to guess which one to open. Autosave makes that worse —
-        // several edits can land between the snackbar and the user's attention.
+        // several edits can land between the toast and the user's attention.
         // Truncate for DISPLAY only; the full name stays in the record. A 200-character
-        // task name would push the field list — the actionable half — off a `Long`
-        // snackbar, which is the opposite of what the longer duration bought.
+        // task name would push the field list — the actionable half — off the toast
+        // card, which is the opposite of what the longer text bought.
         val shown = taskName.trim().let { if (it.length > NAME_DISPLAY_MAX) it.take(NAME_DISPLAY_MAX - 1) + "\u2026" else it }
         val forWhich = shown.takeIf { it.isNotEmpty() }?.let { " for \u201c$it\u201d" }.orEmpty()
         return "Saved, but the server stored different values$forWhich: " +

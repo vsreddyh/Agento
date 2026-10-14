@@ -80,7 +80,7 @@ import com.mikepenz.markdown.m3.Markdown
 import java.util.Locale
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-/** Builds per-tab chat ViewModels so story/resumes/god keep isolated history. */
+/** Builds the Chat ViewModel so the single tab keeps isolated history. */
 class ChatViewModelFactory(
     internal val app: android.app.Application,
     internal val tab: String,
@@ -91,7 +91,7 @@ class ChatViewModelFactory(
     }
 }
 
-/** Scopes one chat ViewModel per tab key so drafts/history survive tab switches. */
+/** Scopes the chat ViewModel to the tab key so drafts/history survive recomposition. */
 @Composable
 internal fun ChatTab(
     app: android.app.Application,
@@ -106,7 +106,7 @@ internal fun ChatTab(
     onConfigChanged: () -> Unit = {},
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
-    // Keyed per tab — otherwise all three tabs would share one ViewModel.
+    // Keyed by tab — the ViewModel survives recomposition.
     val vm: ChatViewModel = viewModel(key = "chat_$tab", factory = factory)
     val state by vm.state
     val context = LocalContext.current
@@ -114,13 +114,13 @@ internal fun ChatTab(
     LaunchedEffect(Unit) { vm.refreshConfig() }
     var showModel by remember { mutableStateOf(false) }
     var showThreads by remember { mutableStateOf(false) }
-    val snackbar = remember { SnackbarHostState() }
+    val toasts = remember(scope) { ToastCenter(scope) }
     // #64: never show raw "not set" — the header shows the model name when
     // configured and a setup prompt otherwise.
     val setupNeeded = state.model.isBlank() || state.provider.isBlank()
     ChatScreen(
         title = title, tab = tab, modelLabel = state.model.ifBlank { "" },
-        setupNeeded = setupNeeded, state = state, wc = wc, snackbar = snackbar,
+        setupNeeded = setupNeeded, state = state, wc = wc, toasts = toasts,
         tts = tts, autoSpeak = autoSpeak, onAutoSpeak = onAutoSpeak,
         onMenu = onMenu, autoLiveGen = autoLiveGen,
         onModel = { showModel = true },
@@ -143,7 +143,7 @@ internal fun ChatTab(
             onDelete = {
                 tts.stop()
                 vm.deleteThread(it)
-                scope.launch { snackbar.showSnackbar("Conversation deleted.") }
+                toasts.toast("Conversation deleted.", ToastKind.Success)
             },
             onExport = { id ->
                 val text = vm.exportMarkdown(id)
@@ -321,7 +321,7 @@ internal fun ThreadSheet(
 internal fun ttsKeyFor(msg: ChatMessage): String = "${msg.ts}:${msg.content.hashCode()}"
 
 /**
- * Per-tab provider/model picker (#18: model selection lives on each
+ * Chat provider/model picker (#18: model selection lives on the chat
  * profile's own page). Saves immediately on pick; blanks mean not set.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -524,7 +524,7 @@ internal fun ChatScreen(
     setupNeeded: Boolean,
     state: ChatUiState,
     wc: WindowClass,
-    snackbar: SnackbarHostState,
+    toasts: ToastCenter,
     tts: ChatTts,
     autoSpeak: Boolean,
     onAutoSpeak: (Boolean) -> Unit,
@@ -606,7 +606,7 @@ internal fun ChatScreen(
     LaunchedEffect(Unit) {
         if (liveLostOnRotate) {
             liveLostOnRotate = false
-            snackbar.showSnackbar("Live session ended on rotation.")
+            toasts.toast("Live session ended on rotation.")
         }
     }
     // Hands-free interrupt (#85): background mic watches for speech while
@@ -629,9 +629,7 @@ internal fun ChatScreen(
         // denied clears the pending start with a hint.
         if (!granted) {
             pendingLiveStart = false
-            scope.launch {
-                snackbar.showSnackbar("Live mode needs microphone access.")
-            }
+            toasts.toast("Live mode needs microphone access.", ToastKind.Error)
         }
     }
     DisposableEffect(tab) {
@@ -650,7 +648,7 @@ internal fun ChatScreen(
     fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
     fun speakMessage(key: String, text: String): Boolean {
         if (!tts.toggle(key, text)) {
-            scope.launch { snackbar.showSnackbar("Voice output unavailable.") }
+            toasts.toast("Voice output unavailable.", ToastKind.Error)
             return false
         }
         return true
@@ -667,12 +665,11 @@ internal fun ChatScreen(
         interrupt.stop()
         liveRec.cancel()
         tts.stop()
-        if (reason != null) scope.launch { snackbar.showSnackbar(reason) }
+        if (reason != null) toasts.toast(reason, ToastKind.Error)
     }
     // Reply/TTS loop effects are defined after startVoice below (they call it).
     // Built-in Android speech-to-text (RecognizerIntent — no extra
-    // permission or dependency). Shared by God/Story/Resume and Portfolio: all three
-    // tabs render this one ChatScreen, so one mic covers all chats.
+    // permission or dependency) for the Chat tab.
     val voiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -705,7 +702,7 @@ internal fun ChatScreen(
         try {
             voiceLauncher.launch(intent)
         } catch (e: ActivityNotFoundException) {
-            scope.launch { snackbar.showSnackbar("No voice input app found.") }
+            toasts.toast("No voice input app found.", ToastKind.Error)
         }
     }
     /** One in-app listen cycle for the live loop (overlay stays visible). */
@@ -850,11 +847,13 @@ internal fun ChatScreen(
     // Surface send failures as a toast too (the inline card keeps details).
     LaunchedEffect(state.error) {
         if (state.error.isNotEmpty()) {
-            snackbar.showSnackbar(friendlyError(state.error).title)
+            toasts.toast(friendlyError(state.error).title, ToastKind.Error)
         }
     }
+    // The toast card floats top-end over the content (Box overlay, not
+    // the bottom-anchored Scaffold slot) so it never shifts the layout.
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         // Jump-to-latest (#122): the stock FAB slot, shown once a manual
         // scroll-up unpins the viewport; tapping re-pins and drops to the
         // newest message. No extra nesting around the message list.
@@ -1502,6 +1501,8 @@ internal fun ChatScreen(
             )
         }
     }
+        ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
+    }
 }
 
 /** Live voice overlay (#85): status + live transcript + a big End button.
@@ -1607,9 +1608,9 @@ internal fun OptionMenu(
     }
 }
 
-/** Providers are gateway-global; one catalog fetch covers all tabs. */
+/** Providers are gateway-global; one catalog fetch covers the Chat tab. */
 internal fun catalogPath(api: ChatApi): String =
-    listOf(api.pathFor("story"), api.pathFor("resumes"), api.pathFor("god")).distinct().first()
+    api.pathFor("chat")
 
 /** Display name for a provider slug. The wire value stays the gateway slug
  * (`opencode-go` per the gateway config); the catalog label is preferred. */

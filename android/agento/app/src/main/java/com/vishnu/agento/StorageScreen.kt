@@ -33,7 +33,7 @@ import kotlinx.coroutines.launch
 internal fun StorageScreen(onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val snackbar = remember { SnackbarHostState() }
+    val toasts = remember(scope) { ToastCenter(scope) }
     var path by remember { mutableStateOf("") }
     var dirs by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var files by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
@@ -65,8 +65,10 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         }.drop(1)
     }
 
+    // The toast card floats top-end over the content (Box overlay, not
+    // the bottom-anchored Scaffold slot) so it never shifts the layout.
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("Storage", maxLines = 1) },
@@ -165,13 +167,12 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                                 TextButton(onClick = {
                                     runCatching {
                                         StorageApi(context).download(path, f.name)
-                                        scope.launch { snackbar.showSnackbar("Saving ${f.name}…") }
+                                        toasts.toast("Saving ${f.name}…", ToastKind.Success)
                                     }.onFailure { e ->
-                                        scope.launch {
-                                            snackbar.showSnackbar(
-                                                friendlyError(e.message ?: "").title
-                                            )
-                                        }
+                                        toasts.toast(
+                                            friendlyError(e.message ?: "").title,
+                                            ToastKind.Error,
+                                        )
                                     }
                                 }) { Text("Save") }
                             }
@@ -180,5 +181,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                 }
             }
         }
+        ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
+    }
     }
 }

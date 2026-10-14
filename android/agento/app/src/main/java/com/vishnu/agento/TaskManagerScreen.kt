@@ -88,11 +88,16 @@ internal fun TaskManagerScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val snackbar = remember { SnackbarHostState() }
+    // Non-suspending queued toasts (#288): toast() enqueues and returns,
+    // so plain callbacks call it directly with no scope.launch dance.
+    val toasts = remember(scope) { ToastCenter(scope) }
 
     // One client for the screen (its OkHttpClient is shared process-wide).
     val api = remember(context) { TasksApi(context) }
     var tasks by remember { mutableStateOf<List<ServerTask>>(emptyList()) }
+    // When the local list was last fetched from the server (epoch millis,
+    // persisted — failures leave it untouched). Shown in the count line.
+    var lastSyncedAt by remember { mutableLongStateOf(readLastSyncedAt(context)) }
     // Whether the server held back rows beyond its cap: the list below
     // must say so rather than silently ending mid-collection (#168).
     var listTruncated by remember { mutableStateOf(false) }
@@ -126,27 +131,21 @@ internal fun TaskManagerScreen(
     LaunchedEffect(Unit) {
         ContractWarnings.mismatched.collect { mismatch ->
             if (mismatch == null) return@collect
-            // Long, not the default Short: this is not a confirmation, it is a warning
-            // the user has to act on (their app and the server disagree, and the stored
-            // values differ from what they asked for). Four seconds is long enough to read
-            // three field names; the default is not.
-            // Refresh FIRST, then show. The message says the list is refreshing, and the
-            // task list is cached state the detail sheet reads from — so the user must
-            // not be looking at the stale row for the whole time the snackbar is up.
-            //
-            // This ordering was wrong until now, and `SnackbarDuration.Long` made it
-            // worse: `showSnackbar` SUSPENDS for the full duration, so bumping afterwards
-            // meant the refresh happened ~10s after the warning appeared, with a
-            // present-tense message sitting over a stale list the whole time.
+            // Refresh FIRST, then toast: the message says the list holds
+            // what was actually stored, and the detail sheet reads from
+            // the cached list — so the user must not keep looking at the
+            // stale row. toast() does not suspend (unlike the old
+            // showSnackbar, which held this collector for ~10s), so no
+            // generation dance is needed around it.
             refreshTick++
-            snackbar.showSnackbar(
-                message = ContractWarnings.message(mismatch.fields, mismatch.taskName),
-                duration = SnackbarDuration.Long,
+            toasts.toast(
+                ContractWarnings.message(mismatch.fields, mismatch.taskName),
+                ToastKind.Error,
             )
-            // Clear by GENERATION, not by the field list: showSnackbar suspends for its
-            // full duration, so another report can land while it is up. Matching on the
-            // list would still wipe that one whenever the fields happen to be the same —
-            // which, against one broken server, they usually are.
+            // Clear by GENERATION, not by the field list: another report
+            // can land while this one is up, and matching on the list
+            // would wipe that one whenever the fields happen to be the
+            // same — which, against one broken server, they usually are.
             ContractWarnings.consume(mismatch.generation)
         }
     }
@@ -154,7 +153,13 @@ internal fun TaskManagerScreen(
     // Editor draft (id empty = new task) and delete target.
     var editing by remember { mutableStateOf<ServerTaskDraft?>(null) }
     var deleting by remember { mutableStateOf<ServerTask?>(null) }
-    var busy by remember { mutableStateOf(false) }
+    // In-flight mutation per task id (#288): only that row's checkbox is
+    // disabled while its request runs — the rest of the list, the top bar
+    // and the editor stay live. Synthetic "__create__" covers the dialog
+    // save path, which has no task id of its own.
+    var busyIds by remember { mutableStateOf(setOf<String>()) }
+    fun markBusy(id: String) { busyIds = busyIds + id }
+    fun unmarkBusy(id: String) { busyIds = busyIds - id }
     // Day-grouped sections (Overdue/Today/…); flat list when off or on
     // the Done filter, where buckets carry no meaning.
     var groupByDay by rememberSaveable { mutableStateOf(true) }
@@ -195,7 +200,7 @@ internal fun TaskManagerScreen(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) armRemindersAfterChecks()
-        else scope.launch { snackbar.showSnackbar("Notifications denied — reminders stay off.") }
+        else toasts.toast("Notifications denied — reminders stay off.", ToastKind.Error)
     }
 
     // First successful load also (re)arms due-time alarms, covering
@@ -211,6 +216,10 @@ internal fun TaskManagerScreen(
             onSuccess = { page ->
                 tasks = page.tasks
                 listTruncated = page.truncated
+                // List-level last fetch, persisted (#288): set on success
+                // only, so a failed fetch leaves the old stamp untouched.
+                lastSyncedAt = System.currentTimeMillis()
+                writeLastSyncedAt(context, lastSyncedAt)
                 if (!scheduledOnce) {
                     scheduledOnce = true
                     TaskReminders.refresh(context)
@@ -313,9 +322,7 @@ internal fun TaskManagerScreen(
     }
 
     fun fail(e: Throwable) {
-        scope.launch {
-            snackbar.showSnackbar(serverDetail(e.message ?: e.javaClass.simpleName))
-        }
+        toasts.toast(serverDetail(e.message ?: e.javaClass.simpleName), ToastKind.Error)
     }
 
     // Push fresh counts to the home-screen widget (#101) after mutations,
@@ -351,7 +358,7 @@ internal fun TaskManagerScreen(
     fun doDuplicate(t: ServerTask) {
         // Everything the client itself enforces is checked here, before the
         // sheet is dismissed: a refusal that closes the task leaves the user
-        // with a snackbar and nothing to fix, because the thing they needed
+        // with a toast and nothing to fix, because the thing they needed
         // to change is behind a tap they just made.
         val missing = listOf(
             "a name" to t.name.isBlank(),
@@ -360,14 +367,27 @@ internal fun TaskManagerScreen(
             "a due time" to t.dueTime.isBlank(),
         ).filter { it.second }.map { it.first }
         if (missing.isNotEmpty()) {
-            scope.launch {
-                snackbar.showSnackbar(
-                    "This task has no ${missing.joinToString(" or ")} yet — add " +
-                        "${if (missing.size == 1) "it" else "them"} before copying it.")
-            }
+            toasts.toast(
+                "This task has no ${missing.joinToString(" or ")} yet — add " +
+                    "${if (missing.size == 1) "it" else "them"} before copying it.",
+                ToastKind.Error,
+            )
             return
         }
-        busy = true
+        // Closed here rather than by the caller, so a task that cannot be
+        // copied stays open to be fixed.
+        selected = null
+        // Optimistic placeholder: the copy appears instantly with a temp id
+        // and is swapped for the server answer — no full-reload flicker.
+        val tempId = "__pending__${System.nanoTime()}"
+        val prev = tasks
+        val placeholder = t.copy(id = tempId)
+        // The server filters by state: on the Done filter an open copy
+        // belongs nowhere visible, so skip the placeholder there (success
+        // still pokes and toasts; the row appears on the next reload only
+        // if the filter would carry it).
+        tasks = if (filter == ServerTaskFilter.Done) prev else listOf(placeholder) + prev
+        markBusy(tempId)
         scope.launch {
             api.create(
                 name = t.name,
@@ -383,154 +403,188 @@ internal fun TaskManagerScreen(
             ).fold(
                 onSuccess = { copy ->
                     editing = null
-                    // Closed here rather than by the caller, so a task
-                    // that cannot be copied stays open to be fixed.
-                    selected = null
-                    refreshTick++
+                    tasks = tasks.map { if (it.id == tempId) copy else it }
                     pokeWidget()
-                    snackbar.showSnackbar("Copied \u201c${copy.name}\u201d.")
+                    toasts.toast("Copied \u201c${copy.name}\u201d.", ToastKind.Success)
                 },
-                onFailure = ::fail,
+                onFailure = { e ->
+                    tasks = prev
+                    fail(e)
+                },
             )
-            busy = false
+            unmarkBusy(tempId)
         }
     }
 
     fun doComplete(t: ServerTask) {
-        busy = true
+        // The sheet is already dismissed by the caller; the row leaves the
+        // open list instantly and the request runs in the background.
+        selected = null
+        val prev = tasks
+        tasks = if (filter == ServerTaskFilter.Open) {
+            prev.filterNot { it.id == t.id }
+        } else {
+            prev.map { if (it.id == t.id) it.copy(completedAt = "__pending__") else it }
+        }
+        markBusy(t.id)
         scope.launch {
             api.complete(t.id).fold(
                 onSuccess = { done ->
-                    refreshTick++
-                    pokeWidget()
-                    // A structured cadence ("every 3 days") rolled itself
-                    // over server-side — the next occurrence already exists,
-                    // with the date advanced and every other field carried
-                    // over. Nothing to ask the user for.
+                    // A structured cadence rolled itself over server-side:
+                    // the next occurrence is a NEW row this response does
+                    // not carry, so only then fall back to a full reload.
+                    // Every other completion patches the row in place.
                     val next = done?.nextDueDate.orEmpty()
                     if (next.isNotEmpty()) {
+                        refreshTick++
+                        // The widget and the alarm set still need the push:
+                        // the loader never pokes, and the new occurrence's
+                        // reminders are not armed until it does.
+                        pokeWidget()
                         // "Tomorrow" / "2 Oct" rather than a raw ISO date.
                         val when2 = friendlyDue(
                             next, "", java.time.LocalDate.now(IST)).ifEmpty { next }
-                        snackbar.showSnackbar("Task completed — next one set for $when2.")
-                        return@fold
-                    }
-                    // A custom condition ("every 3rd Friday", "end of every
-                    // month") is nobody's to compute but ours, so the
-                    // prefilled draft asks for the date — unless an editor
-                    // is already open, which must not be discarded. Dismiss
-                    // to skip. One-shot tasks land here too and are skipped.
-                    if (editing == null && t.hasRepeat) {
-                        editing = ServerTaskDraft(
-                            name = t.name,
-                            description = t.description,
-                            // Only the date is cleared: recreating means
-                            // picking a new one (save stays gated on it),
-                            // but every other field is the user's own and
-                            // is carried over verbatim. Clearing the time
-                            // too made the user re-pick a value they had
-                            // already set (#148). The time field is
-                            // disabled until a date exists, so the kept
-                            // time is revealed, not stranded.
-                            dueDate = "",
-                            dueTime = t.dueTime,
-                            estimatedMinutes = t.estimatedMinutes.toString(),
-                            repeatEvery = if (t.repeatEvery > 0) t.repeatEvery.toString() else "",
-                            repeatUnit = t.repeatUnit.ifEmpty { "days" },
-                            repeatCustom = t.repeatCustom,
-                            repeatRule = t.repeatRule,
-                            parallelable = t.parallelable,
-                        )
-                        // Legacy tasks (created before due_time was
-                        // required) have no time to keep — don't claim
-                        // there is one.
-                        snackbar.showSnackbar(
-                            if (t.dueTime.isBlank()) {
-                                "Task completed — pick a new date and time to recreate it."
-                            } else {
-                                "Task completed — pick a new date to recreate it (time kept)."
-                            },
-                        )
+                        toasts.toast("Task completed — next one set for $when2.")
+                    } else if (filter == ServerTaskFilter.Open) {
+                        pokeWidget()
+                        // A custom condition is nobody's to compute but
+                        // ours, so the prefilled draft asks for the date —
+                        // unless an editor is already open, which must not
+                        // be discarded. One-shot tasks are skipped.
+                        if (editing == null && t.hasRepeat) {
+                            editing = ServerTaskDraft(
+                                name = t.name,
+                                description = t.description,
+                                // Only the date is cleared: recreating means
+                                // picking a new one (save stays gated on it),
+                                // but every other field is the user's own and
+                                // is carried over verbatim. Clearing the time
+                                // too made the user re-pick a value they had
+                                // already set (#148). The time field is
+                                // disabled until a date exists, so the kept
+                                // time is revealed, not stranded.
+                                dueDate = "",
+                                dueTime = t.dueTime,
+                                estimatedMinutes = t.estimatedMinutes.toString(),
+                                repeatEvery = if (t.repeatEvery > 0) t.repeatEvery.toString() else "",
+                                repeatUnit = t.repeatUnit.ifEmpty { "days" },
+                                repeatCustom = t.repeatCustom,
+                                repeatRule = t.repeatRule,
+                                parallelable = t.parallelable,
+                            )
+                            // Legacy tasks (created before due_time was
+                            // required) have no time to keep — don't claim
+                            // there is one.
+                            toasts.toast(
+                                if (t.dueTime.isBlank()) {
+                                    "Task completed — pick a new date and time to recreate it."
+                                } else {
+                                    "Task completed — pick a new date to recreate it (time kept)."
+                                },
+                            )
+                        } else {
+                            toasts.toast("Task completed.", ToastKind.Success)
+                        }
                     } else {
-                        snackbar.showSnackbar("Task completed.")
+                        tasks = tasks.map { if (it.id == t.id) done else it }
+                        pokeWidget()
+                        toasts.toast("Task completed.", ToastKind.Success)
                     }
                 },
-                onFailure = ::fail,
+                onFailure = { e ->
+                    tasks = prev
+                    fail(e)
+                },
             )
-            busy = false
+            unmarkBusy(t.id)
         }
     }
 
     fun doReopen(t: ServerTask) {
-        busy = true
+        selected = null
+        val prev = tasks
+        tasks = if (filter == ServerTaskFilter.Done) {
+            prev.filterNot { it.id == t.id }
+        } else {
+            prev.map { if (it.id == t.id) it.copy(completedAt = "") else it }
+        }
+        markBusy(t.id)
         scope.launch {
             api.reopen(t.id).fold(
-                onSuccess = { refreshTick++; pokeWidget() },
-                onFailure = ::fail,
+                onSuccess = { reopened ->
+                    if (filter != ServerTaskFilter.Done) {
+                        tasks = tasks.map { if (it.id == t.id) reopened else it }
+                    }
+                    pokeWidget()
+                },
+                onFailure = { e ->
+                    tasks = prev
+                    fail(e)
+                },
             )
-            busy = false
+            unmarkBusy(t.id)
         }
     }
 
     fun doDelete(t: ServerTask) {
-        busy = true
+        deleting = null
+        editing = null
+        selected = null
+        val prev = tasks
+        tasks = prev.filterNot { it.id == t.id }
+        markBusy(t.id)
         scope.launch {
             api.delete(t.id).fold(
                 onSuccess = {
-                    deleting = null
-                    editing = null
-                    refreshTick++
                     pokeWidget()
-                    snackbar.showSnackbar("Task deleted.")
+                    toasts.toast("Task deleted.", ToastKind.Success)
                 },
-                onFailure = ::fail,
+                onFailure = { e ->
+                    tasks = prev
+                    fail(e)
+                },
             )
-            busy = false
+            unmarkBusy(t.id)
         }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onMenu) {
-                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
-                    }
-                },
-                title = { Text("Task Manager") },
-                actions = {
-                    IconButton(
-                        onClick = ::onBell,
-                        enabled = !busy,
-                    ) {
-                        Icon(
-                            Icons.Filled.Notifications,
-                            contentDescription = "Due-time reminders",
-                            tint = if (remindersOn) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                    }
-                    IconButton(
-                        onClick = { editing = ServerTaskDraft() },
-                        enabled = !busy,
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = "New task")
-                    }
-                    IconButton(
-                        onClick = { refreshTick++ },
-                        enabled = !busy,
-                    ) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
+    // The toast card floats top-end over the content (Box overlay, not
+    // the bottom-anchored Scaffold slot) so it never shifts the layout.
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = onMenu) {
+                            Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                        }
+                    },
+                    title = { Text("Task Manager") },
+                    // Never gated: mutations are per-row now, so the bell,
+                    // New and Refresh stay live while a request runs.
+                    actions = {
+                        IconButton(onClick = ::onBell) {
+                            Icon(
+                                Icons.Filled.Notifications,
+                                contentDescription = "Due-time reminders",
+                                tint = if (remindersOn) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                        IconButton(onClick = { editing = ServerTaskDraft() }) {
+                            Icon(Icons.Filled.Add, contentDescription = "New task")
+                        }
+                        IconButton(onClick = { refreshTick++ }) {
+                            Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                        }
+                    },
+                )
+            },
+        ) { padding ->
+            Column(
             modifier = Modifier.fillMaxSize().padding(padding),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -597,9 +651,6 @@ internal fun TaskManagerScreen(
                         }
                     }
                 }
-                if (busy) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
                 // Derived once per composition: search narrows, sort orders.
                 // `today` is a remember key below so buckets recompute
                 // past midnight while the app stays open.
@@ -656,32 +707,13 @@ internal fun TaskManagerScreen(
                         onAction = { query = "" },
                     )
                 } else {
-                    Text(
-                        "${visible.size} of ${tasks.size}" +
-                            // No narrowing promise: search filters the fetched
-                            // page client-side, so past the cap it cannot
-                            // find what was never fetched (#168 follow-up is
-                            // wiring ?search= end to end).
-                            if (listTruncated) " — showing the first ${tasks.size}" else "",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    // Time sections (skipped on the Done filter, where due
-                    // buckets carry no meaning); within a section the
-                    // current sort still applies. IST-pinned (#124).
-                    //
-                    // The today's buckets are relative, so they have to move
-                    // with the wall clock: a minute ticker drives the
-                    // remember key, and one `now` is read per pass so every
-                    // row in the same frame is decided from the same instant.
-                    // The ticker only runs while the time groups are on
-                    // screen; on the Done filter and with grouping off,
-                    // nothing here is bucketed and a minute of recomposition
-                    // would be wasted.
-                    val bucketing = groupByDay && filter != ServerTaskFilter.Done
+                    // The minute ticker drives the time buckets AND the
+                    // "synced Xm ago" stamp below, so it runs whenever the
+                    // list is on screen — not only when buckets are shown.
+                    // One recomposition a minute keeps both honest.
                     var clockTick by remember { mutableIntStateOf(0) }
-                    LaunchedEffect(bucketing) {
-                        while (bucketing) {
+                    LaunchedEffect(Unit) {
+                        while (true) {
                             // Aligned to the top of the minute: a plain
                             // 60s sleep drifts by however long the
                             // composition took, so a task would sit in the
@@ -693,6 +725,29 @@ internal fun TaskManagerScreen(
                             clockTick++
                         }
                     }
+                    // Read through a remember key, so this frame recomposes
+                    // each minute even with grouping off or on Done.
+                    val syncedLabel = remember(lastSyncedAt, clockTick) {
+                        formatLastSynced(lastSyncedAt, System.currentTimeMillis())
+                    }
+                    Text(
+                        "${visible.size} of ${tasks.size}" +
+                            // No narrowing promise: search filters the fetched
+                            // page client-side, so past the cap it cannot
+                            // find what was never fetched (#168 follow-up is
+                            // wiring ?search= end to end).
+                            (if (listTruncated) " — showing the first ${tasks.size}" else "") +
+                            // List-level, not per-task (#288): when the local
+                            // rows were last fetched. Absent before the first
+                            // successful load.
+                            (syncedLabel?.let { " · synced $it" } ?: ""),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    // Time sections (skipped on the Done filter, where due
+                    // buckets carry no meaning); within a section the
+                    // current sort still applies. IST-pinned (#124).
+                    val bucketing = groupByDay && filter != ServerTaskFilter.Done
                     // Everything time-derived in this list reads clockKey,
                     // the minute-truncated instant the groups are keyed on —
                     // not the raw now(): nanos would miss the memo on every
@@ -734,7 +789,9 @@ internal fun TaskManagerScreen(
                                     // otherwise.
                                     overdue = t.isOverdue(today, clockKey),
                                     today = day,
-                                    actionsEnabled = !busy,
+                                    // Per-row (#288): only the row with an
+                                    // in-flight request is disabled.
+                                    actionsEnabled = t.id !in busyIds,
                                     onOpen = { selected = t },
                                     onToggle = {
                                         if (t.isOpen()) doComplete(t) else doReopen(t)
@@ -754,8 +811,10 @@ internal fun TaskManagerScreen(
                 // widget: they configure the home screen, not this task
                 // list, and they were the only controls below the rows.
                 HintLine("Your tasks, shared with your assistant — changes here and in chat land in the same list.")
+                }
             }
         }
+        ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
     }
 
     val draft = editing
@@ -763,45 +822,107 @@ internal fun TaskManagerScreen(
         ServerTaskDialog(
             initial = draft,
             isNew = draft.id.isEmpty(),
-            busy = busy,
             onDismiss = { editing = null },
             onDelete = if (draft.id.isEmpty()) null else ({
                 editing = null
                 deleting = tasks.firstOrNull { it.id == draft.id }
             }),
             onSave = { next ->
-                busy = true
-                scope.launch {
-                    val mins = next.estimatedMinutes.trim().toIntOrNull()
-                    if (mins == null || mins < 0) {
-                        snackbar.showSnackbar("Estimated minutes is required (a number 0 or above).")
-                        busy = false
-                        return@launch
+                val mins = next.estimatedMinutes.trim().toIntOrNull()
+                if (mins == null || mins < 0) {
+                    toasts.toast(
+                        "Estimated minutes is required (a number 0 or above).",
+                        ToastKind.Error,
+                    )
+                    return@ServerTaskDialog
+                }
+                // Optimistic (#288): the dialog dismisses and the list
+                // patches instantly; the request runs in the background.
+                // Success patches the row with the server answer (revision
+                // included) — no full-reload flicker. Failure reverts.
+                // Offline just fails and reverts; no queue.
+                if (next.id.isEmpty()) {
+                    val rep = next.repeatOrNull()
+                    val tempId = "__pending__${System.nanoTime()}"
+                    val prev = tasks
+                    tasks = if (filter == ServerTaskFilter.Done) {
+                        // Open task on the Done filter: nothing visible to
+                        // patch (see doDuplicate); the reload on the next
+                        // resume converges.
+                        prev
+                    } else {
+                        listOf(
+                        ServerTask(
+                            id = tempId,
+                            name = next.name,
+                            description = next.description,
+                            dueDate = next.dueDate,
+                            dueTime = next.dueTime,
+                            estimatedMinutes = mins,
+                            repeatEvery = rep?.first ?: 0,
+                            repeatUnit = rep?.second.orEmpty(),
+                            repeatCustom = rep?.third?.isNotEmpty() == true,
+                            repeatRule = rep?.third.orEmpty(),
+                            parallelable = next.parallelable,
+                        ),
+                    ) + prev
                     }
-                    if (next.id.isEmpty()) {
+                    editing = null
+                    markBusy(tempId)
+                    scope.launch {
                         api.create(
                             name = next.name,
                             description = next.description,
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
-                            repeatEvery = next.repeatOrNull()?.first ?: 0,
-                            repeatUnit = next.repeatOrNull()?.second.orEmpty(),
-                            repeatCustom = next.repeatOrNull()?.third?.isNotEmpty() == true,
-                            repeatRule = next.repeatOrNull()?.third.orEmpty(),
+                            repeatEvery = rep?.first ?: 0,
+                            repeatUnit = rep?.second.orEmpty(),
+                            repeatCustom = rep?.third?.isNotEmpty() == true,
+                            repeatRule = rep?.third.orEmpty(),
                             parallelable = next.parallelable,
                         ).fold(
-                            onSuccess = { editing = null; refreshTick++; pokeWidget() },
-                            onFailure = ::fail,
+                            onSuccess = { created ->
+                                tasks = tasks.map { if (it.id == tempId) created else it }
+                                pokeWidget()
+                            },
+                            onFailure = { e ->
+                                tasks = prev
+                                fail(e)
+                            },
                         )
-                    } else {
-                        // Only resend the recurrence when it actually
-                        // changed: an unrelated edit (a name tweak) must
-                        // not read as a repeat rewrite, and a task edited
-                        // by an older build keeps whatever cadence it has.
-                        val was = editing?.repeatOrNull()
-                        val now = next.repeatOrNull()
-                        val repChanged = was != now
+                        unmarkBusy(tempId)
+                    }
+                } else {
+                    // Only resend the recurrence when it actually
+                    // changed: an unrelated edit (a name tweak) must
+                    // not read as a repeat rewrite, and a task edited
+                    // by an older build keeps whatever cadence it has.
+                    val was = editing?.repeatOrNull()
+                    val nowRep = next.repeatOrNull()
+                    val repChanged = was != nowRep
+                    val prev = tasks
+                    val prevRow = prev.firstOrNull { it.id == next.id }
+                    var optimistic = (prevRow ?: ServerTask(id = next.id)).copy(
+                        name = next.name,
+                        description = next.description,
+                        dueDate = next.dueDate,
+                        dueTime = next.dueTime,
+                        estimatedMinutes = mins,
+                        parallelable = next.parallelable,
+                    )
+                    if (repChanged && nowRep != null) {
+                        optimistic = optimistic.copy(
+                            repeatEvery = nowRep.first,
+                            repeatUnit = nowRep.second,
+                            repeatCustom = nowRep.third.isNotEmpty(),
+                            repeatRule = nowRep.third,
+                        )
+                    }
+                    tasks = prev.map { if (it.id == next.id) optimistic else it }
+                    editing = null
+                    markBusy(next.id)
+                    scope.launch {
                         api.update(
                             id = next.id,
                             name = next.name,
@@ -809,14 +930,14 @@ internal fun TaskManagerScreen(
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
-                            repeatEvery = if (repChanged) now?.first else null,
-                            repeatUnit = if (repChanged) now?.second else null,
+                            repeatEvery = if (repChanged) nowRep?.first else null,
+                            repeatUnit = if (repChanged) nowRep?.second else null,
                             repeatCustom = if (repChanged) {
-                                now?.third?.isNotEmpty() == true
+                                nowRep?.third?.isNotEmpty() == true
                             } else {
                                 null
                             },
-                            repeatRule = if (repChanged) now?.third else null,
+                            repeatRule = if (repChanged) nowRep?.third else null,
                             parallelable = next.parallelable,
                             // The revision the dialog read, not a fresh
                             // lookup: the task may have scrolled out of the
@@ -824,11 +945,30 @@ internal fun TaskManagerScreen(
                             // the edit unguarded (#184).
                             expectedRevision = next.revision,
                         ).fold(
-                            onSuccess = { editing = null; refreshTick++; pokeWidget() },
-                            onFailure = ::fail,
+                            onSuccess = { saved ->
+                                if (prevRow == null) refreshTick++ else {
+                                    tasks = tasks.map { if (it.id == next.id) saved else it }
+                                }
+                                pokeWidget()
+                            },
+                            onFailure = { e ->
+                                tasks = prev
+                                if (isConflict(e)) {
+                                    // Someone else wrote first: reload and
+                                    // say so, rather than silently holding
+                                    // the reverted row.
+                                    refreshTick++
+                                    toasts.toast(
+                                        "That task changed elsewhere — reloaded. Reapply your edit.",
+                                        ToastKind.Error,
+                                    )
+                                } else {
+                                    fail(e)
+                                }
+                            },
                         )
+                        unmarkBusy(next.id)
                     }
-                    busy = false
                 }
             },
         )
@@ -841,7 +981,7 @@ internal fun TaskManagerScreen(
             title = { Text("Delete task?") },
             text = { Text("“${target.name}” will be permanently deleted.") },
             confirmButton = {
-                TextButton(onClick = { doDelete(target) }, enabled = !busy) { Text("Delete") }
+                TextButton(onClick = { doDelete(target) }, enabled = target.id !in busyIds) { Text("Delete") }
             },
             dismissButton = {
                 TextButton(onClick = { deleting = null }) { Text("Cancel") }
@@ -863,7 +1003,7 @@ internal fun TaskManagerScreen(
             task = open,
             overdue = open.isOverdue(sheetDay.toString(), sheetNow),
             today = sheetDay,
-            actionsEnabled = !busy,
+            actionsEnabled = open.id !in busyIds,
             onDismiss = { selected = null },
             onEdit = {
                 selected = null
@@ -1191,7 +1331,6 @@ internal fun DetailLine(
 internal fun ServerTaskDialog(
     initial: ServerTaskDraft,
     isNew: Boolean,
-    busy: Boolean,
     onDismiss: () -> Unit,
     onDelete: (() -> Unit)?,
     onSave: (ServerTaskDraft) -> Unit,
@@ -1296,7 +1435,7 @@ internal fun ServerTaskDialog(
                 )
                 // Recreate draft: a kept time with no date yet is the one
                 // state the labels don't explain on their own, so say it
-                // here rather than only in a snackbar that can be missed.
+                // here rather than only in a toast that can be missed.
                 if (dueDate.isEmpty() && dueTime.isNotEmpty()) {
                     HintLine("Time kept from the completed task — pick a date to keep it.")
                 }
@@ -1466,7 +1605,11 @@ internal fun ServerTaskDialog(
                         )
                     )
                 },
-                enabled = !busy && formValid,
+                // Save stays gated on validity alone: the dialog
+                // dismisses instantly on save and the request runs in the
+                // background (#288), so there is no in-flight state to gate
+                // on here.
+                enabled = formValid,
             ) { Text("Save") }
         },
         dismissButton = {
@@ -1588,3 +1731,38 @@ private fun lastSeenChangeRevision(context: Context): Long =
 private fun noteChangeRevision(context: Context, revision: Long) {
     changePrefs(context).edit().putLong(CHANGE_CURSOR_KEY, revision).apply()
 }
+
+private const val LAST_SYNCED_KEY = "tasks_last_synced_at"
+
+/** When the task list was last fetched, or 0 before the first success. */
+private fun readLastSyncedAt(context: Context): Long =
+    context.applicationContext
+        .getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+        .getLong(LAST_SYNCED_KEY, 0L)
+
+/** Persist the last fetch; failures never call this, so a failed load
+ * leaves the old stamp untouched. */
+private fun writeLastSyncedAt(context: Context, at: Long) {
+    context.applicationContext
+        .getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+        .edit().putLong(LAST_SYNCED_KEY, at).apply()
+}
+
+/**
+ * Relative last-synced label (#288): "just now" under a minute, "Xm ago"
+ * under an hour, "Xh ago" beyond. Null before the first successful load —
+ * the count line shows no stamp rather than an invented one.
+ */
+internal fun formatLastSynced(syncedAt: Long, nowMillis: Long): String? {
+    if (syncedAt <= 0) return null
+    val mins = ((nowMillis - syncedAt).coerceAtLeast(0L) / 60_000L)
+    return when {
+        mins < 1 -> "just now"
+        mins < 60 -> "${mins}m ago"
+        else -> "${mins / 60}h ago"
+    }
+}
+
+/** True when the failure is a revision race: someone else wrote first. */
+internal fun isConflict(e: Throwable): Boolean =
+    "HTTP 409" in (e.message ?: "")

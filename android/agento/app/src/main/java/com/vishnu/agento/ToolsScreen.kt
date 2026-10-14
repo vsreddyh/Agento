@@ -167,7 +167,7 @@ internal fun McpCard(profile: String, server: McpServer) {
         }
     }
 }
-/** Read-only tools inventory per assistant — with
+/** Read-only tools inventory for the chat profile — with
  * Tasks-style search filtering and a sort dropdown.
  * Split out of SkillsScreen into its own sidebar section (#106).
  */
@@ -175,13 +175,14 @@ internal fun McpCard(profile: String, server: McpServer) {
 internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var profile by remember { mutableStateOf("god") }
+    // Single profile since #289.
+    val profile = "chat"
     var toolsets by remember { mutableStateOf<List<ToolsetInfo>>(emptyList()) }
     var toolsError by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
-    // Cancelled + replaced on every load() so rapid profile taps can't
-    // let a stale response win; only the latest job may clear busy.
+    // Cancelled + replaced on every load() so a stale response can't
+    // win; only the latest job may clear busy.
     var loadJob by remember { mutableStateOf<Job?>(null) }
 
     fun load() {
@@ -210,9 +211,8 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         loadJob = job
     }
 
-    LaunchedEffect(profile) { load() }
+    LaunchedEffect(Unit) { load() }
 
-    val tabs = listOf("god" to "God", "story" to "Story", "resumes" to "Resume and Portfolio")
     // Everything stays visible (#123, consistent with Skills): explicitly-off
     // toolsets render an Off badge instead of being dropped, and unknown
     // toggle state (null) shows no badge — so flag-less server shapes never
@@ -274,19 +274,6 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(modifier = Modifier.contentWidth(wc)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    tabs.forEach { (key, label) ->
-                        FilterChip(
-                            selected = profile == key,
-                            onClick = { profile = key },
-                            label = { Text(label) },
-                        )
-                    }
-                }
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },

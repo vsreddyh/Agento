@@ -265,7 +265,9 @@ class TaskWidget : AppWidgetProvider() {
             // Parenthesized: without them take() binds to the last string
             // literal only and the head is never capped.
             return ("$head\n--- log (this app) ---\n$mine\n" +
-                "--- log (system, recent) ---\n$all").take(200_000)
+                "--- log (system, recent) ---\n$all\n" +
+                "--- crash logs (5-day TTL) ---\n${CrashLogs.reportSection(appCtx)}"
+                ).take(200_000)
         }
 
         /** Best-effort wipe of the log buffers. Android gates `logcat -c`

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Fully-containerized live stack orchestrator (Podman).
 #
-# Everything (health-api, pi (3 profiles), proxy, retention) — direct to
+# Everything (health-api, pi (chat profile), proxy, retention) — direct to
 # https://opencode.ai/zen/go/v1, no LLM proxy — runs as compose services in
 # docker/docker-compose.yml. init self-installs the host tools it needs (curl,
 # podman + podman-compose, python3, cron), builds the images, seeds the single
@@ -22,11 +22,12 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUN_DIR="$REPO/run"
 COMPOSE="$REPO/docker/docker-compose.yml"
-# Every agent profile, not just the git-backed ones. Under Hermes these were
-# split: `gateway/` was both the gateway home AND the god profile, with story and
-# resumes nested under it. Pi has no such asymmetry — each profile is a directory
-# under the agent dir and each runs as its own process, god included.
-PROFILES=(god story resumes)
+# The single agent profile. Under Hermes these were split: `gateway/` was
+# both the gateway home AND the god profile, with story and resumes nested
+# under it (both retired in #289 — their workspace checkouts stay on disk,
+# orphaned and unmanaged). Pi has no such asymmetry — each profile is a
+# directory under the agent dir and each runs as its own process.
+PROFILES=(chat)
 PI_HOME="$REPO/pi"
 
 profile_home() {
@@ -49,7 +50,7 @@ Usage: $(basename "$0") <command>
 
 Commands:
   init       Build images, seed the root .env (all env vars), report the skills found, set up host tools (curl, podman, python, cron), install retention cron
-  start      Start the whole container stack (health-api, pi (3 profiles), proxy, retention)
+  start      Start the whole container stack (health-api, pi (chat profile), proxy, retention)
   stop       Stop the container stack
   restart    Stop then start
   status     Show all service states
@@ -253,65 +254,21 @@ cmd_init() {
     # Ownership of the host's own files is the SUDO_USER fix-up's job, further down,
     # and on a non-sudo run the invoking user already owns what they just created.
     # HERMES_UID/HERMES_GID therefore have no remaining reader in this script.
-    local b
-    for b in "${PROFILES[@]}"; do
-        mkdir -p "$(profile_home "$b")"
-        # Only story and resumes are repo-backed. God works in its own profile
-        # directory and has no repo, so it gets NO workspace/<name> — an empty
-        # orphan dir there would later read as deliberate.
-        if [[ "$b" == "story" ]]; then
-            # Story lives in the portals vault, not workspace/story (retired) —
-            # never recreate it.
-            mkdir -p "$REPO/workspace/portals"
-            # Retired dir: rmdir only removes it when empty, so this can
-            # never delete real content — manual deletion also stays safe.
-            rmdir "$REPO/workspace/story" 2>/dev/null || true
-        elif [[ "$b" == "resumes" ]]; then
-            # Resumes lives in the portfolio-resume repo, not workspace/resumes
-            # (retired) — never recreate it.
-            mkdir -p "$REPO/workspace/portfolio-resume"
-            # Retired dir: rmdir only removes it when empty, so this can
-            # never delete real content — manual deletion also stays safe.
-            rmdir "$REPO/workspace/resumes" 2>/dev/null || true
-        fi
-    done
-    # Fix ownership before cloning: when run via sudo, dirs are root-owned and
+    mkdir -p "$(profile_home "chat")"
+    # The retired side profiles' checkouts (workspace/portals,
+    # workspace/portfolio-resume) stay on disk, orphaned and unmanaged:
+    # init neither clones nor deletes them (#289). An empty orphan dir
+    # would later read as deliberate, so nothing is created here either.
+    # Fix ownership: when run via sudo, dirs are root-owned and
     # clone as $SUDO_USER would get Permission denied. Do it now, not after.
     if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
         chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$REPO/workspace" "$PI_HOME" 2>/dev/null || true
     fi
 
-    # Each git-backed bot keeps its own repo clone in workspace/ (private; SSH
-    # auth needs a key on this host — set it up before init). The container
-    # commits locally only; pull/push happen here on the host. Both repos stay
-    # as separate git remotes; this repo does NOT vendor their files.
-    #  - vsreddyh/portals → workspace/portals (story bot lore vault AND story cwd)
-    #  - vsreddyh/portfolio-resume → workspace/portfolio-resume (resumes bot works under resume/)
-    # The host key at ~/.ssh (or $SUDO_USER's ~/.ssh when run with sudo)
-    # is reused — no key generation. Add the deploy key to ~/.ssh before
-    # running init.
-    _clone_repo() {
-        local url="$1" dest="$2"
-        # When run via sudo, clone as the invoking user so the host's existing
-        # key (e.g. /home/vsreddyh/.ssh/id_ed25519 in dev) is used and files
-        # stay owned by that user, not root.
-        if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
-            sudo -u "$SUDO_USER" env GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone "$url" "$dest" 2>&1
-        else
-            env GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone "$url" "$dest" 2>&1
-        fi
-    }
-    if [[ ! -d "$REPO/workspace/portfolio-resume/.git" ]]; then
-        info "Cloning portfolio-resume repo into workspace/portfolio-resume..."
-        _clone_repo "git@github.com:vsreddyh/portfolio-resume.git" "$REPO/workspace/portfolio-resume" \
-            || warn "clone failed — configure an SSH key for this host first. ./scripts/hermes.sh start will still work, but the resumes bot won't have its workspace."
-    fi
-    if [[ ! -d "$REPO/workspace/portals/.git" ]]; then
-        info "Cloning Portals (lore vault) repo into workspace/portals..."
-        _clone_repo "git@github.com:vsreddyh/portals.git" "$REPO/workspace/portals" \
-            || warn "clone failed — configure an SSH key for this host first. ./scripts/hermes.sh start will still work, but the story bot won't have its vault."
-    fi
-    unset -f _clone_repo
+    # Retired side-profile checkouts (workspace/portals,
+    # workspace/portfolio-resume) stay on disk, orphaned: init no longer
+    # clones them and never deletes them (#289). Existing clones keep
+    # working from the host by hand; fresh hosts simply have no copy.
     # When run with sudo, ensure workspace/profile dirs stay owned by the
     # invoking user (not root), so dev edits don't need sudo. Prod also benefits.
     if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
@@ -423,7 +380,7 @@ cmd_start() {
         done
     }
 
-    info "Starting container stack (health-api, pi (3 profiles), proxy)..."
+    info "Starting container stack (health-api, pi (chat profile), proxy)..."
     # Restarts reuse layers; only `init` prunes. `up --build` rebuilds layers
     # whose COPY/requirements changed.
     # PI_NO_BUILD, with HERMES_NO_BUILD still honoured: the old name is what any

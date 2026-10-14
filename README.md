@@ -1,6 +1,6 @@
 # Agento Android stack
 
-Fully containerized agent stack running god + story + resumes against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one pi container** — one `pi` process per profile behind an OpenAI-compatible gateway — serving the custom **Android app** (3 chat tabs + Settings), native browser automation via the built-in browser toolset, Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully containerized agent stack running one chat profile against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one pi container** — one `pi` process for the profile behind an OpenAI-compatible gateway — serving the custom **Android app** (Chat tab + Settings), native browser automation via the built-in browser toolset, Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
@@ -10,10 +10,9 @@ Fully containerized agent stack running god + story + resumes against OpenCode G
                                 Remote MongoDB (money, health, cookbook)
                                              ▲
                               Containers
-  god ────┐               │
-  story   ┤ ONE pi host   │  agent dir   ▼   OpenCode Go Direct
-  resumes ┘ 3 pi processes│   /opt/pi     │  (https://opencode.ai/zen/go/v1)
-           (one per profile)└─ API :8643 ─┤
+  chat ───  ONE pi host    │  agent dir   ▼   OpenCode Go Direct
+          1 pi process    │   /opt/pi     │  (https://opencode.ai/zen/go/v1)
+                          └─ API :8643 ─┤
 Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► pi :8643 ──► MongoDB
                                      └──► /api/* ─► health-api ─► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
@@ -21,7 +20,7 @@ Retention ───────────────► one-shot container (c
 
 | Service | Container / Process | Published Port | Purpose |
 |---|---|---|---|
-| `pi` | `pi` container (`pi-gateway`, PID 1) | `8643` (app API) | The agent host: one `pi` process per profile (god, story, resumes) behind an OpenAI-compatible gateway |
+| `pi` | `pi` container (`pi-gateway`, PID 1) | `8643` (app API) | The agent host: one `pi` process for the single chat profile behind an OpenAI-compatible gateway |
 | `health-api` | `health-api` container | `8001` | Ingests Health Connect sync data from Android and persists to MongoDB |
 | `proxy` | `proxy` container (nginx) | `8080` | Single app URL: routes `/p/*` → pi chat, `/api/*` → health sync |
 | `retention` | `retention` container (one-shot) | — | Data retention policy runner (`cmd/retention`, its own `docker/retention/Dockerfile` image) |
@@ -32,9 +31,11 @@ Retention ───────────────► one-shot container (c
 
 | Profile | App Tab | Purpose & Storage | Data Retention Policy |
 |---|---|---|---|
-| `default` | God (main) | Money (`money_transactions`), cookbook (`cookbook_*`, permanent), health tracking (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync via `health-api` | Money >90d autowipe; `hc_meals`/`hc_days` >30d; `hc_weight` + `cookbook_*` **never pruned** |
-| `story` | Story (side) | Mana Revolution lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) | No DB retention (Git tracked) |
-| `resumes` | Resumes (side) | LaTeX resume tailoring & cover letters in Git repo (`workspace/portfolio-resume`, `vsreddyh/portfolio-resume`, scope `resume/`) | No DB retention (Git tracked) |
+| `chat` | Chat | Money (`money_transactions`), cookbook (`cookbook_*`, permanent), health tracking (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync via `health-api` | Money >90d autowipe; `hc_meals`/`hc_days` >30d; `hc_weight` + `cookbook_*` **never pruned** |
+
+(Retired in #289: the `story` and `resumes` side profiles. Their checkouts,
+`workspace/portals` and `workspace/portfolio-resume`, stay on disk, orphaned
+and unmanaged.)
 
 ---
 
@@ -52,10 +53,7 @@ Retention ───────────────► one-shot container (c
 ### Required Host Tools & Access
 - **Git** (`git`) and **sudo** privileges (pre-installed).
 - **Podman** (4.0+) & **podman-compose** (`podman-compose`). Auto-installed by `./scripts/hermes.sh init` if missing. No daemon — Podman is daemonless.
-- **SSH Key Pair**: Configured in `~/.ssh` with read/write access to private GitHub repos for Git-backed bots:
-  - `git@github.com:vsreddyh/portals.git` (Story bot lore vault)
-  - `git@github.com:vsreddyh/portfolio-resume.git` (Resumes bot CV repository, scope `resume/`)
-  - Bootstrap order matters: the pi service bind-mounts `id_ed25519`(.pub) + `known_hosts` read-only and **fails to start without them** — provision keys before the first `./scripts/hermes.sh start` (set `VPS_SSH_DIR` in `.env` if the VPS user isn't root).
+- **SSH Key Pair**: Configured in `~/.ssh` (read-only mounted into the pi service for host-side git by hand; missing files fail container creation — provision keys before the first `./scripts/hermes.sh start`, set `VPS_SSH_DIR` in `.env` if the VPS user isn't root). Retired side-profile repos (`vsreddyh/portals`, `vsreddyh/portfolio-resume`) are no longer cloned by `init`.
 
 ### Required External Services & API Keys
 - **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai). One key for the single `opencode-go` provider, selected per request in app Settings (model `mimo-v2.6-flash`).
@@ -64,7 +62,7 @@ Retention ───────────────► one-shot container (c
 - **App Password**: `PASSWORD` Bearer token matching the Agento Android app Password field (single credential for chat + sync). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password.)
 
 ### Network & Firewall Ports
-- Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `PASSWORD`, provider/model picked per tab from live dropdowns, paths `/p/story`, `/p/resumes`, `/p/god`. Direct ports stay published for comparison: `8643` (pi, what `/p/*` reaches) and `8001` (sync).
+- Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `PASSWORD`, provider/model picked from live dropdowns in Settings, path `/p/chat`. Direct ports stay published for comparison: `8643` (pi, what `/p/*` reaches) and `8001` (sync).
 - Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as the proxy).
 - Outbound HTTPS (`443/tcp`) for OpenCode Go (`opencode.ai`), MongoDB Atlas, and GitHub.
 
@@ -133,8 +131,8 @@ All services read the same root `.env`, so a dev checkout just points `MONGODB_U
 
 ## Android App Screens (2.x)
 
-- **Sidebar**: God / Story / Resumes chats + Tasks + Storage + Reminders + Settings (drawer replaced the bottom bar).
-- **Chat tabs**: threaded conversations persisted on-device (survive restarts; New starts a thread, switcher revisits/deletes old ones), sender labels + timestamps, copy button, retry on failure. Provider/model picked per tab from its own model sheet (top-bar button), saved instantly.
+- **Sidebar**: Chat + Tasks + Storage + Reminders + Settings (drawer replaced the bottom bar).
+- **Chat tab**: threaded conversations persisted on-device (survive restarts; New starts a thread, switcher revisits/deletes old ones), sender labels + timestamps, copy button, retry on failure. Provider/model picked from its own model sheet (top-bar button), saved instantly.
 - **Tasks**: name/status/note table; tap status cycles todo → doing → done; add/edit dialog; persisted locally.
 - **Storage**: browses the VPS `exports/` folder (subfolders supported), downloads to mobile Downloads.
 - **Reminders**: exact-alarm local notifications (falls back to inexact without the system grant); survives reboot.
@@ -188,7 +186,7 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── settings.json       # Pi's own knobs (tool selection, retry, cache warming)
 │   ├── AGENTS.md           # rules shared by every profile
 │   ├── extensions/         # loaded by every profile (spawn_subagent)
-│   └── profiles/           # god, story, resumes — each its own pi process
+│   └── profiles/           # chat — the single pi process
 ├── cmd/                 # Go services (each builds to a static binary)
 │   ├── mongo/             # MongoDB CLI helper for bot toolsets
 │   ├── retention/         # Data lifecycle prune runner
