@@ -87,7 +87,7 @@ class ServerApi(context: Context) {
         }
     }
 
-    /** Lists skills for one profile path (e.g. `/p/god`). The server
+    /** Lists skills for one profile path (e.g. `/p/chat`). The server
      * returns a bare JSON array; object-wrapped shapes fall back gracefully.
      * A valid-but-empty response is success (the UI shows "Nothing listed");
      * only transport/parse failures are errors. */

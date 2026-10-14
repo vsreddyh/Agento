@@ -380,7 +380,7 @@ private fun DrawerList(
     onToggleSettings: () -> Unit,
     modelFor: (Destination) -> String? = { null },
 ) {
-    // Scrollable (#105): 9 destinations plus the settings subsections
+    // Scrollable (#105): 8 destinations plus the settings subsections
     // overflow short screens — without this the bottom items are cut off
     // with no way to reach them.
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
