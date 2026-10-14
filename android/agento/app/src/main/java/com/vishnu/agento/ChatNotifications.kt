@@ -10,6 +10,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.core.net.toUri
 
 /**
  * Hermes reply notifications (issue #58).
@@ -105,9 +106,7 @@ object ChatNotifications {
             Intent(context, MainActivity::class.java)
                 .setAction(CronIntents.ACTION_CRON)
                 .putExtra(CronIntents.EXTRA_JOB_ID, jobId)
-                .setData(
-                    androidx.core.net.toUri("agento://cron/${android.net.Uri.encode(jobId)}"),
-                ),
+                .setData("agento://cron/${android.net.Uri.encode(jobId)}".toUri()),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)

@@ -37,8 +37,10 @@ class CronSyncWorker(
     params: WorkerParameters,
 ) : CoroutineWorker(context, params) {
 
-    private companion object {
-        const val TAG = "CronSyncWorker"
+    companion object {
+        private const val TAG = "CronSyncWorker"
+        const val WORK_NAME = "agento_cron_sync"
+        const val INTERVAL_MINUTES = 30L
     }
 
     override suspend fun doWork(): Result = try {
@@ -51,9 +53,6 @@ class CronSyncWorker(
     }
 
     companion object {
-        const val WORK_NAME = "agento_cron_sync"
-        const val INTERVAL_MINUTES = 30L
-
         /** Unique periodic work with UPDATE policy, like the task sync. */
         fun schedule(context: Context) {
             val request = PeriodicWorkRequestBuilder<CronSyncWorker>(
