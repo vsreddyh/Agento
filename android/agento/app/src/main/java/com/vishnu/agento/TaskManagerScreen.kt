@@ -90,7 +90,7 @@ internal fun TaskManagerScreen(
     val scope = rememberCoroutineScope()
     // Non-suspending queued toasts (#288): toast() enqueues and returns,
     // so plain callbacks call it directly with no scope.launch dance.
-    val toasts = remember { ToastCenter(scope) }
+    val toasts = remember(scope) { ToastCenter(scope) }
 
     // One client for the screen (its OkHttpClient is shared process-wide).
     val api = remember(context) { TasksApi(context) }
@@ -382,7 +382,11 @@ internal fun TaskManagerScreen(
         val tempId = "__pending__${System.nanoTime()}"
         val prev = tasks
         val placeholder = t.copy(id = tempId)
-        tasks = listOf(placeholder) + prev
+        // The server filters by state: on the Done filter an open copy
+        // belongs nowhere visible, so skip the placeholder there (success
+        // still pokes and toasts; the row appears on the next reload only
+        // if the filter would carry it).
+        tasks = if (filter == ServerTaskFilter.Done) prev else listOf(placeholder) + prev
         markBusy(tempId)
         scope.launch {
             api.create(
@@ -433,6 +437,10 @@ internal fun TaskManagerScreen(
                     val next = done?.nextDueDate.orEmpty()
                     if (next.isNotEmpty()) {
                         refreshTick++
+                        // The widget and the alarm set still need the push:
+                        // the loader never pokes, and the new occurrence's
+                        // reminders are not armed until it does.
+                        pokeWidget()
                         // "Tomorrow" / "2 Oct" rather than a raw ISO date.
                         val when2 = friendlyDue(
                             next, "", java.time.LocalDate.now(IST)).ifEmpty { next }
@@ -837,7 +845,13 @@ internal fun TaskManagerScreen(
                     val rep = next.repeatOrNull()
                     val tempId = "__pending__${System.nanoTime()}"
                     val prev = tasks
-                    tasks = listOf(
+                    tasks = if (filter == ServerTaskFilter.Done) {
+                        // Open task on the Done filter: nothing visible to
+                        // patch (see doDuplicate); the reload on the next
+                        // resume converges.
+                        prev
+                    } else {
+                        listOf(
                         ServerTask(
                             id = tempId,
                             name = next.name,
@@ -852,6 +866,7 @@ internal fun TaskManagerScreen(
                             parallelable = next.parallelable,
                         ),
                     ) + prev
+                    }
                     editing = null
                     markBusy(tempId)
                     scope.launch {

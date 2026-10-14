@@ -101,7 +101,7 @@ internal fun SettingsScreen(
     val state by viewModel.state
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val toasts = remember { ToastCenter(scope) }
+    val toasts = remember(scope) { ToastCenter(scope) }
     var error by remember { mutableStateOf("") }
     // Bumped on every resume so the hub's widget count reflects a
     // placement added (or removed) while the app was in the background —

@@ -36,7 +36,7 @@ import kotlinx.coroutines.launch
 internal fun SchedulerScreen(onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val toasts = remember { ToastCenter(scope) }
+    val toasts = remember(scope) { ToastCenter(scope) }
     var jobs by remember { mutableStateOf<List<CronJob>>(emptyList()) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }

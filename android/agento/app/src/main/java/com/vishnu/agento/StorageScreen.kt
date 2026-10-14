@@ -33,7 +33,7 @@ import kotlinx.coroutines.launch
 internal fun StorageScreen(onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val toasts = remember { ToastCenter(scope) }
+    val toasts = remember(scope) { ToastCenter(scope) }
     var path by remember { mutableStateOf("") }
     var dirs by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var files by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }

@@ -114,7 +114,7 @@ internal fun ChatTab(
     LaunchedEffect(Unit) { vm.refreshConfig() }
     var showModel by remember { mutableStateOf(false) }
     var showThreads by remember { mutableStateOf(false) }
-    val toasts = remember { ToastCenter(scope) }
+    val toasts = remember(scope) { ToastCenter(scope) }
     // #64: never show raw "not set" — the header shows the model name when
     // configured and a setup prompt otherwise.
     val setupNeeded = state.model.isBlank() || state.provider.isBlank()

@@ -86,7 +86,7 @@ internal enum class TaskSort(val title: String) {
 internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val toasts = remember { ToastCenter(scope) }
+    val toasts = remember(scope) { ToastCenter(scope) }
     // One client for the screen (its OkHttpClient is shared process-wide).
     val api = remember(context) { ProjectsApi(context) }
     var projects by remember { mutableStateOf<List<ServerProject>>(emptyList()) }
