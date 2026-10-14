@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 
 	"agento/internal/cronjobs"
 )
+
+var nextRunRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$`)
 
 type fakeJobs struct {
 	mu   sync.Mutex
@@ -183,6 +186,9 @@ func TestJobsCRUD(t *testing.T) {
 	id, _ := created["id"].(string)
 	if id == "" || created["paused"] != false {
 		t.Fatalf("bad create shape: %v", created)
+	}
+	if nextRun, _ := created["next_run"].(string); !nextRunRe.MatchString(nextRun) {
+		t.Fatalf("next_run not an IST datetime: %v", created)
 	}
 	if _, ok := created["runs"].([]any); !ok {
 		t.Fatalf("runs missing: %v", created)

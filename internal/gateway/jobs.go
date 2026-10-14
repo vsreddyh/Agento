@@ -45,8 +45,11 @@ func jobJSON(j cronjobs.Job, now time.Time) map[string]any {
 	var nextRun string
 	if !j.Paused {
 		if sched, err := cronjobs.Parse(j.Schedule); err == nil {
+			// IST like everything else the user reads: the container
+			// zone is UTC, and an unconverted Format would print a
+			// next_run 5:30 behind the entered schedule.
 			if next := sched.Next(now); !next.IsZero() {
-				nextRun = next.Format("2006-01-02 15:04")
+				nextRun = next.In(cronjobs.IST).Format("2006-01-02 15:04")
 			}
 		}
 	}
@@ -137,7 +140,14 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, rest string)
 		}
 		text, err := s.cfg.CronFire(r.Context(), id)
 		if err != nil {
-			jobsError(w, err)
+			// Unknown job is the caller's mistake (404); a model
+			// failure is upstream (502), like every other model call.
+			if _, ok := err.(*cronjobs.StoreError); ok {
+				jobsError(w, err)
+			} else {
+				apiError(w, http.StatusBadGateway, "upstream_error", "",
+					"cron fire failed: "+bounded(err.Error()))
+			}
 			return
 		}
 		writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "response": text})
@@ -182,8 +192,15 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, rest string)
 }
 
 func jobsError(w http.ResponseWriter, err error) {
-	if se, ok := err.(*cronjobs.StoreError); ok && se.NotFound {
-		apiError(w, http.StatusNotFound, "invalid_request_error", "", bounded(se.Msg))
+	if se, ok := err.(*cronjobs.StoreError); ok {
+		switch {
+		case se.NotFound:
+			apiError(w, http.StatusNotFound, "invalid_request_error", "", bounded(se.Msg))
+		case se.Upstream:
+			apiError(w, http.StatusBadGateway, "upstream_error", "", bounded(se.Msg))
+		default:
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "", bounded(se.Msg))
+		}
 		return
 	}
 	apiError(w, http.StatusBadRequest, "invalid_request_error", "", bounded(err.Error()))

@@ -48,11 +48,13 @@ type Job struct {
 	Runs     []Run `bson:"runs" json:"runs"`
 }
 
-// StoreError is the domain error: the HTTP layer answers 400, or 404 when
-// NotFound.
+// StoreError is the domain error: the HTTP layer answers 400, 404 when
+// NotFound, or 502 when Upstream (a transport failure, not the caller's
+// mistake).
 type StoreError struct {
 	Msg      string
 	NotFound bool
+	Upstream bool
 }
 
 func (e *StoreError) Error() string { return e.Msg }
@@ -194,7 +196,8 @@ func objectID(id string) (primitive.ObjectID, error) {
 	return oid, nil
 }
 
-// Get returns one job by id.
+// Get returns one job by id. A missing doc is NotFound; anything else
+// (transport failure) is Upstream rather than a 404 for an outage.
 func (s *Store) Get(ctx context.Context, id string) (Job, error) {
 	oid, err := objectID(id)
 	if err != nil {
@@ -202,7 +205,10 @@ func (s *Store) Get(ctx context.Context, id string) (Job, error) {
 	}
 	var m bson.M
 	if err := s.jobs.FindOne(ctx, bson.M{"_id": oid}).Decode(&m); err != nil {
-		return Job{}, notFound(id)
+		if err == mongoDrv.ErrNoDocuments {
+			return Job{}, notFound(id)
+		}
+		return Job{}, &StoreError{Msg: "job read failed: " + err.Error(), Upstream: true}
 	}
 	j := fromDoc(m)
 	j.ID = oid.Hex()
@@ -268,7 +274,10 @@ func (s *Store) Update(ctx context.Context, id string, name, prompt, schedule, d
 		bson.M{"$set": set}, options.FindOneAndUpdate().SetReturnDocument(options.After))
 	var m bson.M
 	if err := res.Decode(&m); err != nil {
-		return Job{}, notFound(id)
+		if err == mongoDrv.ErrNoDocuments {
+			return Job{}, notFound(id)
+		}
+		return Job{}, &StoreError{Msg: "job update failed: " + err.Error(), Upstream: true}
 	}
 	j := fromDoc(m)
 	j.ID = oid.Hex()
@@ -299,12 +308,18 @@ func (s *Store) RecordRun(ctx context.Context, id string, run Run, fireInstant i
 	if err != nil {
 		return err
 	}
-	_, err = s.jobs.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{
+	res, err := s.jobs.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{
 		"$push": bson.M{"runs": bson.M{
 			"$each":  []bson.M{{"at": run.At, "text": run.Text, "missed": run.Missed}},
 			"$slice": -RunHistoryCap,
 		}},
 		"$set": bson.M{"lastFire": fireInstant, "updatedAt": time.Now().UnixMilli()},
 	})
-	return err
+	if err != nil {
+		return &StoreError{Msg: "run record failed: " + err.Error(), Upstream: true}
+	}
+	if res.MatchedCount == 0 {
+		return notFound(id)
+	}
+	return nil
 }
