@@ -28,6 +28,7 @@ package main
 
 import (
 	"agento/internal/crashlog"
+	"agento/internal/cronjobs"
 	"context"
 	"errors"
 	"fmt"
@@ -195,6 +196,39 @@ func run() error {
 		return errors.New("no profile produced a working agent")
 	}
 
+	// Cron jobs live in Mongo next to the other domain collections. A
+	// store failure must not take chat down: without it the jobs routes
+	// answer 404 and the Scheduler stays idle, loudly logged.
+	var cronStore gateway.JobStore
+	var cronFire gateway.CronFire
+	if store, err := cronjobs.FromEnv(); err != nil {
+		logger.Printf("cron jobs disabled: %v", err)
+	} else {
+		runner := &cronjobs.BareClient{
+			APIKey: os.Getenv("OPENCODE_API_KEY"),
+			Model:  envOr("PI_CRON_MODEL", "mimo-v2.6-flash"),
+		}
+		worker := &cronjobs.Worker{Store: store, Runner: runner, Logf: logger.Printf}
+		cronStore = store
+		cronFire = worker.FireNow
+		// One tick a minute plus one immediate pass: the immediate pass
+		// accounts fires missed while down (skip-and-note) instead of
+		// leaving LastFire stale until the next minute.
+		go func() {
+			worker.Tick(ctx, time.Now())
+			tick := time.NewTicker(time.Minute)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case now := <-tick.C:
+					worker.Tick(ctx, now)
+				}
+			}
+		}()
+	}
+
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")
 	if _, ok := agents[defaultProfile]; !ok {
 		// Fall back to the first profile that actually STARTED, not the first one
@@ -211,7 +245,7 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, logger.Printf), agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, logger.Printf), agents)
 	if err != nil {
 		return err
 	}
@@ -411,7 +445,7 @@ func skillArgs(skillsDir string) []string {
 // InventoryTimeout line left every test green, because the test exercised secondsEnv
 // directly and never the wiring. A budget that cannot be shown to reach its field is
 // not configurable in any useful sense.
-func gatewayConfig(password, agentDir, defaultProfile, crashDir string, logf func(string, ...any)) gateway.Config {
+func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, logf func(string, ...any)) gateway.Config {
 	return gateway.Config{
 		Password: password,
 		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
@@ -423,6 +457,10 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, logf fun
 		// survive container restarts). Resolved in run(), not derived in
 		// New, so the mapping stays testable like every other field.
 		CrashDir: crashDir,
+		// Cron backend and manual-run entry, both owned by run(): the
+		// store needs env and the fire path needs the worker.
+		CronJobs: cronStore,
+		CronFire: cronFire,
 		// Each budget is configurable for the same reason: the right value depends on
 		// the host, and changing it should not mean rebuilding the binary.
 		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),
