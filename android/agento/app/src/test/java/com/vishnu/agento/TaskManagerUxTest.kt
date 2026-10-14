@@ -21,7 +21,7 @@ class TaskManagerUxTest {
     @Test
     fun `just synced reads just now`() {
         assertEquals("just now", formatLastSynced(1_000_000L, 1_000_000L))
-        assertEquals("just now", formatLastSynced(1_000_000L, 1_000_059_000L))
+        assertEquals("just now", formatLastSynced(1_000_000L, 1_059_000L))
     }
 
     @Test
