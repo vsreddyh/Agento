@@ -1,6 +1,6 @@
 ---
 name: task-manager
-description: "Personal task manager: create, list, complete, and roll recurring tasks. No status field — open means completedAt is null."
+description: "Personal task manager: create, list, complete, skip, and roll recurring tasks. No status field — open means completedAt is null."
 ---
 
 # Task Manager
@@ -45,11 +45,12 @@ rejects it.
   X" → `parallelable: true`; no repeat mentioned → send no repeat keys.)
 - Morning check: `list_tasks` with `overdue: true`, then state=open.
 - Done for now but not finished: leave open. Only `complete_task` finishes.
-- "Not tonight" / "skip it" means the work did NOT happen: never `complete_task`
-  it — leave it open, or push `due_date`/`due_time` via `update_task` when the
-  user names another time. A completion is a claim the work is done, and
-  completed rows vanish after 3 days, so a false one is erased, not corrected.
+- "Not tonight" / "skip it" means the work did NOT happen: call `skip_task`
+  (never `complete_task` — a completion claims the work happened, and
+  completed rows vanish after 3 days, so a false one is erased, not
+  corrected). A structured repeat rolls over server-side like a completion;
+  a custom repeat is yours to recreate from the response's `follow_up`.
 
 ## Mistake
 
-`reopen_task` — for a mistaken completion. Never `delete_task` to "undo" it.
+`reopen_task` — for a mistaken completion or skip. Never `delete_task` to "undo" it.

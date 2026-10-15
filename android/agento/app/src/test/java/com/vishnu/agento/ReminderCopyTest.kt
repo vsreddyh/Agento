@@ -78,14 +78,45 @@ class ReminderCopyTest {
     }
 
     @Test
-    fun `overdue without an elapsed duration falls back`() {
+    fun `overdue without an elapsed duration states only the fact`() {
         assertEquals(
-            "Overdue since Today, 09:00",
+            "Overdue",
             reminderMessage(ReminderKind.Overdue, "Today, 09:00", null, null),
         )
         assertEquals(
             "Overdue",
             reminderMessage(ReminderKind.Overdue, "", null, null),
         )
+    }
+
+    @Test
+    fun `window line names bare start-to-due times`() {
+        val task = ServerTask(
+            id = "t",
+            name = "Pay rent",
+            dueDate = "2026-08-08",
+            dueTime = "09:00",
+            estimatedMinutes = 30,
+        )
+        // 08:30 to 09:00 IST regardless of the stored padding.
+        assertEquals("08:30 to 09:00", reminderWindowLine(task))
+    }
+
+    @Test
+    fun `window line without a start shows the due time alone`() {
+        val task = ServerTask(
+            id = "t",
+            name = "Pay rent",
+            dueDate = "2026-08-08",
+            dueTime = "9:00",
+            estimatedMinutes = 0,
+        )
+        assertEquals("09:00", reminderWindowLine(task))
+    }
+
+    @Test
+    fun `posted tag names task and kind`() {
+        assertEquals("abc#due", postedTag("abc", ReminderKind.Due))
+        assertEquals("abc#overdue", postedTag("abc", ReminderKind.Overdue))
     }
 }

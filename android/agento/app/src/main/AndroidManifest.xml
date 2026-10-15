@@ -167,9 +167,21 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".TaskSkipActivity"
+            android:theme="@style/Theme.Agento.Trampoline"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="true" />
+
         <!-- Due-time task reminder alarms (explicit intents only). -->
         <receiver
             android:name=".TaskAlarmReceiver"
+            android:exported="false" />
+
+        <!-- Notification inline-reply for [Instruct Agent] (explicit intents only). -->
+        <receiver
+            android:name=".TaskInstructReceiver"
             android:exported="false" />
 
         <receiver

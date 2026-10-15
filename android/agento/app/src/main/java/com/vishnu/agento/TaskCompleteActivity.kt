@@ -1,7 +1,5 @@
 package com.vishnu.agento
 
-import android.app.NotificationManager
-import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -30,14 +28,11 @@ class TaskCompleteActivity : ComponentActivity() {
         if (!completeId.isNullOrEmpty()) {
             lifecycleScope.launch {
                 val completed = runCatching { TasksApi(this@TaskCompleteActivity).complete(completeId) }.isSuccess
-                // Action taps don't auto-cancel: dismiss the due alert
-                // this completion came from (tag + id match the post) —
-                // but only on success, so an offline tap keeps the alert.
+                // Action taps dismiss every posted alert for the task (all
+                // four reminder-point tags, #287) — but only on success,
+                // so an offline tap keeps the alert.
                 if (completed) {
-                    runCatching {
-                        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-                            .cancel(completeId, ALARM_NOTIF_ID)
-                    }
+                    runCatching { TaskReminders.cancelPosted(this@TaskCompleteActivity, completeId) }
                 }
                 // Join before finishing: the scopes are static and would
                 // survive, but a process death right after the tap must

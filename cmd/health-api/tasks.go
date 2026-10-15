@@ -506,10 +506,12 @@ func taskItem(w http.ResponseWriter, r *http.Request) {
 		deleteTask(w, r, id)
 	case action == "complete" && r.Method == http.MethodPost:
 		completeTask(w, r, id)
+	case action == "skip" && r.Method == http.MethodPost:
+		skipTask(w, r, id)
 	case action == "reopen" && r.Method == http.MethodPost:
 		reopenTask(w, r, id)
 	default:
-		if action != "" && action != "complete" && action != "reopen" {
+		if action != "" && action != "complete" && action != "skip" && action != "reopen" {
 			writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
 			return
 		}
@@ -628,6 +630,53 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	// from "repeats, and the rollover failed" instead of inferring from an absent
 	// `next` — which is how a repeat that had stopped recurring still looked like a
 	// successful completion.
+	out["rollover"] = string(rollover)
+	if rollover.NeedsAttention() {
+		out["needs_attention"] = rollover.Attention(rolloverDetail)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// skipTask closes the current occurrence without claiming the work was
+// done (#287): the notification `[Skip]` action and the agent's `skip_task`
+// both land here. Same response envelope as completeTask (task + optional
+// `next` + `rollover`), so callers handle both verbs the same way. The
+// optional `{"reason": "..."}` body is free text; absent or empty is fine.
+func skipTask(w http.ResponseWriter, r *http.Request, id string) {
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	reason := ""
+	if r.Body != nil && r.ContentLength != 0 {
+		if fields, ok := decodeTaskBody(w, r); ok {
+			if v, present := fields["reason"]; present && v != nil {
+				if s, isStr := v.(string); isStr {
+					reason = s
+				} else {
+					writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "reason must be a string"})
+					return
+				}
+			}
+		} else {
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, id, reason)
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	store.RecordMutation(ctx, tasks.OpSkip, id, requestSource(r), fmt.Sprint(rollover))
+	out := bson.M{}
+	for k, v := range doc {
+		out[k] = v
+	}
+	if next != nil {
+		out["next"] = next
+	}
 	out["rollover"] = string(rollover)
 	if rollover.NeedsAttention() {
 		out["needs_attention"] = rollover.Attention(rolloverDetail)

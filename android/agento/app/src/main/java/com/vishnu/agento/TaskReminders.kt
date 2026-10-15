@@ -162,11 +162,10 @@ internal fun reminderPoints(
  * in the lock-screen line, so a "Start now" and a "Due now" stay
  * distinguishable at a glance in a notification stack.
  *
- * [dueLine] is retained for the overdue fallback when no elapsed duration
- * is known; [startLine] is retained for signature stability (callers pass
- * the window lines they already computed). When the task could not be
- * fetched, [overdueElapsed] is null and the wording degrades to the bare
- * fact rather than inventing a duration.
+ * [dueLine] is retained for signature stability (callers pass the window
+ * lines they already computed); [startLine] likewise. When the task could
+ * not be fetched, [overdueElapsed] is null and the wording degrades to the
+ * bare fact rather than inventing a duration.
  */
 internal fun reminderMessage(
     kind: ReminderKind,
@@ -183,9 +182,12 @@ internal fun reminderMessage(
     // the window.
     ReminderKind.Due ->
         "Due now"
+    // No "Overdue since …" fallback: without a known elapsed duration the
+    // honest line is the bare fact (#287). The times live in the expanded
+    // view either way.
     ReminderKind.Overdue ->
         if (overdueElapsed != null) overdueText(overdueElapsed)
-        else if (dueLine.isEmpty()) "Overdue" else "Overdue since $dueLine"
+        else "Overdue"
 }
 
 /**
@@ -202,6 +204,38 @@ internal fun overdueText(elapsedMillis: Long): String {
         h == 0 -> "Overdue for $m min"
         m == 0 -> "Overdue for $h hr"
         else -> "Overdue for $h hr $m min"
+    }
+}
+
+/**
+ * The notification tag for one posted reminder (#287). The tag is per task
+ * AND kind, so a task's start nudge, heads-up and each overdue nag occupy
+ * their own slot instead of replacing one another — and so action taps
+ * dismiss exactly what they came from. Shared with [TaskReminders.cancelPosted]
+ * and the trampolines: the tag must match [notify] or the alert survives
+ * its own action.
+ */
+internal fun postedTag(taskId: String, kind: ReminderKind) = "$taskId#${kind.key}"
+
+/**
+ * The window line for the expanded view (#287): bare start-to-due times,
+ * "8:30 to 9:00". Parsed from instants and zero-padded, never echoed from
+ * storage (the stored due time is unpadded and [friendlyDue] carries a day
+ * prefix — both wrong here). A task with no separate start (zero estimate)
+ * shows the due time alone. Day-spanning windows still read as bare times:
+ * the spec's shape, kept literally.
+ */
+internal fun reminderWindowLine(task: ServerTask): String {
+    val dueAt = task.dueMillisOrNull()
+    fun hhmm(at: Long): String =
+        java.time.Instant.ofEpochMilli(at).atZone(IST).toLocalTime()
+            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+    if (dueAt == null) return task.dueTime.trim()
+    val startAt = startMomentMillis(dueAt, task.estimatedMinutes)
+    return if (startAt != null && startAt != dueAt) {
+        "${hhmm(startAt)} to ${hhmm(dueAt)}"
+    } else {
+        hhmm(dueAt)
     }
 }
 
@@ -439,6 +473,20 @@ object TaskReminders {
     fun cancelOne(context: Context, taskId: String) {
         val appCtx = context.applicationContext
         for (kind in ReminderKind.entries) cancelKind(appCtx, alarmKey(taskId, kind))
+    }
+
+    /**
+     * Dismiss every posted notification for one task (all kinds, #287).
+     * The post tag carries the kind ([postedTag]) while the action tap only
+     * knows the task — so a trampoline must cancel all four tags, not the
+     * bare id, or the alert survives its own action.
+     */
+    fun cancelPosted(context: Context, taskId: String) {
+        val mgr = context.applicationContext
+            .getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        for (kind in ReminderKind.entries) {
+            runCatching { mgr.cancel(postedTag(taskId, kind), ALARM_NOTIF_ID) }
+        }
     }
 
     /**
@@ -751,18 +799,15 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // Locals: task is nullable and conditions below don't smart-cast.
         val taskDesc = task?.description.orEmpty()
         // Expanded view, at most three lines (#287): the message, the task's
-        // own description, and the window it has to happen in ("8:30 to
-        // 9:00" shape — start to due, or the due line alone when there is
-        // no separate start). Deliberately not a dump of every field — the
-        // repeat rule, the parallel flag and the estimate are things to look
-        // up in the app, not to read on a lock screen (issue #160).
+        // own description, and the bare start-to-due window ("8:30 to 9:00").
+        // Deliberately not a dump of every field — the repeat rule, the
+        // parallel flag and the estimate are things to look up in the app,
+        // not to read on a lock screen (issue #160).
+        val window = task?.let { reminderWindowLine(it) }.orEmpty()
         val big = buildList {
             add(message)
             if (taskDesc.isNotEmpty()) add(taskDesc)
-            when {
-                startLine != null && dueLine.isNotEmpty() -> add("$startLine to $dueLine")
-                dueLine.isNotEmpty() -> add(dueLine)
-            }
+            if (window.isNotEmpty()) add(window)
         }.joinToString("\n")
         // Inline complete reuses the widget trampoline (no visible UI:
         // completes, refreshes widget/alarms, finishes). Data URI + own
@@ -776,6 +821,37 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 .setData("agento://reminder/${Uri.encode(taskId)}/complete".toUri()),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        // Inline skip closes the occurrence without claiming the work was
+        // done (#287): same trampoline shape, POST /api/tasks/{id}/skip.
+        val skip = PendingIntent.getActivity(
+            appCtx, ("skip:$taskId").hashCode(),
+            Intent(appCtx, TaskSkipActivity::class.java)
+                .putExtra(TaskSkipActivity.EXTRA_SKIP_ID, taskId)
+                .setData("agento://reminder/${Uri.encode(taskId)}/skip".toUri()),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        // Instruct Agent opens a text box inside the notification
+        // (RemoteInput, #287); on send TaskInstructReceiver starts a new
+        // chat thread tagging this task plus the instruction text.
+        // Data URI + own request code for the same identity reason.
+        val instructIntent = Intent(appCtx, TaskInstructReceiver::class.java)
+            .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
+            .setData("agento://reminder/${Uri.encode(taskId)}/instruct".toUri())
+        val instruct = PendingIntent.getBroadcast(
+            // MUTABLE, not IMMUTABLE: the system delivers the typed reply
+            // as a fill-in intent, which an immutable PendingIntent
+            // rejects on API 31+. (FLAG_MUTABLE is compile-inlined, so
+            // referencing it is safe down to minSdk 28.)
+            appCtx, ("instruct:$taskId").hashCode(), instructIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+        )
+        val instructAction = NotificationCompat.Action.Builder(
+            0, "Instruct Agent", instruct,
+        ).addRemoteInput(
+            androidx.core.app.RemoteInput.Builder(TaskInstructReceiver.KEY_INSTRUCT)
+                .setLabel("Instruction for the agent")
+                .build(),
+        ).build()
         val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE)
             as NotificationManager
         // No SDK guard: notification channels exist since 26 and minSdk
@@ -806,10 +882,9 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             .setContentIntent(tap)
             // No icon (0): framework checkables render badly as action
             // icons on some OEMs.
-            // #287 follow-ups need design and are deliberately out of scope
-            // here: [Skip] has no server endpoint (complete/reopen only) and
-            // [Instruct Agent] has no receiver-to-chat path yet.
             .addAction(0, "Completed", done)
+            .addAction(0, "Skip", skip)
+            .addAction(instructAction)
         // Expanded view whenever it would add something: a task with no
         // description still carries its window, and "Due now" alone leaves
         // the time unsaid. When the body *is* just the message there is
@@ -820,14 +895,15 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             )
         }
         mgr.notify(
-            // Tag-based identity: unique per task *and* reminder point, so
-            // a task's start nudge, heads-up and each overdue nag occupy
-            // their own slot instead of replacing one another. Sharing the
-            // old taskId-only tag meant a task's later reminder silently
-            // overwrote the earlier one still waiting in the shade.
+            // Tag-based identity ([postedTag]): unique per task *and*
+            // reminder point, so a task's start nudge, heads-up and each
+            // overdue nag occupy their own slot instead of replacing one
+            // another. Sharing the old taskId-only tag meant a task's later
+            // reminder silently overwrote the earlier one still waiting in
+            // the shade.
             // (Two ids sharing a hashCode can't collide either — the
             // PendingIntent request code is disambiguated by its data URI.)
-            "$taskId#${kind.key}", ALARM_NOTIF_ID,
+            postedTag(taskId, kind), ALARM_NOTIF_ID,
             notif.build(),
         )
     }

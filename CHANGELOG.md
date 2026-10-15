@@ -8,6 +8,24 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.3.0]
+- **Task reminders finish #287: Skip, Instruct Agent, honest copy** (#287).
+  Every reminder now carries all three actions: `[Completed]` (existing),
+  `[Skip]` — closes the occurrence without claiming the work was done, via
+  a new `POST /api/tasks/{id}/skip` (plus a `skip_task` agent tool with the
+  same rollover reporting as `complete_task`; skipped rows read as "not
+  done" and `reopen_task` restores them) — and `[Instruct Agent]`, an
+  inline reply box that starts a new Chat thread tagging the task plus your
+  instruction (tap the saved card to open and auto-send it). The expanded
+  view's window is the bare `8:30 to 9:00` range, overdue without a known
+  duration reads just `Overdue` instead of inventing a start time, and
+  action taps now dismiss all four reminder points for the task (the old
+  tag missed and the alert survived its own tap).
+- **Reply-failed pings join the reply-finished one** (#287). A turn cut off
+  or errored while backgrounded notifies as `<tab> reply failed` with the
+  fragment preview; clean finishes still ping as `<tab> replied`. One card
+  per tab either way.
+
 ## [5.2.0]
 - **Scheduler hosts stored cron chats** (#289). Each job row shows its
   latest stored response; tap opens the prompt plus the short history

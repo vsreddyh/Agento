@@ -42,6 +42,11 @@ data class ServerTask(
     val completedAt: String = "",
     val createdAt: String = "",
     /**
+     * Derived server-side from `skippedAt` (#209): true when this occurrence
+     * was skipped rather than done. A skipped task reads as "not done".
+     */
+    val skipped: Boolean = false,
+    /**
      * The response contract the server spoke (#185). 0 means the server
      * predates versions entirely; anything else is asserted against
      * [TASK_CONTRACT_VERSION] on write, so a version disagreement warns
@@ -291,6 +296,7 @@ class TasksApi(context: Context) {
             completedAt = optStr(o, "completedAt"),
             createdAt = optStr(o, "createdAt"),
             contractVersion = version,
+            skipped = o.optBoolean("skipped", false),
         )
     }
 
@@ -661,6 +667,37 @@ class TasksApi(context: Context) {
                         checkVersion(it)
                     }
                 }
+        }
+
+    /**
+     * Skips the current occurrence without claiming the work was done
+     * (#287). Same envelope as [complete] (task + optional `next` +
+     * `rollover`); a structured repeat rolls over server-side. The task
+     * reads back with `skipped = true` — "not done", never "done".
+     */
+    suspend fun skip(id: String): Result<ServerTask> =
+        withContext(Dispatchers.IO) {
+            val clean = encodeId(id)
+            if (clean.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Missing task id"))
+            }
+            call("POST", "/api/tasks/$clean/skip", JSONObject()).map { body ->
+                val root = JSONObject(body)
+                val task = parseTask(root.optJSONObject("task") ?: root)
+                    ?: throw RuntimeException("Unexpected response shape")
+                val next = root.optJSONObject("next")
+                val nextVersion =
+                    next?.let { parseContractVersion(it.opt("contract_version")) }
+                if (completeVersionMismatch(task.contractVersion, nextVersion)) {
+                    ContractWarnings.report(listOf("contract_version"), task.name)
+                }
+                noteContractVersion(maxOf(task.contractVersion, nextVersion ?: 0))
+                if (next == null) {
+                    task
+                } else {
+                    task.copy(nextDueDate = optStr(next, "due_date"))
+                }
+            }
         }
 
     /** Permanently deletes a task. */

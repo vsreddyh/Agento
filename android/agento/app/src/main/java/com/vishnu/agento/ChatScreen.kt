@@ -104,6 +104,10 @@ internal fun ChatTab(
     onMenu: () -> Unit,
     autoLiveGen: Int = 0,
     onConfigChanged: () -> Unit = {},
+    targetThreadId: String? = null,
+    targetAutosend: Boolean = false,
+    autosendGen: Int = 0,
+    onTargetConsumed: () -> Unit = {},
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
     // Keyed by tab — the ViewModel survives recomposition.
@@ -112,6 +116,14 @@ internal fun ChatTab(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { vm.refreshConfig() }
+    // Task-instruction deep-link (#287): open the instructed thread once
+    // the ViewModel has loaded, auto-sending exactly once per tap.
+    LaunchedEffect(targetThreadId, autosendGen, state.ready) {
+        if (targetThreadId != null && state.ready) {
+            vm.openThread(targetThreadId, targetAutosend)
+            onTargetConsumed()
+        }
+    }
     var showModel by remember { mutableStateOf(false) }
     var showThreads by remember { mutableStateOf(false) }
     val toasts = remember(scope) { ToastCenter(scope) }

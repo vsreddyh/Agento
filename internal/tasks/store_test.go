@@ -235,6 +235,60 @@ func TestReopenedExcludedFromDone(t *testing.T) {
 	}
 }
 
+func TestSkipDetail(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	doc, _ := s.Create(ctx, "Gym", "leg day", "2026-10-05", "08:00", intP(30), Repeat{Every: 1, Unit: "days"}, boolP(false))
+	id := doc["id"].(string)
+
+	done, next, rollover, _, err := s.SkipDetail(ctx, id, "travelling")
+	if err != nil {
+		t.Fatalf("SkipDetail: %v", err)
+	}
+	// Skipped reads as "not done": completedAt set (leaves the open list)
+	// but the skip marker says the work did not happen.
+	if done["completedAt"] == nil || done["expiresAt"] == nil {
+		t.Fatalf("skip must set completedAt+expiresAt: %v", done)
+	}
+	if done["skipped"] != true {
+		t.Fatalf("skip must read back skipped: %v", done)
+	}
+	// Structured cadence rolls over exactly like a completion.
+	if rollover != RolloverCreated || next == nil {
+		t.Fatalf("structured skip must roll over: rollover=%q next=%v", rollover, next)
+	}
+	if _, _, _, _, err := s.SkipDetail(ctx, id, ""); err == nil {
+		t.Fatal("double skip must fail")
+	}
+	if _, _, _, err := s.Complete(ctx, id); err == nil {
+		t.Fatal("completing a skipped task must fail")
+	}
+	rows, _, _ := s.List(ctx, "open", false, "", 0)
+	for _, r := range rows {
+		if r["id"] == id {
+			t.Fatalf("skipped task must leave open list: %v", rows)
+		}
+	}
+
+	open, err := s.Reopen(ctx, id)
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	if open["skipped"] == true {
+		t.Fatalf("reopen must clear the skip marker: %v", open)
+	}
+
+	// A completed task cannot be skipped: state names itself.
+	doc2, _ := s.Create(ctx, "One shot", "done work", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false))
+	id2 := doc2["id"].(string)
+	if _, _, _, err := s.Complete(ctx, id2); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := s.SkipDetail(ctx, id2, ""); err == nil {
+		t.Fatal("skipping a completed task must fail")
+	}
+}
+
 func TestSearchRegexCharsLiteral(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

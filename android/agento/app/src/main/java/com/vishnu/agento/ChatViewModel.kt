@@ -3,6 +3,7 @@ package com.vishnu.agento
 import android.app.Application
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -244,6 +245,81 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             queued = "",
         )
         refreshServerTotals()
+    }
+
+    /**
+     * Opens a thread from a notification deep-link (#287): the task
+     * instruction's tap-to-open card. With [autosend] the thread's
+     * unanswered user message is sent immediately — this is what "starts"
+     * the instructed chat. Single-shot and guarded: it fires only when the
+     * tail is a user message with no assistant reply yet and nothing is
+     * streaming, so a stale tap can neither double-send nor fire into a
+     * live turn. The pending flag is consumed either way.
+     */
+    fun openThread(id: String, autosend: Boolean) {
+        if (!_state.value.ready) return
+        // The thread was written to disk by the notification receiver after
+        // this ViewModel loaded, so it is not in memory yet: merge any
+        // disk-only threads in (in-memory wins on id clash — it is newer).
+        viewModelScope.launch {
+            if (threads.none { it.id == id }) {
+                val loaded = withContext(Dispatchers.IO) {
+                    ChatThreads.load(appCtx, tab).filter { it.id.isNotEmpty() }
+                }
+                threads = threads + loaded.filter { l -> threads.none { it.id == l.id } }
+            }
+            openThreadLoaded(id, autosend)
+        }
+    }
+
+    private fun openThreadLoaded(id: String, autosend: Boolean) {
+        val target = threads.firstOrNull { it.id == id } ?: run {
+            consumeInstructAutosend(id)
+            return
+        }
+        if (id != threadId) {
+            if (_state.value.streaming) {
+                consumeInstructAutosend(id)
+                return
+            }
+            threadId = id
+            cancelRecovery()
+            _state.value = _state.value.copy(
+                messages = ChatThreads.toUi(target.messages),
+                threads = summaries(),
+                threadId = id,
+                error = "",
+                pending = "",
+                activeTools = emptyList(),
+                activeToolLabel = "",
+                serverTokens = null,
+                queued = "",
+            )
+            refreshServerTotals()
+        }
+        consumeInstructAutosend(id)
+        if (!autosend || _state.value.streaming) return
+        val msgs = _state.value.messages
+        val last = msgs.lastOrNull() ?: return
+        // User-only tail: the instruction with no reply yet. Anything else
+        // (already answered, empty, assistant tail) means leave it alone.
+        if (last.role != "user" || msgs.any { it.role == "assistant" }) return
+        val provider = api.providerFor(tab)
+        val model = api.modelFor(tab)
+        val effort = api.effortFor(tab, model)
+        val path = api.pathFor(tab)
+        _state.value = _state.value.copy(
+            provider = provider, model = model, effort = effort, path = path,
+            pending = "", streaming = true, error = "", queued = "",
+        )
+        doSend(msgs, path, provider, model, effort)
+    }
+
+    private fun consumeInstructAutosend(id: String) {
+        val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        if (prefs.getString(TaskInstructReceiver.PREF_INSTRUCT_AUTOSEND, "") == id) {
+            prefs.edit { remove(TaskInstructReceiver.PREF_INSTRUCT_AUTOSEND) }
+        }
     }
 
     /** + starts a new conversation; threads with chats are kept, empty
@@ -696,11 +772,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // empty notification on the lock screen, which reads as a bug in
                         // the app rather than the connection failing — the user has no
                         // reply to look at, so the ping tells them nothing actionable.
+                        //
+                        // Replied vs crashed (#287): a clean finish pings as a
+                        // reply; a cut-off turn pings as a failure, so the
+                        // lock screen never reports a fragment as an answer.
                         if (!ForegroundTracker.isForeground) {
                             val snippet = final.ifEmpty { acc.toString() }.trim()
                                 .replace(Regex("\\s+"), " ").take(160)
                             if (snippet.isNotEmpty()) {
-                                ChatNotifications.notifyDone(appCtx, tabTitle(tab), snippet)
+                                if (event.interrupted) {
+                                    ChatNotifications.notifyCrashed(appCtx, tabTitle(tab), snippet)
+                                } else {
+                                    ChatNotifications.notifyDone(appCtx, tabTitle(tab), snippet)
+                                }
                             }
                         }
                         // This turn is over: release the job before flushing
@@ -771,6 +855,22 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         val tail = kept.lastOrNull()
                         if (tail?.role == "assistant" && tail.interrupted) {
                             recoverInterruptedTurn(path, stableSessionId, tail.ts, tail.content)
+                        }
+                        // Crashed while backgrounded (#287): an Error carrying
+                        // a partial fragment is a cut-off turn like an
+                        // interrupted Done, so it pings as a failure. A clean
+                        // failure with no fragment keeps the in-app error row
+                        // only — there is nothing to preview on the lock
+                        // screen.
+                        if (!ForegroundTracker.isForeground) {
+                            val fragment = kept.lastOrNull()
+                                ?.takeIf { it.role == "assistant" && it.interrupted }
+                                ?.let { (it.content.ifEmpty { it.reasoning }).trim()
+                                    .replace(Regex("\\s+"), " ").take(160) }
+                                .orEmpty()
+                            if (fragment.isNotEmpty()) {
+                                ChatNotifications.notifyCrashed(appCtx, tabTitle(tab), fragment)
+                            }
                         }
                         checkReachability()
                     }
