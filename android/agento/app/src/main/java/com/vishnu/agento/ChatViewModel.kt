@@ -273,15 +273,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 }
                 threads = threads + loaded.filter { l -> threads.none { it.id == l.id } }
             }
-            openThreadLoaded(id, autosend)
-            onDone()
+            // Consumed only when the open was not blocked on a live turn:
+            // a streaming-blocked tap keeps its target and retries on re-tap.
+            if (openThreadLoaded(id, autosend)) onDone()
         }
     }
 
-    private fun openThreadLoaded(id: String, autosend: Boolean) {
-        val target = threads.firstOrNull { it.id == id } ?: return
+    private fun openThreadLoaded(id: String, autosend: Boolean): Boolean {
+        val target = threads.firstOrNull { it.id == id } ?: return true
         if (id != threadId) {
-            if (_state.value.streaming) return
+            // Blocked on a live turn: NOT consumed, so the retained target
+            // retries on the next tap (each tap bumps the gen). Consuming
+            // here would lose the tap the moment the turn ends.
+            if (_state.value.streaming) return false
             threadId = id
             cancelRecovery()
             _state.value = _state.value.copy(
@@ -297,14 +301,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             )
             refreshServerTotals()
         }
-        if (!autosend || _state.value.streaming) return
+        if (!autosend || _state.value.streaming) return true
         val msgs = _state.value.messages
-        val last = msgs.lastOrNull() ?: return
+        val last = msgs.lastOrNull() ?: return true
         // No assistant reply yet anywhere in this thread — which for the
         // single-message instruction thread is the same as a user-only
         // tail. Anything else (already answered, empty, assistant tail)
         // means leave it alone: a re-tap after a reply must not resend.
-        if (last.role != "user" || msgs.any { it.role == "assistant" }) return
+        if (last.role != "user" || msgs.any { it.role == "assistant" }) return true
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
@@ -314,6 +318,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             pending = "", streaming = true, error = "", queued = "",
         )
         doSend(msgs, path, provider, model, effort)
+        return true
     }
 
     /** + starts a new conversation; threads with chats are kept, empty

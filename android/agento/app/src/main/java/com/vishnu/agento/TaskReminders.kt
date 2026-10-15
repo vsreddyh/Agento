@@ -235,8 +235,9 @@ internal fun reminderWindowLine(task: ServerTask): String {
         // shapes agree ("09:00", never "9:00"); anything else echoes raw.
         val m = ClockTime.matchEntire(task.dueTime.trim())
         val hh = m?.destructured?.component1()?.toIntOrNull()
-        return if (m != null && hh != null && hh <= 23) {
-            String.format(java.util.Locale.ROOT, "%02d:%s", hh, m.destructured.component2())
+        val mm = m?.destructured?.component2()?.toIntOrNull()
+        return if (m != null && hh != null && mm != null && hh <= 23 && mm <= 59) {
+            String.format(java.util.Locale.ROOT, "%02d:%02d", hh, mm)
         } else {
             task.dueTime.trim()
         }
