@@ -1,24 +1,38 @@
 name: opencode-review
 
-# Automatic PR review by Muse Spark 1.3 Contributor via the OpenCode GitHub app.
-# Runs on PR open/update and posts review feedback on the PR.
+# Automatic PR review ONLY by Muse Spark 1.3 Contributor via the OpenCode
+# GitHub action (https://opencode.ai/docs/github/ - Pull Request Example).
+# Trigger is pull_request only: no /oc comment commands, no issue triage,
+# no schedules. Review-only: contents:read so it cannot push code; it posts
+# findings as PR comments.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
+# One review per PR: a new push cancels the in-flight review instead of
+# stacking a full-model review per commit.
+concurrency:
+  group: opencode-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   review:
+    # Fork PRs have no OPENCODE_API_KEY secret, so skip instead of failing.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
       issues: write
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - uses: anomalyco/opencode/github@latest
+      - name: Run OpenCode review
+        uses: anomalyco/opencode/github@733b2c627e5aec39cb33cc22373bdce33053ef2c # v1.19.0
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -26,7 +40,9 @@ jobs:
           model: opencode-go/muse-spark-1.3-contributor
           use_github_token: true
           prompt: |
-            Review this pull request:
+            Review this pull request only. Do not modify code, push commits, or create branches or PRs - post findings as PR comments.
             - Check for code quality issues
             - Look for potential bugs
             - Suggest improvements
+            - Follow repo conventions in AGENTS.md, README.md, and documentation.md
+            - For android/** changes, enforce the VERSION + CHANGELOG rules in AGENTS.md
