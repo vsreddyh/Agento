@@ -277,6 +277,9 @@ func TestSkipDetail(t *testing.T) {
 	if open["skipped"] == true {
 		t.Fatalf("reopen must clear the skip marker: %v", open)
 	}
+	if _, hasExpiry := open["expiresAt"]; hasExpiry {
+		t.Fatalf("reopen must clear expiresAt: %v", open)
+	}
 
 	// A completed task cannot be skipped: state names itself.
 	doc2, _ := s.Create(ctx, "One shot", "done work", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false))

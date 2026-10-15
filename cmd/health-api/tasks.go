@@ -697,7 +697,8 @@ func skipTask(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// reopenTask clears completion, making a done task open again.
+// reopenTask clears completion (and the skip marker), making a done or
+// skipped task open again.
 func reopenTask(w http.ResponseWriter, r *http.Request, id string) {
 	store, ok := taskStore(w)
 	if !ok {
