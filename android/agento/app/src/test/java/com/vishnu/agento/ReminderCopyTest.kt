@@ -117,6 +117,18 @@ class ReminderCopyTest {
     }
 
     @Test
+    fun `window line fallback pads an unparseable date's time`() {
+        val task = ServerTask(
+            id = "t",
+            name = "Pay rent",
+            dueDate = "not-a-date",
+            dueTime = "9:00",
+            estimatedMinutes = 30,
+        )
+        assertEquals("09:00", reminderWindowLine(task))
+    }
+
+    @Test
     fun `posted tag names task and kind`() {
         assertEquals("abc#due", postedTag("abc", ReminderKind.Due))
         assertEquals("abc#overdue", postedTag("abc", ReminderKind.Overdue))

@@ -254,8 +254,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * tail is a user message with no assistant reply yet and nothing is
      * streaming, so a stale tap can neither double-send nor fire into a
      * live turn.
+     *
+     * [onDone] fires once the open has been attempted (found or not), so
+     * the caller consumes the deep-link on confirmed open rather than
+     * optimistically: clearing first would orphan the thread as an unsent
+     * draft if the ViewModel was not ready yet. Not-ready returns without
+     * firing, so the unconsumed target retries when ready flips.
      */
-    fun openThread(id: String, autosend: Boolean) {
+    fun openThread(id: String, autosend: Boolean, onDone: () -> Unit = {}) {
         if (!_state.value.ready) return
         // The thread was written to disk by the notification receiver after
         // this ViewModel loaded, so it is not in memory yet: merge any
@@ -268,6 +274,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 threads = threads + loaded.filter { l -> threads.none { it.id == l.id } }
             }
             openThreadLoaded(id, autosend)
+            onDone()
         }
     }
 

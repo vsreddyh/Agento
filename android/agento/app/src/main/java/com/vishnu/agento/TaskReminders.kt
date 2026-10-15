@@ -230,7 +230,17 @@ internal fun reminderWindowLine(task: ServerTask): String {
     fun hhmm(at: Long): String =
         java.time.Instant.ofEpochMilli(at).atZone(IST).toLocalTime()
             .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
-    if (dueAt == null) return task.dueTime.trim()
+    if (dueAt == null) {
+        // Unparseable due instant: still zero-pad a readable time so both
+        // shapes agree ("09:00", never "9:00"); anything else echoes raw.
+        val m = ClockTime.matchEntire(task.dueTime.trim())
+        val hh = m?.destructured?.component1()?.toIntOrNull()
+        return if (m != null && hh != null && hh <= 23) {
+            String.format(java.util.Locale.ROOT, "%02d:%s", hh, m.destructured.component2())
+        } else {
+            task.dueTime.trim()
+        }
+    }
     val startAt = startMomentMillis(dueAt, task.estimatedMinutes)
     return if (startAt != null && startAt != dueAt) {
         "${hhmm(startAt)} to ${hhmm(dueAt)}"

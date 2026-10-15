@@ -117,11 +117,12 @@ internal fun ChatTab(
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { vm.refreshConfig() }
     // Task-instruction deep-link (#287): open the instructed thread once
-    // the ViewModel has loaded, auto-sending exactly once per tap.
+    // the ViewModel has loaded. Consumed on confirmed open (not
+    // optimistically): an early clear plus an auto-cancelled card would
+    // orphan the thread as an unsent draft on a ready-race miss.
     LaunchedEffect(targetThreadId, autosendGen, state.ready) {
         if (targetThreadId != null && state.ready) {
-            vm.openThread(targetThreadId, targetAutosend)
-            onTargetConsumed()
+            vm.openThread(targetThreadId, targetAutosend, onTargetConsumed)
         }
     }
     var showModel by remember { mutableStateOf(false) }
