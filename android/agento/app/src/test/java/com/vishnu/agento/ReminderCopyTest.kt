@@ -83,6 +83,8 @@ class ReminderCopyTest {
             "Overdue",
             reminderMessage(ReminderKind.Overdue, "Today, 09:00", null, null),
         )
+        // Same expectation with a different dueLine on purpose: proves the
+        // unknown-elapsed path ignores dueLine rather than echoing it.
         assertEquals(
             "Overdue",
             reminderMessage(ReminderKind.Overdue, "", null, null),

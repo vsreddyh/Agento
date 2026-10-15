@@ -27,7 +27,12 @@ class TaskSkipActivity : ComponentActivity() {
         val skipId = intent.getStringExtra(EXTRA_SKIP_ID)
         if (!skipId.isNullOrEmpty()) {
             lifecycleScope.launch {
-                val skipped = runCatching { TasksApi(this@TaskSkipActivity).skip(skipId) }.isSuccess
+                // getOrThrow inside the runCatching: skip() returns a
+                // Result, which never throws on API failure — without it
+                // this is success even when the skip failed, and the alert
+                // is dismissed despite the comment below saying otherwise.
+                val skipped =
+                    runCatching { TasksApi(this@TaskSkipActivity).skip(skipId).getOrThrow() }.isSuccess
                 if (skipped) {
                     runCatching { TaskReminders.cancelPosted(this@TaskSkipActivity, skipId) }
                 }

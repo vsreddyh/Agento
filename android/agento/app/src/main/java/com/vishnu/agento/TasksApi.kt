@@ -619,13 +619,28 @@ class TasksApi(context: Context) {
     /** Marks a task done (server starts the 3-day retention clock). The
      * response carries the rolled-over occurrence in `next` when a
      * structured cadence produced one. */
-    suspend fun complete(id: String): Result<ServerTask> =
+    suspend fun complete(id: String): Result<ServerTask> = resolve(id, "complete")
+
+    /**
+     * Skips the current occurrence without claiming the work was done
+     * (#287). Same envelope as [complete] (task + optional `next` +
+     * `rollover`); a structured repeat rolls over server-side. The task
+     * reads back with `skipped = true` — "not done", never "done".
+     */
+    suspend fun skip(id: String): Result<ServerTask> = resolve(id, "skip")
+
+    /**
+     * Shared complete/skip body: both verbs answer the same envelope
+     * (task + optional `next` + `rollover`). One copy, so the next
+     * contract fix cannot land on one verb and miss the other.
+     */
+    private suspend fun resolve(id: String, verb: String): Result<ServerTask> =
         withContext(Dispatchers.IO) {
             val clean = encodeId(id)
             if (clean.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
-            call("POST", "/api/tasks/$clean/complete", JSONObject()).map { body ->
+            call("POST", "/api/tasks/$clean/$verb", JSONObject()).map { body ->
                 val root = JSONObject(body)
                 val task = parseTask(root.optJSONObject("task") ?: root)
                     ?: throw RuntimeException("Unexpected response shape")
@@ -667,37 +682,6 @@ class TasksApi(context: Context) {
                         checkVersion(it)
                     }
                 }
-        }
-
-    /**
-     * Skips the current occurrence without claiming the work was done
-     * (#287). Same envelope as [complete] (task + optional `next` +
-     * `rollover`); a structured repeat rolls over server-side. The task
-     * reads back with `skipped = true` — "not done", never "done".
-     */
-    suspend fun skip(id: String): Result<ServerTask> =
-        withContext(Dispatchers.IO) {
-            val clean = encodeId(id)
-            if (clean.isEmpty()) {
-                return@withContext Result.failure(IllegalArgumentException("Missing task id"))
-            }
-            call("POST", "/api/tasks/$clean/skip", JSONObject()).map { body ->
-                val root = JSONObject(body)
-                val task = parseTask(root.optJSONObject("task") ?: root)
-                    ?: throw RuntimeException("Unexpected response shape")
-                val next = root.optJSONObject("next")
-                val nextVersion =
-                    next?.let { parseContractVersion(it.opt("contract_version")) }
-                if (completeVersionMismatch(task.contractVersion, nextVersion)) {
-                    ContractWarnings.report(listOf("contract_version"), task.name)
-                }
-                noteContractVersion(maxOf(task.contractVersion, nextVersion ?: 0))
-                if (next == null) {
-                    task
-                } else {
-                    task.copy(nextDueDate = optStr(next, "due_date"))
-                }
-            }
         }
 
     /** Permanently deletes a task. */

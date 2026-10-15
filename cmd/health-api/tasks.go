@@ -4,6 +4,7 @@ package main
 
 import (
 	"agento/internal/tasks"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"go.mongodb.org/mongo-driver/bson"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -648,8 +650,21 @@ func skipTask(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	reason := ""
-	if r.Body != nil && r.ContentLength != 0 {
-		if fields, ok := decodeTaskBody(w, r); ok {
+	// Read the body, not the length header: with chunked encoding
+	// ContentLength is -1, and an empty body would take the decode path
+	// and 422 on EOF. Android sends {} either way, so both land here.
+	if r.Body != nil {
+		raw, rerr := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+		if rerr != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid body: " + rerr.Error()})
+			return
+		}
+		if len(bytes.TrimSpace(raw)) > 0 {
+			var fields map[string]any
+			if jerr := json.Unmarshal(raw, &fields); jerr != nil {
+				writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + jerr.Error()})
+				return
+			}
 			if v, present := fields["reason"]; present && v != nil {
 				if s, isStr := v.(string); isStr {
 					reason = s
@@ -658,8 +673,6 @@ func skipTask(w http.ResponseWriter, r *http.Request, id string) {
 					return
 				}
 			}
-		} else {
-			return
 		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)

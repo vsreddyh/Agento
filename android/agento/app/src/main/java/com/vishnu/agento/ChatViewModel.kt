@@ -301,8 +301,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (!autosend || _state.value.streaming) return
         val msgs = _state.value.messages
         val last = msgs.lastOrNull() ?: return
-        // User-only tail: the instruction with no reply yet. Anything else
-        // (already answered, empty, assistant tail) means leave it alone.
+        // No assistant reply yet anywhere in this thread — which for the
+        // single-message instruction thread is the same as a user-only
+        // tail. Anything else (already answered, empty, assistant tail)
+        // means leave it alone: a re-tap after a reply must not resend.
         if (last.role != "user" || msgs.any { it.role == "assistant" }) return
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
@@ -316,6 +318,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     private fun consumeInstructAutosend(id: String) {
+        // Single key, overwritten by each new instruction: a card that is
+        // dismissed without a tap leaves one stale flag at most, and the
+        // user-only-tail guard above makes firing on it harmless anyway.
         val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         if (prefs.getString(TaskInstructReceiver.PREF_INSTRUCT_AUTOSEND, "") == id) {
             prefs.edit { remove(TaskInstructReceiver.PREF_INSTRUCT_AUTOSEND) }

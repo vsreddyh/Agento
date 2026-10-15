@@ -27,7 +27,13 @@ class TaskCompleteActivity : ComponentActivity() {
         val openId = intent.getStringExtra(TaskWidget.EXTRA_TASK_ID)
         if (!completeId.isNullOrEmpty()) {
             lifecycleScope.launch {
-                val completed = runCatching { TasksApi(this@TaskCompleteActivity).complete(completeId) }.isSuccess
+                // getOrThrow inside the runCatching: complete() returns a
+                // Result, which never throws on API failure — without it
+                // this is success even when the completion failed, and the
+                // alert is dismissed despite the comment below saying
+                // otherwise.
+                val completed =
+                    runCatching { TasksApi(this@TaskCompleteActivity).complete(completeId).getOrThrow() }.isSuccess
                 // Action taps dismiss every posted alert for the task (all
                 // four reminder-point tags, #287) — but only on success,
                 // so an offline tap keeps the alert.

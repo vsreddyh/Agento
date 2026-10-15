@@ -181,8 +181,9 @@ func isSkipped(doc map[string]any) bool {
 	// would fail — no compile error, no test touching a raw doc. A client filtering on
 	// `skipped` would quietly see no skips at all.
 	//
-	// The empty string is Reopen's own clearing value (`skippedAt: ""`), so it must read
-	// as NOT skipped, exactly as a cleared DateTime must.
+	// The empty string is Reopen's own clearing value (`$unset` of
+	// `skippedAt`/`skipReason` reads back the same as an explicit ""), so it
+	// must read as NOT skipped, exactly as a cleared DateTime must.
 	switch v := doc["skippedAt"].(type) {
 	case primitive.DateTime:
 		return v != 0
