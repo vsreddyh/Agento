@@ -26,6 +26,11 @@ object ChatNotifications {
     const val CHANNEL_ID = "hermes_replies"
     const val KEY_NOTIFY_DONE = "notify_reply_done"
     private const val NOTIFICATION_ID = 4252
+    // Own base for the task-instruction cards: the reply cards above share
+    // NOTIFICATION_ID per tab, and parking a second family on the same base
+    // leaves isolation to hashCode luck — a collision would silently
+    // replace a chat-reply card with an instruct card.
+    private const val INSTRUCT_NOTIFICATION_ID = 9171
 
     fun isEnabled(context: Context): Boolean =
         context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
@@ -142,7 +147,7 @@ object ChatNotifications {
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID + ("instruct:$threadId").hashCode(), notification)
+        nm.notify(INSTRUCT_NOTIFICATION_ID + ("instruct:$threadId").hashCode(), notification)
     }
 
     /**

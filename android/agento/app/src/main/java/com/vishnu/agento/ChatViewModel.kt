@@ -3,7 +3,6 @@ package com.vishnu.agento
 import android.app.Application
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
-import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -254,7 +253,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * the instructed chat. Single-shot and guarded: it fires only when the
      * tail is a user message with no assistant reply yet and nothing is
      * streaming, so a stale tap can neither double-send nor fire into a
-     * live turn. The pending flag is consumed either way.
+     * live turn.
      */
     fun openThread(id: String, autosend: Boolean) {
         if (!_state.value.ready) return
@@ -273,15 +272,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     private fun openThreadLoaded(id: String, autosend: Boolean) {
-        val target = threads.firstOrNull { it.id == id } ?: run {
-            consumeInstructAutosend(id)
-            return
-        }
+        val target = threads.firstOrNull { it.id == id } ?: return
         if (id != threadId) {
-            if (_state.value.streaming) {
-                consumeInstructAutosend(id)
-                return
-            }
+            if (_state.value.streaming) return
             threadId = id
             cancelRecovery()
             _state.value = _state.value.copy(
@@ -297,7 +290,6 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             )
             refreshServerTotals()
         }
-        consumeInstructAutosend(id)
         if (!autosend || _state.value.streaming) return
         val msgs = _state.value.messages
         val last = msgs.lastOrNull() ?: return
@@ -315,16 +307,6 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             pending = "", streaming = true, error = "", queued = "",
         )
         doSend(msgs, path, provider, model, effort)
-    }
-
-    private fun consumeInstructAutosend(id: String) {
-        // Single key, overwritten by each new instruction: a card that is
-        // dismissed without a tap leaves one stale flag at most, and the
-        // user-only-tail guard above makes firing on it harmless anyway.
-        val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-        if (prefs.getString(TaskInstructReceiver.PREF_INSTRUCT_AUTOSEND, "") == id) {
-            prefs.edit { remove(TaskInstructReceiver.PREF_INSTRUCT_AUTOSEND) }
-        }
     }
 
     /** + starts a new conversation; threads with chats are kept, empty

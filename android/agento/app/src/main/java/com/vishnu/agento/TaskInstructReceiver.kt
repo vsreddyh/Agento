@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.core.app.RemoteInput
-import androidx.core.content.edit
 import java.time.LocalDate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,9 +33,6 @@ class TaskInstructReceiver : BroadcastReceiver() {
 
     companion object {
         const val KEY_INSTRUCT = "agento.instruct"
-
-        /** Thread id the chat tab should auto-send on open (single-shot). */
-        const val PREF_INSTRUCT_AUTOSEND = "chat_instruct_autosend"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -60,7 +56,9 @@ class TaskInstructReceiver : BroadcastReceiver() {
         val task = withTimeoutOrNull(10_000) {
             TasksApi(appCtx).get(taskId)
         }?.getOrNull()
-        val name = task?.name.orEmpty().ifEmpty { "Task" }
+        // Unknown when the fetch missed (offline/timeout): fall back to the
+        // raw id so the thread still links the task instead of naming "Task".
+        val name = task?.name.orEmpty().ifEmpty { "task $taskId" }
         val dueLine = if (task != null) {
             friendlyDue(task.dueDate, task.dueTime, LocalDate.now(IST))
         } else {
@@ -82,13 +80,9 @@ class TaskInstructReceiver : BroadcastReceiver() {
         val threads = listOf(thread) + ChatThreads.load(appCtx, "chat")
             .filter { it.id.isNotEmpty() && it.id != thread.id }
         ChatThreads.save(appCtx, "chat", threads)
-        // Single-shot auto-send flag, consumed by ChatViewModel.openThread.
-        // Guarded there (user-only tail, not streaming), so a stale flag
-        // can never fire into an ongoing turn.
-        appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
-            .edit {
-                putString(PREF_INSTRUCT_AUTOSEND, thread.id)
-            }
+        // The tap-to-open card carries the thread id + autosend intent
+        // (InstructIntents extras), so no persisted flag is needed: the
+        // receiver-to-chat path is the notification tap itself.
         ChatNotifications.notifyInstructSaved(appCtx, name, thread.id)
     }
 }

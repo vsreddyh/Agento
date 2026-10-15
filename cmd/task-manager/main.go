@@ -357,7 +357,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "reopen_task",
-		Description: "Reopen a completed task (clears completion, cancels the 3-day expiry)."},
+		Description: "Reopen a completed or skipped task (clears completion and the skip marker, cancels the 3-day expiry)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in reopenTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Reopen(ctx, in.ID)
 			if err != nil {

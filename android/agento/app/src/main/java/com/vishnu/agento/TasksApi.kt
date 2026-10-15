@@ -626,6 +626,10 @@ class TasksApi(context: Context) {
      * (#287). Same envelope as [complete] (task + optional `next` +
      * `rollover`); a structured repeat rolls over server-side. The task
      * reads back with `skipped = true` — "not done", never "done".
+     *
+     * No reason is sent: the notification action carries no text field, so
+     * `skipReason` stays empty on this path (the agent's `skip_task` is
+     * what writes one).
      */
     suspend fun skip(id: String): Result<ServerTask> = resolve(id, "skip")
 
