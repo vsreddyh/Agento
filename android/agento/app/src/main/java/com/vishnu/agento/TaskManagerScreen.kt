@@ -1157,7 +1157,9 @@ internal fun ServerTaskDetailSheet(
                     )
                 } else {
                     Text(
-                        "Done",
+                        // Skipped reads as "not done" (#287, #209): a skipped
+                        // occurrence must never render as completed work.
+                        if (task.skipped) "Skipped" else "Done",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1223,7 +1225,7 @@ internal fun ServerTaskDetailSheet(
                         task.createdAt.take(10).takeIf { it.isNotEmpty() }
                             ?.let { "Created $it" },
                         task.completedAt.take(10).takeIf { it.isNotEmpty() }
-                            ?.let { "Done $it" },
+                            ?.let { if (task.skipped) "Skipped $it" else "Done $it" },
                     ).filterNotNull().joinToString(" · ").ifEmpty { "—" },
                 )
             }

@@ -4,6 +4,7 @@ package main
 
 import (
 	"agento/internal/tasks"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"go.mongodb.org/mongo-driver/bson"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -506,10 +508,12 @@ func taskItem(w http.ResponseWriter, r *http.Request) {
 		deleteTask(w, r, id)
 	case action == "complete" && r.Method == http.MethodPost:
 		completeTask(w, r, id)
+	case action == "skip" && r.Method == http.MethodPost:
+		skipTask(w, r, id)
 	case action == "reopen" && r.Method == http.MethodPost:
 		reopenTask(w, r, id)
 	default:
-		if action != "" && action != "complete" && action != "reopen" {
+		if action != "" && action != "complete" && action != "skip" && action != "reopen" {
 			writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
 			return
 		}
@@ -635,7 +639,66 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// reopenTask clears completion, making a done task open again.
+// skipTask closes the current occurrence without claiming the work was
+// done (#287): the notification `[Skip]` action and the agent's `skip_task`
+// both land here. Same response envelope as completeTask (task + optional
+// `next` + `rollover`), so callers handle both verbs the same way. The
+// optional `{"reason": "..."}` body is free text; absent or empty is fine.
+func skipTask(w http.ResponseWriter, r *http.Request, id string) {
+	store, ok := taskStore(w)
+	if !ok {
+		return
+	}
+	reason := ""
+	// Read the body, not the length header: with chunked encoding
+	// ContentLength is -1, and an empty body would take the decode path
+	// and 422 on EOF. Android sends {} either way, so both land here.
+	if r.Body != nil {
+		raw, rerr := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+		if rerr != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid body: " + rerr.Error()})
+			return
+		}
+		if len(bytes.TrimSpace(raw)) > 0 {
+			var fields map[string]any
+			if jerr := json.Unmarshal(raw, &fields); jerr != nil {
+				writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + jerr.Error()})
+				return
+			}
+			if v, present := fields["reason"]; present && v != nil {
+				if s, isStr := v.(string); isStr {
+					reason = s
+				} else {
+					writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "reason must be a string"})
+					return
+				}
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, id, reason)
+	if err != nil {
+		writeTaskErr(w, err)
+		return
+	}
+	store.RecordMutation(ctx, tasks.OpSkip, id, requestSource(r), fmt.Sprint(rollover))
+	out := bson.M{}
+	for k, v := range doc {
+		out[k] = v
+	}
+	if next != nil {
+		out["next"] = next
+	}
+	out["rollover"] = string(rollover)
+	if rollover.NeedsAttention() {
+		out["needs_attention"] = rollover.Attention(rolloverDetail)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// reopenTask clears completion (and the skip marker), making a done or
+// skipped task open again.
 func reopenTask(w http.ResponseWriter, r *http.Request, id string) {
 	store, ok := taskStore(w)
 	if !ok {

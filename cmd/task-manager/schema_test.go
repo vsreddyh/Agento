@@ -41,6 +41,7 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		// Nil pointer = untouched, per the handler.
 		{"update_task", updateTaskInput{}, []string{"id"}},
 		{"complete_task", completeTaskInput{}, []string{"id"}},
+		{"skip_task", skipTaskInput{}, []string{"id"}},
 		{"reopen_task", reopenTaskInput{}, []string{"id"}},
 		{"delete_task", deleteTaskInput{}, []string{"id"}},
 	}

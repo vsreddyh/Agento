@@ -181,8 +181,9 @@ func isSkipped(doc map[string]any) bool {
 	// would fail — no compile error, no test touching a raw doc. A client filtering on
 	// `skipped` would quietly see no skips at all.
 	//
-	// The empty string is Reopen's own clearing value (`skippedAt: ""`), so it must read
-	// as NOT skipped, exactly as a cleared DateTime must.
+	// The empty string is Reopen's own clearing value (`$unset` of
+	// `skippedAt`/`skipReason` reads back the same as an explicit ""), so it
+	// must read as NOT skipped, exactly as a cleared DateTime must.
 	switch v := doc["skippedAt"].(type) {
 	case primitive.DateTime:
 		return v != 0
@@ -927,6 +928,57 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reason, "", nil
+}
+
+// SkipDetail closes the current occurrence WITHOUT claiming the work was
+// done (#287). It mirrors CompleteDetail — completedAt + expiresAt so the
+// occurrence leaves the open list, plus the skip marker (skippedAt +
+// skipReason) so every response still reads as "not done" via the derived
+// `skipped` flag — and then rolls a structured cadence over exactly like a
+// completion. A custom repeat is the caller's to advance (RolloverCustom);
+// a one-shot simply closes (RolloverNone).
+//
+// [reason] is free text (the notification action sends ""), trimmed and
+// capped like any other stored field. Errors on unknown ids and on tasks
+// that are already completed or skipped, naming the actual state.
+func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, string, error) {
+	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
+	if err != nil {
+		return nil, nil, "", "", fail("bad id '%s'", id)
+	}
+	now := time.Now().UTC()
+	res, err := s.tasks.UpdateOne(ctx,
+		bson.M{"_id": oid, "completedAt": nil},
+		bson.M{
+			"$set": bson.M{
+				"completedAt": primitive.NewDateTimeFromTime(now),
+				"expiresAt":   primitive.NewDateTimeFromTime(now.AddDate(0, 0, RetentionDays)),
+				"skippedAt":   primitive.NewDateTimeFromTime(now),
+				"skipReason":  truncateRunes(strings.TrimSpace(reason), 300),
+			},
+			"$inc": bson.M{"revision": 1},
+		})
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	if res.MatchedCount == 0 {
+		doc, serr := s.stateOnMiss(ctx, oid, id)
+		if serr != nil {
+			return nil, nil, "", "", serr
+		}
+		return nil, nil, "", "", resolvedStateErr(doc, id)
+	}
+	done, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	s.bumpChanges(ctx)
+	next, reasonOut, rerr := s.rollOver(ctx, done)
+	if rerr != nil {
+		log.Printf("task %s skipped but rollover failed: %v", id, rerr)
+		return done, nil, RolloverFailed, rerr.Error(), nil
+	}
+	return done, next, reasonOut, "", nil
 }
 
 // stateOnMiss fetches a task that a resolve verb could not claim, because the

@@ -14,7 +14,8 @@ store, same validation — see `cmd/health-api/main.go`).
 | `get_task` | Fetch one task by id |
 | `update_task` | Edit fields. Only `id` is required — every other field is nil-safe, and empty repeat_rule clears the rule |
 | `complete_task` | Mark done (3-day retention starts); echoes repeat_rule + follow-up nudge; always reports `rollover` |
-| `reopen_task` | Reopen a completed task (cancels expiry) |
+| `skip_task` | Skip the occurrence without claiming the work was done (retained 3 days like a completion; `reopen_task` restores it); structured repeats roll over server-side like `complete_task` |
+| `reopen_task` | Reopen a completed or skipped task (cancels expiry) |
 | `delete_task` | Permanently delete |
 
 ## Schema (MongoDB `hermes` DB)

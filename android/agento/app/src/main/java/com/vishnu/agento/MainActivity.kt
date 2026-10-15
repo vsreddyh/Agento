@@ -118,6 +118,15 @@ class MainActivity : ComponentActivity() {
     private val schedulerGen = mutableIntStateOf(0)
     private val schedulerTargetId = mutableStateOf<String?>(null)
 
+    /**
+     * Chat-thread deep-link (task-instruction tap, #287). Generation counter
+     * like tasksGen so retaps renavigate; ChatTab consumes the thread id
+     * and clears it once the ViewModel is ready.
+     */
+    private val chatGen = mutableIntStateOf(0)
+    private val chatThreadId = mutableStateOf<String?>(null)
+    private val chatAutosend = mutableStateOf(false)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -135,6 +144,11 @@ class MainActivity : ComponentActivity() {
             intent.getStringExtra(CronIntents.EXTRA_JOB_ID)?.let {
                 schedulerTargetId.value = it
             }
+        }
+        if (intent.action == InstructIntents.ACTION_CHAT) {
+            chatGen.intValue++
+            chatThreadId.value = intent.getStringExtra(InstructIntents.EXTRA_THREAD_ID)
+            chatAutosend.value = intent.getBooleanExtra(InstructIntents.EXTRA_AUTOSEND, false)
         }
     }
 
@@ -159,6 +173,12 @@ class MainActivity : ComponentActivity() {
             intent.getStringExtra(CronIntents.EXTRA_JOB_ID)?.let {
                 schedulerTargetId.value = it
             }
+        }
+        // Task-instruction tap: same redelivery guard.
+        if (savedInstanceState == null && intent?.action == InstructIntents.ACTION_CHAT && chatGen.intValue == 0) {
+            chatGen.intValue = 1
+            chatThreadId.value = intent?.getStringExtra(InstructIntents.EXTRA_THREAD_ID)
+            chatAutosend.value = intent?.getBooleanExtra(InstructIntents.EXTRA_AUTOSEND, false) == true
         }
         setContent {
             val context = LocalContext.current
@@ -197,6 +217,14 @@ class MainActivity : ComponentActivity() {
                     LaunchedEffect(schedulerGen.intValue) {
                         if (schedulerGen.intValue > 0) {
                             dest = Destination.Scheduler
+                        }
+                    }
+                    // Task-instruction tap (#287): land on the Chat tab; the
+                    // ChatTab consumes the thread id (and auto-sends) once
+                    // its ViewModel is ready. Retaps renavigate (singleTop).
+                    LaunchedEffect(chatGen.intValue) {
+                        if (chatGen.intValue > 0) {
+                            dest = Destination.Chat
                         }
                     }
                     // Null section = the settings hub overview; a non-null
@@ -262,6 +290,13 @@ class MainActivity : ComponentActivity() {
                                     // otherwise auto-start sessions on
                                     // tabs the user merely switches to.
                                     autoLiveGen = liveGen.intValue,
+                                    targetThreadId = chatThreadId.value,
+                                    targetAutosend = chatAutosend.value,
+                                    autosendGen = chatGen.intValue,
+                                    onTargetConsumed = {
+                                        chatThreadId.value = null
+                                        chatAutosend.value = false
+                                    },
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         prefs.edit {

@@ -26,6 +26,11 @@ object ChatNotifications {
     const val CHANNEL_ID = "hermes_replies"
     const val KEY_NOTIFY_DONE = "notify_reply_done"
     private const val NOTIFICATION_ID = 4252
+    // Own base for the task-instruction cards: the reply cards above share
+    // NOTIFICATION_ID per tab, and parking a second family on the same base
+    // leaves isolation to hashCode luck — a collision would silently
+    // replace a chat-reply card with an instruct card.
+    private const val INSTRUCT_NOTIFICATION_ID = 9171
 
     fun isEnabled(context: Context): Boolean =
         context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
@@ -83,6 +88,66 @@ object ChatNotifications {
         // Stable per-tab ID (no 0xFF bucketing) so tabs never overwrite
         // each other; successive replies on one tab replace the previous.
         nm.notify(NOTIFICATION_ID + tabTitle.hashCode(), notification)
+    }
+
+    /**
+     * Posts a reply-failed notification (#287): the turn was cut off
+     * (dropped stream) or errored while backgrounded, and the partial text
+     * (if any) is a fragment, not an answer. Same per-tab slot as
+     * [notifyDone] — one tab owns one card, whatever the outcome — so a
+     * crash replaces the pending ping rather than stacking beside it.
+     */
+    fun notifyCrashed(context: Context, tabTitle: String, snippet: String) {
+        if (!isEnabled(context) || !canPost(context)) return
+        ensureChannel(context)
+        val open = PendingIntent.getActivity(
+            context, tabTitle.hashCode(),
+            Intent(context, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val text = snippet.ifBlank { "The reply was cut off — tap to continue." }
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle("$tabTitle reply failed")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID + tabTitle.hashCode(), notification)
+    }
+
+    /**
+     * Posts the task-instruction saved card (#287): tap opens the new chat
+     * thread and auto-sends it exactly once. One slot per thread, so two
+     * instructions never overwrite each other.
+     */
+    fun notifyInstructSaved(context: Context, taskName: String, threadId: String) {
+        if (!isEnabled(context) || !canPost(context)) return
+        ensureChannel(context)
+        val open = PendingIntent.getActivity(
+            context, ("instruct-open:$threadId").hashCode(),
+            Intent(context, MainActivity::class.java)
+                .setAction(InstructIntents.ACTION_CHAT)
+                .putExtra(InstructIntents.EXTRA_THREAD_ID, threadId)
+                .putExtra(InstructIntents.EXTRA_AUTOSEND, true)
+                .setData("agento://chat/${android.net.Uri.encode(threadId)}".toUri()),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val text = "Instruction for \"$taskName\" saved — tap to start the chat."
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle("Instruction saved")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(INSTRUCT_NOTIFICATION_ID + ("instruct:$threadId").hashCode(), notification)
     }
 
     /**

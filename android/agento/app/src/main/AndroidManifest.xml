@@ -167,9 +167,24 @@
             </intent-filter>
         </activity>
 
+        <!-- Skip is fired only by this app's own notification PendingIntent,
+             so unlike the widget-facing Complete trampoline it stays
+             non-exported: no outside app can guess an ObjectID into a skip. -->
+        <activity
+            android:name=".TaskSkipActivity"
+            android:theme="@style/Theme.Agento.Trampoline"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false" />
+
         <!-- Due-time task reminder alarms (explicit intents only). -->
         <receiver
             android:name=".TaskAlarmReceiver"
+            android:exported="false" />
+
+        <!-- Notification inline-reply for [Instruct Agent] (explicit intents only). -->
+        <receiver
+            android:name=".TaskInstructReceiver"
             android:exported="false" />
 
         <receiver

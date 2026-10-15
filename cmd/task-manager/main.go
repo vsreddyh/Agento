@@ -131,6 +131,12 @@ type completeTaskInput struct {
 	ID string `json:"id"`
 }
 
+type skipTaskInput struct {
+	ID string `json:"id"`
+	// Optional free text for why this occurrence was skipped.
+	Reason string `json:"reason,omitempty"`
+}
+
 type reopenTaskInput struct {
 	ID string `json:"id"`
 }
@@ -280,7 +286,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
-		Description: "Mark a task done (retained 3 days, then auto-deleted). Call ONLY when the work actually happened — never to clear something not done; if it did not happen, leave it open or push due_date/due_time via update_task. A STRUCTURED repeat (repeat_every + repeat_unit) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
+		Description: "Mark a task done (retained 3 days, then auto-deleted). Call ONLY when the work actually happened — never to clear something not done; if it did not happen, call skip_task instead. A STRUCTURED repeat (repeat_every + repeat_unit) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, next, rollover, rolloverDetail, err := store.CompleteDetail(ctx, in.ID)
 			if err != nil {
@@ -315,8 +321,43 @@ func main() {
 			return result(out)
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "skip_task",
+		Description: "Skip the current occurrence WITHOUT claiming the work was done (retained 3 days like a completion, then auto-deleted; `reopen_task` restores it). Call when the work did NOT happen: a STRUCTURED repeat (repeat_every + repeat_unit) rolls itself over exactly like complete_task and the next occurrence is returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task the same way as after a custom completion."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in skipTaskInput) (*mcp.CallToolResult, map[string]any, error) {
+			doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, in.ID, in.Reason)
+			if err != nil {
+				return fail(err)
+			}
+			store.RecordMutation(ctx, tasks.OpSkip, in.ID, mcpSource, fmt.Sprint(rollover))
+			out := map[string]any{"ok": true, "task": doc}
+			// Same rollover reporting as complete_task (#180): `rolled_over`
+			// alone cannot distinguish a one-shot from a repeat that
+			// silently stopped.
+			out["rollover"] = string(rollover)
+			rep := repeatOf(doc)
+			switch {
+			case next != nil:
+				// Rolled over server-side: the agent has nothing to do, and
+				// must not create a second occurrence.
+				out["rolled_over"] = true
+				out["next"] = next
+			case rollover == tasks.RolloverCustom:
+				// Custom: only the caller can compute the next date.
+				out["repeat_every"] = rep.Every
+				out["repeat_unit"] = rep.Unit
+				out["repeat_custom"] = rep.Custom
+				out["repeat_rule"] = rep.Text
+				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required."
+			case rollover.NeedsAttention():
+				// Say it in the response instead of leaving it in a log line: the
+				// repeat has stopped, and only the user can restart it.
+				out["needs_attention"] = rollover.Attention(rolloverDetail)
+			}
+			return result(out)
+		})
+
 	mcp.AddTool(s, &mcp.Tool{Name: "reopen_task",
-		Description: "Reopen a completed task (clears completion, cancels the 3-day expiry)."},
+		Description: "Reopen a completed or skipped task (clears completion and the skip marker, cancels the 3-day expiry)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in reopenTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Reopen(ctx, in.ID)
 			if err != nil {
