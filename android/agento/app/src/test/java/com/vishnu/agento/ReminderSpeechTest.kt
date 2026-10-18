@@ -9,7 +9,7 @@ class ReminderSpeechTest {
     @Test
     fun `before-start speaks lead time with name`() {
         assertEquals(
-            "In 5 minutes you need to start \"pay the power bill\"",
+            "In ${TaskReminders.BEFORE_START_MINUTES} minutes you need to start \"pay the power bill\"",
             reminderSpeech(ReminderKind.BeforeStart, "pay the power bill"),
         )
     }
@@ -34,11 +34,11 @@ class ReminderSpeechTest {
     fun `overdue speaks pending duration`() {
         assertEquals(
             "\"pay the power bill\" has been pending for 5 min",
-            reminderSpeech(ReminderKind.Overdue, "pay the power bill", 5 * 60_000L),
+            reminderSpeech(ReminderKind.Overdue, "pay the power bill", overdueElapsed = 5 * 60_000L),
         )
         assertEquals(
             "\"pay the power bill\" has been pending for 2 hr 5 min",
-            reminderSpeech(ReminderKind.Overdue, "pay the power bill", 125 * 60_000L),
+            reminderSpeech(ReminderKind.Overdue, "pay the power bill", overdueElapsed = 125 * 60_000L),
         )
     }
 
@@ -46,7 +46,7 @@ class ReminderSpeechTest {
     fun `overdue without elapsed degrades`() {
         assertEquals(
             "\"pay the power bill\" is overdue",
-            reminderSpeech(ReminderKind.Overdue, "pay the power bill", null),
+            reminderSpeech(ReminderKind.Overdue, "pay the power bill", overdueElapsed = null),
         )
     }
 
