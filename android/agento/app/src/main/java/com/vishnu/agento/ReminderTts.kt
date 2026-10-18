@@ -124,6 +124,7 @@ object ReminderTts {
     private fun pump() {
         while (true) {
             val next: Pair<String, String>?
+            val eng: TextToSpeech?
             synchronized(lock) {
                 // Watchdog: an utterance the engine accepted but never completes
                 // (no onDone/onError) must not wedge the queue until process death.
@@ -133,6 +134,12 @@ object ReminderTts {
                     speaking = false
                 }
                 if (!ready || speaking) return
+                // Null-checked BEFORE dequeue: on a synchronous-init OEM the
+                // callback's pump() can run before `engine` is assigned — taking
+                // the item first would drop it silently. The outer pump() after
+                // assignment speaks it instead.
+                eng = engine
+                if (eng == null) return
                 next = queue.removeFirstOrNull()
                 if (next != null) {
                     speaking = true
@@ -140,13 +147,6 @@ object ReminderTts {
                 }
             }
             if (next == null) return
-            val eng = engine
-            if (eng == null) {
-                // Unreachable today (engine is nulled only with ready=false),
-                // but a null engine with speaking=true would wedge the queue.
-                synchronized(lock) { speaking = false }
-                return
-            }
             val rc = eng.speak(next.second, TextToSpeech.QUEUE_ADD, null, next.first)
             if (rc != TextToSpeech.ERROR) return
             // A rejected chunk never fires onDone — clear speaking and take

@@ -348,8 +348,10 @@ internal fun truncateUtf8Bytes(s: String, max: Int): String {
     val bytes = s.toByteArray(Charsets.UTF_8)
     if (bytes.size <= max) return s
     var cut = max
-    // Step back over UTF-8 continuation bytes to the rune boundary.
-    while (cut > 0 && bytes[cut].toInt() and 0xC0 == 0x80) cut--
+    // Step back over UTF-8 continuation bytes to the rune boundary. The
+    // `cut < bytes.size` guard is defence in depth: the early return above is
+    // the only thing keeping `bytes[cut]` in range today.
+    while (cut > 0 && cut < bytes.size && bytes[cut].toInt() and 0xC0 == 0x80) cut--
     return String(bytes, 0, cut, Charsets.UTF_8)
 }
 
