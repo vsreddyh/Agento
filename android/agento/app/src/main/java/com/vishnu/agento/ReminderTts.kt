@@ -81,11 +81,25 @@ object ReminderTts {
         }
         // Listener attached before the init callback can pump: a fast callback
         // speaking before setOnUtteranceProgressListener would leave `speaking`
-        // true forever (no onDone ever fires). The callback itself only reads
-        // the volatile engine + synchronized state.
-        val tts = TextToSpeech(appCtx, ::onEngineInit)
+        // true forever (no onDone ever fires).
+        //
+        // Synchronous-init OEMs call the callback inside the constructor, before
+        // `engine` is assigned: the callback then stashes its status and the tail
+        // below applies it after assignment — so the language pick runs and a
+        // synchronous failure shuts down the real object instead of leaking it.
+        var earlyStatus: Int? = null
+        val tts = TextToSpeech(appCtx) { status ->
+            val assigned = synchronized(lock) { engine }
+            if (assigned == null) {
+                synchronized(lock) { earlyStatus = status }
+            } else {
+                onEngineInit(status)
+            }
+        }
         tts.setOnUtteranceProgressListener(progressListener)
         engine = tts
+        val es = synchronized(lock) { earlyStatus }
+        if (es != null) onEngineInit(es)
     }
 
     private fun onEngineInit(status: Int) {
@@ -123,9 +137,11 @@ object ReminderTts {
 
     private fun pump() {
         while (true) {
-            val next: Pair<String, String>?
-            val eng: TextToSpeech?
-            synchronized(lock) {
+            // The engine snapshot leaves the lock non-null: reading `engine`
+            // into a local first keeps the null check and the dequeue ordered
+            // (a synchronous-init callback's pump() must see null and wait for
+            // the outer pump(), never dequeue-then-drop).
+            val eng: TextToSpeech = synchronized(lock) {
                 // Watchdog: an utterance the engine accepted but never completes
                 // (no onDone/onError) must not wedge the queue until process death.
                 // Utterances are seconds long; a minute means stuck.
@@ -134,20 +150,26 @@ object ReminderTts {
                     speaking = false
                 }
                 if (!ready || speaking) return
-                // Null-checked BEFORE dequeue: on a synchronous-init OEM the
-                // callback's pump() can run before `engine` is assigned — taking
-                // the item first would drop it silently. The outer pump() after
-                // assignment speaks it instead.
-                eng = engine
-                if (eng == null) return
-                next = queue.removeFirstOrNull()
-                if (next != null) {
+                engine ?: return
+            }
+            val next: Pair<String, String>? = synchronized(lock) {
+                val n = queue.removeFirstOrNull()
+                if (n != null) {
                     speaking = true
                     speakStartedAt = System.currentTimeMillis()
                 }
+                n
             }
             if (next == null) return
-            val rc = eng.speak(next.second, TextToSpeech.QUEUE_ADD, null, next.first)
+            // A throw (broken OEM binder state) counts like ERROR: clear and
+            // advance. Uncaught here it would escape from onDone/onError's thread.
+            val rc = runCatching {
+                eng.speak(next.second, TextToSpeech.QUEUE_ADD, null, next.first)
+            }.getOrElse {
+                Log.w("ReminderTts", "speak threw, advancing queue", it)
+                synchronized(lock) { speaking = false }
+                continue
+            }
             if (rc != TextToSpeech.ERROR) return
             // A rejected chunk never fires onDone — clear speaking and take
             // the next one in this loop, not via recursion: a broken engine
