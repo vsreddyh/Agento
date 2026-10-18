@@ -208,6 +208,7 @@ func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]a
 	rep := repeatFromDoc(bson.M(done))
 	dueTime, _ := done["due_time"].(string)
 	name, _ := done["name"].(string)
+	speakName, _ := done["speak_name"].(string)
 	description, _ := done["description"].(string)
 	// Typed reads, already proven carryable by the plan above; these cannot fail,
 	// and a default here would be a lie rather than a fallback.
@@ -230,7 +231,7 @@ func (s *Store) rollOver(ctx context.Context, done map[string]any) (map[string]a
 	}
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{
-		"name": name, "description": description,
+		"name": name, "speak_name": speakName, "description": description,
 		"due_date": nextDate, "due_time": dueTime,
 		"estimated_minutes": mins,
 		"parallelable":      parallel,

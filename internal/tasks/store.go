@@ -319,6 +319,12 @@ func toDoc(doc bson.M) map[string]any {
 	if _, ok := out["parallelable"]; !ok {
 		out["parallelable"] = false
 	}
+	// The voice phrase backfills as blank, not absent: pre-#306 docs predate the
+	// key, and blank already means "fall back to `name`" — so an old row and a
+	// row whose phrase was cleared speak identically, with no reader special case.
+	if _, ok := out["speak_name"]; !ok {
+		out["speak_name"] = ""
+	}
 	// `rolled_from` is stripped: it is INTERNAL linkage between a task and the
 	// occurrence it produced, and it lands on exactly the successor docs a user has no
 	// reason to be reading. Exposing it invites a client to reconstruct rollover chains
@@ -430,8 +436,12 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{
 		"name": name, "description": description,
-		"speak_name": strings.TrimSpace(speakName),
-		"due_date": dueDate, "due_time": dueTime,
+		// Capped, not rejected: a pasted paragraph still creates the task, and
+		// the list name (which is uncapped) stays the full record. Truncated
+		// rather than rejected for the same reason as `source` above — a long
+		// voice phrase degrades a spoken line, never an identity.
+		"speak_name": truncateRunes(strings.TrimSpace(speakName), 120),
+		"due_date":   dueDate, "due_time": dueTime,
 		"estimated_minutes": *estimatedMinutes,
 		"parallelable":      *parallelable,
 		"revision":          0,
@@ -716,8 +726,10 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	}
 	// Optional voice phrase for TTS reminders (#306): blank means fall back
 	// to `name`. Clearing back to blank is allowed, so no non-empty check.
+	// Capped like the create path: a pasted paragraph degrades a spoken line,
+	// never a stored row.
 	if str, ok := strField("speak_name"); ok {
-		set["speak_name"] = strings.TrimSpace(str)
+		set["speak_name"] = truncateRunes(strings.TrimSpace(str), 120)
 	}
 	// Due fields flow through only when the caller sent them, so a
 	// no-change update stays a no-op and the len(set)==0 path can fire.

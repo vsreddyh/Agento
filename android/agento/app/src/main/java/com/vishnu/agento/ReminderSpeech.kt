@@ -14,7 +14,7 @@ internal fun reminderSpeech(
     val name = speakName.ifBlank { taskName }.ifEmpty { "Task due" }
     return when (kind) {
         ReminderKind.BeforeStart ->
-            "In 5 minutes you need to start \"$name\""
+            "In ${TaskReminders.BEFORE_START_MINUTES} minutes you need to start \"$name\""
         ReminderKind.Start ->
             "You need to start \"$name\""
         ReminderKind.Due ->

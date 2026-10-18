@@ -1171,3 +1171,48 @@ func TestExhaustedIsOnlyEverTheCeiling(t *testing.T) {
 		}
 	}
 }
+
+// The successor used to drop `speak_name` (#306): every Complete on a structured
+// repeat reset the next occurrence to blank, silently undoing the user's voice
+// phrase. The rollover carries name/description/time/estimate/parallel/repeat —
+// the phrase rides with them.
+func TestRolloverCarriesSpeakName(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	t.Run("non-blank phrase survives", func(t *testing.T) {
+		id := mustCreate(t, s, "Power Bill", map[string]any{
+			"speak_name": "pay the power bill",
+			"due_date":   "2026-10-05", "due_time": "08:00",
+			"repeat_every": 1, "repeat_unit": "days",
+		})
+		next, r, err := s.rollOver(ctx, mustGet(t, s, id))
+		if err != nil {
+			t.Fatalf("rollOver: %v", err)
+		}
+		if r != RolloverCreated {
+			t.Fatalf("rollover = %q, want %q", r, RolloverCreated)
+		}
+		if got, _ := next["speak_name"].(string); got != "pay the power bill" {
+			t.Errorf("successor speak_name = %q, want the phrase carried over", got)
+		}
+	})
+
+	t.Run("blank stays blank", func(t *testing.T) {
+		id := mustCreate(t, s, "Plain", map[string]any{
+			"due_date": "2026-10-05", "due_time": "08:00",
+			"repeat_every": 1, "repeat_unit": "days",
+		})
+		next, r, err := s.rollOver(ctx, mustGet(t, s, id))
+		if err != nil {
+			t.Fatalf("rollOver: %v", err)
+		}
+		if r != RolloverCreated {
+			t.Fatalf("rollover = %q, want %q", r, RolloverCreated)
+		}
+		if got, _ := next["speak_name"].(string); got != "" {
+			t.Errorf("successor speak_name = %q, want blank", got)
+		}
+	})
+}

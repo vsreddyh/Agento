@@ -3,7 +3,6 @@ package com.vishnu.agento
 import android.app.NotificationManager
 import android.content.Context
 import android.media.AudioManager
-import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
@@ -24,7 +23,7 @@ object ReminderTts {
     private var inited = false
     private var speaking = false
 
-    fun speak(appCtx: Context, kind: ReminderKind, task: ServerTask, overdueElapsed: Long? = null) {
+    internal fun speak(appCtx: Context, kind: ReminderKind, task: ServerTask, overdueElapsed: Long? = null) {
         if (isSilent(appCtx)) return
         val text = ChatTts.cleanForSpeech(reminderSpeech(kind, task.name, task.speakName, overdueElapsed))
         val id = "${kind.key}-${UUID.randomUUID()}"
@@ -38,10 +37,9 @@ object ReminderTts {
     internal fun isSilent(appCtx: Context): Boolean {
         val audio = appCtx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         if (audio != null && audio.ringerMode != AudioManager.RINGER_MODE_NORMAL) return true
+        // No SDK guard: notification channels need 26 and minSdk is 28.
         val nm = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        if (nm != null && Build.VERSION.SDK_INT >= 23) {
-            if (nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) return true
-        }
+        if (nm != null && nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) return true
         return false
     }
 
@@ -70,8 +68,16 @@ object ReminderTts {
                 }
                 pump()
             } else {
-                Log.w("ReminderTts", "engine init failed, dropping ${queue.size} queued")
-                synchronized(lock) { queue.clear() }
+                val dead = engine
+                synchronized(lock) {
+                    queue.clear()
+                    // Retry, don't seal: leaving inited=true with ready=false
+                    // would queue-but-never-speak forever after one failure.
+                    inited = false
+                    engine = null
+                }
+                runCatching { dead?.shutdown() }
+                Log.w("ReminderTts", "engine init failed, dropping queued speech; will retry")
             }
         }
         engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {

@@ -929,6 +929,6 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             }
             val speakTask = task ?: ServerTask(id = taskId, name = name)
             ReminderTts.speak(appCtx, kind, speakTask, elapsedSpeech)
-        }
+        }.onFailure { Log.w("TaskReminders", "reminder speech failed", it) }
     }
 }

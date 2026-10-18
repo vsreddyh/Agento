@@ -1080,3 +1080,34 @@ func TestListLimitAndTruncated(t *testing.T) {
 		t.Fatalf("clampLimit(0) = %d, want %d", got, DefaultLimit)
 	}
 }
+
+// The voice phrase is capped, not rejected (#306): a pasted paragraph still
+// creates the task, and Update truncates the same way. Blank stays blank
+// (fallback to `name` happens at speak time, not in storage).
+func TestSpeakNameRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	doc, err := s.Create(ctx, "Power Bill", "utility", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false), "pay the power bill")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if doc["speak_name"] != "pay the power bill" {
+		t.Fatalf("create must store speak_name: %v", doc)
+	}
+	id := doc["id"].(string)
+	long := strings.Repeat("x", 200)
+	capped, err := s.Update(ctx, id, map[string]any{"speak_name": long})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got := capped["speak_name"].(string); len([]rune(got)) != 120 {
+		t.Fatalf("speak_name must truncate to 120 runes, got %d", len([]rune(got)))
+	}
+	cleared, err := s.Update(ctx, id, map[string]any{"speak_name": ""})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if cleared["speak_name"] != "" {
+		t.Fatalf("clearing back to blank must be allowed: %v", cleared)
+	}
+}

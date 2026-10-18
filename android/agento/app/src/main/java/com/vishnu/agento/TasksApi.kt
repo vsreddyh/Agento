@@ -482,7 +482,9 @@ class TasksApi(context: Context) {
         repeatRule: String = "",
         parallelable: Boolean = false,
         // Optional voice phrase for TTS reminders (#306); blank = fallback to name.
-        // Deliberately OUT of the contract assert: old servers ignore it.
+        // Fully IN the contract assert (see TaskContractSent): old servers just
+        // ignore the unknown key on the wire (taskbody_test pins that tolerance),
+        // and answer without it — which the version check then reports.
         speakName: String = "",
     ): Result<ServerTask> = withContext(Dispatchers.IO) {
         if (name.trim().isEmpty()) {
