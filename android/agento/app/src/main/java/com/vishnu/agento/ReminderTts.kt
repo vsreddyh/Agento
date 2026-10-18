@@ -125,7 +125,9 @@ object ReminderTts {
                             r == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE
                     }.getOrDefault(false)
                 }
-                if (picked != null) tts.language = picked
+                // The setter throws on some OEMs (missing data, illegal locale)
+                // on the binder thread — fall back to the default voice.
+                if (picked != null) runCatching { tts.language = picked }
             }
             pump()
         } else {

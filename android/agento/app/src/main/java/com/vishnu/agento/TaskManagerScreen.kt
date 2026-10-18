@@ -1402,7 +1402,11 @@ internal fun ServerTaskDialog(
                     // Bytes, not chars: the builder and the server cap at
                     // SPEAK_NAME_MAX_BYTES bytes, so the field caps the same
                     // way — otherwise a multibyte phrase would shrink on save.
-                    onValueChange = { speakName = truncateUtf8Bytes(it, SPEAK_NAME_MAX_BYTES) },
+                    // Trim-then-truncate, matching the builder/store/fingerprint
+                    // order: truncating first would waste cap on whitespace the
+                    // save then trims away. Leading only — trailing space is
+                    // still being typed, and the save trims it.
+                    onValueChange = { speakName = truncateUtf8Bytes(it.trimStart(), SPEAK_NAME_MAX_BYTES) },
                     label = { Text("Speak as (voice)") },
                     placeholder = { Text("e.g. pay the power bill") },
                     singleLine = true,
