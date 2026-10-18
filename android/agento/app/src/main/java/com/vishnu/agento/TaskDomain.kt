@@ -247,8 +247,10 @@ internal fun dayLabel(day: String): String =
  *
  * Unknown values are DROPPED here, unlike server-side — the chips can only
  * produce known ones, so anything else came from a hand-edited response, and
- * sending it back would earn a 422. Dropping it means the round-trip compare
- * (contractMismatches) reports the difference instead of the write failing.
+ * sending it back would earn a 422. The round-trip compare cannot report that
+ * drop — it canonicalises both sides, so a dropped token is already gone from
+ * each before they are compared — and the server's 422 is what surfaces it on
+ * the next write instead.
  */
 internal fun canonicalRepeatDays(days: List<String>): List<String> {
     val kept = days.map { it.trim().lowercase(Locale.ROOT) }.toSet()

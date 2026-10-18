@@ -68,7 +68,11 @@ func DayLabel(day string) string {
 	if day == "" {
 		return day
 	}
-	return strings.ToUpper(day[:1]) + day[1:]
+	// By RUNE, not by byte: canonicalisation keeps an unrecognised token so
+	// the error can name it, and a token that starts with a multi-byte rune
+	// would otherwise be split into invalid UTF-8 on its way into the message.
+	r := []rune(day)
+	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
 // CanonicalRepeatDays trims, lowercases, de-duplicates and sorts a selection

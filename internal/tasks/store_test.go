@@ -547,6 +547,9 @@ func TestRepeatString(t *testing.T) {
 		"Mon, Wed, Fri": {Days: []string{"mon", "wed", "fri"}},
 		"Mon, Fri":      {Days: []string{"fri", "mon"}},
 		"Sun":           {Days: []string{"SUN"}},
+		// An unrecognised token is KEPT so an error can name it, so the label
+		// has to survive one starting with a multi-byte rune.
+		"Ünknown": {Days: []string{"ünknown"}},
 	}
 	for want, rep := range cases {
 		if got := rep.String(); got != want {
