@@ -332,6 +332,10 @@ internal fun ServerTaskDraft.repeatOrNull(): RepeatDraft? {
  * 2 — the `repeat_days` selection (#304). A new field, and an old app reading
  * a selected-days task as a one-shot is the same silent wrong data this number
  * exists to make loud.
+ *
+ * 3 — the `speak_name` voice phrase (#306). Optional, blank falls back to
+ * `name` — but still a NEW key on the wire: an old app neither sends nor
+ * reads it, and an old server answers without it.
  */
 internal const val TASK_CONTRACT_VERSION = 3
 
@@ -345,6 +349,7 @@ internal const val TASK_CONTRACT_VERSION = 3
 internal const val SPEAK_NAME_MAX_BYTES = 120
 
 internal fun truncateUtf8Bytes(s: String, max: Int): String {
+    if (max <= 0) return ""
     val bytes = s.toByteArray(Charsets.UTF_8)
     if (bytes.size <= max) return s
     var cut = max

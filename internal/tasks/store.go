@@ -1080,6 +1080,9 @@ func resolvedStateErr(doc bson.M, id string) *StoreError {
 // invalid UTF-8, which BSON accepts and every reader then has to defend against.
 // Same rule, one place, applied to every capped field.
 func TruncateBytes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
 	if len(s) <= max {
 		return s
 	}

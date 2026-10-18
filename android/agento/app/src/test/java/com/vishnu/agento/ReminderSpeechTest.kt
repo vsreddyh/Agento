@@ -80,4 +80,13 @@ class ReminderSpeechTest {
         val spoken = reminderSpeech(ReminderKind.Due, long)
         assertEquals("Time to \"${"x".repeat(SPEAK_NAME_MAX_BYTES)}\" is up", spoken)
     }
+
+    @Test
+    fun `fallback cap never splits a multibyte character`() {
+        val spoken = reminderSpeech(ReminderKind.Due, "é".repeat(500))
+        val inner = spoken.removePrefix("Time to \"").removeSuffix("\" is up")
+        val bytes = inner.toByteArray(Charsets.UTF_8)
+        assert(bytes.size <= SPEAK_NAME_MAX_BYTES)
+        assertEquals(inner, String(bytes, Charsets.UTF_8))
+    }
 }
