@@ -335,6 +335,24 @@ internal fun ServerTaskDraft.repeatOrNull(): RepeatDraft? {
  */
 internal const val TASK_CONTRACT_VERSION = 3
 
+/**
+ * Voice-phrase cap (#306), mirroring the server's `TruncateBytes(120)` in
+ * `internal/tasks/store.go`. Bytes, not chars, without splitting a UTF-8
+ * sequence — so what the app sends is byte-identical to what the server
+ * stores, and the contract assert never fires on a phrase that merely
+ * survived the cap.
+ */
+internal const val SPEAK_NAME_MAX_BYTES = 120
+
+internal fun truncateUtf8Bytes(s: String, max: Int): String {
+    val bytes = s.toByteArray(Charsets.UTF_8)
+    if (bytes.size <= max) return s
+    var cut = max
+    // Step back over UTF-8 continuation bytes to the rune boundary.
+    while (cut > 0 && bytes[cut].toInt() and 0xC0 == 0x80) cut--
+    return String(bytes, 0, cut, Charsets.UTF_8)
+}
+
 /** Prefs key for the highest task contract this install has spoken (#185). */
 internal const val CONTRACT_VERSION_SEEN_KEY = "contract_version_seen"
 

@@ -1,0 +1,209 @@
+- generic [ref=f34e8]:
+  - navigation "Main" [ref=f34e11]:
+    - generic [ref=f34e15]:
+      - link "Meta home" [ref=f34e18] [cursor=pointer]:
+        - /url: /
+        - img "Meta" [ref=f34e19]
+      - list [ref=f34e23]:
+        - listitem [ref=f34e24]:
+          - link "AI glasses" [ref=f34e27] [cursor=pointer]:
+            - /url: /ai-glasses/
+        - listitem [ref=f34e30]:
+          - link "Meta Quest" [ref=f34e33] [cursor=pointer]:
+            - /url: /quest/
+        - listitem [ref=f34e36]:
+          - link "Meta VR Glasses" [ref=f34e39] [cursor=pointer]:
+            - /url: /vr-glasses/
+      - generic [ref=f34e44]:
+        - list [ref=f34e45]:
+          - generic [ref=f34e46]:
+            - listitem [ref=f34e47]:
+              - link "Explore Meta" [ref=f34e50] [cursor=pointer]:
+                - /url: /about/
+            - listitem [ref=f34e53]:
+              - link "Support" [ref=f34e56] [cursor=pointer]:
+                - /url: /help/
+        - button "Search Meta Store" [ref=f34e59] [cursor=pointer]
+        - link "Bag" [ref=f34e63] [cursor=pointer]:
+          - /url: /bag/
+          - img "Empty bag" [ref=f34e66]
+  - main [ref=f34e71]:
+    - generic [ref=f34e73]:
+      - heading "Everything We Announced at Meta Connect 2026" [level=1] [ref=f34e75]
+      - generic [ref=f34e79]:
+        - link "Blog" [ref=f34e82] [cursor=pointer]:
+          - /url: /blog/
+        - generic [ref=f34e83]: "|"
+        - time [ref=f34e86]: 23 Sep 2026
+        - generic [ref=f34e87]: "|"
+        - generic [ref=f34e88]:
+          - button "Share article to Facebook" [ref=f34e89] [cursor=pointer]
+          - link "Share article to X" [ref=f34e94] [cursor=pointer]:
+            - /url: https://twitter.com/intent/tweet?text=Take%20a%20look%20at%20this%20post%20I%20read%20on%20Quest%20blog%3A%0D%0A%0D%0AEverything%20We%20Announced%20at%20Meta%20Connect%202026%0D%0A%0D%0A&url=https%3A%2F%2Fwww.meta.com%2Fen-gb%2Fblog%2Fmeta-connect-2026-everything-we-announced%2F
+            - img "X" [ref=f34e97]
+          - link "Share article via email" [ref=f34e99] [cursor=pointer]:
+            - /url: mailto:?subject=Everything%20We%20Announced%20at%20Meta%20Connect%202026&body=Take%20a%20look%20at%20this%20post%20I%20read%20on%20Quest%20blog%3A%0D%0A%0D%0AEverything%20We%20Announced%20at%20Meta%20Connect%202026%0D%0A%0D%0Ahttps%3A%2F%2Fwww.meta.com%2Fen-gb%2Fblog%2Fmeta-connect-2026-everything-we-announced%2F
+    - separator [aria-hidden] [ref=f34e104]
+    - generic [ref=f34e110]:
+      - paragraph [ref=f34e111]: The future should be for everyone. That means personal AI agents that work for everyone, and devices that let you reach them anywhere.
+      - paragraph [ref=f34e112]: "At Connect 2026, we showed how Muse keeps getting better with new features, connectors, and a state-of-the-art model that brings your Muse to life. It also works beyond your phone and desktop: we’re bringing Muse to our glasses so you can connect with your agent throughout your day."
+      - paragraph [ref=f34e113]: We also introduced our new lineup of AI glasses in the widest range of styles across Ray-Ban, Oakley, and Meta Glasses. That includes our first audio glasses, with powerful AI and open-ear audio built into every pair. By the end of this year there will be over 100 styles of AI glasses.
+      - paragraph [ref=f34e114]: Finally, we debuted Meta VR Glasses, a breakthrough device as wearable as glasses that delivers an IMAX-grade cinema experience and full spatial computing.
+      - paragraph [ref=f34e115]: With a personal AI agent and industry-leading hardware, this is what the next generation of computing looks like.
+      - paragraph [ref=f34e116]: Here's everything you need to know about the biggest announcements from Connect 2026.
+      - heading "Take Your Muse Everywhere You Go" [level=3] [ref=f34e117]
+      - paragraph [ref=f34e118]:
+        - text: We introduced
+        - link "Muse" [ref=f34e119] [cursor=pointer]:
+          - /url: https://introducing.muse.ai
+        - text: "just a few weeks ago, and the response has been incredible. At Connect we showed what's next: a Muse you can talk to in real time and reach in more places throughout your day."
+      - list [ref=f34e120]:
+        - listitem [ref=f34e121]:
+          - strong [ref=f34e122]: "A great voice mode:"
+          - text: "Talking to an agent as capable as Muse is different from voice chat with an assistant. You can have a long, in-depth conversation, and Muse gets work done in the background while you're still talking. You can also design your Muse's voice just by describing what you want: faster, slower, or even a specific accent."
+        - listitem [ref=f34e123]:
+          - strong [ref=f34e124]: "See your Muse come to life:"
+          - text: Meta Superintelligence Labs is introducing
+          - link "Muse Realtime Avatar" [ref=f34e125] [cursor=pointer]:
+            - /url: https://research.meta.ai/blog/bringing-your-muse-to-life
+          - text: ", state-of-the-art embodiment technology that turns Muse Realtime Voice into expressive, interactive avatars."
+        - listitem [ref=f34e126]:
+          - strong [ref=f34e127]: "Muse on AI glasses:"
+          - text: "In the coming months we're bringing Muse to our AI glasses for hands-free access, activated by saying your agent's name. Muse can also act on what you're looking at, so you won't have to describe what's in front of you: ask about a product on a shelf, a flier on a wall, or a long list of school supplies, and Muse can take action."
+        - listitem [ref=f34e128]:
+          - strong [ref=f34e129]: "Muse gets its own email address:"
+          - text: Muse will have its own email address that it can use to get things done, or even just as another way for you to communicate with it.
+        - listitem [ref=f34e130]:
+          - strong [ref=f34e131]: "Muse for Mac update:"
+          - text: Computer use is now available with Muse for Mac. With your permission, Muse can now drive any app on your Mac. You can walk away from your computer and it keeps working for you on all the tasks you’ve lined up.
+        - listitem [ref=f34e132]:
+          - strong [ref=f34e133]: "More connectors for Muse:"
+          - text: Connectors are a big reason Muse can do so much for people. We launched with dozens of partners along with access to the entire Shopify catalogue. To make Muse an even better shopper, we're adding Walmart, Best Buy, American Eagle Outfitters, DICK'S Sporting Goods, Fanatics, Gap, Michael Kors, Sephora, Ulta, and Wayfair, plus Shop Pay and PayPal for payments. Expedia is coming soon to help you plan travel, and when you're stocking the kitchen, Instacart is there. For getting work done, there's Notion, Granola, GitHub, and Box. And this is just the start, with more partners on the way.
+      - paragraph [ref=f34e134]: "All of this is on top of the ways you can reach your Muse today: the Muse app, WhatsApp, the web, and the Mac desktop version we recently launched, which can manage messages, find old files, and help you get work done."
+      - heading "Muse Charm" [level=3] [ref=f34e135]
+      - paragraph [ref=f34e136]: Muse Charm is a delightful and fun device built for you to talk and interact with your Muse. It brings the power of Muse with a state of the art real-time voice model into a device that fits in your pocket. We’ll have more to share later this year.
+      - heading "Our First Line of Audio Glasses — and Our Widest AI Glasses Lineup Yet, With 100+ Options" [level=3] [ref=f34e137]
+      - figure [ref=f34e138]
+      - paragraph [ref=f34e139]: We're introducing our first audio glasses, with powerful AI and open-ear audio built into every pair. The Ray-Ban Meta Audio glasses are designed for people who want true all-day wearability, with the power of earbuds and AI, in iconic Ray-Ban style. They’re our slimmest and lightest frames yet, come in two new styles (Clubmaster and Burbank), deliver 12 hours of battery life, and are compatible with a wide range of optical prescriptions.
+      - paragraph [ref=f34e140]: Additionally, we’re expanding our AI glasses portfolio with new features and styles. By the end of the year, we’ll have introduced our widest lineup of AI glasses styles yet. With more than 100 different options, there will be a pair for every style and use case.
+      - list [ref=f34e141]:
+        - listitem [ref=f34e142]:
+          - strong [ref=f34e143]: Ray-Ban Meta (Gen 3)
+          - text: ": The next generation of the world’s bestselling AI glasses will feature a slimmer, more comfortable design, an action button for quicker access to Meta AI and other features, and the longest battery life of any of the Ray-Ban Meta models. There will also be two new frames joining the lineup, Aviator, one of the most recognizable frame silhouettes in the world, and Zena, a bold, modern cat eye design."
+        - listitem [ref=f34e144]:
+          - strong [ref=f34e145]: New Meta Glasses styles
+          - text: ": Our collection features a new Ivory colorway of Meta Glasses by Kylie Jenner as well as our first collaboration with international icon LISA. We’re also introducing additional frame shapes (Meta Capri and Meta Nova) to fit even more faces comfortably, a low-cost Meta Adventurer, and a limited edition Meta Fury, which will only be available in Meta Lab locations at launch."
+        - listitem [ref=f34e146]:
+          - strong [ref=f34e147]: "Personalization:"
+          - text: Meta Glasses are now even more personalized with a Mix & Match program in the US that allows you to customize your frame, lens, and case color.
+        - listitem [ref=f34e148]:
+          - strong [ref=f34e149]: New Markets
+          - text: ": We’re also bringing Meta Glasses to new markets — starting today in Singapore, South Korea, and Mexico, and coming soon to Brazil and the United Arab Emirates."
+        - listitem [ref=f34e150]:
+          - strong [ref=f34e151]: Ray-Ban Meta (Gen 2) Optics
+          - text: "This fall, upgrade your everyday glasses and enjoy standout style, a slimmer fit, and all-day comfort with three new color updates — two limited-time seasonal colors: Blayzer Optics Shiny Brick Brown and Shiny Transparent Ocean Blue plus we’re bringing our core Transparent Dark Olive color to our Scriber Optics style for a limited time."
+        - listitem [ref=f34e152]:
+          - strong [ref=f34e153]: Meta Ray-Ban Display now available in more places
+          - text: ": For the first time, you can order Meta Ray-Ban Display online. It goes on sale today in Canada and the UK, with pre-orders opening today in France, Italy, and Germany ahead of availability on October 13."
+      - paragraph [ref=f34e154]:
+        - link "Read More" [ref=f34e155] [cursor=pointer]:
+          - /url: https://www.meta.com/blog/ray-ban-meta-audio-and-deepest-ai-glasses-lineup
+      - heading "New Features for Meta AI Glasses" [level=3] [ref=f34e156]
+      - figure [ref=f34e157]
+      - paragraph [ref=f34e158]: "We also announced a wide range of software features that are designed to help you stay present instead of looking down at a screen. These updates will roll out in the coming months:"
+      - list [ref=f34e159]:
+        - listitem [ref=f34e160]:
+          - strong [ref=f34e161]: "Onboard hearing assistance:"
+          - text: "Hearing enhancement is an FDA-cleared software feature that helps adults 18 and older with perceived mild to moderate hearing loss hear better, coming to supported AI glasses. Hearing enhancement can be set up at home in minutes — no clinic or prescription needed. Launching in the US later this year, hearing enhancement will be available to add to supported AI glasses for $149.99 (HSA/FSA eligible*) or with a Meta One subscription. We're also giving every AI glasses wearer more control over audio: shift the balance toward your left or right ear with the new audio balance feature, or route all sound to a single side with mono audio."
+        - listitem [ref=f34e162]:
+          - strong [ref=f34e163]: "Power your day:"
+          - text: We’re also adding hands-free guided workouts for running and cycling, nutrition tracking with personalized insights, and shopping AI that identifies products, prices, and reviews so you can set alerts or buy with your voice.
+        - listitem [ref=f34e164]:
+          - strong [ref=f34e165]: "Capture the moment:"
+          - text: Meta AI glasses are the first consumer device that enables users to capture and experience videos in Dolby Atmos. Capture moments in true 360° spatial sound. Just record and your glasses handle everything, capturing seamlessly in Dolby Atmos so playback feels as immersive as being there.
+        - listitem [ref=f34e166]:
+          - strong [ref=f34e167]: Navigation that sounds more human
+          - text: ": Get walking directions based on landmarks instead of street names, like “turn left at the supermarket” instead of “turn left at Broadway.”"
+          - link "Read more about this feature" [ref=f34e168] [cursor=pointer]:
+            - /url: https://www.meta.com/blog/meta-ray-ban-display-more-useful-more-people
+          - text: .
+        - listitem [ref=f34e169]:
+          - strong [ref=f34e170]: "More ways to tailor your experience:"
+          - text: Personalized audio, custom gestures, and smarter visual AI give you more control over how you use your glasses. Set the touchpad press-and-hold shortcut to launch a tool you use often.
+        - listitem [ref=f34e171]:
+          - strong [ref=f34e172]: Cycling and public transit directions
+          - text: ": Launching later this month on Meta Ray-Ban Display in the US and Canada, you’ll be able to ask for cycling and public transit directions using your voice."
+      - paragraph [ref=f34e173]:
+        - link "Read More" [ref=f34e174] [cursor=pointer]:
+          - /url: https://www.meta.com/blog/muse-personal-agent-ai-glasses/
+      - 'heading "Meta VR Glasses: Our Most Advanced VR Device Yet" [level=3] [ref=f34e175]'
+      - figure [ref=f34e176]
+      - paragraph [ref=f34e177]: Meta VR Glasses, which put a cinema, a workspace, and a console into a comfortable form factor, will be available in Spring 2027 for $1,299.99 USD.
+      - paragraph [ref=f34e178]: At about 100 grams, Meta VR Glasses are five times lighter than Meta Quest 3. They feature a 5K Infinite Display built on micro-OLED panels, and a two-part design that moves the battery and processors into a puck you clip to your belt, pocket, or bag, keeping the weight off your face.
+      - paragraph [ref=f34e179]: "Meta VR Glasses allow for multi-panel virtual displays with surface input built in, letting you turn any table or desk into a keyboard and touchpad, and spin up a massive screen, or several, anywhere you are — with the option to connect your other devices and extend their screens. Input is seamless and intuitive: navigate with your eyes and hand gestures, instead of using controllers. You can also ask Meta AI to perform any number of tasks, like rearranging your workspace or playing a movie on apps like Disney+, YouTube, HBO Max, Prime Video, and more."
+      - paragraph [ref=f34e180]: We also debuted hologram, a photorealistic, real-time digital representation of you that lets the people you call see your face and expressions. All it takes is a quick self-capture with your phone. Hologram will be available on Meta VR Glasses when they launch next spring, and begins rolling out in the US in Early Access on WhatsApp for Meta Ray-Ban Display users in the coming months.
+      - paragraph [ref=f34e181]:
+        - link "Read More" [ref=f34e182] [cursor=pointer]:
+          - /url: https://www.meta.com/blog/meta-vr-glasses-announcement-meta-connect/
+      - heading "‘Beat Saber’ Enters a New Era" [level=3] [ref=f34e183]
+      - figure [ref=f34e184]
+      - paragraph [ref=f34e185]:
+        - text: Next spring,
+        - emphasis [ref=f34e186]: Beat Saber
+        - text: "is getting its biggest update ever, arriving on Meta VR Glasses and Meta Quest, and featuring its first visual refresh and new logo in nearly a decade. The headliner is Flux, an all-new way to play built around high-fidelity hand-tracking: your hands become your weapons as you channel energy between your palms to slice notes and build Jolt Energy for bonus points."
+      - paragraph [ref=f34e187]:
+        - link "Read More" [ref=f34e188] [cursor=pointer]:
+          - /url: https://www.meta.com/blog/beat-saber-flux-campaign-update-rewards-hand-tracking/
+      - heading "A Wave of New Games for Meta VR Glasses and Quest" [level=3] [ref=f34e189]
+      - paragraph [ref=f34e190]:
+        - text: Our new lineup includes games that were built from the ground up for hand-tracking, so you can play them without controllers on Meta VR Glasses, or with them on Meta Quest. New titles include
+        - emphasis [ref=f34e191]: "Cardmada, Dice Throne Digital, Dragon Grove, Phoenix Wright: Ace Attorney – Dual Destinies, Supernatural, Tetris Effect: Mixed Realities,"
+        - text: and
+        - emphasis [ref=f34e192]: Two Point Hospital.
+      - paragraph [ref=f34e193]:
+        - link "Read More" [ref=f34e194] [cursor=pointer]:
+          - /url: https://www.meta.com/blog/connect-2026-game-announcements-meta-vr-glasses-quest/
+      - heading "Building Personal Superintelligence for Everyone" [level=3] [ref=f34e195]
+      - paragraph [ref=f34e196]: This has been one of our most important Connect events ever to show how our vision for personal AI superintelligence is connected to our industry-leading hardware across glasses and VR. With Muse coming soon to our growing collection of AI glasses, along with the launch of our first audio glasses, we’re excited to build the future for everyone.
+      - paragraph [ref=f34e197]: "*Hearing enhancement is eligible for HSA/FSA reimbursement. Check your plan to confirm eligibility."
+    - separator [aria-hidden] [ref=f34e198]
+    - generic [ref=f34e199]:
+      - generic [ref=f34e200]:
+        - generic [ref=f34e201]: RELATED ARTICLES
+        - link "See all articles" [ref=f34e204] [cursor=pointer]:
+          - /url: /blog/
+      - region "related blogs" [ref=f34e214]:
+        - generic [ref=f34e219]:
+          - group "1 of 3" [ref=f34e220]:
+            - generic [ref=f34e224]:
+              - link "Elevate Your Gaming With These New Titles and Updates For Meta VR Glasses and Quest, Announced at Meta Connect 23 Sep 2026 Here’s a look at the latest VR announcements for Meta VR Glasses and Meta Quest from Meta Connect." [ref=f34e225] [cursor=pointer]:
+                - /url: https://www.meta.com/blog/connect-2026-game-announcements-meta-vr-glasses-quest/
+                - generic [ref=f34e226]:
+                  - generic [ref=f34e228]: Elevate Your Gaming With These New Titles and Updates For Meta VR Glasses and Quest, Announced at Meta Connect
+                  - time [ref=f34e231]: 23 Sep 2026
+                  - generic [ref=f34e232]: Here’s a look at the latest VR announcements for Meta VR Glasses and Meta Quest from Meta Connect.
+              - 'link "Read article: Elevate Your Gaming With These New Titles and Updates For Meta VR Glasses and Quest, Announced at Meta Connect" [ref=f34e234] [cursor=pointer]':
+                - /url: https://www.meta.com/blog/connect-2026-game-announcements-meta-vr-glasses-quest/
+                - generic [ref=f34e235]: Read article
+          - group [aria-hidden] [ref=f34e242]:
+            - generic [ref=f34e246]:
+              - link [ref=f34e247] [cursor=pointer]:
+                - /url: https://www.meta.com/blog/beat-saber-flux-campaign-update-rewards-hand-tracking/
+                - generic [ref=f34e248]:
+                  - generic [ref=f34e250]: Biggest ‘Beat Saber’ Update Ever Brings Flux, Refreshed Campaign, and More in Spring 2027
+                  - time [ref=f34e253]: 23 Sep 2026
+                  - generic [ref=f34e254]: This spring, Beat Saber is starting its evolution into a multi-mode rhythm platform with its biggest update yet on Meta VR Glasses and Meta Quest.
+              - link [ref=f34e256] [cursor=pointer]:
+                - /url: https://www.meta.com/blog/beat-saber-flux-campaign-update-rewards-hand-tracking/
+                - generic [ref=f34e257]: Read article
+          - group [aria-hidden] [ref=f34e264]:
+            - generic [ref=f34e268]:
+              - link [ref=f34e269] [cursor=pointer]:
+                - /url: https://www.meta.com/blog/demeo-x-dungeons-dragons-battlemarked-campaign-twilights-end-release/
+                - generic [ref=f34e270]:
+                  - generic [ref=f34e272]: "Fight to Save Faerûn in ‘Demeo x Dungeons and Dragons: Battlemarked’ With the Twilight’s End Campaign, Launching Today on Meta Quest"
+                  - time [ref=f34e275]: 22 Sep 2026
+                  - generic [ref=f34e276]: "“Twilight’s End,” the third story campaign for Demeo x Dungeons & Dragons: Battlemarked, launches today on Meta Quest."
+              - link [ref=f34e278] [cursor=pointer]:
+                - /url: https://www.meta.com/blog/demeo-x-dungeons-dragons-battlemarked-campaign-twilights-end-release/
+                - generic [ref=f34e279]: Read article

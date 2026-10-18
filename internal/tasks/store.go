@@ -440,7 +440,7 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 		// the list name (which is uncapped) stays the full record. Truncated
 		// rather than rejected for the same reason as `source` above — a long
 		// voice phrase degrades a spoken line, never an identity.
-		"speak_name": truncateRunes(strings.TrimSpace(speakName), 120),
+		"speak_name": TruncateBytes(strings.TrimSpace(speakName), 120),
 		"due_date":   dueDate, "due_time": dueTime,
 		"estimated_minutes": *estimatedMinutes,
 		"parallelable":      *parallelable,
@@ -466,7 +466,7 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 		// Same insert as the key, so a task can never carry one without the other.
 		// An empty fingerprint disables the check rather than failing the write: a
 		// caller that has no body to digest (the MCP path) still gets idempotency.
-		if fingerprint = truncateRunes(fingerprint, 64); fingerprint != "" {
+		if fingerprint = TruncateBytes(fingerprint, 64); fingerprint != "" {
 			doc[idempotencyFingerprintField] = fingerprint
 		}
 	}
@@ -476,7 +476,7 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 		// audit log: two long labels colliding degrades a log line and nothing else.
 		// `idempotency_key` is an identity that decides whether a request is a replay,
 		// so two keys colliding there silently returns the wrong task.
-		source = truncateRunes(source, 40)
+		source = TruncateBytes(source, 40)
 		doc[sourceField] = source
 	}
 	out, err := s.insert(ctx, doc)
@@ -729,7 +729,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	// Capped like the create path: a pasted paragraph degrades a spoken line,
 	// never a stored row.
 	if str, ok := strField("speak_name"); ok {
-		set["speak_name"] = truncateRunes(strings.TrimSpace(str), 120)
+		set["speak_name"] = TruncateBytes(strings.TrimSpace(str), 120)
 	}
 	// Due fields flow through only when the caller sent them, so a
 	// no-change update stays a no-op and the len(set)==0 path can fire.
@@ -1020,7 +1020,7 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 				"completedAt": primitive.NewDateTimeFromTime(now),
 				"expiresAt":   primitive.NewDateTimeFromTime(now.AddDate(0, 0, RetentionDays)),
 				"skippedAt":   primitive.NewDateTimeFromTime(now),
-				"skipReason":  truncateRunes(strings.TrimSpace(reason), 300),
+				"skipReason":  TruncateBytes(strings.TrimSpace(reason), 300),
 			},
 			"$inc": bson.M{"revision": 1},
 		})
@@ -1070,7 +1070,7 @@ func resolvedStateErr(doc bson.M, id string) *StoreError {
 	return fail("task '%s' is already completed", id)
 }
 
-// truncateRunes caps a string at max BYTES without splitting a UTF-8 rune, so a
+// TruncateBytes caps a string at max BYTES without splitting a UTF-8 rune, so a
 // stored value never ends in the middle of a character.
 //
 // There were three hand-rolled versions of this (truncSkipReason, truncateField
@@ -1079,7 +1079,7 @@ func resolvedStateErr(doc bson.M, id string) *StoreError {
 // non-ASCII source label or a key with a multi-byte character could be stored as
 // invalid UTF-8, which BSON accepts and every reader then has to defend against.
 // Same rule, one place, applied to every capped field.
-func truncateRunes(s string, max int) string {
+func TruncateBytes(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}

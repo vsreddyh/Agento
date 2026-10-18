@@ -53,18 +53,18 @@ object ReminderTts {
             if (status == TextToSpeech.SUCCESS) {
                 val tts = engine
                 if (tts != null) {
-                    for (loc in listOf(Locale.getDefault(), Locale.US)) {
+                    // Prefer the device default, fall back to US English: the
+                    // first available language wins, not the last one tried.
+                    val candidates = listOf(Locale.getDefault(), Locale.US)
+                    val picked = candidates.firstOrNull { loc ->
                         runCatching {
                             val r = tts.isLanguageAvailable(loc)
-                            if (r == TextToSpeech.LANG_AVAILABLE ||
+                            r == TextToSpeech.LANG_AVAILABLE ||
                                 r == TextToSpeech.LANG_COUNTRY_AVAILABLE ||
                                 r == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE
-                            ) {
-                                tts.language = loc
-                                return@runCatching
-                            }
-                        }
+                        }.getOrDefault(false)
                     }
+                    if (picked != null) tts.language = picked
                 }
                 pump()
             } else {
@@ -99,18 +99,21 @@ object ReminderTts {
     }
 
     private fun pump() {
-        val next: Pair<String, String>?
-        synchronized(lock) {
-            if (!ready || speaking) return
-            next = queue.removeFirstOrNull()
-            if (next != null) speaking = true
-        }
-        if (next == null) return
-        val rc = engine?.speak(next.second, TextToSpeech.QUEUE_ADD, null, next.first)
-        if (rc == TextToSpeech.ERROR) {
+        while (true) {
+            val next: Pair<String, String>?
+            synchronized(lock) {
+                if (!ready || speaking) return
+                next = queue.removeFirstOrNull()
+                if (next != null) speaking = true
+            }
+            if (next == null) return
+            val rc = engine?.speak(next.second, TextToSpeech.QUEUE_ADD, null, next.first)
+            if (rc != TextToSpeech.ERROR) return
+            // A rejected chunk never fires onDone — clear speaking and take
+            // the next one in this loop, not via recursion: a broken engine
+            // with N queued items would otherwise recurse N deep.
             Log.w("ReminderTts", "speak rejected, advancing queue")
             synchronized(lock) { speaking = false }
-            pump()
         }
     }
 }

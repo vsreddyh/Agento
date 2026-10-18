@@ -479,6 +479,15 @@ func taskFingerprint(fields map[string]any) string {
 				v = strings.TrimSpace(str)
 			}
 		}
+		// The voice phrase is TRUNCATED as well as trimmed, because that is
+		// exactly what the store does (TruncateBytes 120): two bodies that
+		// differ only past the cap store identically, so hashing them
+		// differently would 422 a legitimate retry of a create that succeeded.
+		if k == "speak_name" {
+			if str, isStr := v.(string); isStr {
+				v = tasks.TruncateBytes(str, 120)
+			}
+		}
 		// The selection is CANONICALISED rather than trimmed, because that is
 		// exactly what the store does (CanonicalRepeatDays): ["Mon","mon"] and
 		// ["mon"] create the SAME task, and ["wed","mon"] and ["mon","wed"]

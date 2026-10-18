@@ -1,0 +1,6 @@
+[    1121ms] [WARNING] OTS parsing error: Size of decompressed WOFF 2.0 is less than compressed size @ https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/f/av0/rch/dn53l/0x4AAAAAAADnPIDROrmt1Wwj/light/fbE/new/normal?lang=auto:0
+[    1379ms] [WARNING] Error with Permissions-Policy header: Unrecognized feature: 'attribution-reporting'. @ :0
+[    1382ms] [WARNING] Error with Permissions-Policy header: Unrecognized feature: 'bluetooth'. @ :0
+[    1382ms] [WARNING] Error with Permissions-Policy header: Unrecognized feature: 'shared-storage'. @ :0
+[    1382ms] [WARNING] Error with Permissions-Policy header: Unrecognized feature: 'shared-storage-select-url'. @ :0
+[    4018ms] [WARNING] No available adapters. @ https://www.meta.com/en-gb/blog/meta-connect-2026-everything-we-announced/:0

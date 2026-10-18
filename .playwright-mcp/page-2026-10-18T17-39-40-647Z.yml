@@ -1,0 +1,1009 @@
+- generic [active] [ref=f36e1]:
+  - generic [ref=f36e2]:
+    - banner [ref=f36e3]:
+      - generic [ref=f36e5]:
+        - link [ref=f36e6] [cursor=pointer]:
+          - /url: /en
+          - img "Truescho" [ref=f36e7]
+        - navigation [ref=f36e8]:
+          - generic [ref=f36e9]:
+            - button "Advisors" [ref=f36e10] [cursor=pointer]
+            - generic:
+              - generic:
+                - generic:
+                  - link "Your choice Choose your advisor Compare approved advisors and choose the right fit Open now":
+                    - /url: /en/apply-for-me/consultants
+                    - paragraph: Your choice
+                    - heading "Choose your advisor" [level=3]
+                    - paragraph: Compare approved advisors and choose the right fit
+                    - generic: Open now
+                  - generic:
+                    - generic:
+                      - generic:
+                        - paragraph: Advisors & requests
+                        - paragraph: Certified advisors with real ratings, or post a request and compare offers.
+                      - generic:
+                        - link "Request marketplace Post a request and compare certified advisor offers":
+                          - /url: /en/marketplace
+                          - generic:
+                            - generic: Request marketplace
+                            - generic: Post a request and compare certified advisor offers
+                        - link "Open requests Browse student requests and the offers submitted on them":
+                          - /url: /en/marketplace/requests
+                          - generic:
+                            - generic: Open requests
+                            - generic: Browse student requests and the offers submitted on them
+                        - link "Apply For Me services File review, CV, letters and full applications":
+                          - /url: /en/apply-for-me
+                          - generic:
+                            - generic: Apply For Me services
+                            - generic: File review, CV, letters and full applications
+                        - link "Office directory Study-abroad and student-service offices by city":
+                          - /url: /en/consultants
+                          - generic:
+                            - generic: Office directory
+                            - generic: Study-abroad and student-service offices by city
+                        - link "List your office free A Google-indexed page and students who contact you directly":
+                          - /url: /en/consultants/join
+                          - generic:
+                            - generic: List your office free
+                            - generic: A Google-indexed page and students who contact you directly
+                        - link "Join as a consultant Offer your services to thousands of students":
+                          - /url: https://crm.truescho.com/freelancer/register
+                          - generic:
+                            - generic: Join as a consultant
+                            - generic: Offer your services to thousands of students
+          - link "List your office" [ref=f36e17] [cursor=pointer]:
+            - /url: /en/consultants/join
+          - generic [ref=f36e23]:
+            - button "Scholarships" [ref=f36e24] [cursor=pointer]
+            - generic:
+              - generic:
+                - generic:
+                  - link "Trusted discovery Browse all Thousands of opportunities for discovery Open now":
+                    - /url: /en/opportunities
+                    - paragraph: Trusted discovery
+                    - heading "Browse all" [level=3]
+                    - paragraph: Thousands of opportunities for discovery
+                    - generic: Open now
+                  - generic:
+                    - generic:
+                      - generic:
+                        - paragraph: Scholarships & study
+                        - paragraph: Scholarships, opportunities, jobs and courses from clear sources.
+                      - generic:
+                        - link "Verified scholarships Scholarships from official sources":
+                          - /url: /en/trusted/scholarships
+                          - generic:
+                            - generic: Verified scholarships
+                            - generic: Scholarships from official sources
+                        - link "Conferences Academic and professional conferences":
+                          - /url: /en/trusted/conferences
+                          - generic:
+                            - generic: Conferences
+                            - generic: Academic and professional conferences
+                        - link "Jobs Jobs and internships across regions":
+                          - /url: /en/jobs
+                          - generic:
+                            - generic: Jobs
+                            - generic: Jobs and internships across regions
+                        - link "Browse all Thousands of opportunities for discovery":
+                          - /url: /en/opportunities
+                          - generic:
+                            - generic: Browse all
+                            - generic: Thousands of opportunities for discovery
+          - generic [ref=f36e27]:
+            - button "Universities" [ref=f36e28] [cursor=pointer]
+            - generic:
+              - generic:
+                - generic:
+                  - link "Choose your path Universities database Verified university profiles with official links Open now":
+                    - /url: /en/universities
+                    - paragraph: Choose your path
+                    - heading "Universities database" [level=3]
+                    - paragraph: Verified university profiles with official links
+                    - generic: Open now
+                  - generic:
+                    - generic:
+                      - generic:
+                        - paragraph: Universities & majors
+                        - paragraph: University, major, ranking and career-compass guides.
+                      - generic:
+                        - link "Universities database Verified university profiles with official links":
+                          - /url: /en/universities
+                          - generic:
+                            - generic: Universities database
+                            - generic: Verified university profiles with official links
+                        - link "University rankings Compare universities by global rankings":
+                          - /url: /en/rankings
+                          - generic:
+                            - generic: University rankings
+                            - generic: Compare universities by global rankings
+                        - link "Majors guide Majors, salaries and job paths":
+                          - /url: /en/majors
+                          - generic:
+                            - generic: Majors guide
+                            - generic: Majors, salaries and job paths
+                        - link "Career compass Assessment for choosing a path":
+                          - /url: /en/discover
+                          - generic:
+                            - generic: Career compass
+                            - generic: Assessment for choosing a path
+          - generic [ref=f36e31]:
+            - button "Tools" [ref=f36e32] [cursor=pointer]
+            - generic:
+              - generic:
+                - generic:
+                  - link "Useful now ARWriter Arabic AI writing and research platform Open now":
+                    - /url: https://app.arwriterai.com/
+                    - paragraph: Useful now
+                    - heading "ARWriter" [level=3]
+                    - paragraph: Arabic AI writing and research platform
+                    - generic: Open now
+                  - generic:
+                    - generic:
+                      - generic:
+                        - paragraph: Tools
+                        - paragraph: AI, calculators, translation and research tools.
+                      - generic:
+                        - link "All AI tools Writing, SEO, social media, images, OCR and more":
+                          - /url: /en/tools/ai
+                          - generic:
+                            - generic: All AI tools
+                            - generic: Writing, SEO, social media, images, OCR and more
+                        - link "Prompt generator Turn ideas into professional AI prompts":
+                          - /url: /en/tools/ai/generate-prompt
+                          - generic:
+                            - generic: Prompt generator
+                            - generic: Turn ideas into professional AI prompts
+                        - link "SEO titles Ready titles for articles and pages":
+                          - /url: /en/tools/ai/seo-title
+                          - generic:
+                            - generic: SEO titles
+                            - generic: Ready titles for articles and pages
+                        - link "Article outline H1/H2/H3 structure and FAQs":
+                          - /url: /en/tools/ai/article-outline
+                          - generic:
+                            - generic: Article outline
+                            - generic: H1/H2/H3 structure and FAQs
+          - generic [ref=f36e35]:
+            - button "Immigration" [ref=f36e36] [cursor=pointer]
+            - generic:
+              - generic:
+                - generic:
+                  - link "Plan clearly Immigration guide Immigration pathways and requirements by country Open now":
+                    - /url: /en/immigration
+                    - paragraph: Plan clearly
+                    - heading "Immigration guide" [level=3]
+                    - paragraph: Immigration pathways and requirements by country
+                    - generic: Open now
+                  - generic:
+                    - generic:
+                      - generic:
+                        - paragraph: Immigration & travel
+                        - paragraph: Immigration, visas, insurance and flight guidance.
+                      - generic:
+                        - link "Immigration guide Immigration pathways and requirements by country":
+                          - /url: /en/immigration
+                          - generic:
+                            - generic: Immigration guide
+                            - generic: Immigration pathways and requirements by country
+                        - link "Immigration countries Compare countries and programs":
+                          - /url: /en/immigration/countries
+                          - generic:
+                            - generic: Immigration countries
+                            - generic: Compare countries and programs
+                        - link "Visa checker Check visa requirements for any country":
+                          - /url: /en/visas
+                          - generic:
+                            - generic: Visa checker
+                            - generic: Check visa requirements for any country
+                        - link "Travel hub All travel and flight tools on one page":
+                          - /url: /en/travel
+                          - generic:
+                            - generic: Travel hub
+                            - generic: All travel and flight tools on one page
+          - generic [ref=f36e39]:
+            - button "More" [ref=f36e40] [cursor=pointer]
+            - generic:
+              - generic:
+                - generic:
+                  - link "Truescho ecosystem Digital shop Digital subscriptions and AI tools at practical prices Open now":
+                    - /url: /en/shop
+                    - paragraph: Truescho ecosystem
+                    - heading "Digital shop" [level=3]
+                    - paragraph: Digital subscriptions and AI tools at practical prices
+                    - generic: Open now
+                  - generic:
+                    - generic:
+                      - generic:
+                        - paragraph: More
+                        - paragraph: Shop, blog, Sada and company information.
+                      - generic:
+                        - link "Digital shop Digital subscriptions and AI tools at practical prices":
+                          - /url: /en/shop
+                          - generic:
+                            - generic: Digital shop
+                            - generic: Digital subscriptions and AI tools at practical prices
+                        - link "AI & business blog Practical guides for growth, content and digital tools":
+                          - /url: /en/blog
+                          - generic:
+                            - generic: AI & business blog
+                            - generic: Practical guides for growth, content and digital tools
+                        - link "Office directory Study-abroad and student-service offices by city":
+                          - /url: /en/consultants
+                          - generic:
+                            - generic: Office directory
+                            - generic: Study-abroad and student-service offices by city
+                        - link "List your office free A Google-indexed page and students who contact you directly":
+                          - /url: /en/consultants/join
+                          - generic:
+                            - generic: List your office free
+                            - generic: A Google-indexed page and students who contact you directly
+        - generic [ref=f36e43]:
+          - button "Change language" [ref=f36e45] [cursor=pointer]:
+            - generic [ref=f36e49]: English
+          - link "Start your file" [ref=f36e50] [cursor=pointer]:
+            - /url: /en/apply-for-me
+          - link "Sign in" [ref=f36e55] [cursor=pointer]:
+            - /url: /en/login
+    - generic [ref=f36e57]:
+      - generic [ref=f36e58]:
+        - complementary "Sponsored" [ref=f36e59]
+        - generic [ref=f36e60]:
+          - link "Back to blog" [ref=f36e61] [cursor=pointer]:
+            - /url: /en/blog
+          - 'heading "Grok Bot by xAI 2026: AI Teammates With Their Own Cloud Computer" [level=1] [ref=f36e62]'
+          - generic [ref=f36e63]:
+            - generic [ref=f36e64]:
+              - generic [ref=f36e65]: August 15, 2026
+              - generic [ref=f36e66]: •
+              - generic [ref=f36e67]: Mahmoud Hussein
+              - generic [ref=f36e68]: •
+              - generic [ref=f36e69]: 18 min read
+            - button "Share" [ref=f36e73] [cursor=pointer]
+          - 'img "Grok Bot by xAI 2026: AI Teammates With Their Own Cloud Computer" [ref=f36e81]'
+          - paragraph [ref=f36e82]: "xAI launched Grok Bot on 11 August 2026 as an early beta: named AI teammates that share one persistent cloud computer and keep working after you close the laptop. This is a…"
+          - generic [ref=f36e83]:
+            - generic [ref=f36e84]: Grok Bot
+            - generic [ref=f36e85]: xAI
+            - generic [ref=f36e86]: AI agents
+            - generic [ref=f36e87]: Cursor Ultra
+            - generic [ref=f36e88]: SuperGrok Heavy
+            - generic [ref=f36e89]: cloud computer
+            - generic [ref=f36e90]: automation
+            - generic [ref=f36e91]: AI teammates
+        - generic [ref=f36e92]:
+          - blockquote [ref=f36e93]:
+            - paragraph [ref=f36e94]: "Last updated: August 2026"
+          - paragraph [ref=f36e95]:
+            - text: xAI launched
+            - strong [ref=f36e96]: Grok Bot
+            - text: "on"
+            - strong [ref=f36e97]: 11 August 2026
+            - text: "as an early beta: named AI teammates that share one persistent cloud computer and keep working after you close the laptop. This is a setup guide for the first handoff — from an eligible plan to a finished draft you can approve — not a same-day breaking alert."
+          - paragraph [ref=f36e98]:
+            - strong [ref=f36e99]: Grok Bot xAI
+            - text: is a product, not a new model. Early beta access sits on
+            - strong [ref=f36e100]: SuperGrok Heavy at $300 per month
+            - text: ","
+            - strong [ref=f36e101]: Cursor Ultra at $200 per month
+            - text: ", and"
+            - strong [ref=f36e102]: Cursor Premium Teams at $120 per seat per month
+            - text: ", plus an enterprise waitlist. Desktop and iOS are live. You message a Bot like a colleague. You do not build a workflow canvas first."
+          - paragraph [ref=f36e103]:
+            - text: If you came here because you already use
+            - link "Grok 4.6" [ref=f36e104] [cursor=pointer]:
+              - /url: /en/blog/grok-46-xai-ai-model
+            - text: ", park that article. Grok 4.6 is a model. Grok Bot is a roster of agents with a virtual machine. Mixing the two names is the most common mistake in the first week after launch."
+          - figure "Official Grok Bot launch artwork from xAI" [ref=f36e105]:
+            - img "Official Grok Bot launch artwork from xAI" [ref=f36e106]
+          - paragraph [ref=f36e108]:
+            - emphasis [ref=f36e109]:
+              - text: "Source:"
+              - link "Introducing Grok Bot" [ref=f36e110] [cursor=pointer]:
+                - /url: https://x.ai/news/introducing-grok-bot
+          - heading "What Grok Bot is — and what it is not" [level=2] [ref=f36e111]
+          - paragraph [ref=f36e112]:
+            - text: Official docs define a Bot as a
+            - strong [ref=f36e113]: single persistent, named agent
+            - text: . It has memory, files, browser sessions, and preferences that survive across turns. It runs on a cloud VM with a
+            - strong [ref=f36e114]: browser
+            - text: ", a"
+            - strong [ref=f36e115]: filesystem
+            - text: ", and a"
+            - strong [ref=f36e116]: terminal
+            - text: . It can use connectors or MCP where those exist. Where an app has
+            - strong [ref=f36e117]: no clean API
+            - text: ", it uses computer-use and works in the interface like a person."
+          - paragraph [ref=f36e118]: That last point is the product. A coding agent that stays inside an editor is useful. A teammate that can open Zendesk, a CRM, Gmail, and a buggy UI is a different job. xAI's launch post says Bots "finish jobs end to end, and only come back when something needs your approval."
+          - paragraph [ref=f36e119]: "What Grok Bot is not:"
+          - list [ref=f36e120]:
+            - listitem [ref=f36e121]:
+              - text: It is
+              - strong [ref=f36e122]: not
+              - text: Grok 4.6.
+            - listitem [ref=f36e123]:
+              - text: It is
+              - strong [ref=f36e124]: not
+              - text: a free consumer chatbot.
+            - listitem [ref=f36e125]:
+              - text: It is
+              - strong [ref=f36e126]: not
+              - text: a Linux desktop app today.
+            - listitem [ref=f36e127]:
+              - text: It is
+              - strong [ref=f36e128]: not
+              - text: generally available to every Grok user.
+            - listitem [ref=f36e129]:
+              - text: It is
+              - strong [ref=f36e130]: not
+              - text: a promise that every company inbox is safe to connect on day one.
+          - paragraph [ref=f36e131]: xAI built it as an internal prototype. Sales, operations, and engineering teams inside the company used it before the 11 August public beta. The public story is that same prototype, opened to three paid gates.
+          - heading "Who can use it, and what the official plans cost" [level=2] [ref=f36e132]
+          - paragraph [ref=f36e133]:
+            - text: "On launch day, xAI listed three doors:"
+            - strong [ref=f36e134]: SuperGrok Heavy
+            - text: ","
+            - strong [ref=f36e135]: Cursor Ultra
+            - text: ", and"
+            - strong [ref=f36e136]: Cursor Teams Premium
+            - text: . The product page now spells the list as SuperGrok Heavy, Cursor Ultra, and
+            - strong [ref=f36e137]: Cursor Premium Teams
+            - text: . Desktop and iOS are in. Enterprises join a waitlist and use
+            - strong [ref=f36e138]: Contact sales
+            - text: .
+          - paragraph [ref=f36e139]:
+            - text: Official prices on
+            - link "x.ai/bot" [ref=f36e140] [cursor=pointer]:
+              - /url: https://x.ai/bot
+            - text: "as of this guide:"
+          - table [ref=f36e142]:
+            - rowgroup [ref=f36e143]:
+              - row [ref=f36e144]:
+                - columnheader "Plan" [ref=f36e145]
+                - columnheader "Official price" [ref=f36e146]
+                - columnheader "What the page says you get" [ref=f36e147]
+            - rowgroup [ref=f36e148]:
+              - row [ref=f36e149]:
+                - cell "Cursor Ultra" [ref=f36e150]
+                - cell [ref=f36e151]:
+                  - strong [ref=f36e152]: $200 / month
+                  - text: ", billed monthly"
+                - cell "Grok Bot's own computer, tool sign-in, scheduled routines, desktop and mobile, extended token limits" [ref=f36e153]
+              - row [ref=f36e154]:
+                - cell "SuperGrok Heavy" [ref=f36e155]
+                - cell [ref=f36e156]:
+                  - strong [ref=f36e157]: $300 / month
+                  - text: ", billed monthly"
+                - cell "Everything in SuperGrok, plus highest usage, fastest speed, hardest problems, dedicated support and early access" [ref=f36e158]
+              - row [ref=f36e159]:
+                - cell "Cursor Premium Teams" [ref=f36e160]
+                - cell [ref=f36e161]:
+                  - strong [ref=f36e162]: $120 / seat / month
+                  - text: ", billed monthly"
+                - cell "Everything in Cursor Ultra, plus team billing, marketplace, shared analytics, SAML/OIDC SSO" [ref=f36e163]
+              - row [ref=f36e164]:
+                - cell "Enterprise" [ref=f36e165]
+                - cell "Contact sales" [ref=f36e166]
+                - cell "Waitlist / sales conversation — no public seat price" [ref=f36e167]
+          - region "Claude Max from the Truescho shop" [ref=f36e168]:
+            - generic [ref=f36e169]:
+              - generic [ref=f36e170]:
+                - img "Claude Max" [ref=f36e171]
+                - generic [ref=f36e173]:
+                  - generic [ref=f36e174]: From the Truescho shop
+                  - paragraph [ref=f36e175]: Claude Max
+                  - paragraph [ref=f36e176]: Claude Max shared account — choose Max 5x or Max 20x usage, for 10 days or a full month. Includes Fable 5 and Claude Code. Official Claude Max plans cost $100–$200/month; a shared account gives you the same power for a fraction of the price.
+                  - generic [ref=f36e177]:
+                    - generic [ref=f36e178]: Shared profile
+                    - generic [ref=f36e184]: 10-day warranty
+                    - generic [ref=f36e188]: Fast delivery
+              - generic [ref=f36e192]:
+                - paragraph [ref=f36e193]: Starting at
+                - paragraph [ref=f36e194]:
+                  - text: €21.99
+                  - generic [ref=f36e195]: / 10 days
+                - link "Order now" [ref=f36e196] [cursor=pointer]:
+                  - /url: /en/shop/claude-ai?utm_source=blog&utm_medium=product_card&utm_campaign=claude-ai
+          - complementary "إعلان" [ref=f36e200]:
+            - generic [ref=f36e201]: إعلان ممول
+          - paragraph [ref=f36e204]:
+            - text: Those are
+            - strong [ref=f36e205]: USD
+            - text: list prices on the official page. There is no cheaper "Grok Bot Lite" on the same page. If you are not already on one of those plans, the honest first decision is whether a cloud teammate is worth
+            - strong [ref=f36e206]: $200–$300 per month
+            - text: (or
+            - strong [ref=f36e207]: $120 per seat
+            - text: on the team SKU). For many students and freelancers in Nairobi or Jakarta, it is not.
+          - paragraph [ref=f36e208]:
+            - text: "The 11 August launch post published a specific macOS build:"
+            - link "Grok Bot 0.18.0 for Apple silicon" [ref=f36e209] [cursor=pointer]:
+              - /url: https://downloads.cursor.com/grokbot/stable/darwin-arm64/0.18.0/Grok_Bot_0.18.0.dmg
+            - text: . Official get-started docs now also describe
+            - strong [ref=f36e210]: Windows
+            - text: x64 and Arm64 installers, plus iOS. There is
+            - strong [ref=f36e211]: no Linux desktop app
+            - text: . Downloads live on Cursor's domain. That is not a coincidence. Authentication, privacy settings, and account deletion follow
+            - strong [ref=f36e212]: Cursor
+            - text: ", not a separate xAI consumer login."
+          - paragraph [ref=f36e213]:
+            - text: Grok Bot
+            - strong [ref=f36e214]: requires cloud data storage
+            - text: . Accounts on Cursor
+            - strong [ref=f36e215]: Legacy Privacy Mode
+            - text: must change that setting before the product will start. That is a hard blocker, not a footnote.
+          - 'heading "First handoff: numbered setup and first task" [level=2] [ref=f36e216]'
+          - paragraph [ref=f36e217]: Do the first handoff on a task that cannot empty a bank account. Official docs suggest a document summary or a read-only dashboard look. Save CRM writes and outbound mail for later.
+          - list [ref=f36e218]:
+            - listitem [ref=f36e219]:
+              - paragraph [ref=f36e220]:
+                - strong [ref=f36e221]: Confirm the plan.
+                - text: Sign in with the Cursor account that holds SuperGrok Heavy, Cursor Ultra, or Cursor Premium Teams. If you only have a cheap chat subscription, stop here. Grok Bot will not appear as a hidden free flag.
+            - listitem [ref=f36e222]:
+              - paragraph [ref=f36e223]:
+                - strong [ref=f36e224]: Install the desktop app.
+                - text: On macOS, pick Apple silicon or Intel, open the disk image, and drag Grok Bot into Applications. On Windows, run the x64 or Arm64 installer. On a phone, use the iOS app. Check
+                - strong [ref=f36e225]: Apple menu → About This Mac
+                - text: (Chip vs Processor) or
+                - strong [ref=f36e226]: Settings → System → About → System type
+                - text: so you do not download the wrong binary.
+            - listitem [ref=f36e227]:
+              - paragraph [ref=f36e228]:
+                - strong [ref=f36e229]: Sign in with Cursor.
+                - text: Choose
+                - strong [ref=f36e230]: Get started
+                - text: ", finish browser authentication, and return to the app. SSO users complete the normal organisation flow. First-run screens ask which tools you use. Those answers only shape suggestions. They do not connect the tools yet."
+            - listitem [ref=f36e231]:
+              - paragraph [ref=f36e232]:
+                - strong [ref=f36e233]: Create one narrow Bot.
+                - text: "Give it a short name, one primary job, and a written boundary. Example: \"Piper / product performance / investigate with observability tools, keep screenshots, never change production.\" A catch-all Bot learns slower and is harder to audit."
+            - listitem [ref=f36e234]:
+              - paragraph [ref=f36e235]:
+                - strong [ref=f36e236]: Hand off a closed-loop first task.
+                - text: "Official docs use a request with five parts: outcome, sources, constraints, deliverable, review point. A safe first prompt is: \"Summarize this document in five bullets. List every date, decision, and open question. Cite the section. Do not change the source file.\""
+            - listitem [ref=f36e237]:
+              - paragraph [ref=f36e238]:
+                - strong [ref=f36e239]: Escalate to one real tool, still read-only.
+                - text: "\"Open the analytics dashboard, compare this week's new-user activation with the previous four weeks, and draft an investigation plan with chart links. Do not change any dashboard. Ask me to sign in if needed.\""
+            - listitem [ref=f36e240]:
+              - paragraph [ref=f36e241]:
+                - strong [ref=f36e242]: Take over for passwords yourself.
+                - text: When the Bot hits a login, open
+                - strong [ref=f36e243]: Agent Computer
+                - text: ", take control, enter the password, passkey, two-factor code, or CAPTCHA, then return control. Do not paste secrets into ordinary chat."
+          - complementary "إعلان" [ref=f36e244]:
+            - generic [ref=f36e245]: إعلان ممول
+          - list [ref=f36e248]:
+            - listitem [ref=f36e249]:
+              - paragraph [ref=f36e250]:
+                - strong [ref=f36e251]: Correct the format once, out loud.
+                - text: "\"Use this format for future weekly reports: five bullets, source links inline, and a final section called Decisions needed.\" That sentence is how memory becomes a house style."
+            - listitem [ref=f36e252]:
+              - paragraph [ref=f36e253]:
+                - strong [ref=f36e254]: Save a routine only after the path is stable.
+                - text: Ask the Bot to follow along the next time you do the job live, then persist it as a skill or scheduled routine. Do not automate a workflow you have not watched.
+            - listitem [ref=f36e255]:
+              - paragraph [ref=f36e256]:
+                - strong [ref=f36e257]: Keep sending, paying, deleting, and production changes behind approval.
+                - text: Official security docs list those actions as the ones that should stop. An approval does not undo work already done.
+          - paragraph [ref=f36e258]: That is a complete first week. If you skip to "sign into the company CRM and clear the pipeline," you have not followed the vendor's own onboarding. You have just given a shared VM your production session.
+          - heading "How the shared cloud computer actually works" [level=2] [ref=f36e259]
+          - paragraph [ref=f36e260]:
+            - text: All of your Bots use
+            - strong [ref=f36e261]: one
+            - text: persistent cloud computer. It is isolated to
+            - strong [ref=f36e262]: your account
+            - text: ", not to each Bot. Files, browser sessions, and command-line credentials on that machine are visible to the whole roster. Each Bot gets its"
+            - strong [ref=f36e263]: own screen
+            - text: ", so they can drive the browser in parallel. They do"
+            - strong [ref=f36e264]: not
+            - text: get separate security sandboxes.
+          - paragraph [ref=f36e265]: Read that twice before you connect Gmail.
+          - paragraph [ref=f36e266]: Handoffs become easy because of this design. A research Bot can leave a folder that a writing Bot already sees. A sales Bot can use the CRM session you signed into for an ops Bot. The same design is why "I made a second Bot so the first one cannot see payroll" is false.
+          - paragraph [ref=f36e267]:
+            - text: Bots can message each other, share threads, and sit in a
+            - strong [ref=f36e268]: group chat
+            - text: ". xAI's internal pattern is a chief-of-staff Bot on top of specialists: inbox, expenses, recruiting, bugs. You are not supposed to be the paste-bridge between chats."
+          - paragraph [ref=f36e269]:
+            - text: The computer keeps working if your laptop lid is closed. That is the official 24/7 claim. Local execution on the Mac or Windows machine in front of you is a
+            - strong [ref=f36e270]: separate
+            - text: setting (
+            - strong [ref=f36e271]: Settings → General → Agent → Execution on Local Computer
+            - text: ), defaulting to
+            - strong [ref=f36e272]: Ask every time
+            - text: . Use
+            - strong [ref=f36e273]: Never allowed
+            - text: unless a Bot has a specific reason to touch local files. Turning local execution off does not stop the cloud VM.
+          - figure "Official Grok Bot product-page launch trailer poster" [ref=f36e274]:
+            - img "Official Grok Bot product-page launch trailer poster" [ref=f36e275]
+          - paragraph [ref=f36e277]:
+            - emphasis [ref=f36e278]:
+              - text: "Source:"
+              - link "Grok Bot product page" [ref=f36e279] [cursor=pointer]:
+                - /url: https://x.ai/bot
+          - heading "Teaching a Bot by watching once" [level=2] [ref=f36e280]
+          - paragraph [ref=f36e281]: xAI's favourite demo is not a prompt library. It is a live demonstration. You ask the Bot to follow along while you do the job once. It stores the path as a routine, accepts corrections, and can run it later on a schedule.
+          - paragraph [ref=f36e282]: That is closer to training a junior hire than to writing a Zapier graph. It is also how mistakes get cloned. If you show a sloppy CRM update, you have just taught sloppy CRM updates.
+          - paragraph [ref=f36e283]: Official get-started advice is to name lasting preferences explicitly. "Always keep evidence above hypotheses." "Never email a customer without a draft for me." "Cite the dashboard link." Those sentences are cheaper than a second $200 seat.
+          - paragraph [ref=f36e284]:
+            - text: When the routine exists, review it the way you would review a junior's checklist. Pause it when the source system changes. Deleting a Bot does
+            - strong [ref=f36e285]: not
+            - text: wipe the shared computer. You still have to sign out of sites, remove files from
+            - code [ref=f36e286]: /workspace
+            - text: ", uninstall connectors, and revoke tokens in the source app."
+          - complementary "إعلان" [ref=f36e287]:
+            - generic [ref=f36e288]: إعلان ممول
+          - heading "How xAI's own teams use Grok Bot" [level=2] [ref=f36e291]
+          - paragraph [ref=f36e292]: The launch post is unusually concrete about internal use. Treat these as existence proofs, not as a claim that your five-person agency will match them on day two.
+          - paragraph [ref=f36e293]:
+            - strong [ref=f36e294]: Sales.
+            - text: A Bot updates the CRM from call transcripts and drafts follow-ups. Another researches accounts overnight, scores contacts, and leaves email and LinkedIn drafts in the seller's voice. A pipeline Bot flags stalls and drops a Monday scoreboard.
+          - paragraph [ref=f36e295]:
+            - strong [ref=f36e296]: Operations.
+            - text: A Bot seats new hires and processes invoices that arrive in Gmail. Expense and recruiting specialists show up in the same "many Bots at once" pattern.
+          - paragraph [ref=f36e297]:
+            - strong [ref=f36e298]: Engineering.
+            - text: A Bot reproduces a bug in the product UI, files the ticket, and hands the fix to a debugging Bot. That is computer-use, not an API wrapper.
+          - paragraph [ref=f36e299]:
+            - strong [ref=f36e300]: Product and community quotes
+            - text: "on the launch page push the same idea: most assistants stop at 90 percent; Grok Bot is supposed to put the work in the actual tool. Those are vendor quotes. Your first weekend will feel more like onboarding than like eight extra arms."
+          - paragraph [ref=f36e301]: A two-person studio in São Paulo that already lives in Cursor Ultra can copy the sales-draft pattern without copying SpaceXAI's org chart. A campus club in Manila probably cannot justify $200 a month to file imaginary invoices.
+          - heading "Access, pricing, and detection for students and professionals" [level=2] [ref=f36e302]
+          - paragraph [ref=f36e303]:
+            - strong [ref=f36e304]: Access.
+            - text: If you can pay for SuperGrok Heavy, Cursor Ultra, or Cursor Premium Teams, and you have macOS, Windows, or iPhone, you can start. If you cannot, you watch from the waitlist or you use a cheaper agent. Availability is plan-gated, not city-gated. A founder in Lagos with Cursor Ultra is in. A founder in the same city on a free Grok session is out.
+          - paragraph [ref=f36e305]:
+            - text: Enterprise is explicitly
+            - strong [ref=f36e306]: not
+            - text: self-serve on day one. Contact sales and wait.
+          - paragraph [ref=f36e307]:
+            - strong [ref=f36e308]: Pricing.
+            - text: "The official page is blunt:"
+            - strong [ref=f36e309]: $200
+            - text: ","
+            - strong [ref=f36e310]: $300
+            - text: ", or"
+            - strong [ref=f36e311]: $120 per seat
+            - text: . There is no published "Grok Bot-only" micro-plan. Token "extended limits" are bundled into Ultra. Heavy sells speed and ceiling. Teams sells admin. None of those numbers is a Truescho shop SKU. We do
+            - strong [ref=f36e312]: not
+            - text: sell Grok Bot. Shared ChatGPT and Claude plans in the
+            - link "Truescho shop" [ref=f36e313] [cursor=pointer]:
+              - /url: https://truescho.com/en/shop
+            - text: are a different product for people who need a model, not a cloud VM.
+          - paragraph [ref=f36e314]:
+            - strong [ref=f36e315]: Detection.
+            - text: Grok Bot is not a watermark product. The detection question here is organisational, not forensic. Other people will see the Bot's work
+            - strong [ref=f36e316]: inside the tools it logged into
+            - text: ": the CRM note, the GitHub ticket, the Gmail draft, the browser history on the shared VM. If a Bot posts under your session, the platform will attribute that action to the signed-in account. There is no \"the Bot did it\" stamp that protects you."
+          - paragraph [ref=f36e317]: xAI and Cursor also collect what the product needs to function. Legacy Privacy Mode is incompatible. Training opt-out follows Cursor account settings. Read the current Cursor privacy and security pages before you connect a customer list.
+          - paragraph [ref=f36e318]:
+            - text: If you mainly need a chat model rather than a $200-a-month cloud teammate, compare current writing and coding tools in the
+            - link "Truescho AI tools directory" [ref=f36e319] [cursor=pointer]:
+              - /url: https://truescho.com/en/tools/ai
+            - text: .
+          - heading "Grok Bot vs Claude Cowork vs a normal coding agent" [level=2] [ref=f36e320]
+          - paragraph [ref=f36e321]: The useful comparison is not "which model is smarter?" It is "where does the work live when you walk away?"
+          - complementary "إعلان" [ref=f36e322]:
+            - generic [ref=f36e323]: إعلان ممول
+          - table [ref=f36e327]:
+            - rowgroup [ref=f36e328]:
+              - row [ref=f36e329]:
+                - columnheader [ref=f36e330]
+                - columnheader "Grok Bot" [ref=f36e331]
+                - columnheader "Claude Cowork" [ref=f36e332]
+                - columnheader "Ordinary Copilot / Cursor coding agent" [ref=f36e333]
+            - rowgroup [ref=f36e334]:
+              - row [ref=f36e335]:
+                - cell "Persistent cloud computer" [ref=f36e336]
+                - cell "Yes — one VM shared by all of your Bots" [ref=f36e337]
+                - cell "Not the same account-level VM model" [ref=f36e338]
+                - cell "Usually a session environment" [ref=f36e339]
+              - row [ref=f36e340]:
+                - cell "Keeps going after the laptop closes" [ref=f36e341]
+                - cell "Official 24/7 claim" [ref=f36e342]
+                - cell "Session-dependent" [ref=f36e343]
+                - cell "Usually no" [ref=f36e344]
+              - row [ref=f36e345]:
+                - cell "Learn by watching a live run" [ref=f36e346]
+                - cell "Yes, saved as a routine" [ref=f36e347]
+                - cell "More limited" [ref=f36e348]
+                - cell "Skills, rules, prompts" [ref=f36e349]
+              - row [ref=f36e350]:
+                - cell "Apps with no API" [ref=f36e351]
+                - cell "Computer use in the real UI" [ref=f36e352]
+                - cell "Depends on the Cowork surface" [ref=f36e353]
+                - cell "Weak unless the repo is the whole job" [ref=f36e354]
+              - row [ref=f36e355]:
+                - cell "Parallel named teammates" [ref=f36e356]
+                - cell "Yes, including group chat" [ref=f36e357]
+                - cell "Different product shape" [ref=f36e358]
+                - cell "You are usually the router" [ref=f36e359]
+              - row [ref=f36e360]:
+                - cell "Who can get it from Karachi or Nairobi" [ref=f36e361]
+                - cell "Heavy / Ultra / Premium Teams only" [ref=f36e362]
+                - cell "Broader Claude plans" [ref=f36e363]
+                - cell "Broader Copilot / Cursor plans" [ref=f36e364]
+              - row [ref=f36e365]:
+                - cell "Published entry price" [ref=f36e366]
+                - cell "$200 / $300 / $120 per seat" [ref=f36e367]
+                - cell "Claude plan pricing" [ref=f36e368]
+                - cell "Copilot / Cursor plan pricing" [ref=f36e369]
+              - row [ref=f36e370]:
+                - cell "Best first job" [ref=f36e371]
+                - cell "Multi-app operations you already pay to sit in" [ref=f36e372]
+                - cell "Claude-centric document and task work" [ref=f36e373]
+                - cell "Code in a repository" [ref=f36e374]
+          - paragraph [ref=f36e375]: Pick Grok Bot if you already pay for the top Cursor or SuperGrok tier and your bottleneck is "the work is stuck in five websites." Pick a coding agent if the work is the repo. Pick Claude Cowork if your stack is already Claude and you do not want a second $200 bill.
+          - paragraph [ref=f36e376]: A student in Jakarta writing a thesis should not start here. A three-person agency in São Paulo that already burns Cursor Ultra on client sites might.
+          - heading "Honest limits and security boundaries" [level=2] [ref=f36e377]
+          - paragraph [ref=f36e378]: Early beta means the product will change under you. Official docs already carry a long security chapter. Ignore it and the shared computer becomes a single stolen-session problem.
+          - paragraph [ref=f36e379]: "Hard limits worth repeating:"
+          - list [ref=f36e380]:
+            - listitem [ref=f36e381]:
+              - strong [ref=f36e382]: One computer per account.
+              - text: Separate Bots are not a firewall.
+            - listitem [ref=f36e383]:
+              - strong [ref=f36e384]: Approvals do not rewind history.
+              - text: They only stop the next action.
+            - listitem [ref=f36e385]:
+              - strong [ref=f36e386]: Do not type passwords into chat.
+              - text: Take over the VM.
+            - listitem [ref=f36e387]:
+              - strong [ref=f36e388]: Do not "Always allow" the entire browser.
+              - text: Auto Review rules should be narrow. Require Approval wins if two rules clash.
+            - listitem [ref=f36e389]:
+              - strong [ref=f36e390]: Local-computer execution is optional and dangerous.
+              - text: Default is ask every time. Prefer never.
+            - listitem [ref=f36e391]:
+              - strong [ref=f36e392]:
+                - text: Deleting a Bot does not delete sessions or
+                - code [ref=f36e393]: /workspace
+                - text: files.
+            - listitem [ref=f36e394]:
+              - strong [ref=f36e395]: Legacy Privacy Mode is incompatible.
+            - listitem [ref=f36e396]:
+              - strong [ref=f36e397]: Linux desktop is out.
+            - listitem [ref=f36e398]:
+              - strong [ref=f36e399]: Enterprise is waitlisted.
+            - listitem [ref=f36e400]:
+              - strong [ref=f36e401]: The price is real.
+              - text: $200–$300 a month is not a rounding error in most independent budgets.
+          - paragraph [ref=f36e402]: "xAI's own suggested first tasks stay on the safe side of that list: summarize a file, inspect a dashboard, draft something for approval. A Bot that \"just handles finance\" on day one is a prompt, not a control system."
+          - paragraph [ref=f36e403]: If you connect a company inbox, use a scoped mailbox, keep sends behind approval, and revoke the session when the project ends. If you cannot explain to a partner in Nairobi what the Bot is allowed to click, you are not ready to give it the click.
+          - paragraph [ref=f36e404]: Grok Bot can be a genuine teammate for people already on the expensive Cursor or SuperGrok tracks. It is a poor substitute for a $20 chat plan, and it is a reckless place to store the only copy of a client's passwords.
+          - heading "Frequently asked questions" [level=2] [ref=f36e405]
+          - heading "What is Grok Bot and when did it launch?" [level=3] [ref=f36e406]
+          - paragraph [ref=f36e407]:
+            - text: Grok Bot is xAI's early-beta roster of named AI teammates. Each Bot works on a persistent cloud computer and can drive real apps, including tools with no clean API. xAI launched it on
+            - strong [ref=f36e408]: 11 August 2026
+            - text: . It is a product surface, not a new Grok model release.
+          - complementary "إعلان" [ref=f36e409]:
+            - generic [ref=f36e410]: إعلان ممول
+          - heading "Which subscriptions include Grok Bot?" [level=3] [ref=f36e413]
+          - paragraph [ref=f36e414]:
+            - text: Official access is
+            - strong [ref=f36e415]: SuperGrok Heavy
+            - text: ($300 per month),
+            - strong [ref=f36e416]: Cursor Ultra
+            - text: ($200 per month), and
+            - strong [ref=f36e417]: Cursor Premium Teams
+            - text: ($120 per seat per month). Enterprise buyers join a waitlist and contact sales. There is no public cheap add-on that unlocks Grok Bot by itself.
+          - heading "How is Grok Bot different from a coding agent?" [level=3] [ref=f36e418]
+          - paragraph [ref=f36e419]: A typical coding agent lives in a repo and a session. Grok Bot has a long-lived VM, browser, and terminal, and finishes work in the real app. Several named Bots can run in parallel and pass work in a group chat. Use a coding agent for the repo. Use Grok Bot for multi-app jobs.
+          - heading "Do Grok Bots share one computer?" [level=3] [ref=f36e420]
+          - paragraph [ref=f36e421]: "Yes. Official docs are explicit: every Bot on your account shares one cloud computer. Files, browser logins, and credentials are account-scoped, not Bot-scoped. Each Bot has its own screen so they can work in parallel. Do not treat a second Bot as a security boundary."
+          - heading "Can Grok Bot use apps that have no API?" [level=3] [ref=f36e422]
+          - paragraph [ref=f36e423]: Yes. That is a launch claim and a docs claim. Where connectors or MCP exist, the Bot can use them. Where they do not, it uses computer-use and works through the interface. You still need to sign in, and you should take over the VM for passwords and two-factor codes.
+          - heading "Is Grok Bot available on Windows and iOS?" [level=3] [ref=f36e424]
+          - paragraph [ref=f36e425]: iOS is part of the 11 August launch surfaces. The launch post published a macOS 0.18.0 disk image. Official get-started docs now also document Windows x64 and Arm64 installers. There is no Linux desktop app. Use the vendor's current download page rather than an unofficial mirror.
+          - heading "Is Grok Bot the same as Grok 4.6?" [level=3] [ref=f36e426]
+          - paragraph [ref=f36e427]: No. Grok 4.6 is a model. Grok Bot is an agent product that gives named teammates a shared cloud computer. You can read our Grok 4.6 explainer separately. Buying or using one does not automatically mean you have the other.
+          - heading "Should I connect company email on day one?" [level=3] [ref=f36e428]
+          - paragraph [ref=f36e429]: No. Start with a local document or a read-only dashboard. Official security guidance says to keep sending, publishing, purchases, deletion, and production changes behind approval. All Bots share sessions, so a mailbox login is a roster-wide login. Use a scoped account if you connect mail at all.
+          - heading "Sources" [level=2] [ref=f36e430]
+          - list [ref=f36e431]:
+            - listitem [ref=f36e432]:
+              - link "Introducing Grok Bot" [ref=f36e433] [cursor=pointer]:
+                - /url: https://x.ai/news/introducing-grok-bot
+              - text: — xAI, 11 August 2026
+            - listitem [ref=f36e434]:
+              - link "Grok Bot product page" [ref=f36e435] [cursor=pointer]:
+                - /url: https://x.ai/bot
+              - text: — official plans and prices
+            - listitem [ref=f36e436]:
+              - link "Grok Bot overview" [ref=f36e437] [cursor=pointer]:
+                - /url: https://docs.x.ai/grok-bot/overview
+              - text: — xAI docs
+            - listitem [ref=f36e438]:
+              - link "Get started" [ref=f36e439] [cursor=pointer]:
+                - /url: https://docs.x.ai/grok-bot/get-started
+              - text: — install and first-handoff steps
+            - listitem [ref=f36e440]:
+              - link "Approvals, security, and privacy" [ref=f36e441] [cursor=pointer]:
+                - /url: https://docs.x.ai/grok-bot/approvals-security-and-privacy
+              - text: — shared-computer rules
+          - heading "What to do next" [level=2] [ref=f36e442]
+          - paragraph [ref=f36e443]: If you already pay for Cursor Ultra or SuperGrok Heavy, install the official app, create one narrow Bot, and run the read-only first task above. If you do not, skip the waitlist theatre and use a cheaper model until the work you need actually requires a cloud computer. Grok Bot is four days past launch as of this guide, still an early beta, and priced like a specialist seat — which is exactly how it should be treated.
+          - paragraph [ref=f36e444]:
+            - text: "Related reading:"
+            - link "the free Grok Build app-building guide" [ref=f36e445] [cursor=pointer]:
+              - /url: https://truescho.com/en/blog/grok-build-apps-free-guide
+            - text: .
+        - region "About Mahmoud Hussein" [ref=f36e446]:
+          - paragraph [ref=f36e447]: About the author
+          - generic [ref=f36e448]:
+            - img "Mahmoud Hussein" [ref=f36e450]
+            - generic [ref=f36e451]:
+              - heading "Mahmoud Hussein" [level=2] [ref=f36e452]
+              - paragraph [ref=f36e453]: Founder of Truescho & Content Lead
+          - paragraph [ref=f36e454]: I founded Truescho to make study opportunities and application steps easier to understand. I work on the platform and its content, connecting students with services and advisors who can help them plan their next step.
+          - generic [ref=f36e455]:
+            - link "Instagram" [ref=f36e456] [cursor=pointer]:
+              - /url: https://www.instagram.com/mahmoudhssn/
+            - link "YouTube" [ref=f36e462] [cursor=pointer]:
+              - /url: https://www.youtube.com/@truescho
+            - link "mahmoudhssn.com" [ref=f36e468] [cursor=pointer]:
+              - /url: https://mahmoudhssn.com/
+          - link "Meet Truescho and see how we work" [ref=f36e474] [cursor=pointer]:
+            - /url: /en/about
+        - generic [ref=f36e477]:
+          - heading "Related Articles" [level=2] [ref=f36e478]
+          - generic [ref=f36e479]:
+            - link [ref=f36e480] [cursor=pointer]:
+              - /url: /en/blog/openai-fires-safety-researchers
+              - 'img "OpenAI Fired 3 Safety Researchers: Letter and Response Explained" [ref=f36e482]'
+              - generic [ref=f36e483]:
+                - 'heading "OpenAI Fired 3 Safety Researchers: Letter and Response Explained" [level=3] [ref=f36e484]'
+                - paragraph [ref=f36e485]: OpenAI fired safety researchers Jasmine Wang, Tomek Korbak and Mikita Balesni. Their open letter denies misconduct and warns of a chilling effect inside the company.
+            - link [ref=f36e486] [cursor=pointer]:
+              - /url: /en/blog/openai-misalignment-reports
+              - 'img "OpenAI''s Misalignment Archive: 15 Cases of AI Models Cheating, Sabotaging, and Hiding It" [ref=f36e488]'
+              - generic [ref=f36e489]:
+                - 'heading "OpenAI''s Misalignment Archive: 15 Cases of AI Models Cheating, Sabotaging, and Hiding It" [level=3] [ref=f36e490]'
+                - paragraph [ref=f36e491]: "OpenAI's misalignment archive: 15 cases of AI models cheating, sabotaging and hiding it — including a grader that wrecked its own environment. Full guide."
+            - link [ref=f36e492] [cursor=pointer]:
+              - /url: /en/blog/google-gemini-agent
+              - img "Google's New Gemini Agent Gets Its Own Email and Works Like a Coworker" [ref=f36e494]
+              - generic [ref=f36e495]:
+                - heading "Google's New Gemini Agent Gets Its Own Email and Works Like a Coworker" [level=3] [ref=f36e496]
+                - paragraph [ref=f36e497]: Google announces a Gemini agent for work with its own Workspace account and email address, acting as a digital coworker across Gmail, Docs, and Sheets, with a tasks inbox exposing its thinking, subagents, and spend caps.
+        - generic [ref=f36e498]:
+          - generic [ref=f36e501]:
+            - heading "Comments" [level=3] [ref=f36e502]
+            - paragraph [ref=f36e505]: Share your experience or ask a question — the community and the Truescho team will reply.
+          - generic [ref=f36e506]:
+            - generic [ref=f36e507]:
+              - paragraph [ref=f36e508]: Sign in to write a comment or reply to others.
+              - link "Sign in" [ref=f36e509] [cursor=pointer]:
+                - /url: /en/login?callbackUrl=%2Fen%2Fblog%2Fgrok-bot-xai-ai-teammates
+            - generic [ref=f36e510]: No comments yet — be the first to comment.
+      - complementary "Navigation and links" [ref=f36e512]:
+        - navigation "Table of Contents" [ref=f36e513]:
+          - paragraph [ref=f36e514]: Table of Contents
+          - list [ref=f36e515]:
+            - listitem [ref=f36e516]:
+              - button "What Grok Bot is — and what it is not" [ref=f36e517] [cursor=pointer]
+            - listitem [ref=f36e518]:
+              - button "Who can use it, and what the official plans cost" [ref=f36e519] [cursor=pointer]
+            - listitem [ref=f36e520]:
+              - 'button "First handoff: numbered setup and first task" [ref=f36e521] [cursor=pointer]'
+            - listitem [ref=f36e522]:
+              - button "How the shared cloud computer actually works" [ref=f36e523] [cursor=pointer]
+            - listitem [ref=f36e524]:
+              - button "Teaching a Bot by watching once" [ref=f36e525] [cursor=pointer]
+            - listitem [ref=f36e526]:
+              - button "How xAI's own teams use Grok Bot" [ref=f36e527] [cursor=pointer]
+            - listitem [ref=f36e528]:
+              - button "Access, pricing, and detection for students and professionals" [ref=f36e529] [cursor=pointer]
+            - listitem [ref=f36e530]:
+              - button "Grok Bot vs Claude Cowork vs a normal coding agent" [ref=f36e531] [cursor=pointer]
+            - listitem [ref=f36e532]:
+              - button "Honest limits and security boundaries" [ref=f36e533] [cursor=pointer]
+            - listitem [ref=f36e534]:
+              - button "Frequently asked questions" [ref=f36e535] [cursor=pointer]
+            - listitem [ref=f36e536]:
+              - button "What is Grok Bot and when did it launch?" [ref=f36e537] [cursor=pointer]
+            - listitem [ref=f36e538]:
+              - button "Which subscriptions include Grok Bot?" [ref=f36e539] [cursor=pointer]
+            - listitem [ref=f36e540]:
+              - button "How is Grok Bot different from a coding agent?" [ref=f36e541] [cursor=pointer]
+            - listitem [ref=f36e542]:
+              - button "Do Grok Bots share one computer?" [ref=f36e543] [cursor=pointer]
+            - listitem [ref=f36e544]:
+              - button "Can Grok Bot use apps that have no API?" [ref=f36e545] [cursor=pointer]
+            - listitem [ref=f36e546]:
+              - button "Is Grok Bot available on Windows and iOS?" [ref=f36e547] [cursor=pointer]
+            - listitem [ref=f36e548]:
+              - button "Is Grok Bot the same as Grok 4.6?" [ref=f36e549] [cursor=pointer]
+            - listitem [ref=f36e550]:
+              - button "Should I connect company email on day one?" [ref=f36e551] [cursor=pointer]
+            - listitem [ref=f36e552]:
+              - button "Sources" [ref=f36e553] [cursor=pointer]
+            - listitem [ref=f36e554]:
+              - button "What to do next" [ref=f36e555] [cursor=pointer]
+        - complementary "Ad" [ref=f36e557]:
+          - generic [ref=f36e558]:
+            - article [ref=f36e559]:
+              - generic [ref=f36e568]:
+                - heading "Truescho Marketplace" [level=3] [ref=f36e570]
+                - paragraph [ref=f36e574]: Offers from certified advisors
+              - generic [ref=f36e575]:
+                - generic [ref=f36e576]: "4.9"
+                - generic [ref=f36e579]: Verified
+                - generic [ref=f36e584]: Escrow
+              - link "Post a request for offers" [ref=f36e588] [cursor=pointer]:
+                - /url: /en/marketplace
+              - link "Or choose an advisor directly" [ref=f36e589] [cursor=pointer]:
+                - /url: /en/apply-for-me/consultants
+            - link "Telegram Official Telegram channel Open" [ref=f36e590] [cursor=pointer]:
+              - /url: https://t.me/truescho
+              - generic [ref=f36e594]:
+                - generic [ref=f36e595]: Telegram
+                - generic [ref=f36e596]: Official Telegram channel
+              - generic [ref=f36e597]: Open
+            - link "WhatsApp Official WhatsApp channel Open" [ref=f36e598] [cursor=pointer]:
+              - /url: https://www.whatsapp.com/channel/0029VaBNJO6HrDZkLBwRf01C
+              - generic [ref=f36e602]:
+                - generic [ref=f36e603]: WhatsApp
+                - generic [ref=f36e604]: Official WhatsApp channel
+              - generic [ref=f36e605]: Open
+            - link "Google Play Get the Android app Open" [ref=f36e606] [cursor=pointer]:
+              - /url: https://play.google.com/store/apps/details?id=com.truescho.study
+              - generic [ref=f36e613]:
+                - generic [ref=f36e614]: Google Play
+                - generic [ref=f36e615]: Get the Android app
+              - generic [ref=f36e616]: Open
+            - link "App Store Get the iPhone app Open" [ref=f36e617] [cursor=pointer]:
+              - /url: https://apps.apple.com/app/truescho/id6759534261
+              - generic [ref=f36e621]:
+                - generic [ref=f36e622]: App Store
+                - generic [ref=f36e623]: Get the iPhone app
+              - generic [ref=f36e624]: Open
+    - contentinfo [ref=f36e625]:
+      - generic [ref=f36e627]:
+        - generic [ref=f36e628]:
+          - generic [ref=f36e629]:
+            - paragraph [ref=f36e630]: Start with the right person
+            - heading "Choose your advisor. Track every step. Receive with confidence." [level=3] [ref=f36e631]
+            - paragraph [ref=f36e632]: Transparent advisor profiles, documented in-platform communication and delivery protection until you confirm receipt.
+          - generic [ref=f36e633]:
+            - link "Apply For Me" [ref=f36e634] [cursor=pointer]:
+              - /url: /en/apply-for-me
+            - link "Choose your advisor" [ref=f36e641] [cursor=pointer]:
+              - /url: /en/apply-for-me/consultants
+        - generic [ref=f36e646]:
+          - generic [ref=f36e647]:
+            - link "Truescho Truescho Human-guided study" [ref=f36e648] [cursor=pointer]:
+              - /url: /en
+              - img "Truescho" [ref=f36e649]
+              - generic [ref=f36e650]:
+                - generic [ref=f36e651]: Truescho
+                - generic [ref=f36e652]: Human-guided study
+            - paragraph [ref=f36e653]: An Arabic platform that connects you with an academic advisor you choose and documents the journey from first message to confirmed delivery.
+            - generic [ref=f36e654]:
+              - link "YouTube" [ref=f36e655] [cursor=pointer]:
+                - /url: https://www.youtube.com/@truescho
+              - link "Instagram" [ref=f36e658] [cursor=pointer]:
+                - /url: https://www.instagram.com/truescho
+              - link "Facebook" [ref=f36e661] [cursor=pointer]:
+                - /url: https://www.facebook.com/truescho
+              - link "X" [ref=f36e664] [cursor=pointer]:
+                - /url: https://www.twitter.com/truescho
+              - link "Telegram" [ref=f36e667] [cursor=pointer]:
+                - /url: https://t.me/truescho
+              - link "WhatsApp" [ref=f36e670] [cursor=pointer]:
+                - /url: https://www.whatsapp.com/channel/0029VaBNJO6HrDZkLBwRf01C
+              - link "LinkedIn" [ref=f36e673] [cursor=pointer]:
+                - /url: https://www.linkedin.com/company/truescho
+            - generic [ref=f36e676]:
+              - link "Get it on Google Play" [ref=f36e677] [cursor=pointer]:
+                - /url: https://play.google.com/store/apps/details?id=com.truescho.study
+                - generic [ref=f36e680]:
+                  - generic [ref=f36e681]: Get it on
+                  - generic [ref=f36e682]: Google Play
+              - link "Download on the App Store" [ref=f36e683] [cursor=pointer]:
+                - /url: https://apps.apple.com/app/truescho/id6759534261
+                - generic [ref=f36e686]:
+                  - generic [ref=f36e687]: Download on the
+                  - generic [ref=f36e688]: App Store
+          - generic [ref=f36e689]:
+            - generic [ref=f36e690]:
+              - heading "Advising & Applications" [level=4] [ref=f36e691]
+              - list [ref=f36e692]:
+                - listitem [ref=f36e693]:
+                  - link "Choose your advisor" [ref=f36e694] [cursor=pointer]:
+                    - /url: /en/apply-for-me/consultants
+                - listitem [ref=f36e695]:
+                  - link "Apply For Me" [ref=f36e696] [cursor=pointer]:
+                    - /url: /en/apply-for-me
+                - listitem [ref=f36e697]:
+                  - link "Education services" [ref=f36e698] [cursor=pointer]:
+                    - /url: /en/services
+                - listitem [ref=f36e699]:
+                  - link "Request marketplace" [ref=f36e700] [cursor=pointer]:
+                    - /url: /en/marketplace
+                - listitem [ref=f36e701]:
+                  - link "Join as a consultant" [ref=f36e702] [cursor=pointer]:
+                    - /url: https://crm.truescho.com/freelancer/register
+                - listitem [ref=f36e703]:
+                  - link "List your office free" [ref=f36e704] [cursor=pointer]:
+                    - /url: /en/consultants/join
+                - listitem [ref=f36e705]:
+                  - link "All opportunities" [ref=f36e706] [cursor=pointer]:
+                    - /url: /en/opportunities
+                - listitem [ref=f36e707]:
+                  - link "Verified scholarships" [ref=f36e708] [cursor=pointer]:
+                    - /url: /en/trusted/scholarships
+                - listitem [ref=f36e709]:
+                  - link "Conferences" [ref=f36e710] [cursor=pointer]:
+                    - /url: /en/trusted/conferences
+                - listitem [ref=f36e711]:
+                  - link "Jobs and internships" [ref=f36e712] [cursor=pointer]:
+                    - /url: /en/jobs
+            - generic [ref=f36e713]:
+              - heading "Universities & Careers" [level=4] [ref=f36e714]
+              - list [ref=f36e715]:
+                - listitem [ref=f36e716]:
+                  - link "Universities" [ref=f36e717] [cursor=pointer]:
+                    - /url: /en/universities
+                - listitem [ref=f36e718]:
+                  - link "Rankings" [ref=f36e719] [cursor=pointer]:
+                    - /url: /en/rankings
+                - listitem [ref=f36e720]:
+                  - link "Majors guide" [ref=f36e721] [cursor=pointer]:
+                    - /url: /en/majors
+                - listitem [ref=f36e722]:
+                  - link "Courses" [ref=f36e723] [cursor=pointer]:
+                    - /url: /en/courses
+                - listitem [ref=f36e724]:
+                  - link "Career compass" [ref=f36e725] [cursor=pointer]:
+                    - /url: /en/discover
+            - generic [ref=f36e726]:
+              - heading "Tools & content" [level=4] [ref=f36e727]
+              - list [ref=f36e728]:
+                - listitem [ref=f36e729]:
+                  - link "ARWriter Arabic AI" [ref=f36e730] [cursor=pointer]:
+                    - /url: https://app.arwriterai.com/
+                - listitem [ref=f36e731]:
+                  - link "Free AI tools" [ref=f36e732] [cursor=pointer]:
+                    - /url: /en/tools/ai
+                - listitem [ref=f36e733]:
+                  - link "Prompt generator" [ref=f36e734] [cursor=pointer]:
+                    - /url: /en/tools/ai/generate-prompt
+                - listitem [ref=f36e735]:
+                  - link "Digital shop" [ref=f36e736] [cursor=pointer]:
+                    - /url: /en/shop
+                - listitem [ref=f36e737]:
+                  - link "AI and business blog" [ref=f36e738] [cursor=pointer]:
+                    - /url: /en/blog
+            - generic [ref=f36e739]:
+              - heading "Company" [level=4] [ref=f36e740]
+              - list [ref=f36e741]:
+                - listitem [ref=f36e742]:
+                  - link "About" [ref=f36e743] [cursor=pointer]:
+                    - /url: /en/about
+                - listitem [ref=f36e744]:
+                  - link "Office directory" [ref=f36e745] [cursor=pointer]:
+                    - /url: /en/consultants
+                - listitem [ref=f36e746]:
+                  - link "Our apps" [ref=f36e747] [cursor=pointer]:
+                    - /url: /en/apps
+                - listitem [ref=f36e748]:
+                  - link "Sada" [ref=f36e749] [cursor=pointer]:
+                    - /url: /en/sada
+                - listitem [ref=f36e750]:
+                  - link "Sada threads" [ref=f36e751] [cursor=pointer]:
+                    - /url: /en/threads
+                - listitem [ref=f36e752]:
+                  - link "Privacy" [ref=f36e753] [cursor=pointer]:
+                    - /url: /en/privacy
+                - listitem [ref=f36e754]:
+                  - link "Terms" [ref=f36e755] [cursor=pointer]:
+                    - /url: /en/terms
+        - generic [ref=f36e756]:
+          - paragraph [ref=f36e757]: © 2026 Truescho. All rights reserved.
+          - link "info@truescho.com" [ref=f36e759] [cursor=pointer]:
+            - /url: mailto:info@truescho.com
+  - region "Notifications (F8)":
+    - list

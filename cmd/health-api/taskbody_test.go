@@ -455,3 +455,27 @@ func TestNoOpUpdateFieldsAreRecognisedAsNoOp(t *testing.T) {
 			"concurrency plumbing and must not mask a real edit", mixed, got)
 	}
 }
+
+// A body differing only past the 120-byte voice-phrase cap stores identically,
+// so it must digest identically — otherwise the retry 422s as a "different body".
+func TestFingerprintTruncatesSpeakNameLikeTheStore(t *testing.T) {
+	base := map[string]any{
+		"name": "task", "description": "d",
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"estimated_minutes": 5, "parallelable": false,
+	}
+	over := map[string]any{}
+	for k, v := range base {
+		over[k] = v
+	}
+	over["speak_name"] = strings.Repeat("x", 200)
+	capped := map[string]any{}
+	for k, v := range base {
+		capped[k] = v
+	}
+	capped["speak_name"] = strings.Repeat("x", 120)
+	if taskFingerprint(over) != taskFingerprint(capped) {
+		t.Error("speak_name past the cap digests differently, but the store truncates " +
+			"it — a legitimate retry would 422 instead of replaying")
+	}
+}

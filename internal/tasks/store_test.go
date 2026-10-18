@@ -1100,8 +1100,8 @@ func TestSpeakNameRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if got := capped["speak_name"].(string); len([]rune(got)) != 120 {
-		t.Fatalf("speak_name must truncate to 120 runes, got %d", len([]rune(got)))
+	if got := capped["speak_name"].(string); len(got) != 120 {
+		t.Fatalf("speak_name must truncate to 120 bytes, got %d", len(got))
 	}
 	cleared, err := s.Update(ctx, id, map[string]any{"speak_name": ""})
 	if err != nil {

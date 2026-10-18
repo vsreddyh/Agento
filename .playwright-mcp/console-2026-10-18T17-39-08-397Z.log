@@ -1,0 +1,6 @@
+[     185ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://openai.com/index/introducing-dots/:0
+[     415ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://openai.com/cdn-cgi/challenge-platform/h/b/scripts/alpha/invisible.js?ts=1792339200:0
+[     797ms] [WARNING] No available adapters. @ https://openai.com/index/introducing-dots/:0
+[     853ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://openai.com/favicon.ico:0
+[    1669ms] [WARNING] No available adapters. @ https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/f/av0/rch/2xwyu/0x4AAAAAAADnPIDROrmt1Wwj/light/fbE/new/normal?lang=auto:0
+[    3129ms] [WARNING] OTS parsing error: Size of decompressed WOFF 2.0 is less than compressed size @ https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/f/av0/rch/2xwyu/0x4AAAAAAADnPIDROrmt1Wwj/light/fbE/new/normal?lang=auto:0

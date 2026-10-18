@@ -228,7 +228,9 @@ class TasksApi(context: Context) {
             parallelable: Boolean? = null,
         ): TaskContractSent = TaskContractSent(
             name = name?.trim(),
-            speakName = speakName?.trim(),
+            // Trimmed AND capped, exactly like the server stores it — so a
+            // pasted paragraph asserts as what was stored, not as what was typed.
+            speakName = speakName?.trim()?.let { truncateUtf8Bytes(it, SPEAK_NAME_MAX_BYTES) },
             description = description?.trim(),
             dueDate = dueDate?.trim(),
             dueTime = dueTime?.trim(),

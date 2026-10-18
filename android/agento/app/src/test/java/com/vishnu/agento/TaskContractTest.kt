@@ -677,6 +677,23 @@ class SingleSourceOfTruthTest {
     fun `padding is trimmed once so body and assertion cannot diverge`() {
         assertEquals("Take meds", sent(name = "  Take meds  ").name)
     }
+
+    @Test
+    fun `a long speak name is capped to what the server stores`() {
+        // The server truncates to 120 bytes; the builder mirrors it, so the
+        // assert compares what was stored rather than what was typed.
+        val s = TasksApi.buildTaskContractSent(name = "n", speakName = "x".repeat(200))
+        assertEquals(120, s.speakName!!.toByteArray(Charsets.UTF_8).size)
+    }
+
+    @Test
+    fun `multibyte truncation never splits a character`() {
+        val s = TasksApi.buildTaskContractSent(name = "n", speakName = "é".repeat(200))
+        val bytes = s.speakName!!.toByteArray(Charsets.UTF_8)
+        assert(bytes.size <= 120)
+        // Decodes cleanly: no half-character at the cut.
+        assertEquals(s.speakName, String(bytes, Charsets.UTF_8))
+    }
 }
 
 /**

@@ -1399,7 +1399,7 @@ internal fun ServerTaskDialog(
                 )
                 OutlinedTextField(
                     value = speakName,
-                    onValueChange = { speakName = it },
+                    onValueChange = { speakName = it.take(SPEAK_NAME_MAX_BYTES) },
                     label = { Text("Speak as (voice)") },
                     placeholder = { Text("e.g. pay the power bill") },
                     singleLine = true,

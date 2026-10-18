@@ -407,7 +407,7 @@ func TestTruncateRunesNeverSplitsARune(t *testing.T) {
 		{"devanagari, 3-byte runes", strings.Repeat("क", 40)},
 	}
 	for _, c := range cases {
-		got := truncateRunes(c.in, max)
+		got := TruncateBytes(c.in, max)
 		if len(got) > max {
 			t.Errorf("%s: length %d exceeds the %d-byte cap", c.name, len(got), max)
 		}
@@ -419,7 +419,7 @@ func TestTruncateRunesNeverSplitsARune(t *testing.T) {
 		}
 	}
 	// Under the cap, nothing is touched.
-	if got := truncateRunes("short", max); got != "short" {
+	if got := TruncateBytes("short", max); got != "short" {
 		t.Errorf("a short string was altered: %q", got)
 	}
 }

@@ -1,0 +1,344 @@
+- generic [ref=f14e6]:
+  - generic [ref=f14e7]:
+    - link "Skip to main content" [ref=f14e8] [cursor=pointer]:
+      - /url: "#mdc-main-content"
+    - navigation "Main" [ref=f14e12]:
+      - generic [ref=f14e16]:
+        - link "Meta home" [ref=f14e19] [cursor=pointer]:
+          - /url: /
+          - img "Meta" [ref=f14e20]
+        - list [ref=f14e24]:
+          - listitem [ref=f14e25]:
+            - link "Products" [ref=f14e28] [cursor=pointer]:
+              - /url: "#"
+          - listitem [ref=f14e31]:
+            - link "AI Research" [ref=f14e34] [cursor=pointer]:
+              - /url: /research/
+          - listitem [ref=f14e37]:
+            - link "Resources" [ref=f14e40] [cursor=pointer]:
+              - /url: "#"
+          - listitem [ref=f14e43]:
+            - link "About" [ref=f14e46] [cursor=pointer]:
+              - /url: /about/
+          - listitem [ref=f14e49]:
+            - link "AI Developers" [ref=f14e52] [cursor=pointer]:
+              - /url: https://developer.meta.com/ai/?utm_source=ai_meta_site&utm_medium=web&utm_campaign=nav_AI-developers_07242026&utm_content=nav_AI-developers
+        - link "Try Muse" [ref=f14e58] [cursor=pointer]:
+          - /url: https://applink.muse.ai/?pt=10684&pid=ai_meta_site&utm_source=ai_meta_site&utm_medium=web&utm_campaign=nav_try-muse_09082026&utm_content=nav_try-muse_09082026&ct=nav_try-muse_09082026&referrer=utm_source%3Dai_meta_site%26utm_medium%3Dweb%26utm_campaign%3Dnav_try-muse_09082026%26utm_content%3Dnav_try-muse_09082026
+  - main [ref=f14e62]:
+    - region "Meet Hatch introduction" [ref=f14e69]:
+      - generic [ref=f14e77]:
+        - generic [ref=f14e78]:
+          - img "Muse NRP blog thumbnail" [ref=f14e80]
+          - generic [ref=f14e83]:
+            - generic [ref=f14e84]: Introducing Muse
+            - heading "AI that gets it done" [level=1] [ref=f14e87]
+        - generic [ref=f14e89]:
+          - link "Get it on Google Play" [ref=f14e90] [cursor=pointer]:
+            - /url: https://play.google.com/store/apps/details?id=com.facebook.aura&referrer=utm_source%3Dai_meta_site%26utm_medium%3Dweb%26utm_campaign%3Dmuse_header_google-play_09232026
+            - img "Get it on Google Play" [ref=f14e91]
+          - link "Download on the App Store" [ref=f14e92] [cursor=pointer]:
+            - /url: https://apps.apple.com/us/app/muse-from-meta/id6760173601?pt=10684&ct=muse_header_app-store_09232026&utm_campaign=muse_header_app-store_09232026
+            - img "Download on the App Store" [ref=f14e93]
+    - generic [ref=f14e95]:
+      - generic [ref=f14e96]:
+        - generic [ref=f14e97]:
+          - text: MUSE FEATURES
+          - heading "Take the busywork off your plate" [level=2] [ref=f14e100]
+          - generic [ref=f14e101]: Muse gets to know you and your goals, working across all aspects of life so you can focus on the things that matter. It comes with strong privacy and security built in, keeping you in control.
+        - link "Try Muse" [ref=f14e106] [cursor=pointer]:
+          - /url: https://applink.muse.ai/?pt=10684&pid=ai_meta_site&utm_source=ai_meta_site&utm_medium=web&utm_campaign=muse_features_try-muse_09232026&utm_content=muse_features_try-muse_09232026&ct=muse_features_try-muse_09232026&referrer=utm_source%3Dai_meta_site%26utm_medium%3Dweb%26utm_campaign%3Dmuse_features_try-muse_09232026%26utm_content%3Dmuse_features_try-muse_09232026
+      - generic [ref=f14e115]:
+        - generic [ref=f14e116]:
+          - generic [ref=f14e118]:
+            - separator [aria-hidden] [ref=f14e119]
+            - button "Designed to feel like a conversation" [ref=f14e120] [cursor=pointer]
+            - generic [ref=f14e127]: Chat with your Muse in the same way you message with other people, using the Muse app on mobile, Mac, or directly in WhatsApp. It’s simple, just tell Muse what you want to get done.
+          - generic [ref=f14e132]:
+            - separator [aria-hidden] [ref=f14e133]
+            - button "A secure computer with a browser shared by you and your agent" [ref=f14e134] [cursor=pointer]
+          - generic [ref=f14e142]:
+            - separator [aria-hidden] [ref=f14e143]
+            - button "Always working on your goals and suggesting ideas" [ref=f14e144] [cursor=pointer]
+          - generic [ref=f14e152]:
+            - separator [aria-hidden] [ref=f14e153]
+            - button "Works with your apps and builds its own tools" [ref=f14e154] [cursor=pointer]
+          - separator [aria-hidden] [ref=f14e161]
+        - img "Chatting with Muse via mobile or Mac" [ref=f14e167]
+    - generic [ref=f14e169]:
+      - generic [ref=f14e170]: SECURE AND IN CONTROL
+      - generic [ref=f14e173]:
+        - generic [ref=f14e178]:
+          - heading "Your personal data is safe and secure" [level=3] [ref=f14e180]
+          - generic [ref=f14e181]:
+            - text: Your logins are kept in a secure credential store your agent can't read, with 1Password integration coming soon. When shopping, a one-time card number is generated at checkout so your real card is never seen by the merchant or your agent. Eligible purchases are covered by
+            - link "Link’s purchase protections" [ref=f14e182] [cursor=pointer]:
+              - /url: https://link.com/protections
+            - text: ", a first for AI agents, and your conversations are not shared with Meta's ad systems."
+        - generic [ref=f14e187]:
+          - heading "Approve critical actions from your agent" [level=3] [ref=f14e189]
+          - generic [ref=f14e190]: Review and approve actions from Muse before they happen, like sending emails and making purchases. See a complete audit trail of everything your agent has done (and what it is planning to do).
+    - generic [ref=f14e192]:
+      - generic [ref=f14e193]:
+        - generic [ref=f14e195]:
+          - heading "MUSE IN ACTION" [level=2] [ref=f14e196]
+          - heading "See how Muse works for you" [level=3] [ref=f14e198]
+          - generic [ref=f14e199]: From email and calendar management to saving money, improving your health, and shopping smarter. Muse handles it all.
+        - link "Try Muse" [ref=f14e205] [cursor=pointer]:
+          - /url: https://applink.muse.ai/?pt=10684&pid=ai_meta_site&utm_source=ai_meta_site&utm_medium=web&utm_campaign=muse_in-action_try-muse_09232026&utm_content=muse_in-action_try-muse_09232026&ct=muse_in-action_try-muse_09232026&referrer=utm_source%3Dai_meta_site%26utm_medium%3Dweb%26utm_campaign%3Dmuse_in-action_try-muse_09232026%26utm_content%3Dmuse_in-action_try-muse_09232026
+      - generic [ref=f14e217]:
+        - generic "Muse sizzle video" [ref=f14e218]
+        - group "Video player" [ref=f14e219]:
+          - generic [ref=f14e222]:
+            - button "Unmute video" [ref=f14e223] [cursor=pointer]
+            - button "Play video" [ref=f14e228] [cursor=pointer]
+    - generic [ref=f14e236]:
+      - generic [ref=f14e239]:
+        - heading "CREATOR STORIES" [level=2] [ref=f14e240]
+        - heading "Get inspired" [level=3] [ref=f14e242]
+        - generic [ref=f14e243]: Muse is helping people manage and achieve their goals and everyday tasks.
+        - link "Try Muse" [ref=f14e246] [cursor=pointer]:
+          - /url: https://applink.muse.ai/?pt=10684&pid=ai_meta_site&utm_source=ai_meta_site&utm_medium=web&utm_campaign=muse_creator-stories_try-muse_09232026&utm_content=muse_creator-stories_try-muse_09232026&ct=muse_creator-stories_try-muse_09232026&referrer=utm_source%3Dai_meta_site%26utm_medium%3Dweb%26utm_campaign%3Dmuse_creator-stories_try-muse_09232026%26utm_content%3Dmuse_creator-stories_try-muse_09232026
+      - region "Presets" [ref=f14e254]:
+        - group "1 of 4" [ref=f14e256]:
+          - generic [ref=f14e258]:
+            - generic [ref=f14e265]:
+              - generic "Change backgrounds, try on different outfits, and transform people, pets, and more with presets or custom prompts" [ref=f14e266]
+              - group "Video player" [ref=f14e267]:
+                - generic [ref=f14e270]:
+                  - button "Unmute video" [ref=f14e271] [cursor=pointer]
+                  - button "Play video" [ref=f14e276] [cursor=pointer]
+            - generic [ref=f14e281]: Ryan Serhant talks through how his Muse, Pumpkin, gets tasks done
+        - group "2 of 4" [ref=f14e283]:
+          - generic [ref=f14e285]:
+            - generic [ref=f14e292]:
+              - generic "Change backgrounds, try on different outfits, and transform people, pets, and more with presets or custom prompts" [ref=f14e293]
+              - group "Video player" [ref=f14e294]:
+                - generic [ref=f14e297]:
+                  - button "Unmute video" [ref=f14e298] [cursor=pointer]
+                  - button "Play video" [ref=f14e303] [cursor=pointer]
+            - generic [ref=f14e308]: Ashley Graham’s Muse, Lux, helps her organize her whole life
+        - group "3 of 4" [ref=f14e310]:
+          - generic [ref=f14e312]:
+            - generic [ref=f14e319]:
+              - generic "Change backgrounds, try on different outfits, and transform people, pets, and more with presets or custom prompts" [ref=f14e320]
+              - group "Video player" [ref=f14e321]:
+                - generic [ref=f14e324]:
+                  - button "Unmute video" [ref=f14e325] [cursor=pointer]
+                  - button "Play video" [ref=f14e330] [cursor=pointer]
+            - generic [ref=f14e335]: Teyana Taylor problem solves with her Muse, AunTEY
+        - group "4 of 4" [ref=f14e337]:
+          - generic [ref=f14e339]:
+            - generic [ref=f14e346]:
+              - generic "Change backgrounds, try on different outfits, and transform people, pets, and more with presets or custom prompts" [ref=f14e347]
+              - group "Video player" [ref=f14e348]:
+                - generic [ref=f14e351]:
+                  - button "Unmute video" [ref=f14e352] [cursor=pointer]
+                  - button "Play video" [ref=f14e357] [cursor=pointer]
+            - generic [ref=f14e362]: Ally Love’s Muse, Mango, helps her stay on top of business
+    - generic [ref=f14e372]:
+      - generic [ref=f14e381]:
+        - generic "Muse for small businesses" [ref=f14e382]
+        - group "Video player" [ref=f14e383]:
+          - generic [ref=f14e386]:
+            - button "Unmute video" [ref=f14e387] [cursor=pointer]
+            - button "Play video" [ref=f14e392] [cursor=pointer]
+      - generic [ref=f14e399]:
+        - generic [ref=f14e400]:
+          - heading "MUSE FOR SMALL BUSINESS" [level=2] [ref=f14e401]
+          - heading "AI that works for your small business" [level=3] [ref=f14e403]
+        - generic [ref=f14e404]: Muse is now expanding with Muse for Small Business—a collection of new skills and connectors for the small business owner whose to-do list has a to-do list.
+        - link "Try Muse" [ref=f14e406] [cursor=pointer]:
+          - /url: https://muse.ai/business?utm_source=ai_meta_site&utm_medium=web&utm_campaign=muse_for-small-business_try-muse_09282026&utm_content=muse_for-small-business_try-muse_09292026
+    - generic [ref=f14e413]:
+      - generic [ref=f14e415]:
+        - generic:
+          - generic:
+            - img "Muse desktop Mac app"
+      - generic [ref=f14e418]:
+        - heading "Download Muse for Mac" [level=3] [ref=f14e420]
+        - generic [ref=f14e421]: Muse works with your desktop computer files, apps and browser tabs.
+        - generic [ref=f14e422]:
+          - link "Download for macOS" [ref=f14e423] [cursor=pointer]:
+            - /url: https://scontent-cdg4-2.xx.fbcdn.net/v/t39.110568-6/852660970_1982181785803179_1607687638854370045_n.dmg/Muse-8.0.dmg?_nc_cat=107&ccb=1-7&_nc_sid=116824&_nc_ohc=0j-TCLBMuDQQ7kNvwF3TRFK&_nc_oc=Adqa1nxrxGXNhXie5fBE6qkO1EUVF0wHIK0ZnUTwXg3dvpbnBZXLLwIjRbntS28OKKA&_nc_zt=14&_nc_ht=scontent-cdg4-2.xx&_nc_gid=eibot3JEe24XRwBbBHBz7g&_nc_ss=7f289&oh=00_AQMTquY_u_aaQUf3rWf7_vRVyIByjMiSeEF6vUbC4ASrrg&oe=6ADABEA8
+          - link "Learn more" [ref=f14e431] [cursor=pointer]:
+            - /url: /muse/download/
+    - generic [ref=f14e443]:
+      - img "Try Muse background" [ref=f14e446]
+      - generic [ref=f14e450]:
+        - heading "TRY MUSE" [level=2] [ref=f14e453]
+        - heading "Ready to get more done with Muse?" [level=3] [ref=f14e455]
+        - link "Get started" [ref=f14e458] [cursor=pointer]:
+          - /url: https://applink.muse.ai/?pt=10684&pid=ai_meta_site&utm_source=ai_meta_site&utm_medium=web&utm_campaign=muse_more-done_started_09232026&utm_content=muse_more-done_started_09232026&ct=muse_more-done_started_09232026&referrer=utm_source%3Dai_meta_site%26utm_medium%3Dweb%26utm_campaign%3Dmuse_more-done_started_09232026%26utm_content%3Dmuse_more-done_started_09232026
+    - generic [ref=f14e466]:
+      - heading "FREQUENTLY ASKED QUESTIONS" [level=2] [ref=f14e473]
+      - list [ref=f14e475]:
+        - separator [aria-hidden] [ref=f14e476]
+        - listitem [ref=f14e477]:
+          - button [ref=f14e479] [cursor=pointer]:
+            - heading "What can Muse do?" [level=3] [ref=f14e484]
+        - separator [aria-hidden] [ref=f14e488]
+        - listitem [ref=f14e489]:
+          - button [ref=f14e491] [cursor=pointer]:
+            - heading "How does Muse work?" [level=3] [ref=f14e496]
+        - separator [aria-hidden] [ref=f14e500]
+        - listitem [ref=f14e501]:
+          - button [ref=f14e503] [cursor=pointer]:
+            - heading "Is Muse free?" [level=3] [ref=f14e508]
+        - separator [aria-hidden] [ref=f14e512]
+        - listitem [ref=f14e513]:
+          - button [ref=f14e515] [cursor=pointer]:
+            - heading "Is Muse safe?" [level=3] [ref=f14e520]
+        - separator [aria-hidden] [ref=f14e524]
+        - listitem [ref=f14e525]:
+          - button [ref=f14e527] [cursor=pointer]:
+            - heading "Does Muse keep working after I close the app?" [level=3] [ref=f14e532]
+        - separator [aria-hidden] [ref=f14e536]
+        - listitem [ref=f14e537]:
+          - button [ref=f14e539] [cursor=pointer]:
+            - heading "Does Muse ask before it acts on my behalf?" [level=3] [ref=f14e544]
+        - separator [aria-hidden] [ref=f14e548]
+        - listitem [ref=f14e549]:
+          - button [ref=f14e551] [cursor=pointer]:
+            - heading "What is a personal AI agent?" [level=3] [ref=f14e556]
+        - separator [aria-hidden] [ref=f14e560]
+        - listitem [ref=f14e561]:
+          - button [ref=f14e563] [cursor=pointer]:
+            - heading "How is a personal agent different from a chatbot or AI assistant?" [level=3] [ref=f14e568]
+        - separator [aria-hidden] [ref=f14e572]
+        - listitem [ref=f14e573]:
+          - button [ref=f14e575] [cursor=pointer]:
+            - heading "What can a personal AI agent help with?" [level=3] [ref=f14e580]
+        - separator [aria-hidden] [ref=f14e584]
+    - generic [ref=f14e586]:
+      - heading "Explore Meta AI products" [level=2] [ref=f14e590]
+      - generic [ref=f14e591]:
+        - generic [ref=f14e594]:
+          - img "Meta AI personal assistant on mobile device" [ref=f14e597]
+          - generic [ref=f14e601]:
+            - heading "Meta AI Assistant" [level=3] [ref=f14e603]
+            - heading "Get more done with Meta AI, your personal AI assistant." [level=4] [ref=f14e605]
+            - generic [ref=f14e606]:
+              - link "Try Meta AI" [ref=f14e608] [cursor=pointer]:
+                - /url: http://applink.meta.ai/?pt=10684&pid=ai_meta_site&utm_source=ai_meta_site&utm_medium=web&utm_campaign=lh-hub-page_get-more-done_try-on-meta-ai_05072026&utm_content=lh-hub-page_get-more-done_try-on-meta-ai_05072026&ct=lh-hub-page_get-more-done_try-on-meta-ai_05072026&referrer=utm_source%3Dai_meta_site%26utm_medium%3Dweb%26utm_campaign%3Dlh-hub-page_get-more-done_try-on-meta-ai_05072026%26utm_content%3Dlh-hub-page_get-more-done_try-on-meta-ai_05072026
+              - link "Learn more" [ref=f14e614] [cursor=pointer]:
+                - /url: /meta-ai/assistant/
+        - generic [ref=f14e624]:
+          - img "Meta AI media generation output cards" [ref=f14e627]
+          - generic [ref=f14e631]:
+            - heading "Image Generation" [level=3] [ref=f14e633]
+            - heading "Explore fun presets, make precise edits and visualize your ideas." [level=4] [ref=f14e635]
+            - generic [ref=f14e636]:
+              - link "Start generating" [ref=f14e638] [cursor=pointer]:
+                - /url: https://applink.meta.ai/?pt=10684&pid=ai_meta_site&utm_source=ai_meta_site&utm_medium=web&utm_campaign=learning_hub_start-generating_07242026&utm_content=learning_hub_start-generating_07242026&ct=learning_hub_start-generating_07242026&referrer=utm_source%3Dai_meta_site%26utm_medium%3Dweb%26utm_campaign%3Dlearning_hub_start-generating_07242026%26utm_content%3Dlearning_hub_start-generating_07242026
+              - link "Learn more" [ref=f14e644] [cursor=pointer]:
+                - /url: /meta-ai/media-generation/
+  - contentinfo [ref=f14e652]:
+    - generic [ref=f14e653]:
+      - separator [aria-hidden] [ref=f14e654]
+      - generic [ref=f14e658]:
+        - generic [ref=f14e660]:
+          - img "Meta" [ref=f14e662]
+          - list [ref=f14e664]:
+            - listitem:
+              - link "Facebook ai.meta.com social media":
+                - /url: https://www.facebook.com/AIatMeta/
+                - img "Facebook ai.meta.com social media"
+            - listitem:
+              - link "Threads ai.meta.com social media":
+                - /url: https://www.threads.com/@aiatmeta
+                - img "Threads ai.meta.com social media"
+            - listitem:
+              - link "X ai.meta.com social media":
+                - /url: https://x.com/aiatmeta/
+                - img "X ai.meta.com social media"
+            - listitem:
+              - link "YouTube ai.meta.com media channel":
+                - /url: https://www.youtube.com/@aiatmeta
+                - img "YouTube ai.meta.com media channel"
+            - listitem:
+              - link "Threads ai.meta.com social media":
+                - /url: https://github.com/facebookresearch/
+                - img "Threads ai.meta.com social media"
+        - generic [ref=f14e666]:
+          - generic [ref=f14e668]:
+            - heading "Meta AI" [level=2] [ref=f14e669]
+            - list [ref=f14e671]:
+              - listitem [ref=f14e672]:
+                - link "Assistant" [ref=f14e674] [cursor=pointer]:
+                  - /url: /meta-ai/assistant/
+              - listitem [ref=f14e675]:
+                - link "Media Generation" [ref=f14e677] [cursor=pointer]:
+                  - /url: /meta-ai/media-generation/
+              - listitem [ref=f14e678]:
+                - link "Vibes" [ref=f14e680] [cursor=pointer]:
+                  - /url: /meta-ai/vibes/
+          - generic [ref=f14e682]:
+            - heading "Muse" [level=2] [ref=f14e683]
+            - list [ref=f14e685]:
+              - listitem [ref=f14e686]:
+                - link "Agent" [ref=f14e688] [cursor=pointer]:
+                  - /url: /muse/
+              - listitem [ref=f14e689]:
+                - link "AI agents explained" [ref=f14e691] [cursor=pointer]:
+                  - /url: /learn/agentic-ai/what-are-ai-agents/
+              - listitem [ref=f14e692]:
+                - link "What is agentic AI" [ref=f14e694] [cursor=pointer]:
+                  - /url: /learn/agentic-ai/what-is-agentic-ai/
+              - listitem [ref=f14e695]:
+                - link "Agentic AI examples" [ref=f14e697] [cursor=pointer]:
+                  - /url: /learn/agentic-ai/agentic-ai-examples/
+          - generic [ref=f14e699]:
+            - heading "AI Research" [level=2] [ref=f14e700]
+            - list [ref=f14e702]:
+              - listitem [ref=f14e703]:
+                - link "Overview" [ref=f14e705] [cursor=pointer]:
+                  - /url: /research/
+              - listitem [ref=f14e706]:
+                - link "Projects" [ref=f14e708] [cursor=pointer]:
+                  - /url: /research/#projects
+              - listitem [ref=f14e709]:
+                - link "Resources & tools" [ref=f14e711] [cursor=pointer]:
+                  - /url: /resources/
+              - listitem [ref=f14e712]:
+                - link "Publications" [ref=f14e714] [cursor=pointer]:
+                  - /url: /results/?content_types[0]=publication
+              - listitem [ref=f14e715]:
+                - link "GitHub" [ref=f14e717] [cursor=pointer]:
+                  - /url: https://github.com/facebookresearch/
+          - generic [ref=f14e719]:
+            - heading "Resources" [level=2] [ref=f14e720]
+            - list [ref=f14e722]:
+              - listitem [ref=f14e723]:
+                - link "Blog" [ref=f14e725] [cursor=pointer]:
+                  - /url: /blog/
+              - listitem [ref=f14e726]:
+                - link "Learning Hub" [ref=f14e728] [cursor=pointer]:
+                  - /url: /learn/
+              - listitem [ref=f14e729]:
+                - link "Demos" [ref=f14e731] [cursor=pointer]:
+                  - /url: https://aidemos.meta.com/
+          - generic [ref=f14e733]:
+            - heading "About" [level=2] [ref=f14e734]
+            - list [ref=f14e736]:
+              - listitem [ref=f14e737]:
+                - link "Overview" [ref=f14e739] [cursor=pointer]:
+                  - /url: /about/
+              - listitem [ref=f14e740]:
+                - link "Open Source" [ref=f14e742] [cursor=pointer]:
+                  - /url: /opensourceai/
+              - listitem [ref=f14e743]:
+                - link "Careers" [ref=f14e745] [cursor=pointer]:
+                  - /url: https://www.metacareers.com/
+          - generic [ref=f14e747]:
+            - heading "Legal" [level=2] [ref=f14e748]
+            - list [ref=f14e750]:
+              - listitem [ref=f14e751]:
+                - link "Privacy Policy" [ref=f14e753] [cursor=pointer]:
+                  - /url: https://www.facebook.com/privacy/policy/
+              - listitem [ref=f14e754]:
+                - link "Terms" [ref=f14e756] [cursor=pointer]:
+                  - /url: https://www.facebook.com/policies_center/
+              - listitem [ref=f14e757]:
+                - link "Cookies" [ref=f14e759] [cursor=pointer]:
+                  - /url: https://www.facebook.com/privacy/policies/cookies/
