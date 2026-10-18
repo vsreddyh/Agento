@@ -356,11 +356,26 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 	// version used a 1-day cutoff, which quietly skipped any repeat that stopped two
 	// days ago and was still sitting there in plain sight. Duplicating the retention
 	// constant here would be a third place for it to drift.
+	// The query selects the STRUCTURED shapes, in both spellings (#304):
+	// an interval cadence, or a selected-days cadence. It used to test only
+	// `repeat_every > 0` + a unit, which is exactly the shape a days task does
+	// NOT have — so a stopped "Mon, Wed, Fri" repeat was invisible to the one
+	// job that exists to report stopped repeats.
+	//
+	// "repeat_days.0 exists" is how a non-empty BSON array is asked about: an
+	// empty array has no element 0, so it reads as "not this mode", which is
+	// what the classifier will say too.
+	structured := bson.A{
+		bson.M{
+			"repeat_every": bson.M{"$gt": 0},
+			"repeat_unit":  bson.M{"$nin": bson.A{"", nil}},
+		},
+		bson.M{"repeat_days.0": bson.M{"$exists": true}},
+	}
 	cur, err := s.tasks.Find(ctx, bson.M{
 		"completedAt":   bson.M{"$ne": nil, "$exists": true},
-		"repeat_every":  bson.M{"$gt": 0},
-		"repeat_unit":   bson.M{"$nin": bson.A{"", nil}},
 		"repeat_custom": bson.M{"$ne": true},
+		"$or":           structured,
 	}, options.Find().
 		SetSort(bson.D{{Key: "completedAt", Value: -1}}).
 		// +1 so hitting the cap is DETECTABLE: a query returning exactly the limit
@@ -469,7 +484,8 @@ func (s *Store) ReconcileRollover(ctx context.Context) (ReconcileResult, error) 
 			// deliberately NOT skipped.
 			//
 			// The query selected only rows that LOOK structured (repeat_every > 0, a
-			// unit, repeat_custom != true), so the classifier disagreeing means a field
+			// unit, or a non-empty repeat_days, with repeat_custom != true), so the
+			// classifier disagreeing means a field
 			// has drifted to a type the store cannot read. Measured, not assumed: a
 			// `repeat_every` stored as a string does NOT pass `$gt: 0` (MongoDB brackets
 			// comparison operators by BSON type), but a `repeat_unit` stored as a NUMBER

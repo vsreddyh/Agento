@@ -39,6 +39,9 @@ func repeatOf(doc map[string]any) tasks.Repeat {
 	if b, ok := doc["repeat_custom"].(bool); ok {
 		rep.Custom = b
 	}
+	// The selection, leniently — a doc is read for display (rep.String()) and
+	// for the follow_up hint, so an unreadable shape must not fail the call.
+	rep.Days, _ = tasks.ParseRepeatDays(doc["repeat_days"])
 	return rep.Normalize()
 }
 
@@ -50,7 +53,20 @@ func repeatHint(rep tasks.Repeat) string {
 		// apostrophe, and this string is copied by the agent.
 		return fmt.Sprintf("repeat_custom: true, repeat_rule: %q", rep.Text)
 	}
+	if len(rep.Days) > 0 {
+		return fmt.Sprintf("repeat_days: %s", daysHint(rep.Days))
+	}
 	return fmt.Sprintf("repeat_every: %d, repeat_unit: %q", rep.Every, rep.Unit)
+}
+
+// daysHint renders a selection as the JSON-shaped literal an agent can copy,
+// quoted like every other value in this instruction.
+func daysHint(days []string) string {
+	parts := make([]string, 0, len(days))
+	for _, d := range days {
+		parts = append(parts, fmt.Sprintf("%q", d))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
@@ -90,10 +106,11 @@ type createTaskInput struct {
 	EstimatedMinutes *int   `json:"estimated_minutes"`
 	// The repeat is optional as a block: no keys means one-shot. Each key is
 	// individually optional too, since Normalize treats a missing key as zero.
-	RepeatEvery  *int   `json:"repeat_every,omitempty"`
-	RepeatUnit   string `json:"repeat_unit,omitempty"`
-	RepeatCustom *bool  `json:"repeat_custom,omitempty"`
-	RepeatRule   string `json:"repeat_rule,omitempty"`
+	RepeatEvery  *int     `json:"repeat_every,omitempty"`
+	RepeatUnit   string   `json:"repeat_unit,omitempty"`
+	RepeatDays   []string `json:"repeat_days,omitempty"`
+	RepeatCustom *bool    `json:"repeat_custom,omitempty"`
+	RepeatRule   string   `json:"repeat_rule,omitempty"`
 	// Required by store.Create, which rejects a task with no estimate and one with no
 	// parallelable flag — so it stays required in the schema despite being a pointer.
 	Parallelable *bool `json:"parallelable"`
@@ -114,17 +131,18 @@ type updateTaskInput struct {
 	ID string `json:"id"`
 	// Every field below is optional: nil means untouched. Name is a plain string
 	// because it can never be cleared, so "" is how "untouched" is spelled.
-	Name             string  `json:"name,omitempty"`
-	Description      *string `json:"description,omitempty"`
-	DueDate          *string `json:"due_date,omitempty"`
-	DueTime          *string `json:"due_time,omitempty"`
-	EstimatedMinutes *int    `json:"estimated_minutes,omitempty"`
-	RepeatEvery      *int    `json:"repeat_every,omitempty"`
-	RepeatUnit       *string `json:"repeat_unit,omitempty"`
-	RepeatCustom     *bool   `json:"repeat_custom,omitempty"`
-	RepeatRule       *string `json:"repeat_rule,omitempty"`
-	ExpectedRevision *int    `json:"expected_revision,omitempty"`
-	Parallelable     *bool   `json:"parallelable,omitempty"`
+	Name             string    `json:"name,omitempty"`
+	Description      *string   `json:"description,omitempty"`
+	DueDate          *string   `json:"due_date,omitempty"`
+	DueTime          *string   `json:"due_time,omitempty"`
+	EstimatedMinutes *int      `json:"estimated_minutes,omitempty"`
+	RepeatEvery      *int      `json:"repeat_every,omitempty"`
+	RepeatUnit       *string   `json:"repeat_unit,omitempty"`
+	RepeatDays       *[]string `json:"repeat_days,omitempty"`
+	RepeatCustom     *bool     `json:"repeat_custom,omitempty"`
+	RepeatRule       *string   `json:"repeat_rule,omitempty"`
+	ExpectedRevision *int      `json:"expected_revision,omitempty"`
+	Parallelable     *bool     `json:"parallelable,omitempty"`
 }
 
 type completeTaskInput struct {
@@ -157,6 +175,7 @@ func createTask(ctx context.Context, store *tasks.Store, in createTaskInput) (ma
 	rep := tasks.Repeat{
 		Every:  0,
 		Unit:   strings.TrimSpace(in.RepeatUnit),
+		Days:   in.RepeatDays,
 		Custom: in.RepeatCustom != nil && *in.RepeatCustom,
 		// Not trimmed here: Repeat.Normalize owns that, and it is the only place it needs
 		// to live now that both create paths go through it.
@@ -202,7 +221,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "task-manager", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_task",
-		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). The repeat is EITHER structured (repeat_every 1-28 with repeat_unit days|weeks|months|years) OR a custom condition (repeat_custom true with repeat_rule = the user's words verbatim) — never both, and all of them empty/0 = one-shot (never interpreted server-side)."},
+		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). The repeat is ONE of three mutually exclusive shapes — never combine them: structured interval (repeat_every 1-28 with repeat_unit days|weeks|months|years), structured selected days (repeat_days = an array of weekdays from mon,tue,wed,thu,fri,sat,sun, always WEEKLY, and due_date MUST be one of them), or a custom condition (repeat_custom true with repeat_rule = the user's words verbatim). All of them empty/0/[] = one-shot. Prefer the structured shapes: the server rolls those over itself; only a custom condition is yours to advance."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := createTask(ctx, store, in)
 			if err != nil {
@@ -232,7 +251,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_task",
-		Description: "Edit name/description/due_date/due_time/estimated_minutes/repeat/parallelable. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected). The repeat accepts the same four keys (repeat_every/repeat_unit/repeat_custom/repeat_rule) and is validated as a whole; OMIT ALL FOUR repeat keys to leave the recurrence alone; sending repeat_rule \"\" with no structured key clears the whole rule (one-shot). expected_revision: pass the revision the task showed when read; a mismatch means someone else wrote first and the edit is rejected, so re-read and retry. Works on open or done tasks."},
+		Description: "Edit name/description/due_date/due_time/estimated_minutes/repeat/parallelable. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected). The repeat accepts the same five keys (repeat_every/repeat_unit/repeat_days/repeat_custom/repeat_rule) and is validated as a whole; OMIT ALL FIVE repeat keys to leave the recurrence alone; sending repeat_rule \"\" with no structured key clears the whole rule (one-shot). Switching shapes means sending the new one and zeroing the old (e.g. moving to repeat_days: send repeat_every 0, repeat_unit \"\"). Repeat_days is an array of weekdays (mon..sun), always weekly, and due_date must be one of them. expected_revision: pass the revision the task showed when read; a mismatch means someone else wrote first and the edit is rejected, so re-read and retry. Works on open or done tasks."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			fields := map[string]any{}
 			// Plain strings can't tell "" from absent, so only name (which
@@ -258,6 +277,9 @@ func main() {
 			}
 			if in.RepeatUnit != nil {
 				fields["repeat_unit"] = strings.TrimSpace(*in.RepeatUnit)
+			}
+			if in.RepeatDays != nil {
+				fields["repeat_days"] = *in.RepeatDays
 			}
 			if in.RepeatCustom != nil {
 				fields["repeat_custom"] = *in.RepeatCustom
@@ -286,7 +308,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
-		Description: "Mark a task done (retained 3 days, then auto-deleted). Call ONLY when the work actually happened — never to clear something not done; if it did not happen, call skip_task instead. A STRUCTURED repeat (repeat_every + repeat_unit) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
+		Description: "Mark a task done (retained 3 days, then auto-deleted). Call ONLY when the work actually happened — never to clear something not done; if it did not happen, call skip_task instead. A STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, next, rollover, rolloverDetail, err := store.CompleteDetail(ctx, in.ID)
 			if err != nil {
@@ -310,6 +332,7 @@ func main() {
 				// Custom: only the caller can compute the next date.
 				out["repeat_every"] = rep.Every
 				out["repeat_unit"] = rep.Unit
+				out["repeat_days"] = rep.Days
 				out["repeat_custom"] = rep.Custom
 				out["repeat_rule"] = rep.Text
 				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required."
@@ -322,7 +345,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "skip_task",
-		Description: "Skip the current occurrence WITHOUT claiming the work was done (retained 3 days like a completion, then auto-deleted; `reopen_task` restores it). Call when the work did NOT happen: a STRUCTURED repeat (repeat_every + repeat_unit) rolls itself over exactly like complete_task and the next occurrence is returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task the same way as after a custom completion."},
+		Description: "Skip the current occurrence WITHOUT claiming the work was done (retained 3 days like a completion, then auto-deleted; `reopen_task` restores it). Call when the work did NOT happen: a STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over exactly like complete_task and the next occurrence is returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task the same way as after a custom completion."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in skipTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, in.ID, in.Reason)
 			if err != nil {
@@ -345,6 +368,7 @@ func main() {
 				// Custom: only the caller can compute the next date.
 				out["repeat_every"] = rep.Every
 				out["repeat_unit"] = rep.Unit
+				out["repeat_days"] = rep.Days
 				out["repeat_custom"] = rep.Custom
 				out["repeat_rule"] = rep.Text
 				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required."

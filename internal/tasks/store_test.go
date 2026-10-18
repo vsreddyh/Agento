@@ -10,6 +10,8 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"os"
+	"reflect"
+	"strings"
 )
 
 func testStore(t *testing.T) *Store {
@@ -35,6 +37,15 @@ func testStore(t *testing.T) *Store {
 
 func intP(n int) *int    { return &n }
 func boolP(b bool) *bool { return &b }
+
+// sameRepeat compares two recurrences by their canonical fields. Repeat holds a
+// slice as of #304 (the selected days), so `==` no longer compiles — and the
+// canonical form is the right comparison anyway: ["Mon","mon"] and ["mon"] are
+// the same recurrence, and Normalize makes that visible here instead of
+// depending on the order each side happened to build its slice in.
+func sameRepeat(a, b Repeat) bool {
+	return reflect.DeepEqual(a.Normalize(), b.Normalize())
+}
 
 // customRep is the free-text repeat mode: the user's words, verbatim.
 func customRep(text string) Repeat { return Repeat{Custom: true, Text: text} }
@@ -304,6 +315,86 @@ func TestSearchRegexCharsLiteral(t *testing.T) {
 	}
 }
 
+// The selected-days mode, end to end through the store: what gets stored, the
+// due-date rule, and the rollover that makes it worth having (#304). Every
+// assertion here is about the CONTRACT rather than about a date the test
+// hardcodes, because rollover catches up to today and a fixed expected date
+// would rot the moment this runs on a different day.
+func TestSelectedDaysCreateAndRollover(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	selected := []string{"mon", "wed", "fri"}
+	// 2026-09-30 is a Wednesday and one of the selected days.
+	doc, err := s.Create(ctx, "Gym", "leg day", "2026-09-30", "18:00", intP(60),
+		Repeat{Days: selected}, boolP(false))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got, _ := ParseRepeatDays(doc["repeat_days"]); !reflect.DeepEqual(got, selected) {
+		t.Fatalf("stored repeat_days = %#v, want %#v", doc["repeat_days"], selected)
+	}
+	// Every OTHER mode's keys are neutral on the doc, so the response cannot be
+	// read as an interval cadence as well.
+	if doc["repeat_every"] != 0 || doc["repeat_unit"] != "" || doc["repeat_custom"] != false {
+		t.Fatalf("a days task must not carry another mode's keys: %v", doc)
+	}
+
+	// The due date is the FIRST occurrence, so it has to be one of the days.
+	if _, err := s.Create(ctx, "Gym", "leg day", "2026-10-01", "18:00", intP(60),
+		Repeat{Days: selected}, boolP(false)); err == nil {
+		t.Fatal("a due date outside the selection must be rejected")
+	}
+	// And the same rule holds on an edit that only moves the date.
+	id := doc["id"].(string)
+	if _, err := s.Update(ctx, id, map[string]any{"due_date": "2026-10-01"}); err == nil {
+		t.Fatal("moving a days task's date off the selection must be rejected")
+	}
+	// A move that stays on a selected day is accepted.
+	moved, err := s.Update(ctx, id, map[string]any{"due_date": "2026-10-02"}) // Friday
+	if err != nil {
+		t.Fatalf("moving onto a selected day: %v", err)
+	}
+	if moved["due_date"] != "2026-10-02" {
+		t.Fatalf("due_date = %v, want 2026-10-02", moved["due_date"])
+	}
+
+	// Completing mints the next occurrence itself — the server owns this mode
+	// exactly as it owns an interval cadence.
+	_, next, reason, err := s.Complete(ctx, id)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if reason != RolloverCreated || next == nil {
+		t.Fatalf("rollover = %q, next = %v; a days repeat must roll itself over", reason, next)
+	}
+	nextDate, _ := next["due_date"].(string)
+	day, ok := WeekdayOf(nextDate)
+	if !ok {
+		t.Fatalf("successor due_date %q is not a date", nextDate)
+	}
+	if !containsStr(selected, day) {
+		t.Errorf("successor due_date %q is a %s, which is not in the selection %v", nextDate, day, selected)
+	}
+	if nextDate <= "2026-10-02" {
+		t.Errorf("successor due_date %q must be after the occurrence it came from", nextDate)
+	}
+	if next["due_time"] != "18:00" {
+		t.Errorf("the time must be carried verbatim, got %v", next["due_time"])
+	}
+	if got, _ := ParseRepeatDays(next["repeat_days"]); !reflect.DeepEqual(got, selected) {
+		t.Errorf("the successor's repeat_days = %#v, want %#v", next["repeat_days"], selected)
+	}
+}
+
+func containsStr(hay []string, needle string) bool {
+	for _, h := range hay {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
 func TestParallelableRoundTrip(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -365,6 +456,16 @@ func TestNextDueDate(t *testing.T) {
 		{"catch up from last year", Repeat{Every: 1, Unit: "days"}, "2025-09-01", "2026-09-29", today},
 		{"catch up skips a past step", Repeat{Every: 6, Unit: "months"}, "2026-01-15", "2027-01-15", today},
 		{"catch up keeps month ends clamped", Repeat{Every: 1, Unit: "months"}, "2026-01-31", "2026-10-28", today},
+		// Selected days (#304). 2026-09-28 is a Monday, 30 the Wednesday, 2 Oct
+		// the Friday — so the steps below cross the week boundary both ways.
+		{"days: next selected weekday", Repeat{Days: []string{"mon", "wed", "fri"}}, "2026-09-28", "2026-09-30", day(2026, 9, 28)},
+		{"days: skips the unselected days in between", Repeat{Days: []string{"mon", "wed", "fri"}}, "2026-09-30", "2026-10-02", day(2026, 9, 30)},
+		{"days: wraps around the weekend", Repeat{Days: []string{"fri", "mon"}}, "2026-10-02", "2026-10-05", day(2026, 10, 2)},
+		{"days: a single day steps a whole week", Repeat{Days: []string{"sun"}}, "2026-09-27", "2026-10-04", day(2026, 9, 27)},
+		// Same catch-up rule as an interval: the next occurrence is never left in
+		// the past. Mondays from 1 Sep 2026 (a Tuesday) reach 5 Oct, the first one
+		// on/after today.
+		{"days: catch up to the future", Repeat{Days: []string{"mon"}}, "2026-09-01", "2026-10-05", today},
 	}
 	for _, c := range cases {
 		got, ok := c.rep.NextDueDate(c.from, c.asOf)
@@ -411,6 +512,14 @@ func TestRepeatValidate(t *testing.T) {
 		{"custom with no words", Repeat{Custom: true}, false},
 		{"both modes at once", Repeat{Every: 2, Unit: "days", Custom: true, Text: "mostly"}, false},
 		{"cadence with stray text", Repeat{Every: 2, Unit: "days", Text: "sometimes"}, false},
+		// Selected days (#304).
+		{"selected days", Repeat{Days: []string{"mon", "wed", "fri"}}, true},
+		{"selected days are canonicalised, so mixed case is fine", Repeat{Days: []string{"Mon", "WED"}}, true},
+		{"a single selected day", Repeat{Days: []string{"sun"}}, true},
+		{"days plus an interval cadence", Repeat{Every: 2, Unit: "weeks", Days: []string{"mon"}}, false},
+		{"days plus custom words", Repeat{Days: []string{"mon"}, Text: "sort of"}, false},
+		{"days plus the custom flag", Repeat{Days: []string{"mon"}, Custom: true, Text: "x"}, false},
+		{"an unknown weekday", Repeat{Days: []string{"mon", "funday"}}, false},
 	}
 	for _, c := range cases {
 		err := c.rep.Validate()
@@ -433,10 +542,107 @@ func TestRepeatString(t *testing.T) {
 		"Every year":         {Every: 1, Unit: "years"},
 		"mon-fri only":       {Custom: true, Text: "mon-fri only"},
 		"end of every month": {Text: "end of every month"},
+		// Selected days render in calendar order whatever order they arrived
+		// in, so two identical selections never read differently on screen.
+		"Mon, Wed, Fri": {Days: []string{"mon", "wed", "fri"}},
+		"Mon, Fri":      {Days: []string{"fri", "mon"}},
+		"Sun":           {Days: []string{"SUN"}},
+		// An unrecognised token is KEPT so an error can name it, so the label
+		// has to survive one starting with a multi-byte rune.
+		"Ünknown": {Days: []string{"ünknown"}},
 	}
 	for want, rep := range cases {
 		if got := rep.String(); got != want {
 			t.Fatalf("String() = %q, want %q", got, want)
+		}
+	}
+}
+
+// The canonical spelling of a selection is what gets STORED, so it has to be
+// stable, order-independent and case-insensitive — and it must keep a value it
+// does not recognise, so Validate can name the typo instead of the write
+// silently becoming a one-shot task.
+func TestCanonicalRepeatDays(t *testing.T) {
+	cases := []struct {
+		in   []string
+		want []string
+	}{
+		{nil, nil},
+		{[]string{}, nil},
+		{[]string{"  ", ""}, nil},
+		{[]string{"mon"}, []string{"mon"}},
+		{[]string{"Fri", "mon"}, []string{"mon", "fri"}},
+		{[]string{"sun", "mon", "sun"}, []string{"mon", "sun"}},
+		{[]string{" tue "}, []string{"tue"}},
+		// Unknown tokens are KEPT and sorted after the real days, so a typo
+		// reaches Validate as the thing the caller actually sent.
+		{[]string{"funday", "mon"}, []string{"mon", "funday"}},
+		{[]string{"funday"}, []string{"funday"}},
+	}
+	for _, c := range cases {
+		if got := CanonicalRepeatDays(c.in); !reflect.DeepEqual(got, c.want) {
+			t.Fatalf("CanonicalRepeatDays(%v) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// The due date the user picked is the first occurrence, so it has to be one of
+// the selected days (#304, decided): a "Mon, Wed, Fri" task due on a Thursday
+// is a contradiction nobody would notice until the second occurrence landed on
+// a day they never chose.
+func TestCheckDueDate(t *testing.T) {
+	days := Repeat{Days: []string{"mon", "wed", "fri"}}
+	if err := days.CheckDueDate("2026-09-30"); err != nil { // a Wednesday
+		t.Fatalf("a selected day must be accepted: %v", err)
+	}
+	// Case and padding are Normalize's job, and it runs here too.
+	mixed := Repeat{Days: []string{"WED "}}
+	if err := mixed.CheckDueDate("2026-09-30"); err != nil {
+		t.Fatalf("a canonicalised selection must be accepted: %v", err)
+	}
+	err := days.CheckDueDate("2026-10-01") // Thursday
+	if err == nil {
+		t.Fatal("a due date outside the selection must be rejected")
+	}
+	if !strings.Contains(err.Error(), "thu") && !strings.Contains(err.Error(), "Thu") {
+		t.Errorf("the error should name the day it got, got %q", err)
+	}
+	// Every other mode is unaffected — including a custom condition, where the
+	// words decide the date and the server does not interpret them.
+	for _, rep := range []Repeat{{}, {Every: 1, Unit: "days"}, customRep("every 3rd friday")} {
+		if err := rep.CheckDueDate("2026-10-01"); err != nil {
+			t.Fatalf("%+v must not be date-checked: %v", rep, err)
+		}
+	}
+	// A date that is selected but unparseable still fails, rather than
+	// passing because the weekday could not be computed.
+	if err := days.CheckDueDate("Thursday"); err == nil {
+		t.Fatal("an unparseable due date must be rejected")
+	}
+}
+
+// WeekdayOf is the one place a date becomes a weekday name; the selected-days
+// rule, the app's chips and the error messages all read their answer from it.
+func TestWeekdayOf(t *testing.T) {
+	cases := map[string]string{
+		"2026-09-28":   "mon", // Monday
+		"2026-09-29":   "tue",
+		"2026-09-30":   "wed",
+		"2026-10-01":   "thu",
+		"2026-10-02":   "fri",
+		"2026-10-03":   "sat",
+		"2026-10-04":   "sun",
+		" 2026-10-04 ": "sun",
+	}
+	for date, want := range cases {
+		got, ok := WeekdayOf(date)
+		if !ok || got != want {
+			t.Fatalf("WeekdayOf(%q) = %q/%v, want %q", date, got, ok, want)
+		}
+	}
+	for _, bad := range []string{"", "tomorrow", "2026-13-45"} {
+		if _, ok := WeekdayOf(bad); ok {
+			t.Fatalf("WeekdayOf(%q) must not answer", bad)
 		}
 	}
 }
@@ -518,6 +724,70 @@ func TestMergeRepeat(t *testing.T) {
 			touched: true,
 			wantErr: true,
 		},
+		// Selected days (#304).
+		{
+			name:    "a selection is stored canonicalised",
+			cur:     bson.M{},
+			fields:  map[string]any{"repeat_days": []any{"Fri", "mon", "mon"}},
+			touched: true,
+			want:    Repeat{Days: []string{"mon", "fri"}},
+		},
+		{
+			name: "switching from an interval to selected days clears the interval",
+			cur:  bson.M{"repeat_every": 2, "repeat_unit": "weeks"},
+			fields: map[string]any{
+				"repeat_every": 0, "repeat_unit": "", "repeat_days": []any{"mon", "wed"},
+			},
+			touched: true,
+			want:    Repeat{Days: []string{"mon", "wed"}},
+		},
+		{
+			name: "switching from selected days to an interval clears the selection",
+			cur:  bson.M{"repeat_days": bson.A{"mon", "wed"}},
+			fields: map[string]any{
+				"repeat_every": 1, "repeat_unit": "months", "repeat_days": []any{},
+			},
+			touched: true,
+			want:    Repeat{Every: 1, Unit: "months"},
+		},
+		{
+			// The pre-4.6 clear path has to reach the days mode too: without
+			// days in that condition, clearing a days-only task did nothing at
+			// all and the "clear" silently kept the selection.
+			name:    "empty text from an old client clears a days-only rule",
+			cur:     bson.M{"repeat_days": bson.A{"mon", "wed"}, "repeat_custom": false},
+			fields:  map[string]any{"repeat_rule": ""},
+			touched: true,
+			want:    Repeat{},
+		},
+		{
+			name:    "a mistyped selection is rejected, not read as absent",
+			cur:     bson.M{},
+			fields:  map[string]any{"repeat_days": "mon,wed"},
+			touched: true,
+			wantErr: true,
+		},
+		{
+			name:    "a non-string entry is rejected",
+			cur:     bson.M{},
+			fields:  map[string]any{"repeat_days": []any{"mon", 2}},
+			touched: true,
+			wantErr: true,
+		},
+		{
+			name:    "an unknown weekday is rejected",
+			cur:     bson.M{},
+			fields:  map[string]any{"repeat_days": []any{"mon", "funday"}},
+			touched: true,
+			wantErr: true,
+		},
+		{
+			name:    "days and an interval together are rejected",
+			cur:     bson.M{},
+			fields:  map[string]any{"repeat_days": []any{"mon"}, "repeat_every": 2, "repeat_unit": "weeks"},
+			touched: true,
+			wantErr: true,
+		},
 	}
 	for _, c := range cases {
 		got, touched, err := mergeRepeat(c.cur, c.fields, str(c.fields))
@@ -536,7 +806,7 @@ func TestMergeRepeat(t *testing.T) {
 		if !c.touched {
 			continue
 		}
-		if got != c.want {
+		if !sameRepeat(got, c.want) {
 			t.Fatalf("%s: got %+v, want %+v", c.name, got, c.want)
 		}
 	}

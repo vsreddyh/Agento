@@ -383,6 +383,51 @@ func TestRolloverPlanClassifiesEachFailure(t *testing.T) {
 var fixtureNames = []string{
 	"One shot", "Custom", "Structured", "Legacy broken",
 	"Good", "Bad", "Custom done", "One shot done", "Chain",
+	"Days stopped", "Days live",
+}
+
+// A stopped SELECTED-DAYS repeat must be reported like any other (#304).
+//
+// The reconciler's query used to select on `repeat_every > 0` plus a unit —
+// the interval shape only — so a days task has none of it and was invisible to
+// the one job in the stack that notices a repeat has stopped. The task would
+// have stopped recurring in total silence, which is the exact failure #180
+// exists to report.
+func TestReconcileFindsAStoppedSelectedDaysRepeat(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	defer cleanupFixtures(t, s, ctx)
+
+	// Completed, structured (days), and with no successor minted — the shape a
+	// rollover that never landed leaves behind.
+	stoppedID := mustCreate(t, s, "Days stopped", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"repeat_days": bson.A{"mon", "wed", "fri"},
+		"completedAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+	})
+	// And the healthy control: the same selection, rolled over for real.
+	liveID := mustCreate(t, s, "Days live", map[string]any{
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"repeat_days": bson.A{"mon", "wed", "fri"},
+	})
+	if _, next, r, err := s.Complete(ctx, liveID); err != nil || r != RolloverCreated || next == nil {
+		t.Fatalf("setup: days rollover = %v %v %v", next, r, err)
+	}
+
+	res, err := s.ReconcileRollover(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRollover: %v", err)
+	}
+	seen := map[string]Rollover{}
+	for _, g := range res.Gaps {
+		seen[g.TaskID] = g.Why
+	}
+	if _, ok := seen[stoppedID]; !ok {
+		t.Errorf("a stopped selected-days repeat was NOT reported; gaps were %+v", res.Gaps)
+	}
+	if _, ok := seen[liveID]; ok {
+		t.Error("a days repeat that rolled over correctly must not be reported as a gap")
+	}
 }
 
 func mustCreate(t *testing.T, s *Store, name string, fields map[string]any) string {

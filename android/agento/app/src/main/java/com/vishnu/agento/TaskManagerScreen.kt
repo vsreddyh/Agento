@@ -397,6 +397,7 @@ internal fun TaskManagerScreen(
                 estimatedMinutes = t.estimatedMinutes,
                 repeatEvery = t.repeatEvery,
                 repeatUnit = t.repeatUnit,
+                repeatDays = t.repeatDays,
                 repeatCustom = t.repeatCustom,
                 repeatRule = t.repeatRule,
                 parallelable = t.parallelable,
@@ -468,6 +469,7 @@ internal fun TaskManagerScreen(
                                 estimatedMinutes = t.estimatedMinutes.toString(),
                                 repeatEvery = if (t.repeatEvery > 0) t.repeatEvery.toString() else "",
                                 repeatUnit = t.repeatUnit.ifEmpty { "days" },
+                                repeatDays = t.repeatDays,
                                 repeatCustom = t.repeatCustom,
                                 repeatRule = t.repeatRule,
                                 parallelable = t.parallelable,
@@ -859,10 +861,11 @@ internal fun TaskManagerScreen(
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
-                            repeatEvery = rep?.first ?: 0,
-                            repeatUnit = rep?.second.orEmpty(),
-                            repeatCustom = rep?.third?.isNotEmpty() == true,
-                            repeatRule = rep?.third.orEmpty(),
+                            repeatEvery = rep?.every ?: 0,
+                            repeatUnit = rep?.unit.orEmpty(),
+                            repeatDays = rep?.days.orEmpty(),
+                            repeatCustom = rep?.custom == true,
+                            repeatRule = rep?.text.orEmpty(),
                             parallelable = next.parallelable,
                         ),
                     ) + prev
@@ -876,10 +879,11 @@ internal fun TaskManagerScreen(
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
-                            repeatEvery = rep?.first ?: 0,
-                            repeatUnit = rep?.second.orEmpty(),
-                            repeatCustom = rep?.third?.isNotEmpty() == true,
-                            repeatRule = rep?.third.orEmpty(),
+                            repeatEvery = rep?.every ?: 0,
+                            repeatUnit = rep?.unit.orEmpty(),
+                            repeatDays = rep?.days.orEmpty(),
+                            repeatCustom = rep?.custom == true,
+                            repeatRule = rep?.text.orEmpty(),
                             parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { created ->
@@ -913,10 +917,11 @@ internal fun TaskManagerScreen(
                     )
                     if (repChanged && nowRep != null) {
                         optimistic = optimistic.copy(
-                            repeatEvery = nowRep.first,
-                            repeatUnit = nowRep.second,
-                            repeatCustom = nowRep.third.isNotEmpty(),
-                            repeatRule = nowRep.third,
+                            repeatEvery = nowRep.every,
+                            repeatUnit = nowRep.unit,
+                            repeatDays = nowRep.days,
+                            repeatCustom = nowRep.custom,
+                            repeatRule = nowRep.text,
                         )
                     }
                     tasks = prev.map { if (it.id == next.id) optimistic else it }
@@ -930,14 +935,11 @@ internal fun TaskManagerScreen(
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
                             estimatedMinutes = mins,
-                            repeatEvery = if (repChanged) nowRep?.first else null,
-                            repeatUnit = if (repChanged) nowRep?.second else null,
-                            repeatCustom = if (repChanged) {
-                                nowRep?.third?.isNotEmpty() == true
-                            } else {
-                                null
-                            },
-                            repeatRule = if (repChanged) nowRep?.third else null,
+                            repeatEvery = if (repChanged) nowRep?.every else null,
+                            repeatUnit = if (repChanged) nowRep?.unit else null,
+                            repeatDays = if (repChanged) nowRep?.days.orEmpty() else null,
+                            repeatCustom = if (repChanged) nowRep?.custom else null,
+                            repeatRule = if (repChanged) nowRep?.text else null,
                             parallelable = next.parallelable,
                             // The revision the dialog read, not a fresh
                             // lookup: the task may have scrolled out of the
@@ -1344,6 +1346,7 @@ internal fun ServerTaskDialog(
     var minutes by remember(initial) { mutableStateOf(initial.estimatedMinutes) }
     var repeatEvery by remember(initial) { mutableStateOf(initial.repeatEvery) }
     var repeatUnit by remember(initial) { mutableStateOf(initial.repeatUnit) }
+    var repeatDays by remember(initial) { mutableStateOf(initial.repeatDays) }
     var repeatCustom by remember(initial) { mutableStateOf(initial.repeatCustom) }
     var repeatRule by remember(initial) { mutableStateOf(initial.repeatRule) }
     var parallelable by remember(initial) { mutableStateOf(initial.parallelable) }
@@ -1355,15 +1358,23 @@ internal fun ServerTaskDialog(
     val repeat = ServerTaskDraft(
         repeatEvery = repeatEvery,
         repeatUnit = repeatUnit,
+        repeatDays = repeatDays,
         repeatCustom = repeatCustom,
         repeatRule = repeatRule,
     ).repeatOrNull()
+    // The selected-days rule (#304): the due date above is the FIRST
+    // occurrence, so it has to be one of the days. Gated here rather than
+    // discovered on save — the server rejects the contradiction, and a form
+    // that enabled Save anyway would fail after the dialog had already
+    // dismissed, leaving the user with nothing to fix.
+    val daysOnDueDate = dueDateIsSelectedDay(dueDate, repeatDays)
     val formValid = name.trim().isNotEmpty() &&
         description.trim().isNotEmpty() &&
         dueDate.trim().isNotEmpty() &&
         dueTime.trim().isNotEmpty() &&
         (minutes.trim().toIntOrNull()?.let { it >= 0 } == true) &&
-        repeat != null
+        repeat != null &&
+        daysOnDueDate
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1475,10 +1486,11 @@ internal fun ServerTaskDialog(
                         )
                     }
                 }
-                // Recurrence: a real cadence (count + unit) or the user's
-                // own words, never both — the server rejects the mix. A
-                // blank count is the one-shot case, so the unit chips only
-                // light up once there is a count to apply them to.
+                // Recurrence: a real cadence (count + unit, or a set of days) or
+                // the user's own words, never a mix — the server rejects the
+                // combination. A blank count and no selected days is the
+                // one-shot case, so the unit chips only light up once there is
+                // a count to apply them to.
                 FormLabel("Repeats")
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1492,7 +1504,12 @@ internal fun ServerTaskDialog(
                         label = { Text("Every") },
                         placeholder = { Text("Never") },
                         singleLine = true,
-                        enabled = !repeatCustom,
+                        // Disabled while the selection is the active mode, the
+                        // same way it is disabled for a custom condition: two
+                        // cadences cannot both be the answer, and a field that
+                        // accepted input the server would ignore is worse than
+                        // one that plainly does not.
+                        enabled = !repeatCustom && repeatDays.isEmpty(),
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Number),
                         modifier = Modifier.width(112.dp),
@@ -1503,11 +1520,11 @@ internal fun ServerTaskDialog(
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        val on = !repeatCustom && repeatEvery.isNotEmpty()
+                        val on = !repeatCustom && repeatDays.isEmpty() && repeatEvery.isNotEmpty()
                         for (unit in REPEAT_UNITS) {
                             FilterChip(
                                 selected = on && repeatUnit == unit,
-                                enabled = !repeatCustom,
+                                enabled = !repeatCustom && repeatDays.isEmpty(),
                                 onClick = {
                                     repeatUnit = unit
                                     // Picking a unit with no count means
@@ -1519,13 +1536,53 @@ internal fun ServerTaskDialog(
                         }
                     }
                 }
+                // "Select days" (#304): a peer of the count above, not a variant
+                // of the custom condition — the server rolls this cadence over
+                // itself, exactly like "every N days". Picking a day clears the
+                // count, because a task carrying both is the one thing the
+                // server refuses; tap it again to take it back out.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    for (day in REPEAT_DAYS) {
+                        FilterChip(
+                            selected = repeatDays.contains(day),
+                            enabled = !repeatCustom,
+                            onClick = {
+                                repeatDays = if (repeatDays.contains(day)) {
+                                    repeatDays - day
+                                } else {
+                                    // Selecting a day also leaves the custom
+                                    // mode: the chips and the custom words are
+                                    // two answers to one question, and leaving
+                                    // the checkbox ticked would save the words
+                                    // and silently drop the days.
+                                    repeatCustom = false
+                                    repeatEvery = ""
+                                    canonicalRepeatDays(repeatDays + day)
+                                }
+                            },
+                            label = { Text(dayLabel(day)) },
+                        )
+                    }
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .toggleable(
                             value = repeatCustom,
                             role = Role.Checkbox,
-                            onValueChange = { repeatCustom = it },
+                            onValueChange = {
+                                repeatCustom = it
+                                // Entering the custom mode drops the selected
+                                // days: the chips are disabled from here on, so
+                                // leaving them lit would show a selection the
+                                // saved task does not have.
+                                if (it) repeatDays = emptyList()
+                            },
                         ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1554,6 +1611,13 @@ internal fun ServerTaskDialog(
                     // say what comes after it. Worth saying: the two sit far
                     // apart in the form and read like they compete.
                     HintLine("The due date you picked is the first one — this is the rule for the ones after it.")
+                } else if (repeatDays.isNotEmpty() && !daysOnDueDate) {
+                    // The one state the chips cannot explain, and the reason
+                    // Save is disabled: the date is the first occurrence, so it
+                    // has to be one of the days picked.
+                    HintLine("The due date must be one of the selected days.")
+                } else if (repeatDays.isNotEmpty()) {
+                    HintLine("Repeats weekly on the selected days.")
                 } else if (!repeatCustom && repeatEvery.trim().toIntOrNull()
                     ?.let { it < REPEAT_EVERY_MIN || it > REPEAT_EVERY_MAX } == true
                 ) {
@@ -1599,10 +1663,16 @@ internal fun ServerTaskDialog(
                             dueDate = dueDate.trim(),
                             dueTime = dueTime.trim(),
                             estimatedMinutes = minutes.trim(),
-                            repeatEvery = repeat!!.first.toString(),
-                            repeatUnit = repeat!!.second,
-                            repeatCustom = repeat!!.third.isNotEmpty(),
-                            repeatRule = repeat!!.third,
+                            // Written from the PARSED recurrence, not the raw
+                            // widgets: the update path re-parses this draft and
+                            // compares it with what the dialog opened on, so a
+                            // "0" left in a one-shot's count would re-parse as an
+                            // out-of-range number and read as a change.
+                            repeatEvery = if (repeat!!.every > 0) repeat!!.every.toString() else "",
+                            repeatUnit = repeat!!.unit,
+                            repeatDays = repeat!!.days,
+                            repeatCustom = repeat!!.custom,
+                            repeatRule = repeat!!.text,
                             parallelable = parallelable,
                         )
                     )

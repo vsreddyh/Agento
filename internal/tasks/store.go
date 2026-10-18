@@ -7,9 +7,9 @@
 //
 // Completed tasks are retained 3 days via expiresAt TTL
 // (= completedAt + RetentionDays); open tasks carry no expiresAt and never
-// expire. A Repeat is never interpreted here — advancing to the next
-// occurrence is purely the agent's job (see pi/skills/task-manager/SKILL.md);
-// complete_task only echoes the rule back so the caller can't miss it.
+// expire. Complete rolls a STRUCTURED repeat (interval or selected days) over
+// itself and echoes the rule back so the caller can't miss it; a custom
+// condition is the caller's to advance (see pi/skills/task-manager/SKILL.md).
 package tasks
 
 import (
@@ -204,7 +204,13 @@ func isSkipped(doc map[string]any) bool {
 // side reads as a version disagreement instead of silent wrong data. That is the
 // mechanical form of the review that caught the 4.7.0 complete-response break:
 // it must not depend on a reviewer happening to look.
-const TaskContractVersion = 1
+//
+// 2 — the `repeat_days` selection (#304). It is a NEW field rather than a
+// renamed one, and that is not a smaller change: an app that predates it reads
+// every selected-days task as a one-shot, with no repeat shown and nothing
+// warning — precisely the 4.6.0 silent case. The version makes the two sides
+// disagree out loud instead.
+const TaskContractVersion = 2
 
 func toDoc(doc bson.M) map[string]any {
 	out := map[string]any{}
@@ -294,6 +300,13 @@ func toDoc(doc bson.M) map[string]any {
 	}
 	if _, ok := out["repeat_unit"]; !ok {
 		out["repeat_unit"] = ""
+	}
+	// The selected-days selection backfills as an EMPTY ARRAY, not nil: the
+	// app reads this key as a list, and null would make every pre-#304 doc a
+	// special case in a reader that already handles []. Absent and [] mean the
+	// same thing — this mode is not in play — and speak it the same way.
+	if _, ok := out["repeat_days"]; !ok {
+		out["repeat_days"] = bson.A{}
 	}
 	if _, ok := out["repeat_custom"]; !ok {
 		rule, _ := out["repeat_rule"].(string)
@@ -402,6 +415,12 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 	}
 	rep = rep.Normalize()
 	if err := rep.Validate(); err != nil {
+		return nil, false, err
+	}
+	// The selected-days rule needs BOTH fields, so it is checked where both are
+	// known (see Repeat.CheckDueDate). Before the insert, so a contradiction is
+	// rejected at the door rather than discovered on the second occurrence.
+	if err := rep.CheckDueDate(dueDate); err != nil {
 		return nil, false, err
 	}
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
@@ -615,8 +634,9 @@ func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 // Update edits mutable fields of any task (open or done). Supplied values
 // must satisfy the same mandatory rules as Create (empty description /
 // due fields are rejected, not cleared); the recurrence stays clearable
-// ("" / 0 = one-shot). Absent keys are untouched; due fields and the
-// recurrence's four keys are validated together.
+// ("" / 0 / [] = one-shot). Absent keys are untouched; due fields and the
+// recurrence's keys are validated together, including the selected-days rule
+// that the due date is one of the selected days.
 //
 // expected_revision is the optimistic-concurrency guard (#184): when the
 // caller sends the revision it read, a mismatch means someone else wrote
@@ -718,11 +738,21 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		set["estimated_minutes"] = n
 	}
 	// Recurrence: merge whatever was supplied onto the stored one and
-	// validate the result, so the four keys can never end up describing
-	// two different rules. Any of the four present means "edit the
+	// validate the result, so the keys can never end up describing
+	// two different rules. Any of them present means "edit the
 	// recurrence"; none of them means leave it alone.
 	rep, repTouched, err := mergeRepeat(cur, fields, strField)
 	if err != nil {
+		return nil, err
+	}
+	if !repTouched {
+		// The stored rule still has to hold against the (possibly edited) due
+		// date: the selected-days rule is a property of the TASK, so moving a
+		// "Mon, Wed, Fri" task's date to a Thursday is the same contradiction
+		// as creating one that way, and it must be rejected here too.
+		rep = repeatFromDoc(cur)
+	}
+	if err := rep.CheckDueDate(dueDate); err != nil {
 		return nil, err
 	}
 	if repTouched {
@@ -787,7 +817,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 
 // mergeRepeat folds the supplied recurrence fields onto the task's stored
 // recurrence and validates the result. touched is false when the caller
-// sent none of the four keys, so an unrelated edit leaves the rule alone.
+// sent none of the keys, so an unrelated edit leaves the rule alone.
 //
 // One compatibility rule lives here: a client that sends repeat_rule ""
 // with no structured keys is asking to clear the rule (the only way a
@@ -802,8 +832,8 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 		}
 		return false
 	}
-	structuredSent := present("repeat_every", "repeat_unit", "repeat_custom")
-	if !present("repeat_rule", "repeat_every", "repeat_unit", "repeat_custom") {
+	structuredSent := present("repeat_every", "repeat_unit", "repeat_custom", "repeat_days")
+	if !present("repeat_rule", "repeat_every", "repeat_unit", "repeat_custom", "repeat_days") {
 		return Repeat{}, false, nil
 	}
 	rep := repeatFromDoc(cur)
@@ -823,6 +853,16 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 	if str, ok := strField("repeat_unit"); ok {
 		rep.Unit = strings.TrimSpace(str)
 	}
+	// Present-but-unreadable is rejected, not treated as absent: a
+	// `repeat_days: "mon,wed"` would otherwise silently clear the selection
+	// (or leave the stored one) while the caller believed it had set days.
+	if v, ok := fields["repeat_days"]; ok && v != nil {
+		days, ok := ParseRepeatDays(v)
+		if !ok {
+			return rep, true, fail("repeat_days must be an array of weekday strings, e.g. [\"mon\",\"wed\"]")
+		}
+		rep.Days = days
+	}
 	if v, ok := fields["repeat_custom"]; ok && v != nil {
 		b, ok := mongostore.ToBool(v)
 		if !ok {
@@ -833,8 +873,12 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 	if str, ok := strField("repeat_rule"); ok {
 		rep.Text = strings.TrimSpace(str)
 	}
-	// "No text, no structured keys" from an older client = clear it all.
-	if rep.Text == "" && !structuredSent && (rep.Every != 0 || rep.Unit != "" || rep.Custom) {
+	// "No text, no structured keys" from an older client = clear it all. The
+	// selected days count as a cadence here too: without them in this
+	// condition, a pre-4.6 client clearing a days-only task would leave the
+	// selection in place and the "clear" would silently do nothing.
+	if rep.Text == "" && !structuredSent &&
+		(rep.Every != 0 || rep.Unit != "" || rep.Custom || len(rep.Days) > 0) {
 		rep = Repeat{}
 	}
 	rep = rep.Normalize()
