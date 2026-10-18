@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.5.0]
+- **Task reminders speak: per-kind voice + Speak-as field** (#306). Each of
+  the 4 reminder kinds now speaks its own line — "In 5 minutes you need to
+  start …", "You need to start …", "Time to … is up", "… has been pending
+  for y hr x min" — through one queued voice, so simultaneous alarms speak
+  in order instead of cutting each other off. DND/silent stays silent
+  (visual notification only). The editor gains an optional **Speak as
+  (voice)** field — a verb phrase like "pay the power bill" for tasks whose
+  list name would sound wrong out loud; blank falls back to the name. The
+  task contract is now `3`, so an older server or install warns instead of
+  silently dropping the phrase.
+
 ## [5.4.0]
 - **Repeats: pick the days of the week** (#304). The task editor gains a
   **Select days** row — Mon…Sun chips, always weekly — as a third shape
