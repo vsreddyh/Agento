@@ -16,6 +16,7 @@ import java.util.UUID
  * (visual notification only).
  */
 object ReminderTts {
+    private const val MAX_QUEUED = 10
     private val lock = Any()
     private val queue = ArrayDeque<Pair<String, String>>()
     private var engine: TextToSpeech? = null
@@ -25,9 +26,15 @@ object ReminderTts {
 
     internal fun speak(appCtx: Context, kind: ReminderKind, task: ServerTask, overdueElapsed: Long? = null) {
         if (isSilent(appCtx)) return
+        // Quotes delimit the name in text but some engines verbalize "quote",
+        // so they are stripped only on the speech path (reminderSpeech keeps them).
         val text = ChatTts.cleanForSpeech(reminderSpeech(kind, task.name, task.speakName, overdueElapsed))
+            .replace("\"", "")
         val id = "${kind.key}-${UUID.randomUUID()}"
         synchronized(lock) {
+            // Bounded: an OEM that never fires the init callback would
+            // otherwise grow this forever (ready stays false, nothing drains).
+            while (queue.size >= MAX_QUEUED) queue.removeFirst()
             queue.addLast(id to text)
         }
         ensureEngine(appCtx.applicationContext)
@@ -107,7 +114,14 @@ object ReminderTts {
                 if (next != null) speaking = true
             }
             if (next == null) return
-            val rc = engine?.speak(next.second, TextToSpeech.QUEUE_ADD, null, next.first)
+            val eng = engine
+            if (eng == null) {
+                // Unreachable today (engine is nulled only with ready=false),
+                // but a null engine with speaking=true would wedge the queue.
+                synchronized(lock) { speaking = false }
+                return
+            }
+            val rc = eng.speak(next.second, TextToSpeech.QUEUE_ADD, null, next.first)
             if (rc != TextToSpeech.ERROR) return
             // A rejected chunk never fires onDone — clear speaking and take
             // the next one in this loop, not via recursion: a broken engine

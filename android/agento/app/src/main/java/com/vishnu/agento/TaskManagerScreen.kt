@@ -1399,7 +1399,10 @@ internal fun ServerTaskDialog(
                 )
                 OutlinedTextField(
                     value = speakName,
-                    onValueChange = { speakName = it.take(SPEAK_NAME_MAX_BYTES) },
+                    // Bytes, not chars: the builder and the server cap at
+                    // SPEAK_NAME_MAX_BYTES bytes, so the field caps the same
+                    // way — otherwise a multibyte phrase would shrink on save.
+                    onValueChange = { speakName = truncateUtf8Bytes(it, SPEAK_NAME_MAX_BYTES) },
                     label = { Text("Speak as (voice)") },
                     placeholder = { Text("e.g. pay the power bill") },
                     singleLine = true,
