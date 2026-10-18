@@ -19,22 +19,42 @@ object ReminderTts {
     private const val MAX_QUEUED = 10
     private val lock = Any()
     private val queue = ArrayDeque<Pair<String, String>>()
-    private var engine: TextToSpeech? = null
+    @Volatile private var engine: TextToSpeech? = null
     private var ready = false
     private var inited = false
     private var speaking = false
+
+    private val progressListener = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String) = Unit
+        override fun onDone(utteranceId: String) {
+            synchronized(lock) { speaking = false }
+            pump()
+        }
+        @Deprecated("Deprecated in Java")
+        override fun onError(utteranceId: String) {
+            synchronized(lock) { speaking = false }
+            pump()
+        }
+        override fun onError(utteranceId: String, errorCode: Int) {
+            synchronized(lock) { speaking = false }
+            pump()
+        }
+    }
 
     internal fun speak(appCtx: Context, kind: ReminderKind, task: ServerTask, overdueElapsed: Long? = null) {
         if (isSilent(appCtx)) return
         // Quotes delimit the name in text but some engines verbalize "quote",
         // so they are stripped only on the speech path (reminderSpeech keeps them).
         val text = ChatTts.cleanForSpeech(reminderSpeech(kind, task.name, task.speakName, overdueElapsed))
-            .replace("\"", "")
+            .replace("\"", "").replace(Regex("[“”]"), "")
         val id = "${kind.key}-${UUID.randomUUID()}"
         synchronized(lock) {
             // Bounded: an OEM that never fires the init callback would
             // otherwise grow this forever (ready stays false, nothing drains).
-            while (queue.size >= MAX_QUEUED) queue.removeFirst()
+            while (queue.size >= MAX_QUEUED) {
+                val dropped = queue.removeFirst()
+                Log.w("ReminderTts", "queue full, dropping oldest speech ${dropped.first}")
+            }
             queue.addLast(id to text)
         }
         ensureEngine(appCtx.applicationContext)
@@ -55,54 +75,46 @@ object ReminderTts {
             if (inited) return
             inited = true
         }
-        engine = TextToSpeech(appCtx) { status ->
-            synchronized(lock) { ready = status == TextToSpeech.SUCCESS }
-            if (status == TextToSpeech.SUCCESS) {
-                val tts = engine
-                if (tts != null) {
-                    // Prefer the device default, fall back to US English: the
-                    // first available language wins, not the last one tried.
-                    val candidates = listOf(Locale.getDefault(), Locale.US)
-                    val picked = candidates.firstOrNull { loc ->
-                        runCatching {
-                            val r = tts.isLanguageAvailable(loc)
-                            r == TextToSpeech.LANG_AVAILABLE ||
-                                r == TextToSpeech.LANG_COUNTRY_AVAILABLE ||
-                                r == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE
-                        }.getOrDefault(false)
-                    }
-                    if (picked != null) tts.language = picked
+        // Listener attached before the init callback can pump: a fast callback
+        // speaking before setOnUtteranceProgressListener would leave `speaking`
+        // true forever (no onDone ever fires). The callback itself only reads
+        // the volatile engine + synchronized state.
+        val tts = TextToSpeech(appCtx, ::onEngineInit)
+        tts.setOnUtteranceProgressListener(progressListener)
+        engine = tts
+    }
+
+    private fun onEngineInit(status: Int) {
+        synchronized(lock) { ready = status == TextToSpeech.SUCCESS }
+        if (status == TextToSpeech.SUCCESS) {
+            val tts = engine
+            if (tts != null) {
+                // Prefer the device default, fall back to US English: the
+                // first available language wins, not the last one tried.
+                val candidates = listOf(Locale.getDefault(), Locale.US)
+                val picked = candidates.firstOrNull { loc ->
+                    runCatching {
+                        val r = tts.isLanguageAvailable(loc)
+                        r == TextToSpeech.LANG_AVAILABLE ||
+                            r == TextToSpeech.LANG_COUNTRY_AVAILABLE ||
+                            r == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE
+                    }.getOrDefault(false)
                 }
-                pump()
-            } else {
-                val dead = engine
-                synchronized(lock) {
-                    queue.clear()
-                    // Retry, don't seal: leaving inited=true with ready=false
-                    // would queue-but-never-speak forever after one failure.
-                    inited = false
-                    engine = null
-                }
-                runCatching { dead?.shutdown() }
-                Log.w("ReminderTts", "engine init failed, dropping queued speech; will retry")
+                if (picked != null) tts.language = picked
             }
+            pump()
+        } else {
+            val dead = engine
+            synchronized(lock) {
+                queue.clear()
+                // Retry, don't seal: leaving inited=true with ready=false
+                // would queue-but-never-speak forever after one failure.
+                inited = false
+                engine = null
+            }
+            runCatching { dead?.shutdown() }
+            Log.w("ReminderTts", "engine init failed, dropping queued speech; will retry")
         }
-        engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String) = Unit
-            override fun onDone(utteranceId: String) {
-                synchronized(lock) { speaking = false }
-                pump()
-            }
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String) {
-                synchronized(lock) { speaking = false }
-                pump()
-            }
-            override fun onError(utteranceId: String, errorCode: Int) {
-                synchronized(lock) { speaking = false }
-                pump()
-            }
-        })
     }
 
     private fun pump() {
