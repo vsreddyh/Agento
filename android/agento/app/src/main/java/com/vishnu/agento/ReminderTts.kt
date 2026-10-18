@@ -35,7 +35,8 @@ object ReminderTts {
     private var generation = 0
     /** Watchdog generation: stale delayed wakeups no-op instead of freeing a live utterance. */
     private var watchdogGen = 0
-    private val mainHandler = Handler(Looper.getMainLooper())
+    // Lazy: object load must not require a main looper (unit tests have none).
+    private val mainHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
 
     private fun progressListener(gen: Int) = object : UtteranceProgressListener() {
         override fun onStart(utteranceId: String) = Unit
@@ -186,16 +187,18 @@ object ReminderTts {
                 if (n != null) {
                     speaking = true
                     speakStartedAt = SystemClock.uptimeMillis()
-                    // The watchdog is a real timer, not just a check: without
-                    // further alarms nothing re-enters pump(), so a delayed
-                    // wakeup performs the timeout. Stale generations no-op.
                     watchdogGen += 1
-                    val wgen = watchdogGen
-                    mainHandler.postDelayed({ watchdogFired(wgen) }, SPEAK_TIMEOUT_MS)
                 }
-                eng to n
+                eng to (n to watchdogGen)
             }
-            val (eng, next) = step
+            val (eng, nw) = step
+            val next = nw.first
+            // Posted outside the lock: postDelayed only enqueues, and the
+            // critical section should end before it.
+            if (next != null) {
+                val wgen = nw.second
+                mainHandler.postDelayed({ watchdogFired(wgen) }, SPEAK_TIMEOUT_MS)
+            }
             if (next == null) return
             // A throw (broken OEM binder state) counts like ERROR: clear and
             // advance. Uncaught here it would escape from onDone/onError's thread.
