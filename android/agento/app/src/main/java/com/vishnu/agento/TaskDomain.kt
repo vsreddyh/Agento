@@ -191,6 +191,8 @@ internal fun List<ServerTask>.sortedByMode(mode: ServerTaskSort): List<ServerTas
 internal data class ServerTaskDraft(
     val id: String = "",
     val name: String = "",
+    /** Optional voice phrase for TTS reminders (#306); blank falls back to [name]. */
+    val speakName: String = "",
     val description: String = "",
     val dueDate: String = "",
     val dueTime: String = "",
@@ -210,6 +212,7 @@ internal data class ServerTaskDraft(
 internal fun ServerTask.toDraft() = ServerTaskDraft(
     id = id,
     name = name,
+    speakName = speakName,
     description = description,
     dueDate = dueDate,
     dueTime = dueTime,
@@ -330,7 +333,7 @@ internal fun ServerTaskDraft.repeatOrNull(): RepeatDraft? {
  * a selected-days task as a one-shot is the same silent wrong data this number
  * exists to make loud.
  */
-internal const val TASK_CONTRACT_VERSION = 2
+internal const val TASK_CONTRACT_VERSION = 3
 
 /** Prefs key for the highest task contract this install has spoken (#185). */
 internal const val CONTRACT_VERSION_SEEN_KEY = "contract_version_seen"
@@ -347,6 +350,7 @@ internal const val CONTRACT_VERSION_SEEN_KEY = "contract_version_seen"
  */
 internal val TASK_CREATE_KEYS = listOf(
     "name",
+    "speak_name",
     "description",
     "due_date",
     "due_time",
@@ -427,6 +431,7 @@ internal fun maxContractVersion(tasks: List<ServerTask>): Int =
  */
 internal data class TaskContractSent(
     val name: String? = null,
+    val speakName: String? = null,
     val description: String? = null,
     val dueDate: String? = null,
     val dueTime: String? = null,
@@ -495,6 +500,7 @@ internal fun contractMismatches(
     // which is what a reader needs to find it in the response.
     if (got.contractVersion != TASK_CONTRACT_VERSION) out += "contract_version"
     if (sent.name != null && sent.name.trim() != got.name.trim()) out += "name"
+    if (sent.speakName != null && sent.speakName.trim() != got.speakName.trim()) out += "speak_name"
     if (sent.description != null &&
         sent.description.trim() != got.description.trim()
     ) out += "description"

@@ -26,6 +26,8 @@ private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 data class ServerTask(
     val id: String,
     val name: String = "",
+    /** Optional verb phrase for voice reminders (#306); blank falls back to [name]. */
+    val speakName: String = "",
     val description: String = "",
     val dueDate: String = "",
     val dueTime: String = "",
@@ -213,6 +215,7 @@ class TasksApi(context: Context) {
          */
         internal fun buildTaskContractSent(
             name: String? = null,
+            speakName: String? = null,
             description: String? = null,
             dueDate: String? = null,
             dueTime: String? = null,
@@ -225,6 +228,7 @@ class TasksApi(context: Context) {
             parallelable: Boolean? = null,
         ): TaskContractSent = TaskContractSent(
             name = name?.trim(),
+            speakName = speakName?.trim(),
             description = description?.trim(),
             dueDate = dueDate?.trim(),
             dueTime = dueTime?.trim(),
@@ -318,6 +322,7 @@ class TasksApi(context: Context) {
         return ServerTask(
             id = id,
             name = name,
+            speakName = optStr(o, "speak_name"),
             description = optStr(o, "description"),
             dueDate = optStr(o, "due_date"),
             dueTime = optStr(o, "due_time"),
@@ -476,6 +481,9 @@ class TasksApi(context: Context) {
         repeatCustom: Boolean = false,
         repeatRule: String = "",
         parallelable: Boolean = false,
+        // Optional voice phrase for TTS reminders (#306); blank = fallback to name.
+        // Deliberately OUT of the contract assert: old servers ignore it.
+        speakName: String = "",
     ): Result<ServerTask> = withContext(Dispatchers.IO) {
         if (name.trim().isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Name is required"))
@@ -498,6 +506,7 @@ class TasksApi(context: Context) {
         // cleaning up before they agree.
         val sent = buildTaskContractSent(
             name = name,
+            speakName = speakName,
             description = description,
             dueDate = dueDate,
             dueTime = dueTime,
@@ -519,7 +528,7 @@ class TasksApi(context: Context) {
         // of failing. A `require` here would throw out of this suspend, and callers use
         // `.fold(onFailure = ::fail)` with no try/catch — so the failure would escape the
         // coroutine and show no toast at all.
-        if (sent.name == null || sent.description == null || sent.dueDate == null ||
+        if (sent.name == null || sent.speakName == null || sent.description == null || sent.dueDate == null ||
             sent.dueTime == null || sent.estimatedMinutes == null || sent.parallelable == null ||
             sent.repeatEvery == null || sent.repeatUnit == null || sent.repeatDays == null ||
             sent.repeatCustom == null || sent.repeatRule == null
@@ -538,6 +547,7 @@ class TasksApi(context: Context) {
         // getValue) would escape the coroutine and show nothing at all.
         val values: Map<String, Any?> = mapOf(
             "name" to sent.name,
+            "speak_name" to sent.speakName,
             "description" to sent.description,
             "due_date" to sent.dueDate,
             "due_time" to sent.dueTime,
@@ -593,6 +603,7 @@ class TasksApi(context: Context) {
     suspend fun update(
         id: String,
         name: String? = null,
+        speakName: String? = null,
         description: String? = null,
         dueDate: String? = null,
         dueTime: String? = null,
@@ -621,6 +632,7 @@ class TasksApi(context: Context) {
         // than sent as a JSON null — which the server would read as an explicit clear.
         val sent = buildTaskContractSent(
             name = name,
+            speakName = speakName,
             description = description,
             dueDate = dueDate,
             dueTime = dueTime,
@@ -634,6 +646,7 @@ class TasksApi(context: Context) {
         )
         val body = JSONObject()
         sent.name?.let { body.put("name", it) }
+        sent.speakName?.let { body.put("speak_name", it) }
         sent.description?.let { body.put("description", it) }
         sent.dueDate?.let { body.put("due_date", it) }
         sent.dueTime?.let { body.put("due_time", it) }

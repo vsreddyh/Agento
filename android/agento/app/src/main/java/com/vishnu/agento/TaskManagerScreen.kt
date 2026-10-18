@@ -349,7 +349,7 @@ internal fun TaskManagerScreen(
 
     /**
      * Copy a task 1:1 (issue #161): every field carried over verbatim —
-     * name, description, due date/time, estimate, the whole repeat block
+     * name, speak_name, description, due date/time, estimate, the whole repeat block
      * and the parallel flag — as a new **open** task. Nothing is "smarter"
      * than the original: a past due date stays a past due date, and a
      * cadence comes across as the same cadence. A copy is a starting point
@@ -391,6 +391,7 @@ internal fun TaskManagerScreen(
         scope.launch {
             api.create(
                 name = t.name,
+                speakName = t.speakName,
                 description = t.description,
                 dueDate = t.dueDate,
                 dueTime = t.dueTime,
@@ -857,6 +858,7 @@ internal fun TaskManagerScreen(
                         ServerTask(
                             id = tempId,
                             name = next.name,
+                            speakName = next.speakName,
                             description = next.description,
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
@@ -875,6 +877,7 @@ internal fun TaskManagerScreen(
                     scope.launch {
                         api.create(
                             name = next.name,
+                            speakName = next.speakName,
                             description = next.description,
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
@@ -909,6 +912,7 @@ internal fun TaskManagerScreen(
                     val prevRow = prev.firstOrNull { it.id == next.id }
                     var optimistic = (prevRow ?: ServerTask(id = next.id)).copy(
                         name = next.name,
+                        speakName = next.speakName,
                         description = next.description,
                         dueDate = next.dueDate,
                         dueTime = next.dueTime,
@@ -931,6 +935,7 @@ internal fun TaskManagerScreen(
                         api.update(
                             id = next.id,
                             name = next.name,
+                            speakName = next.speakName,
                             description = next.description,
                             dueDate = next.dueDate,
                             dueTime = next.dueTime,
@@ -1340,6 +1345,7 @@ internal fun ServerTaskDialog(
     onSave: (ServerTaskDraft) -> Unit,
 ) {
     var name by remember(initial) { mutableStateOf(initial.name) }
+    var speakName by remember(initial) { mutableStateOf(initial.speakName) }
     var description by remember(initial) { mutableStateOf(initial.description) }
     var dueDate by remember(initial) { mutableStateOf(initial.dueDate) }
     var dueTime by remember(initial) { mutableStateOf(initial.dueTime) }
@@ -1388,6 +1394,14 @@ internal fun ServerTaskDialog(
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("Name *") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = speakName,
+                    onValueChange = { speakName = it },
+                    label = { Text("Speak as (voice)") },
+                    placeholder = { Text("e.g. pay the power bill") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1659,6 +1673,7 @@ internal fun ServerTaskDialog(
                     onSave(
                         initial.copy(
                             name = name.trim(),
+                            speakName = speakName.trim(),
                             description = description.trim(),
                             dueDate = dueDate.trim(),
                             dueTime = dueTime.trim(),

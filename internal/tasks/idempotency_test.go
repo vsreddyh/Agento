@@ -27,7 +27,7 @@ func TestCreateWithKeyIsIdempotent(t *testing.T) {
 	defer cleanupIdem(t, s, ctx)
 
 	first, replayed, err := s.CreateWithKey(ctx, "idem", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "key-1", "test", "fp-1")
+		intP(5), Repeat{}, boolP(false), "", "key-1", "test", "fp-1")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestCreateWithKeyIsIdempotent(t *testing.T) {
 	}
 
 	second, replayed, err := s.CreateWithKey(ctx, "idem", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "key-1", "test", "fp-1")
+		intP(5), Repeat{}, boolP(false), "", "key-1", "test", "fp-1")
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestCreateWithKeyConcurrentRetriesCreateOneTask(t *testing.T) {
 			defer wg.Done()
 			<-start // release together, so the window is actually contended
 			doc, replayed, err := s.CreateWithKey(ctx, "race", "d", "2026-10-05", "08:00",
-				intP(5), Repeat{}, boolP(false), "race-key", "test", "fp-race")
+				intP(5), Repeat{}, boolP(false), "", "race-key", "test", "fp-race")
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -128,7 +128,7 @@ func TestCreateWithDistinctKeysMakesDistinctTasks(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		if _, replayed, err := s.CreateWithKey(ctx, fmt.Sprintf("dist%d", i), "d",
-			"2026-10-05", "08:00", intP(5), Repeat{}, boolP(false),
+			"2026-10-05", "08:00", intP(5), Repeat{}, boolP(false), "",
 			fmt.Sprintf("dist-key-%d", i), "test", "fp-dist"); err != nil || replayed {
 			t.Fatalf("key %d: replayed=%v err=%v", i, replayed, err)
 		}
@@ -153,7 +153,7 @@ func TestCreateWithoutAKeyStillWorksRepeatedly(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		if _, replayed, err := s.CreateWithKey(ctx, fmt.Sprintf("nokey%d", i), "d",
-			"2026-10-05", "08:00", intP(5), Repeat{}, boolP(false), "", "test", ""); err != nil {
+			"2026-10-05", "08:00", intP(5), Repeat{}, boolP(false), "", "", "test", ""); err != nil {
 			t.Fatalf("keyless create %d: %v", i, err)
 		} else if replayed {
 			t.Errorf("keyless create %d reported as a replay", i)
@@ -177,7 +177,7 @@ func TestCreateRecordsKeyAndSource(t *testing.T) {
 	defer cleanupIdem(t, s, ctx)
 
 	if _, _, err := s.CreateWithKey(ctx, "traced", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "trace-key", "app", "fp-trace"); err != nil {
+		intP(5), Repeat{}, boolP(false), "", "trace-key", "app", "fp-trace"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	var doc bson.M
@@ -268,13 +268,13 @@ func TestCreateWithKeyRejectsADifferentBody(t *testing.T) {
 	defer cleanupIdem(t, s, ctx)
 
 	first, replayed, err := s.CreateWithKey(ctx, "original", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "shared-key", "test", "fp-original")
+		intP(5), Repeat{}, boolP(false), "", "shared-key", "test", "fp-original")
 	if err != nil || replayed {
 		t.Fatalf("first create: replayed=%v err=%v", replayed, err)
 	}
 
 	_, replayed, err = s.CreateWithKey(ctx, "DIFFERENT", "d", "2026-10-05", "09:00",
-		intP(30), Repeat{}, boolP(false), "shared-key", "test", "fp-different")
+		intP(30), Repeat{}, boolP(false), "", "shared-key", "test", "fp-different")
 	if err == nil {
 		t.Fatal("reusing a key with a different body must be refused, not replayed")
 	}
@@ -318,12 +318,12 @@ func TestCreateWithKeyReplaysTheSameBody(t *testing.T) {
 	defer cleanupIdem(t, s, ctx)
 
 	first, _, err := s.CreateWithKey(ctx, "retry", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "retry-key", "test", "fp-same")
+		intP(5), Repeat{}, boolP(false), "", "retry-key", "test", "fp-same")
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	second, replayed, err := s.CreateWithKey(ctx, "retry", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "retry-key", "test", "fp-same")
+		intP(5), Repeat{}, boolP(false), "", "retry-key", "test", "fp-same")
 	if err != nil {
 		t.Fatalf("a genuine retry must replay, got: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestCreateWithKeyToleratesAMissingFingerprint(t *testing.T) {
 
 	// Replaying a legacy key WITH a fingerprint must not be refused.
 	doc, replayed, err := s.CreateWithKey(ctx, "totally different", "d", "2026-11-11", "23:00",
-		intP(99), Repeat{}, boolP(false), "legacy-key", "test", "fp-new")
+		intP(99), Repeat{}, boolP(false), "", "legacy-key", "test", "fp-new")
 	if err != nil {
 		t.Fatalf("a legacy key must still replay, got: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestFingerprintIsStoredWithTheKey(t *testing.T) {
 	defer cleanupIdem(t, s, ctx)
 
 	if _, _, err := s.CreateWithKey(ctx, "fp", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "fp-key", "test", "fp-abc123"); err != nil {
+		intP(5), Repeat{}, boolP(false), "", "fp-key", "test", "fp-abc123"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	var doc bson.M
@@ -490,7 +490,7 @@ func TestOverlongIdempotencyKeyIsRejectedNotTruncated(t *testing.T) {
 
 	prefix := strings.Repeat("k", IdempotencyKeyMax)
 	exact, _, err := s.CreateWithKey(ctx, "exact", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), prefix, "test", "fp-exact")
+		intP(5), Repeat{}, boolP(false), "", prefix, "test", "fp-exact")
 	if err != nil {
 		t.Fatalf("a key of exactly the limit must be accepted: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestOverlongIdempotencyKeyIsRejectedNotTruncated(t *testing.T) {
 	// One byte over, sharing the whole prefix.
 	over := prefix + "X"
 	doc, replayed, err := s.CreateWithKey(ctx, "overlong", "d", "2026-10-05", "09:00",
-		intP(99), Repeat{}, boolP(false), over, "test", "fp-over")
+		intP(99), Repeat{}, boolP(false), "", over, "test", "fp-over")
 	if err == nil {
 		t.Fatalf("an overlong key was accepted; it would collide with its own prefix")
 	}
@@ -534,12 +534,12 @@ func TestIdempotencyKeyLimitBoundary(t *testing.T) {
 
 	atLimit := strings.Repeat("b", IdempotencyKeyMax)
 	if _, _, err := s.CreateWithKey(ctx, "atlimit", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), atLimit, "test", "fp-a"); err != nil {
+		intP(5), Repeat{}, boolP(false), "", atLimit, "test", "fp-a"); err != nil {
 		t.Errorf("a key of exactly %d bytes was rejected: %v", IdempotencyKeyMax, err)
 	}
 	overBy1 := strings.Repeat("c", IdempotencyKeyMax+1)
 	if _, _, err := s.CreateWithKey(ctx, "overby1", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), overBy1, "test", "fp-b"); err == nil {
+		intP(5), Repeat{}, boolP(false), "", overBy1, "test", "fp-b"); err == nil {
 		t.Errorf("a key of %d bytes was accepted", IdempotencyKeyMax+1)
 	}
 }
@@ -553,7 +553,7 @@ func TestFingerprintIsNotExposedOnAnyTask(t *testing.T) {
 	defer cleanupIdem(t, s, ctx)
 
 	created, _, err := s.CreateWithKey(ctx, "hidden", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "hide-key", "app", "fp-secret-digest")
+		intP(5), Repeat{}, boolP(false), "", "hide-key", "app", "fp-secret-digest")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -591,13 +591,13 @@ func TestMismatchCheckSurvivesTheFingerprintBeingStripped(t *testing.T) {
 	defer cleanupIdem(t, s, ctx)
 
 	if _, _, err := s.CreateWithKey(ctx, "first", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "survive-key", "app", "fp-one"); err != nil {
+		intP(5), Repeat{}, boolP(false), "", "survive-key", "app", "fp-one"); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
 	// Same key, different body. Must be refused even though the rendered task no
 	// longer carries the fingerprint.
 	_, replayed, err := s.CreateWithKey(ctx, "second", "d", "2026-10-05", "09:00",
-		intP(99), Repeat{}, boolP(false), "survive-key", "app", "fp-two")
+		intP(99), Repeat{}, boolP(false), "", "survive-key", "app", "fp-two")
 	if err == nil {
 		t.Fatal("a different body with the same key was accepted — the mismatch check " +
 			"is reading the fingerprint from a stripped document")
@@ -612,7 +612,7 @@ func TestMismatchCheckSurvivesTheFingerprintBeingStripped(t *testing.T) {
 	// And the genuine retry still replays, so the check is discriminating rather than
 	// rejecting everything.
 	doc, replayed, err := s.CreateWithKey(ctx, "first", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "survive-key", "app", "fp-one")
+		intP(5), Repeat{}, boolP(false), "", "survive-key", "app", "fp-one")
 	if err != nil || !replayed {
 		t.Errorf("a genuine retry no longer replays: replayed=%v err=%v", replayed, err)
 	}
@@ -633,7 +633,7 @@ func TestAReplayIsNotAuditedAsASecondCreate(t *testing.T) {
 	defer cleanupIdem(t, s, ctx)
 
 	first, replayed, err := s.CreateWithKey(ctx, "audited once", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "audit-key", "app", "fp-1")
+		intP(5), Repeat{}, boolP(false), "", "audit-key", "app", "fp-1")
 	if err != nil || replayed {
 		t.Fatalf("first create: replayed=%v err=%v", replayed, err)
 	}
@@ -642,7 +642,7 @@ func TestAReplayIsNotAuditedAsASecondCreate(t *testing.T) {
 	// a replay returns the SAME id, so a second `create` entry would be a duplicate
 	// claim about one task rather than a record of a second task.
 	second, replayed, err := s.CreateWithKey(ctx, "audited once", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{}, boolP(false), "audit-key", "app", "fp-1")
+		intP(5), Repeat{}, boolP(false), "", "audit-key", "app", "fp-1")
 	if err != nil || !replayed {
 		t.Fatalf("replay: replayed=%v err=%v", replayed, err)
 	}

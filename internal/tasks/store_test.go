@@ -53,7 +53,7 @@ func customRep(text string) Repeat { return Repeat{Custom: true, Text: text} }
 func TestCreateAndList(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, err := s.Create(ctx, "Pay rent", "bank transfer", "2026-10-01", "09:00", intP(15), customRep("monthly on the 1st"), boolP(false))
+	doc, err := s.Create(ctx, "Pay rent", "bank transfer", "2026-10-01", "09:00", intP(15), customRep("monthly on the 1st"), boolP(false), "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -76,22 +76,22 @@ func TestCreateAndList(t *testing.T) {
 func TestValidation(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, "  ", "", "", "", intP(0), Repeat{}, boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "  ", "", "", "", intP(0), Repeat{}, boolP(false), ""); err == nil {
 		t.Fatal("blank name must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "10-01", "", intP(0), Repeat{}, boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "x", "", "10-01", "", intP(0), Repeat{}, boolP(false), ""); err == nil {
 		t.Fatal("bad due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "2026-13-99", "", intP(0), Repeat{}, boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "x", "", "2026-13-99", "", intP(0), Repeat{}, boolP(false), ""); err == nil {
 		t.Fatal("non-calendar due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "9am", intP(0), Repeat{}, boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "9am", intP(0), Repeat{}, boolP(false), ""); err == nil {
 		t.Fatal("bad due_time must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "09:00", intP(0), Repeat{}, boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "09:00", intP(0), Repeat{}, boolP(false), ""); err == nil {
 		t.Fatal("due_time without due_date must fail")
 	}
-	if _, err := s.Create(ctx, "x", "", "", "", intP(-5), Repeat{}, boolP(false)); err == nil {
+	if _, err := s.Create(ctx, "x", "", "", "", intP(-5), Repeat{}, boolP(false), ""); err == nil {
 		t.Fatal("negative estimate must fail")
 	}
 }
@@ -121,17 +121,17 @@ func TestCreateRequiresAllFields(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		n, d, dd, dt, m, r, p := mutate(full())
-		if _, err := s.Create(ctx, n, d, dd, dt, m, r, p); err == nil {
+		if _, err := s.Create(ctx, n, d, dd, dt, m, r, p, ""); err == nil {
 			t.Fatalf("%s must fail", name)
 		}
 	}
 	// The all-zero repeat stays valid (one-shot).
 	n, d, dd, dt, m, r, p := full()
-	if _, err := s.Create(ctx, n, d, dd, dt, m, Repeat{}, p); err != nil {
+	if _, err := s.Create(ctx, n, d, dd, dt, m, Repeat{}, p, ""); err != nil {
 		t.Fatalf("zero repeat (one-shot) must stay valid: %v", err)
 	}
 	// Clearing a required field via update must fail too.
-	doc, err := s.Create(ctx, n+"-upd", d, dd, dt, m, r, p)
+	doc, err := s.Create(ctx, n+"-upd", d, dd, dt, m, r, p, "")
 	if err != nil {
 		t.Fatalf("setup create: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestCreateRequiresAllFields(t *testing.T) {
 func TestCompleteReopenDelete(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, _ := s.Create(ctx, "Water plants", "balcony pots", "2026-10-05", "08:00", intP(5), customRep("every Sunday"), boolP(false))
+	doc, _ := s.Create(ctx, "Water plants", "balcony pots", "2026-10-05", "08:00", intP(5), customRep("every Sunday"), boolP(false), "")
 	id := doc["id"].(string)
 
 	done, next, rollover, err := s.Complete(ctx, id)
@@ -226,7 +226,7 @@ func TestCompleteReopenDelete(t *testing.T) {
 func TestReopenedExcludedFromDone(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, _ := s.Create(ctx, "reopen me", "test task", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false))
+	doc, _ := s.Create(ctx, "reopen me", "test task", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false), "")
 	id := doc["id"].(string)
 	if _, _, _, err := s.Complete(ctx, id); err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func TestReopenedExcludedFromDone(t *testing.T) {
 func TestSkipDetail(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, _ := s.Create(ctx, "Gym", "leg day", "2026-10-05", "08:00", intP(30), Repeat{Every: 1, Unit: "days"}, boolP(false))
+	doc, _ := s.Create(ctx, "Gym", "leg day", "2026-10-05", "08:00", intP(30), Repeat{Every: 1, Unit: "days"}, boolP(false), "")
 	id := doc["id"].(string)
 
 	done, next, rollover, _, err := s.SkipDetail(ctx, id, "travelling")
@@ -293,7 +293,7 @@ func TestSkipDetail(t *testing.T) {
 	}
 
 	// A completed task cannot be skipped: state names itself.
-	doc2, _ := s.Create(ctx, "One shot", "done work", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false))
+	doc2, _ := s.Create(ctx, "One shot", "done work", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false), "")
 	id2 := doc2["id"].(string)
 	if _, _, _, err := s.Complete(ctx, id2); err != nil {
 		t.Fatal(err)
@@ -306,7 +306,7 @@ func TestSkipDetail(t *testing.T) {
 func TestSearchRegexCharsLiteral(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, "fix (auth) [urgent]", "login flow", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false)); err != nil {
+	if _, err := s.Create(ctx, "fix (auth) [urgent]", "login flow", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(false), ""); err != nil {
 		t.Fatal(err)
 	}
 	rows, _, err := s.List(ctx, "open", false, "(auth) [urgent]", 0)
@@ -326,7 +326,7 @@ func TestSelectedDaysCreateAndRollover(t *testing.T) {
 	selected := []string{"mon", "wed", "fri"}
 	// 2026-09-30 is a Wednesday and one of the selected days.
 	doc, err := s.Create(ctx, "Gym", "leg day", "2026-09-30", "18:00", intP(60),
-		Repeat{Days: selected}, boolP(false))
+		Repeat{Days: selected}, boolP(false), "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestSelectedDaysCreateAndRollover(t *testing.T) {
 
 	// The due date is the FIRST occurrence, so it has to be one of the days.
 	if _, err := s.Create(ctx, "Gym", "leg day", "2026-10-01", "18:00", intP(60),
-		Repeat{Days: selected}, boolP(false)); err == nil {
+		Repeat{Days: selected}, boolP(false), ""); err == nil {
 		t.Fatal("a due date outside the selection must be rejected")
 	}
 	// And the same rule holds on an edit that only moves the date.
@@ -398,7 +398,7 @@ func containsStr(hay []string, needle string) bool {
 func TestParallelableRoundTrip(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, err := s.Create(ctx, "parallel job", "runs alongside others", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(true))
+	doc, err := s.Create(ctx, "parallel job", "runs alongside others", "2026-10-05", "08:00", intP(0), Repeat{}, boolP(true), "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -873,7 +873,7 @@ func TestUpdateRepeatRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
 	mk := func() string {
-		doc, err := s.Create(ctx, "round trip", "repeat probe", tomorrow, "08:00", intP(0), Repeat{}, boolP(false))
+		doc, err := s.Create(ctx, "round trip", "repeat probe", tomorrow, "08:00", intP(0), Repeat{}, boolP(false), "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -946,7 +946,7 @@ func TestUpdateRevision(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
-	doc, err := s.Create(ctx, "raced", "revision probe", tomorrow, "08:00", intP(0), Repeat{}, boolP(false))
+	doc, err := s.Create(ctx, "raced", "revision probe", tomorrow, "08:00", intP(0), Repeat{}, boolP(false), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1009,10 +1009,10 @@ func TestOverdueAndTTLIndex(t *testing.T) {
 	ctx := context.Background()
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
-	if _, err := s.Create(ctx, "late", "overdue task", yesterday, "08:00", intP(0), Repeat{}, boolP(false)); err != nil {
+	if _, err := s.Create(ctx, "late", "overdue task", yesterday, "08:00", intP(0), Repeat{}, boolP(false), ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Create(ctx, "future", "upcoming task", tomorrow, "08:00", intP(0), Repeat{}, boolP(false)); err != nil {
+	if _, err := s.Create(ctx, "future", "upcoming task", tomorrow, "08:00", intP(0), Repeat{}, boolP(false), ""); err != nil {
 		t.Fatal(err)
 	}
 	rows, _, err := s.List(ctx, "open", true, "", 0)
@@ -1053,7 +1053,7 @@ func TestListLimitAndTruncated(t *testing.T) {
 	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
 	for i := 0; i < 5; i++ {
 		name := "capped task"
-		if _, err := s.Create(ctx, name, "limit probe", tomorrow, "08:00", intP(0), Repeat{}, boolP(false)); err != nil {
+		if _, err := s.Create(ctx, name, "limit probe", tomorrow, "08:00", intP(0), Repeat{}, boolP(false), ""); err != nil {
 			t.Fatal(err)
 		}
 	}

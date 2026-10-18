@@ -781,12 +781,12 @@ func TestPaddedCustomRuleStoresTheSameAsPlain(t *testing.T) {
 	// version of this test did exactly that and "proved" the two callers disagreed,
 	// when what it actually showed was that it had skipped the code under test.
 	plain, _, err := s.CreateWithKey(ctx, "Plain rule", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{Custom: true, Text: "3rd Friday"}, boolP(false), "", "", "")
+		intP(5), Repeat{Custom: true, Text: "3rd Friday"}, boolP(false), "", "", "", "")
 	if err != nil {
 		t.Fatalf("plain create: %v", err)
 	}
 	padded, _, err := s.CreateWithKey(ctx, "Padded rule", "d", "2026-10-05", "08:00",
-		intP(5), Repeat{Custom: true, Text: "   3rd Friday   "}, boolP(false), "", "", "")
+		intP(5), Repeat{Custom: true, Text: "   3rd Friday   "}, boolP(false), "", "", "", "")
 	if err != nil {
 		t.Fatalf("padded create: %v", err)
 	}

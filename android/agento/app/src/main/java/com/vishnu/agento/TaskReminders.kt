@@ -917,5 +917,18 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             postedTag(taskId, kind), ALARM_NOTIF_ID,
             notif.build(),
         )
+        // Spoken alert (#306): queued behind any speech already playing,
+        // skipped entirely on DND/silent (visual notification only).
+        // speak_name is the voice phrase, falling back to the list name.
+        runCatching {
+            val dueAt = task?.let { dueMillisOrNull(it.dueDate, it.dueTime) }
+            val elapsedSpeech = if (kind == ReminderKind.Overdue && dueAt != null) {
+                (System.currentTimeMillis() - dueAt).coerceAtLeast(0L)
+            } else {
+                null
+            }
+            val speakTask = task ?: ServerTask(id = taskId, name = name)
+            ReminderTts.speak(appCtx, kind, speakTask, elapsedSpeech)
+        }
     }
 }

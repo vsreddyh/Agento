@@ -53,7 +53,7 @@ func TestDefaultDecodeStillRejectsAnEmptyBody(t *testing.T) {
 // adds to the create path without adding it here fails here rather than in review.
 func TestFingerprintCoversEveryConsumedField(t *testing.T) {
 	base := map[string]any{
-		"name": "task", "description": "d",
+		"name": "task", "speak_name": "", "description": "d",
 		"due_date": "2026-10-05", "due_time": "08:00",
 		"estimated_minutes": 5, "parallelable": false,
 		"repeat_every": 0, "repeat_unit": "",
@@ -67,7 +67,7 @@ func TestFingerprintCoversEveryConsumedField(t *testing.T) {
 	// A different value per key. repeat_custom/repeat_every/repeat_unit have typed
 	// expectations, so use values of the right shape rather than one string for all.
 	differ := map[string]any{
-		"name": "other", "description": "other",
+		"name": "other", "speak_name": "do the thing", "description": "other",
 		"due_date": "2026-10-06", "due_time": "09:00",
 		"estimated_minutes": 30, "parallelable": true,
 		"repeat_every": 2, "repeat_unit": "weeks",
@@ -349,7 +349,7 @@ func TestTrimListMatchesWhatTheStoreActuallyTrims(t *testing.T) {
 	doc, _, err := store.CreateWithKey(ctx, "trim probe", "d",
 		padded["due_date"].(string), padded["due_time"].(string),
 		intPtr(5), tasks.Repeat{Custom: true, Text: "   3rd Friday   "},
-		boolPtr(false), "", "test", "")
+		boolPtr(false), "", "", "test", "")
 	if err != nil {
 		t.Skipf("create unavailable: %v", err)
 	}

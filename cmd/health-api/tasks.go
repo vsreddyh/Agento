@@ -146,7 +146,7 @@ func taskStrField(fields map[string]any, key string) string {
 // turn client bugs into mystery no-ops — the HTTP layer validates first so
 // mistakes come back as 422. JSON null counts as absent (no change).
 func checkTaskFields(fields map[string]any) error {
-	for _, k := range []string{"name", "description", "due_date", "due_time", "repeat_rule", "repeat_unit"} {
+	for _, k := range []string{"name", "description", "speak_name", "due_date", "due_time", "repeat_rule", "repeat_unit"} {
 		if v, ok := fields[k]; ok && v != nil {
 			if _, ok := v.(string); !ok {
 				return &tasks.StoreError{Msg: k + " must be a string"}
@@ -299,6 +299,7 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		&minutes,
 		taskRepeat(fields),
 		&parallelable,
+		taskStrField(fields, "speak_name"),
 		idemKey,
 		source,
 		taskFingerprint(fields),
@@ -386,7 +387,7 @@ func zeroLike(fields map[string]any, key string) any {
 // changes the digest, which is what makes the next omission a test failure rather than
 // a review finding. When a field is added to the create path, add it here too.
 var taskCreateFields = []string{
-	"name", "description", "due_date", "due_time",
+	"name", "speak_name", "description", "due_date", "due_time",
 	"estimated_minutes", "parallelable",
 	"repeat_every", "repeat_unit", "repeat_days", "repeat_custom", "repeat_rule",
 }
@@ -407,7 +408,7 @@ var taskCreateFields = []string{
 // the same canonicalisation through the store's own CanonicalRepeatDays, so the two cannot
 // drift — a second rule written here is the defect this map keeps producing.
 var trimmedForFingerprint = map[string]bool{
-	"name": true, "description": true,
+	"name": true, "speak_name": true, "description": true,
 	"due_date": true, "due_time": true,
 	"repeat_unit": true,
 	// repeat_rule is here because Repeat.Normalize now trims Text, and the digest

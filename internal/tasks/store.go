@@ -210,7 +210,11 @@ func isSkipped(doc map[string]any) bool {
 // every selected-days task as a one-shot, with no repeat shown and nothing
 // warning — precisely the 4.6.0 silent case. The version makes the two sides
 // disagree out loud instead.
-const TaskContractVersion = 2
+//
+// 3 — the `speak_name` voice phrase (#306). Optional (blank falls back to
+// `name`), but a NEW key on the wire all the same: an old app neither sends
+// nor reads it, and an old server answers without it.
+const TaskContractVersion = 3
 
 func toDoc(doc bson.M) map[string]any {
 	out := map[string]any{}
@@ -338,8 +342,8 @@ func toDoc(doc bson.M) map[string]any {
 //
 // A non-empty key makes the insert idempotent (#176): a repeat of the same key
 // returns the ORIGINAL task instead of creating a second one.
-func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool) (map[string]any, error) {
-	doc, _, err := s.CreateWithKey(ctx, name, description, dueDate, dueTime, estimatedMinutes, rep, parallelable, "", "", "")
+func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool, speakName string) (map[string]any, error) {
+	doc, _, err := s.CreateWithKey(ctx, name, description, dueDate, dueTime, estimatedMinutes, rep, parallelable, speakName, "", "", "")
 	return doc, err
 }
 
@@ -384,7 +388,7 @@ const (
 //
 // `replayed` is returned true only for that second-and-subsequent case, so a
 // caller can answer "already saved" rather than implying it created something.
-func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool, idemKey, source, fingerprint string) (map[string]any, bool, error) {
+func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool, speakName, idemKey, source, fingerprint string) (map[string]any, bool, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, false, fail("name is required")
@@ -426,6 +430,7 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{
 		"name": name, "description": description,
+		"speak_name": strings.TrimSpace(speakName),
 		"due_date": dueDate, "due_time": dueTime,
 		"estimated_minutes": *estimatedMinutes,
 		"parallelable":      *parallelable,
@@ -689,7 +694,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	// Wrong types fail loudly instead of becoming mystery no-ops
 	// (strField above treats them as absent). JSON null still counts
 	// as absent, matching the HTTP layer's convention.
-	for _, k := range []string{"description", "due_date", "due_time", "repeat_rule"} {
+	for _, k := range []string{"description", "due_date", "due_time", "repeat_rule", "speak_name"} {
 		if v, ok := fields[k]; ok && v != nil {
 			if _, ok := v.(string); !ok {
 				return nil, fail("%s must be a string", k)
@@ -708,6 +713,11 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 			return nil, fail("description is required")
 		}
 		set["description"] = strings.TrimSpace(str)
+	}
+	// Optional voice phrase for TTS reminders (#306): blank means fall back
+	// to `name`. Clearing back to blank is allowed, so no non-empty check.
+	if str, ok := strField("speak_name"); ok {
+		set["speak_name"] = strings.TrimSpace(str)
 	}
 	// Due fields flow through only when the caller sent them, so a
 	// no-change update stays a no-op and the len(set)==0 path can fire.
