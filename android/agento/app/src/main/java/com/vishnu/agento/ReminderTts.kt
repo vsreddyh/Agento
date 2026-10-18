@@ -173,7 +173,7 @@ object ReminderTts {
             // fire two concurrent eng.speak calls. The engine snapshot leaves
             // the lock non-null, so a synchronous-init callback's pump() still
             // sees null and waits for the outer pump() instead of dropping.
-            val step: Pair<TextToSpeech, Pair<String, String>?> = synchronized(lock) {
+            val step: Triple<TextToSpeech, Pair<String, String>?, Int> = synchronized(lock) {
                 // Watchdog on a MONOTONIC clock: wall-clock jumps must neither
                 // trip it early nor stall it. Utterances are seconds long;
                 // a minute means stuck.
@@ -190,14 +190,23 @@ object ReminderTts {
                     watchdogGen += 1
                 }
                 eng to (n to watchdogGen)
+                Triple(eng, n, watchdogGen)
             }
-            val (eng, nw) = step
-            val next = nw.first
+            val (eng, next, wgen) = step
             // Posted outside the lock: postDelayed only enqueues, and the
-            // critical section should end before it.
+            // critical section should end before it. Guarded: a no-main-looper
+            // environment (local unit test) must not wedge `speaking` after
+            // the dequeue above — on failure the item goes back to the head.
             if (next != null) {
-                val wgen = nw.second
-                mainHandler.postDelayed({ watchdogFired(wgen) }, SPEAK_TIMEOUT_MS)
+                val posted = runCatching {
+                    mainHandler.postDelayed({ watchdogFired(wgen) }, SPEAK_TIMEOUT_MS)
+                }.getOrDefault(false)
+                if (!posted) {
+                    synchronized(lock) {
+                        queue.addFirst(next)
+                        speaking = false
+                    }
+                }
             }
             if (next == null) return
             // A throw (broken OEM binder state) counts like ERROR: clear and
