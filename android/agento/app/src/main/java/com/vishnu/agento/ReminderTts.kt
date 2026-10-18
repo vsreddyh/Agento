@@ -3,6 +3,8 @@ package com.vishnu.agento
 import android.app.NotificationManager
 import android.content.Context
 import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -31,6 +33,9 @@ object ReminderTts {
     private var speakStartedAt = 0L
     /** Engine generation: a late callback from a dead engine must not clear the new one's state. */
     private var generation = 0
+    /** Watchdog generation: stale delayed wakeups no-op instead of freeing a live utterance. */
+    private var watchdogGen = 0
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private fun progressListener(gen: Int) = object : UtteranceProgressListener() {
         override fun onStart(utteranceId: String) = Unit
@@ -72,6 +77,9 @@ object ReminderTts {
 
     internal fun isSilent(appCtx: Context): Boolean {
         val audio = appCtx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        // Vibrate counts as silent on purpose: TTS would play on the media
+        // stream regardless, and vibrate means "stay quiet" (#306: DND/silent
+        // stays silent, visual notification only).
         if (audio != null && audio.ringerMode != AudioManager.RINGER_MODE_NORMAL) return true
         // No SDK guard: notification channels need 26 and minSdk is 28.
         val nm = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -147,6 +155,16 @@ object ReminderTts {
         }
     }
 
+    /** Delayed watchdog wakeup: frees a stuck utterance even with no further alarms. */
+    private fun watchdogFired(wgen: Int) {
+        synchronized(lock) {
+            if (wgen != watchdogGen || !speaking) return
+            Log.w("ReminderTts", "speech timed out with no callback, advancing queue")
+            speaking = false
+        }
+        pump()
+    }
+
     private fun pump() {
         while (true) {
             // ONE critical section for check + dequeue + throttle: two separate
@@ -168,6 +186,12 @@ object ReminderTts {
                 if (n != null) {
                     speaking = true
                     speakStartedAt = SystemClock.uptimeMillis()
+                    // The watchdog is a real timer, not just a check: without
+                    // further alarms nothing re-enters pump(), so a delayed
+                    // wakeup performs the timeout. Stale generations no-op.
+                    watchdogGen += 1
+                    val wgen = watchdogGen
+                    mainHandler.postDelayed({ watchdogFired(wgen) }, SPEAK_TIMEOUT_MS)
                 }
                 eng to n
             }
