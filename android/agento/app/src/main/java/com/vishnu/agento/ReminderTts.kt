@@ -3,11 +3,14 @@ package com.vishnu.agento
 import android.app.NotificationManager
 import android.content.Context
 import android.media.AudioManager
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import java.util.Locale
 import java.util.UUID
+
+private val QUOTE_CHARS = Regex("[“”]")
 
 /**
  * App-scoped TTS for task reminders (#306). One engine, one FIFO queue:
@@ -26,22 +29,24 @@ object ReminderTts {
     private var inited = false
     private var speaking = false
     private var speakStartedAt = 0L
+    /** Engine generation: a late callback from a dead engine must not clear the new one's state. */
+    private var generation = 0
 
-    private val progressListener = object : UtteranceProgressListener() {
+    private fun progressListener(gen: Int) = object : UtteranceProgressListener() {
         override fun onStart(utteranceId: String) = Unit
-        override fun onDone(utteranceId: String) {
-            synchronized(lock) { speaking = false }
+        private fun finished() {
+            // Only the current generation owns `speaking`: a stale onDone from
+            // the shut-down engine clears nothing, and pump() always runs so a
+            // stale completion still advances whatever is queued.
+            synchronized(lock) {
+                if (gen == generation) speaking = false
+            }
             pump()
         }
+        override fun onDone(utteranceId: String) = finished()
         @Deprecated("Deprecated in Java")
-        override fun onError(utteranceId: String) {
-            synchronized(lock) { speaking = false }
-            pump()
-        }
-        override fun onError(utteranceId: String, errorCode: Int) {
-            synchronized(lock) { speaking = false }
-            pump()
-        }
+        override fun onError(utteranceId: String) = finished()
+        override fun onError(utteranceId: String, errorCode: Int) = finished()
     }
 
     internal fun speak(appCtx: Context, kind: ReminderKind, task: ServerTask, overdueElapsed: Long? = null) {
@@ -49,7 +54,7 @@ object ReminderTts {
         // Quotes delimit the name in text but some engines verbalize "quote",
         // so they are stripped only on the speech path (reminderSpeech keeps them).
         val text = ChatTts.cleanForSpeech(reminderSpeech(kind, task.name, task.speakName, overdueElapsed))
-            .replace("\"", "").replace(Regex("[“”]"), "")
+            .replace("\"", "").replace(QUOTE_CHARS, "")
         val id = "${kind.key}-${UUID.randomUUID()}"
         synchronized(lock) {
             // Bounded, drop-oldest: for a stuck engine nothing speaks anyway,
@@ -75,9 +80,11 @@ object ReminderTts {
     }
 
     private fun ensureEngine(appCtx: Context) {
-        synchronized(lock) {
+        val gen: Int = synchronized(lock) {
             if (inited) return
             inited = true
+            generation += 1
+            generation
         }
         // Listener attached before the init callback can pump: a fast callback
         // speaking before setOnUtteranceProgressListener would leave `speaking`
@@ -96,7 +103,7 @@ object ReminderTts {
                 onEngineInit(status)
             }
         }
-        tts.setOnUtteranceProgressListener(progressListener)
+        tts.setOnUtteranceProgressListener(progressListener(gen))
         engine = tts
         val es = synchronized(lock) { earlyStatus }
         if (es != null) onEngineInit(es)
@@ -142,10 +149,10 @@ object ReminderTts {
             // (a synchronous-init callback's pump() must see null and wait for
             // the outer pump(), never dequeue-then-drop).
             val eng: TextToSpeech = synchronized(lock) {
-                // Watchdog: an utterance the engine accepted but never completes
-                // (no onDone/onError) must not wedge the queue until process death.
-                // Utterances are seconds long; a minute means stuck.
-                if (speaking && System.currentTimeMillis() - speakStartedAt > SPEAK_TIMEOUT_MS) {
+                // Watchdog on a MONOTONIC clock: wall-clock jumps must neither
+                // trip it early nor stall it. Utterances are seconds long;
+                // a minute means stuck.
+                if (speaking && SystemClock.uptimeMillis() - speakStartedAt > SPEAK_TIMEOUT_MS) {
                     Log.w("ReminderTts", "speech timed out, advancing queue")
                     speaking = false
                 }
@@ -156,7 +163,7 @@ object ReminderTts {
                 val n = queue.removeFirstOrNull()
                 if (n != null) {
                     speaking = true
-                    speakStartedAt = System.currentTimeMillis()
+                    speakStartedAt = SystemClock.uptimeMillis()
                 }
                 n
             }

@@ -73,4 +73,11 @@ class ReminderSpeechTest {
             reminderSpeech(ReminderKind.Due, ""),
         )
     }
+
+    @Test
+    fun `fallback name is capped like a phrase`() {
+        val long = "x".repeat(500)
+        val spoken = reminderSpeech(ReminderKind.Due, long)
+        assertEquals("Time to \"${"x".repeat(SPEAK_NAME_MAX_BYTES)}\" is up", spoken)
+    }
 }

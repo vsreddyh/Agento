@@ -14,7 +14,12 @@ internal fun reminderSpeech(
     speakName: String = "",
     overdueElapsed: Long? = null,
 ): String {
-    val name = speakName.ifBlank { taskName }.ifEmpty { FALLBACK_TASK_NAME }
+    // Capped like speak_name: the list name has no server-side cap, so the
+    // fallback path most tasks actually speak gets the same 120-byte budget.
+    val name = truncateUtf8Bytes(
+        speakName.ifBlank { taskName }.ifEmpty { FALLBACK_TASK_NAME },
+        SPEAK_NAME_MAX_BYTES,
+    )
     return when (kind) {
         ReminderKind.BeforeStart ->
             "In ${TaskReminders.BEFORE_START_MINUTES} minutes you need to start \"$name\""
