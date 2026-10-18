@@ -181,6 +181,16 @@ func checkTaskFields(fields map[string]any) error {
 			}
 		}
 	}
+	// The selected-days selection takes a list, so its type check is its own:
+	// a bare string ("mon,wed") is the mistake the schema invites, and it must
+	// fail here rather than reach the store and read as "no selection" — which
+	// would silently make the task a one-shot.
+	if v, ok := fields["repeat_days"]; ok && v != nil {
+		if _, ok := tasks.ParseRepeatDays(v); !ok {
+			return &tasks.StoreError{
+				Msg: `repeat_days must be an array of weekday strings, e.g. ["mon","wed"]`}
+		}
+	}
 	return nil
 }
 
@@ -224,6 +234,12 @@ func taskRepeat(fields map[string]any) tasks.Repeat {
 		rep.Every = n
 	}
 	rep.Unit = strings.TrimSpace(taskStrField(fields, "repeat_unit"))
+	// The selection, when present and well-formed. A mistyped value has
+	// already 422'd in checkTaskFields, so the error here is discarded like
+	// the other lenient reads on this path.
+	if days, ok := tasks.ParseRepeatDays(fields["repeat_days"]); ok {
+		rep.Days = days
+	}
 	if b, ok := fields["repeat_custom"].(bool); ok {
 		rep.Custom = b
 	}
@@ -345,6 +361,11 @@ func zeroLike(fields map[string]any, key string) any {
 			}
 		}
 		return false
+	case "repeat_days":
+		// The zero of a list is an EMPTY list, not a string: the store reads an
+		// absent key and an empty array identically (both = "not this mode"),
+		// so the digest must too, and `""` would hash differently from `[]`.
+		return []string{}
 	default:
 		return ""
 	}
@@ -367,7 +388,7 @@ func zeroLike(fields map[string]any, key string) any {
 var taskCreateFields = []string{
 	"name", "description", "due_date", "due_time",
 	"estimated_minutes", "parallelable",
-	"repeat_every", "repeat_unit", "repeat_custom", "repeat_rule",
+	"repeat_every", "repeat_unit", "repeat_days", "repeat_custom", "repeat_rule",
 }
 
 // trimmedForFingerprint is the subset of taskCreateFields the create path TrimSpaces
@@ -380,6 +401,11 @@ var taskCreateFields = []string{
 // layers (the store trims the four core fields, taskRepeat trims the unit) and there is
 // nothing to derive from. TestFingerprintAgreesWithWhatTheStoreTrims round-trips
 // through the store to keep the two in step.
+//
+// `repeat_days` is deliberately NOT here: it is a LIST, and what the store does to it is
+// canonicalisation (lowercase, de-duplicate, sort), not trimming. taskFingerprint applies
+// the same canonicalisation through the store's own CanonicalRepeatDays, so the two cannot
+// drift — a second rule written here is the defect this map keeps producing.
 var trimmedForFingerprint = map[string]bool{
 	"name": true, "description": true,
 	"due_date": true, "due_time": true,
@@ -450,6 +476,20 @@ func taskFingerprint(fields map[string]any) string {
 		if trimmed[k] {
 			if str, isStr := v.(string); isStr {
 				v = strings.TrimSpace(str)
+			}
+		}
+		// The selection is CANONICALISED rather than trimmed, because that is
+		// exactly what the store does (CanonicalRepeatDays): ["Mon","mon"] and
+		// ["mon"] create the SAME task, and ["wed","mon"] and ["mon","wed"]
+		// create the same task, so hashing them differently would 422 a
+		// legitimate retry of a create that succeeded. A nil (empty) selection
+		// hashes as [], matching zeroLike.
+		if k == "repeat_days" {
+			if days, ok := tasks.ParseRepeatDays(v); ok {
+				if days == nil {
+					days = []string{}
+				}
+				v = days
 			}
 		}
 		relevant[k] = v

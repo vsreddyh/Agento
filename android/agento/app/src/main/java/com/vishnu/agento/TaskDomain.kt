@@ -197,6 +197,7 @@ internal data class ServerTaskDraft(
     val estimatedMinutes: String = "",
     val repeatEvery: String = "",
     val repeatUnit: String = "days",
+    val repeatDays: List<String> = emptyList(),
     val repeatCustom: Boolean = false,
     val repeatRule: String = "",
     val parallelable: Boolean = false,
@@ -215,6 +216,7 @@ internal fun ServerTask.toDraft() = ServerTaskDraft(
     estimatedMinutes = estimatedMinutes.toString(),
     repeatEvery = if (repeatEvery > 0) repeatEvery.toString() else "",
     repeatUnit = repeatUnit.ifEmpty { "days" },
+    repeatDays = repeatDays,
     repeatCustom = repeatCustom,
     repeatRule = repeatRule,
     parallelable = parallelable,
@@ -224,27 +226,93 @@ internal fun ServerTask.toDraft() = ServerTaskDraft(
 /** Repeat units offered by the editor, matching the server's vocabulary. */
 internal val REPEAT_UNITS = listOf("days", "weeks", "months", "years")
 
+/** The weekdays the editor's "Select days" chips offer, Monday first —
+ * matching the server's vocabulary (RepeatDays) and the order it stores a
+ * selection in, so what the app shows and what the server stores agree. */
+internal val REPEAT_DAYS = listOf("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
 /** Bounds of the structured count, kept in step with the server. */
 internal const val REPEAT_EVERY_MIN = 1
 internal const val REPEAT_EVERY_MAX = 28
 
-/** The draft's recurrence as (every, unit, customText), or null when it is
- * inconsistent — a custom condition with no words, or a count outside
- * 1-28, or a half-typed number. Save stays disabled until it parses. */
-internal fun ServerTaskDraft.repeatOrNull(): Triple<Int, String, String>? {
+/** The chip label for one weekday value: "mon" -> "Mon". The server's
+ * DayLabel, mirrored — an unknown value is shown as it arrived rather than
+ * hidden, so a selection the app cannot name is still visible. */
+internal fun dayLabel(day: String): String =
+    day.replaceFirstChar { it.uppercase(Locale.ROOT) }
+
+/**
+ * Canonicalises a weekday selection the way the server does: trims, lowercases,
+ * drops duplicates, and sorts into calendar order.
+ *
+ * Unknown values are DROPPED here, unlike server-side — the chips can only
+ * produce known ones, so anything else came from a hand-edited response, and
+ * sending it back would earn a 422. Dropping it means the round-trip compare
+ * (contractMismatches) reports the difference instead of the write failing.
+ */
+internal fun canonicalRepeatDays(days: List<String>): List<String> {
+    val kept = days.map { it.trim().lowercase(Locale.ROOT) }.toSet()
+    return REPEAT_DAYS.filter { it in kept }
+}
+
+/**
+ * The server's selected-days rule (#304): the due date the user picked is the
+ * FIRST occurrence, so it has to be one of the days.
+ *
+ * Mirrored here so the form cannot enable Save on a write the server rejects —
+ * the same contract [repeatOrNull] keeps for the count and the custom words.
+ * A date that will not parse is false, not an exception: a half-picked form is
+ * an ordinary state to be in, not a fault.
+ */
+internal fun dueDateIsSelectedDay(dueDate: String, days: List<String>): Boolean {
+    if (days.isEmpty()) return true
+    val date = runCatching { java.time.LocalDate.parse(dueDate.trim()) }.getOrNull()
+        ?: return false
+    // DayOfWeek is MONDAY = 1, and REPEAT_DAYS starts at Monday.
+    return REPEAT_DAYS[date.dayOfWeek.value - 1] in canonicalRepeatDays(days)
+}
+
+/**
+ * The draft's recurrence in the server's shape: an interval cadence, a
+ * selected-days cadence, or a custom condition. [RepeatDraft.oneShot] is the
+ * all-zero case, and null means the draft is inconsistent — a custom condition
+ * with no words, a count outside 1-28, a half-typed number, or a selection that
+ * canonicalises to nothing. Save stays disabled until it parses.
+ *
+ * One shape at a time by construction, which is what the server requires: the
+ * dialog clears the other modes as it enters one (see ServerTaskDialog), so a
+ * user cannot describe two cadences and have the server pick one of them.
+ */
+internal data class RepeatDraft(
+    val every: Int = 0,
+    val unit: String = "",
+    val days: List<String> = emptyList(),
+    val custom: Boolean = false,
+    val text: String = "",
+) {
+    /** True when nothing repeats: the one-shot case. */
+    val oneShot: Boolean get() = every == 0 && unit.isEmpty() && days.isEmpty() && !custom && text.isEmpty()
+}
+
+internal fun ServerTaskDraft.repeatOrNull(): RepeatDraft? {
     if (repeatCustom) {
         val text = repeatRule.trim()
-        return if (text.isEmpty()) null else Triple(0, "", text)
+        return if (text.isEmpty()) null else RepeatDraft(custom = true, text = text)
+    }
+    if (repeatDays.isNotEmpty()) {
+        val days = canonicalRepeatDays(repeatDays)
+        if (days.isEmpty()) return null
+        return RepeatDraft(days = days)
     }
     val typed = repeatEvery.trim()
     if (typed.isEmpty()) {
         // No cadence: one-shot.
-        return Triple(0, "", "")
+        return RepeatDraft()
     }
     val every = typed.toIntOrNull() ?: return null
     if (every < REPEAT_EVERY_MIN || every > REPEAT_EVERY_MAX) return null
     if (repeatUnit !in REPEAT_UNITS) return null
-    return Triple(every, repeatUnit, "")
+    return RepeatDraft(every = every, unit = repeatUnit)
 }
 
 /**
@@ -255,8 +323,12 @@ internal fun ServerTaskDraft.repeatOrNull(): Triple<Int, String, String>? {
  * server's `TaskContractVersion` whenever the contract changes — a renamed
  * key, a new shape, a different rollover envelope — so a stale install on
  * either side reads as a version disagreement instead of silent wrong data.
+ *
+ * 2 — the `repeat_days` selection (#304). A new field, and an old app reading
+ * a selected-days task as a one-shot is the same silent wrong data this number
+ * exists to make loud.
  */
-internal const val TASK_CONTRACT_VERSION = 1
+internal const val TASK_CONTRACT_VERSION = 2
 
 /** Prefs key for the highest task contract this install has spoken (#185). */
 internal const val CONTRACT_VERSION_SEEN_KEY = "contract_version_seen"
@@ -280,6 +352,7 @@ internal val TASK_CREATE_KEYS = listOf(
     "parallelable",
     "repeat_every",
     "repeat_unit",
+    "repeat_days",
     "repeat_custom",
     "repeat_rule",
 )
@@ -358,6 +431,7 @@ internal data class TaskContractSent(
     val estimatedMinutes: Int? = null,
     val repeatEvery: Int? = null,
     val repeatUnit: String? = null,
+    val repeatDays: List<String>? = null,
     val repeatCustom: Boolean? = null,
     val repeatRule: String? = null,
     val parallelable: Boolean? = null,
@@ -432,6 +506,15 @@ internal fun contractMismatches(
     }
     if (sent.repeatUnit != null && sent.repeatUnit.trim() != got.repeatUnit.trim()) {
         out += "repeat_unit"
+    }
+    // Compared as canonical SELECTIONS, not as lists — the trim-insensitive rule
+    // above, extended to a field where "the same value" means the same days in
+    // any order or case. Both sides canonicalise (the app before sending, the
+    // server before storing), so a difference that survives that is real.
+    if (sent.repeatDays != null &&
+        canonicalRepeatDays(sent.repeatDays) != canonicalRepeatDays(got.repeatDays)
+    ) {
+        out += "repeat_days"
     }
     if (sent.repeatCustom != null && sent.repeatCustom != got.repeatCustom) {
         out += "repeat_custom"

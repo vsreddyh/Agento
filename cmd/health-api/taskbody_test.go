@@ -56,8 +56,8 @@ func TestFingerprintCoversEveryConsumedField(t *testing.T) {
 		"name": "task", "description": "d",
 		"due_date": "2026-10-05", "due_time": "08:00",
 		"estimated_minutes": 5, "parallelable": false,
-		"repeat_every": 1, "repeat_unit": "days",
-		"repeat_custom": false, "repeat_rule": "",
+		"repeat_every": 0, "repeat_unit": "",
+		"repeat_days": []any{"mon"}, "repeat_custom": false, "repeat_rule": "",
 	}
 	baseFP := taskFingerprint(base)
 	if baseFP == "" {
@@ -71,7 +71,7 @@ func TestFingerprintCoversEveryConsumedField(t *testing.T) {
 		"due_date": "2026-10-06", "due_time": "09:00",
 		"estimated_minutes": 30, "parallelable": true,
 		"repeat_every": 2, "repeat_unit": "weeks",
-		"repeat_custom": true, "repeat_rule": "3rd Friday",
+		"repeat_days": []any{"tue", "thu"}, "repeat_custom": true, "repeat_rule": "3rd Friday",
 	}
 	for _, k := range taskCreateFields {
 		if _, ok := differ[k]; !ok {
@@ -126,7 +126,7 @@ func TestFingerprintTreatsAbsentAndEmptyAlike(t *testing.T) {
 		"name": "t", "description": "d",
 		"due_date": "2026-10-05", "due_time": "08:00",
 		"estimated_minutes": 5, "parallelable": false,
-		"repeat_custom": false, "repeat_rule": "",
+		"repeat_days": []any{}, "repeat_custom": false, "repeat_rule": "",
 	}
 	without := map[string]any{
 		"name": "t", "description": "d",
@@ -150,13 +150,13 @@ func TestAbsentAndExplicitZeroAgreeForEveryField(t *testing.T) {
 		"due_date": "2026-10-05", "due_time": "08:00",
 		"estimated_minutes": 5, "parallelable": true,
 		"repeat_every": 2, "repeat_unit": "weeks",
-		"repeat_custom": true, "repeat_rule": "3rd Friday",
+		"repeat_days": []any{"mon", "wed"}, "repeat_custom": true, "repeat_rule": "3rd Friday",
 	}
 	// For each key, the zero value of its type as the store would read it.
 	zeros := map[string]any{
 		"description": "", "due_time": "", "repeat_unit": "", "repeat_rule": "",
 		"estimated_minutes": 0, "repeat_every": 0,
-		"parallelable": false, "repeat_custom": false,
+		"repeat_days": []any{}, "parallelable": false, "repeat_custom": false,
 	}
 	for k, zero := range zeros {
 		mutated := make(map[string]any, len(full))
@@ -238,7 +238,54 @@ func TestFingerprintAgreesWithWhatTheStoreTrims(t *testing.T) {
 	}
 }
 
-// The liveness probe must never be throttled: compose healthchecks /health with
+// The digest must agree with the STORE about what "the same request" means for the
+// selected-days field too (#304): the store canonicalises a selection (case, order,
+// duplicates), so two bodies that create the SAME task must hash the same — and two
+// genuinely different selections must still hash differently, or a real edit would
+// replay as the task it was meant to change.
+func TestFingerprintCanonicalisesRepeatDays(t *testing.T) {
+	body := func(days any) map[string]any {
+		return map[string]any{
+			"name": "gym", "description": "leg day",
+			"due_date": "2026-10-05", "due_time": "18:00",
+			"estimated_minutes": 60, "parallelable": false,
+			"repeat_every": 0, "repeat_unit": "",
+			"repeat_days": days, "repeat_custom": false, "repeat_rule": "",
+		}
+	}
+	canonical := taskFingerprint(body([]any{"mon", "wed"}))
+	if canonical == "" {
+		t.Fatal("a days body produced no fingerprint")
+	}
+	for name, same := range map[string]any{
+		"mixed case":       []any{"MON", "Wed"},
+		"reversed order":   []any{"wed", "mon"},
+		"duplicated entry": []any{"mon", "mon", "wed"},
+		"padded entry":     []any{" mon ", "wed"},
+	} {
+		if got := taskFingerprint(body(same)); got != canonical {
+			t.Errorf("%s digests differently, but the store canonicalises it into the "+
+				"same task — a legitimate retry would 422 instead of replaying", name)
+		}
+	}
+	// The other direction: two DIFFERENT selections must not collide.
+	if taskFingerprint(body([]any{"mon", "tue"})) == canonical {
+		t.Error("two different selections digest identically — a real edit would replay " +
+			"as the task it was meant to change")
+	}
+	// And an absent selection and an explicit empty one are the same request: the
+	// store reads both as "not this mode".
+	deleteAll := body([]any{"mon"})
+	delete(deleteAll, "repeat_days")
+	if taskFingerprint(deleteAll) != taskFingerprint(body([]any{})) {
+		t.Error("an absent repeat_days and an empty one digest differently; the store " +
+			"reads them alike, so the digest must too")
+	}
+	if taskFingerprint(deleteAll) == canonical {
+		t.Error("dropping the selection entirely digest the same as selecting days")
+	}
+}
+
 // `curl -f`, so a 429 under load fails the probe and can mark the container unhealthy
 // exactly when it is already struggling. /health touches no database, so throttling it
 // protects nothing.

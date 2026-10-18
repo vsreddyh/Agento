@@ -8,6 +8,19 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.4.0]
+- **Repeats: pick the days of the week** (#304). The task editor gains a
+  **Select days** row — Mon…Sun chips, always weekly — as a third shape
+  alongside "every N days/weeks/months/years" and the custom condition, so
+  "gym Mon/Wed/Fri" no longer needs the free-text box. It is a STRUCTURED
+  repeat: the server creates each next occurrence on completion, exactly like
+  the count-based cadence, and the due date you pick must be one of the days
+  you selected (the form says so and keeps Save disabled until it is). The
+  agent's `task-manager` tools and skill speak the same shape, so chat can
+  create and roll one over too. The task contract is now `2` — the response
+  carries `repeat_days` — so an older server or install warns instead of
+  reading a days task as a one-shot.
+
 ## [5.3.0]
 - **Task reminders finish #287: Skip, Instruct Agent, honest copy** (#287).
   Every reminder now carries all three actions: `[Completed]` (existing),

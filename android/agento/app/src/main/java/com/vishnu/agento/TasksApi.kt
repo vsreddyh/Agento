@@ -12,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.Locale
@@ -29,10 +30,12 @@ data class ServerTask(
     val dueDate: String = "",
     val dueTime: String = "",
     val estimatedMinutes: Int = 0,
-    // Recurrence: either structured (every N unit) or custom (the user's
-    // own words in repeatRule). 0/""/false everywhere = one-shot.
+    // Recurrence: a structured interval (every N unit), a structured weekly
+    // selection of days, or a custom condition (the user's own words in
+    // repeatRule). 0/""/[]/false everywhere = one-shot.
     val repeatEvery: Int = 0,
     val repeatUnit: String = "",
+    val repeatDays: List<String> = emptyList(),
     val repeatCustom: Boolean = false,
     val repeatRule: String = "",
     val parallelable: Boolean = false,
@@ -143,18 +146,30 @@ fun ServerTask.startToDueLine(today: java.time.LocalDate): String {
     return "$start → $time"
 }
 
-/** True when the task repeats at all: a structured cadence or a custom
- * condition. One-shot tasks must not open a recreate draft. */
+/** True when the task repeats at all: a structured cadence (interval or
+ * selected days) or a custom condition. One-shot tasks must not open a
+ * recreate draft. */
 val ServerTask.hasRepeat: Boolean
-    get() = repeatCustom || repeatEvery > 0 || repeatRule.isNotEmpty()
+    get() = repeatCustom || repeatEvery > 0 || repeatDays.isNotEmpty() || repeatRule.isNotEmpty()
 
 /** Human repeat line, matching the server's rendering: "Every 3 days",
- * the custom words verbatim, or "" for a one-shot task. */
+ * "Mon, Wed, Fri", the custom words verbatim, or "" for a one-shot task. */
 fun ServerTask.repeatLabel(): String =
-    repeatLabel(repeatEvery, repeatUnit, repeatCustom, repeatRule)
+    repeatLabel(repeatEvery, repeatUnit, repeatDays, repeatCustom, repeatRule)
 
-/** The same rendering for any source of the four fields. */
-fun repeatLabel(every: Int, unit: String, custom: Boolean, text: String): String {
+/** The same rendering for any source of the recurrence fields. */
+fun repeatLabel(
+    every: Int,
+    unit: String,
+    days: List<String>,
+    custom: Boolean,
+    text: String,
+): String {
+    if (days.isNotEmpty()) {
+        // The server's Repeat.String, mirrored: the stored selection is already
+        // canonical, so this never has to sort or de-duplicate.
+        return days.joinToString(", ") { dayLabel(it) }
+    }
     // every <= 0 rather than == 0: a stray or half-migrated doc must never
     // render "Every day" from a zero count.
     if (custom || every <= 0 || unit.isEmpty()) return text
@@ -204,6 +219,7 @@ class TasksApi(context: Context) {
             estimatedMinutes: Int? = null,
             repeatEvery: Int? = null,
             repeatUnit: String? = null,
+            repeatDays: List<String>? = null,
             repeatCustom: Boolean? = null,
             repeatRule: String? = null,
             parallelable: Boolean? = null,
@@ -215,6 +231,11 @@ class TasksApi(context: Context) {
             estimatedMinutes = estimatedMinutes,
             repeatEvery = repeatEvery,
             repeatUnit = repeatUnit?.trim(),
+            // Canonicalised here, next to the trims, for the same reason: the
+            // body is written from `sent`, so what is asserted has to be what is
+            // sent. Null in means null out (an update that did not touch the
+            // selection asserts nothing about it).
+            repeatDays = repeatDays?.let { canonicalRepeatDays(it) },
             repeatCustom = repeatCustom,
             repeatRule = repeatRule?.trim(),
             parallelable = parallelable,
@@ -264,6 +285,22 @@ class TasksApi(context: Context) {
     private fun optStr(o: JSONObject, key: String): String =
         if (o.isNull(key)) "" else o.optString(key, "").trim()
 
+    /** Lenient weekday-selection read (#304): a missing or mistyped key is an
+     * empty selection rather than a parse failure — the whole parse path is
+     * lenient across shapes, and the round-trip compare is what reports a
+     * server that stored something the app did not ask for. Values are
+     * canonicalised on the way in so a display and a comparison both start from
+     * the same spelling the server stores. */
+    private fun optDays(o: JSONObject, key: String): List<String> {
+        val arr = o.optJSONArray(key) ?: return emptyList()
+        val raw = mutableListOf<String>()
+        for (i in 0 until arr.length()) {
+            val s = arr.optString(i, "").trim()
+            if (s.isNotEmpty()) raw.add(s)
+        }
+        return canonicalRepeatDays(raw)
+    }
+
     private fun parseTask(o: JSONObject): ServerTask? {
         val id = optStr(o, "id")
             .ifEmpty { optStr(o, "_id") }
@@ -287,6 +324,7 @@ class TasksApi(context: Context) {
             estimatedMinutes = mins.coerceAtLeast(0),
             repeatEvery = (o.opt("repeat_every") as? Number)?.toInt() ?: 0,
             repeatUnit = optStr(o, "repeat_unit"),
+            repeatDays = optDays(o, "repeat_days"),
             repeatCustom = o.optBoolean("repeat_custom", false),
             repeatRule = optStr(o, "repeat_rule"),
             parallelable = o.optBoolean("parallelable", false),
@@ -423,8 +461,9 @@ class TasksApi(context: Context) {
         }
 
     /** Creates a task. Everything except the repeat is required — the
-     * server rejects missing keys (all-zero repeat = one-shot). The
-     * repeat is either structured or custom, never both. */
+     * server rejects missing keys (all-zero repeat = one-shot). The repeat is
+     * one of three shapes — an interval cadence, a selected-days cadence, or a
+     * custom condition — never a combination. */
     suspend fun create(
         name: String,
         description: String,
@@ -433,6 +472,7 @@ class TasksApi(context: Context) {
         estimatedMinutes: Int,
         repeatEvery: Int = 0,
         repeatUnit: String = "",
+        repeatDays: List<String> = emptyList(),
         repeatCustom: Boolean = false,
         repeatRule: String = "",
         parallelable: Boolean = false,
@@ -464,6 +504,7 @@ class TasksApi(context: Context) {
             estimatedMinutes = estimatedMinutes,
             repeatEvery = repeatEvery,
             repeatUnit = repeatUnit,
+            repeatDays = repeatDays,
             repeatCustom = repeatCustom,
             repeatRule = repeatRule,
             parallelable = parallelable,
@@ -480,8 +521,8 @@ class TasksApi(context: Context) {
         // coroutine and show no toast at all.
         if (sent.name == null || sent.description == null || sent.dueDate == null ||
             sent.dueTime == null || sent.estimatedMinutes == null || sent.parallelable == null ||
-            sent.repeatEvery == null || sent.repeatUnit == null || sent.repeatCustom == null ||
-            sent.repeatRule == null
+            sent.repeatEvery == null || sent.repeatUnit == null || sent.repeatDays == null ||
+            sent.repeatCustom == null || sent.repeatRule == null
         ) {
             return@withContext Result.failure(
                 IllegalStateException("create: builder dropped a required field"),
@@ -504,6 +545,11 @@ class TasksApi(context: Context) {
             "parallelable" to sent.parallelable,
             "repeat_every" to sent.repeatEvery,
             "repeat_unit" to sent.repeatUnit,
+            // An explicit JSONArray rather than the List itself: JSONObject.put
+            // accepts any Object, so a raw Collection would rely on the writer
+            // to notice it is one. Building the array here keeps the wire shape
+            // visible at the one place that decides it.
+            "repeat_days" to JSONArray(sent.repeatDays),
             "repeat_custom" to sent.repeatCustom,
             "repeat_rule" to sent.repeatRule,
         )
@@ -542,6 +588,7 @@ class TasksApi(context: Context) {
      *
      * Enforcing it would mean rejecting a half-repeat update outright, which changes the
      * API contract and belongs with the other deferred parts of #185, not in a KDoc fix.
+     * (#304 adds `repeatDays` as a fifth key with the same convention.)
      */
     suspend fun update(
         id: String,
@@ -552,6 +599,7 @@ class TasksApi(context: Context) {
         estimatedMinutes: Int? = null,
         repeatEvery: Int? = null,
         repeatUnit: String? = null,
+        repeatDays: List<String>? = null,
         repeatCustom: Boolean? = null,
         repeatRule: String? = null,
         parallelable: Boolean? = null,
@@ -579,6 +627,7 @@ class TasksApi(context: Context) {
             estimatedMinutes = estimatedMinutes,
             repeatEvery = repeatEvery,
             repeatUnit = repeatUnit,
+            repeatDays = repeatDays,
             repeatCustom = repeatCustom,
             repeatRule = repeatRule,
             parallelable = parallelable,
@@ -591,6 +640,10 @@ class TasksApi(context: Context) {
         sent.estimatedMinutes?.let { body.put("estimated_minutes", it) }
         sent.repeatEvery?.let { body.put("repeat_every", it) }
         sent.repeatUnit?.let { body.put("repeat_unit", it) }
+        // An empty list is a REAL value here: it is how the app says "this task
+        // no longer repeats on selected days". `?.let` keeps a null (not sent)
+        // distinct from it, exactly like the strings above.
+        sent.repeatDays?.let { body.put("repeat_days", JSONArray(it)) }
         sent.repeatCustom?.let { body.put("repeat_custom", it) }
         sent.repeatRule?.let { body.put("repeat_rule", it) }
         sent.parallelable?.let { body.put("parallelable", it) }

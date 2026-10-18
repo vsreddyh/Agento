@@ -46,6 +46,9 @@ class TaskContractTest {
         estimatedMinutes = 5,
         repeatEvery = 1,
         repeatUnit = "days",
+        // create() sends the selection explicitly, even as an empty list, so the
+        // fixture asserts one — an interval task has no days, which is a value.
+        repeatDays = emptyList(),
         repeatCustom = false,
         repeatRule = "",
         parallelable = false,
@@ -69,6 +72,7 @@ class TaskContractTest {
         estimatedMinutes = s.estimatedMinutes ?: 0,
         repeatEvery = s.repeatEvery ?: 0,
         repeatUnit = s.repeatUnit ?: "",
+        repeatDays = s.repeatDays.orEmpty(),
         repeatCustom = s.repeatCustom ?: false,
         repeatRule = s.repeatRule ?: "",
         parallelable = s.parallelable ?: false,
@@ -134,6 +138,46 @@ class TaskContractTest {
         assertEquals(emptyList<String>(), contractMismatches(s, stored(s)))
         val got = stored(s).copy(repeatRule = "every other sunday")
         assertEquals(listOf("repeat_rule"), contractMismatches(s, got))
+    }
+
+    @Test
+    fun `a selection the server dropped is reported`() {
+        // #304 in the shape of the 4.6.0 bug: the app asked for "Mon, Wed, Fri"
+        // and the server stored a one-shot. Every other field agrees, so without
+        // this arm the task would read as not repeating at all, silently.
+        val s = daily().copy(repeatEvery = 0, repeatUnit = "", repeatDays = listOf("mon", "wed", "fri"))
+        assertEquals(emptyList<String>(), contractMismatches(s, stored(s)))
+        val got = stored(s).copy(repeatDays = emptyList())
+        assertTrue(
+            "a dropped selection must be reported, got ${contractMismatches(s, got)}",
+            contractMismatches(s, got).contains("repeat_days"),
+        )
+    }
+
+    @Test
+    fun `a selection the server changed is reported`() {
+        val s = daily().copy(repeatEvery = 0, repeatUnit = "", repeatDays = listOf("mon", "wed"))
+        val got = stored(s).copy(repeatDays = listOf("mon", "tue"))
+        assertEquals(listOf("repeat_days"), contractMismatches(s, got))
+    }
+
+    @Test
+    fun `order and case are not a selection break`() {
+        // Both sides canonicalise — the app before sending, the server before
+        // storing — so a selection that agrees as a SET is agreement. Flagging it
+        // would fire on every write and teach people to ignore the warning.
+        val s = daily().copy(repeatEvery = 0, repeatUnit = "", repeatDays = listOf("Wed", "mon"))
+        val got = stored(s).copy(repeatDays = listOf("mon", "wed"))
+        assertEquals(emptyList<String>(), contractMismatches(s, got))
+    }
+
+    @Test
+    fun `a selection the app never sent is not asserted`() {
+        // A partial edit that left the recurrence alone knows nothing about the
+        // selection: null, not "empty", or every name-only edit would warn.
+        val s = daily().copy(repeatDays = null)
+        val got = stored(daily()).copy(repeatDays = listOf("sat"))
+        assertEquals(emptyList<String>(), contractMismatches(s, got))
     }
 
     @Test
@@ -531,6 +575,7 @@ class UpdateContractWiringTest {
             estimatedMinutes = 5,
             repeatEvery = 1,
             repeatUnit = "  days ",
+            repeatDays = emptyList(),
             repeatCustom = false,
             repeatRule = "",
             parallelable = false,
@@ -550,11 +595,12 @@ class UpdateContractWiringTest {
             "create must assert every field it sends",
             listOf(
                 created.name, created.description, created.dueDate, created.dueTime,
-                created.repeatUnit, created.repeatRule,
+                created.repeatUnit, created.repeatDays, created.repeatRule,
             ).all { it != null },
         )
         assertEquals(5, created.estimatedMinutes)
         assertEquals(1, created.repeatEvery)
+        assertEquals(emptyList<String>(), created.repeatDays)
         assertEquals(false, created.repeatCustom)
         assertEquals(false, created.parallelable)
     }
