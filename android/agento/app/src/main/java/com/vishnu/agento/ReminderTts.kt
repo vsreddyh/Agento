@@ -165,8 +165,9 @@ object ReminderTts {
             // advance. Uncaught here it would escape from onDone/onError's thread.
             val rc = runCatching {
                 eng.speak(next.second, TextToSpeech.QUEUE_ADD, null, next.first)
-            }.getOrElse {
-                Log.w("ReminderTts", "speak threw, advancing queue", it)
+            }.getOrNull()
+            if (rc == null) {
+                Log.w("ReminderTts", "speak threw, advancing queue")
                 synchronized(lock) { speaking = false }
                 continue
             }
