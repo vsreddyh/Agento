@@ -776,7 +776,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 TaskReminders.rearmOverdue(appCtx, taskId)
             }
         }
-        val name = task?.name.orEmpty().ifEmpty { "Task due" }
+        val name = task?.name.orEmpty().ifEmpty { FALLBACK_TASK_NAME }
         val today = LocalDate.now(IST)
         val dueLine = if (task != null) {
             friendlyDue(task.dueDate, task.dueTime, today)

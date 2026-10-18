@@ -1406,6 +1406,9 @@ internal fun ServerTaskDialog(
                     label = { Text("Speak as (voice)") },
                     placeholder = { Text("e.g. pay the power bill") },
                     singleLine = true,
+                    supportingText = {
+                        Text("${speakName.toByteArray(Charsets.UTF_8).size}/$SPEAK_NAME_MAX_BYTES")
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(

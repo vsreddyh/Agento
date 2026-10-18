@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"agento/internal/tasks"
 )
@@ -477,5 +478,25 @@ func TestFingerprintTruncatesSpeakNameLikeTheStore(t *testing.T) {
 	if taskFingerprint(over) != taskFingerprint(capped) {
 		t.Error("speak_name past the cap digests differently, but the store truncates " +
 			"it — a legitimate retry would 422 instead of replaying")
+	}
+	// Multibyte parity: the cap is bytes at a rune boundary, so a phrase of
+	// 200 "é" (400 bytes) must digest the same as its stored form — and the
+	// stored form must decode cleanly (no half-rune at the cut).
+	multi := map[string]any{}
+	for k, v := range base {
+		multi[k] = v
+	}
+	multi["speak_name"] = strings.Repeat("é", 200)
+	cappedMulti := map[string]any{}
+	for k, v := range base {
+		cappedMulti[k] = v
+	}
+	cappedMulti["speak_name"] = tasks.TruncateBytes(strings.Repeat("é", 200), 120)
+	if taskFingerprint(multi) != taskFingerprint(cappedMulti) {
+		t.Error("multibyte speak_name past the cap digests differently from its " +
+			"truncated form — a legitimate retry would 422 instead of replaying")
+	}
+	if got := cappedMulti["speak_name"].(string); !utf8.ValidString(got) {
+		t.Errorf("truncated speak_name is not valid UTF-8: %q", got)
 	}
 }

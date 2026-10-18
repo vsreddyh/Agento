@@ -5,13 +5,16 @@ package com.vishnu.agento
  * which is the lock-screen line: speech names the task so a hands-free
  * listener knows *what* fired without looking.
  */
+/** Name spoken when the task could not be fetched — one string, not two. */
+internal const val FALLBACK_TASK_NAME = "Task due"
+
 internal fun reminderSpeech(
     kind: ReminderKind,
     taskName: String,
     speakName: String = "",
     overdueElapsed: Long? = null,
 ): String {
-    val name = speakName.ifBlank { taskName }.ifEmpty { "Task due" }
+    val name = speakName.ifBlank { taskName }.ifEmpty { FALLBACK_TASK_NAME }
     return when (kind) {
         ReminderKind.BeforeStart ->
             "In ${TaskReminders.BEFORE_START_MINUTES} minutes you need to start \"$name\""

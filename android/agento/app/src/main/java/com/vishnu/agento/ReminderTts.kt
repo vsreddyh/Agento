@@ -17,12 +17,15 @@ import java.util.UUID
  */
 object ReminderTts {
     private const val MAX_QUEUED = 10
+    /** Watchdog: an utterance that never completes frees the queue after this. */
+    private const val SPEAK_TIMEOUT_MS = 60_000L
     private val lock = Any()
     private val queue = ArrayDeque<Pair<String, String>>()
     @Volatile private var engine: TextToSpeech? = null
     private var ready = false
     private var inited = false
     private var speaking = false
+    private var speakStartedAt = 0L
 
     private val progressListener = object : UtteranceProgressListener() {
         override fun onStart(utteranceId: String) = Unit
@@ -49,8 +52,9 @@ object ReminderTts {
             .replace("\"", "").replace(Regex("[“”]"), "")
         val id = "${kind.key}-${UUID.randomUUID()}"
         synchronized(lock) {
-            // Bounded: an OEM that never fires the init callback would
-            // otherwise grow this forever (ready stays false, nothing drains).
+            // Bounded, drop-oldest: for a stuck engine nothing speaks anyway,
+            // and for a transient burst the freshest alarm is the most relevant
+            // one to keep — the visual notification still posts for every alarm.
             while (queue.size >= MAX_QUEUED) {
                 val dropped = queue.removeFirst()
                 Log.w("ReminderTts", "queue full, dropping oldest speech ${dropped.first}")
@@ -121,9 +125,19 @@ object ReminderTts {
         while (true) {
             val next: Pair<String, String>?
             synchronized(lock) {
+                // Watchdog: an utterance the engine accepted but never completes
+                // (no onDone/onError) must not wedge the queue until process death.
+                // Utterances are seconds long; a minute means stuck.
+                if (speaking && System.currentTimeMillis() - speakStartedAt > SPEAK_TIMEOUT_MS) {
+                    Log.w("ReminderTts", "speech timed out, advancing queue")
+                    speaking = false
+                }
                 if (!ready || speaking) return
                 next = queue.removeFirstOrNull()
-                if (next != null) speaking = true
+                if (next != null) {
+                    speaking = true
+                    speakStartedAt = System.currentTimeMillis()
+                }
             }
             if (next == null) return
             val eng = engine
