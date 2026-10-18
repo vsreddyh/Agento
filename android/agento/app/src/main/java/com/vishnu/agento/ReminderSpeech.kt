@@ -16,8 +16,9 @@ internal fun reminderSpeech(
 ): String {
     // Capped like speak_name: the list name has no server-side cap, so the
     // fallback path most tasks actually speak gets the same 120-byte budget.
+    // Both stages blank-checked: a whitespace-only name speaks the fallback.
     val name = truncateUtf8Bytes(
-        speakName.ifBlank { taskName }.ifEmpty { FALLBACK_TASK_NAME },
+        speakName.ifBlank { taskName }.ifBlank { FALLBACK_TASK_NAME },
         SPEAK_NAME_MAX_BYTES,
     )
     return when (kind) {

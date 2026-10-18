@@ -1087,7 +1087,11 @@ func TruncateBytes(s string, max int) string {
 		return s
 	}
 	cut := max
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
+	// The `cut < len(s)` guard is defence in depth (the early return above is
+	// the only thing keeping `s[cut]` in range today), mirroring the Kotlin
+	// side's bound check — if either early return is refactored, the loop must
+	// still terminate instead of panicking.
+	for cut > 0 && cut < len(s) && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
 	return s[:cut]

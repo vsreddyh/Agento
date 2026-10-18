@@ -133,24 +133,28 @@ object ReminderTts {
         } else {
             val dead = engine
             synchronized(lock) {
-                queue.clear()
+                // Kept, not cleared: an alarm enqueued while this init was in
+                // flight arrived after the failure was decided — wiping it
+                // would drop a voice whose notification just posted. The queue
+                // is bounded anyway, and the retry speaks it.
                 // Retry, don't seal: leaving inited=true with ready=false
                 // would queue-but-never-speak forever after one failure.
                 inited = false
                 engine = null
             }
             runCatching { dead?.shutdown() }
-            Log.w("ReminderTts", "engine init failed, dropping queued speech; will retry")
+            Log.w("ReminderTts", "engine init failed, keeping queued speech for retry")
         }
     }
 
     private fun pump() {
         while (true) {
-            // The engine snapshot leaves the lock non-null: reading `engine`
-            // into a local first keeps the null check and the dequeue ordered
-            // (a synchronous-init callback's pump() must see null and wait for
-            // the outer pump(), never dequeue-then-drop).
-            val eng: TextToSpeech = synchronized(lock) {
+            // ONE critical section for check + dequeue + throttle: two separate
+            // blocks let concurrent speak()/onDone pass the guard together and
+            // fire two concurrent eng.speak calls. The engine snapshot leaves
+            // the lock non-null, so a synchronous-init callback's pump() still
+            // sees null and waits for the outer pump() instead of dropping.
+            val step: Pair<TextToSpeech, Pair<String, String>?> = synchronized(lock) {
                 // Watchdog on a MONOTONIC clock: wall-clock jumps must neither
                 // trip it early nor stall it. Utterances are seconds long;
                 // a minute means stuck.
@@ -159,16 +163,15 @@ object ReminderTts {
                     speaking = false
                 }
                 if (!ready || speaking) return
-                engine ?: return
-            }
-            val next: Pair<String, String>? = synchronized(lock) {
+                val eng = engine ?: return
                 val n = queue.removeFirstOrNull()
                 if (n != null) {
                     speaking = true
                     speakStartedAt = SystemClock.uptimeMillis()
                 }
-                n
+                eng to n
             }
+            val (eng, next) = step
             if (next == null) return
             // A throw (broken OEM binder state) counts like ERROR: clear and
             // advance. Uncaught here it would escape from onDone/onError's thread.
