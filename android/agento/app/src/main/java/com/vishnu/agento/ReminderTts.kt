@@ -189,14 +189,13 @@ object ReminderTts {
                     speakStartedAt = SystemClock.uptimeMillis()
                     watchdogGen += 1
                 }
-                eng to (n to watchdogGen)
                 Triple(eng, n, watchdogGen)
             }
             val (eng, next, wgen) = step
             // Posted outside the lock: postDelayed only enqueues, and the
             // critical section should end before it. Guarded: a no-main-looper
-            // environment (local unit test) must not wedge `speaking` after
-            // the dequeue above — on failure the item goes back to the head.
+            // environment (local unit test) requeues and bails — falling
+            // through would speak a duplicate AND lose the throttle.
             if (next != null) {
                 val posted = runCatching {
                     mainHandler.postDelayed({ watchdogFired(wgen) }, SPEAK_TIMEOUT_MS)
@@ -206,6 +205,7 @@ object ReminderTts {
                         queue.addFirst(next)
                         speaking = false
                     }
+                    return
                 }
             }
             if (next == null) return
