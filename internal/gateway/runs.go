@@ -1142,6 +1142,14 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 				runsError(w, err)
 				return
 			}
+			// A stored `running` row with no live entry is a dead run (terminal
+			// Save failed twice): nothing is executing, so echoing the status
+			// would report success against it. Same 409 as the events path.
+			if run.Status == runs.StatusRunning {
+				apiError(w, http.StatusConflict, "invalid_request_error", "run_status",
+					"this run is no longer executing; its final record was not stored")
+				return
+			}
 			writeJSONResponse(w, http.StatusOK, map[string]any{
 				"ok": true, "status": string(run.Status),
 			})
