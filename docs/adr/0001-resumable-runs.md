@@ -82,6 +82,9 @@ relayed; everything at or below `N` is already inside it. This needs no stored
 event log and no replay: a client that reattaches reconstructs its display from
 the snapshot and continues from the live stream.
 
+The reattach key is the conversation plus the full user turn — text and image
+set. Same text with different images is a different turn (429, not a reattach).
+
 An older client ignores the snapshot frame (unknown keys are skipped by the app)
 and still sees ordinary chat chunks. A run that settled before the client
 subscribed replays its final output as one ordinary delta chunk so that client
@@ -104,5 +107,11 @@ socket is exactly the case this feature exists to make non-destructive.
 - `/api/runs` in the app must use the profile path (`/p/chat/api/runs`);
   unprefixed `/api/*` through the proxy belongs to health-api.
 - Run output is capped on persistence (256 KiB output, 64 KiB reasoning, 4 KB
-  prompt preview, 32 tool names, 100 runs per list). The live in-memory copy is
-  uncapped for the duration of the run.
+  prompt preview, 32 tool names, 100 runs per list). The live output buffer is
+  uncapped for the duration of the run; live reasoning follows the same 64 KiB
+  cap, filled partially rather than dropped at the boundary.
+- The list route shows previews (2 KB output, 1 KB reasoning), not full turns;
+  the detail route keeps everything.
+- Persistence never blocks the turn: the executor offers each second's snapshot
+  to a background loop without waiting, and the terminal write drains after it.
+  The 429 names the profile's in-flight run even across conversations.

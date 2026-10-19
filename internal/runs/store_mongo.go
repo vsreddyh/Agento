@@ -89,6 +89,9 @@ func (s *MongoStore) Get(ctx context.Context, id string) (Run, error) {
 // its TTL because persistence was failing). Losing the record mid-run is worse
 // than recreating it.
 func (s *MongoStore) Save(ctx context.Context, r Run) error {
+	if r.ID == "" {
+		return NewStoreError("run save needs an id", false)
+	}
 	r = r.Capped()
 	_, err := s.runs.ReplaceOne(ctx, bson.M{"_id": r.ID}, r, options.Replace().SetUpsert(true))
 	if err != nil {

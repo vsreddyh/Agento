@@ -49,10 +49,16 @@ func (m *MemoryStore) Get(_ context.Context, id string) (Run, error) {
 	return r.Clone(), nil
 }
 
-// Save replaces an existing run, or inserts it if it is missing.
+// Save replaces an existing run, or inserts it if it is missing. An empty ID
+// is refused rather than stored under "": a Save names a run that Create (or
+// NewID) already identified, and inventing one here would fork the record on
+// every write.
 func (m *MemoryStore) Save(_ context.Context, r Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if r.ID == "" {
+		return NewStoreError("run save needs an id", false)
+	}
 	m.byID[r.ID] = r.Capped()
 	return nil
 }

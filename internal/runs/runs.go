@@ -37,10 +37,20 @@ const (
 	// ListCap bounds one list response.
 	ListCap = 100
 
+	// ListPreviewOutput bounds the per-run output shown by the LIST route.
+	// A full list at ListCap with 256 KiB turns would be tens of megabytes in
+	// one response; the list shows what each turn was about, and the detail
+	// route carries the whole text.
+	ListPreviewOutput = 2000
+
+	// ListPreviewReasoning is the same preview bound for reasoning traces.
+	ListPreviewReasoning = 1000
+
 	// MaxOutput bounds the output persisted per run. The phone renders a
 	// turn, not a log; a runaway tool loop that produced megabytes must not
 	// become a megabyte Mongo document written once a second. The live
-	// in-memory copy is uncapped for the duration of the run.
+	// output buffer is uncapped for the duration of the run (reasoning is
+	// capped live too, filled partially rather than dropped at the boundary).
 	MaxOutput = 256 << 10
 
 	// MaxReasoning bounds the stored reasoning trace. The app already caps
@@ -157,9 +167,17 @@ func NewID() string { return primitive.NewObjectID().Hex() }
 
 // CapText bounds s to at most limit bytes without cutting a UTF-8 rune in half.
 // A truncated value ends with a marker so a reader can tell it is not the whole
-// output.
+// output. The stored document overshoots the limit by the marker (~14 bytes);
+// the bound is on the content kept, not the final field size.
+//
+// Idempotent: a value that already carries the marker is returned unchanged, so
+// a prompt trimmed by TrimPrompt and then stored through Capped is not cut and
+// marked twice.
 func CapText(s string, limit int) string {
 	if limit <= 0 || len(s) <= limit {
+		return s
+	}
+	if strings.HasSuffix(s, truncMarker) {
 		return s
 	}
 	// Walk back to a rune boundary. At most 3 bytes of damage, and the result
@@ -168,8 +186,10 @@ func CapText(s string, limit int) string {
 	for cut > 0 && (s[cut]&0xC0) == 0x80 {
 		cut--
 	}
-	return s[:cut] + "… (truncated)"
+	return s[:cut] + truncMarker
 }
+
+const truncMarker = "… (truncated)"
 
 // Capped returns a copy with the size-bounded fields trimmed for persistence.
 func (r Run) Capped() Run {

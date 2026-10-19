@@ -332,6 +332,135 @@ func TestFinishedRunReplaysOutputForOlderClients(t *testing.T) {
 	}
 }
 
+// Same text but different images is a different turn: it must not reattach to
+// the in-flight run, or the new turn's images would be answered with the old
+// turn's progress.
+func TestSameTextDifferentImagesStartsNewTurn(t *testing.T) {
+	agent := newFakeAgent()
+	srv := newTestServer(t, agent, Config{})
+
+	release := make(chan struct{})
+	agent.mu.Lock()
+	agent.onPrompt = func() { <-release }
+	agent.mu.Unlock()
+
+	imgBody := func(data string) string {
+		return `{"model":"mimo-v2.6-flash","model_options":{"reasoning_effort":"low"},` +
+			`"messages":[{"role":"user","content":[` +
+			`{"type":"text","text":"hi"},` +
+			`{"type":"image_url","image_url":{"url":"data:image/png;base64,` + data + `"}}]}],"stream":true}`
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(imgBody("QUJD")))
+	first = first.WithContext(ctx)
+	first.Header.Set("Content-Type", "application/json")
+	first.Header.Set("Authorization", "Bearer test-token")
+	first.Header.Set("X-Hermes-Session-Id", "conv-img")
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		srv.ServeHTTP(httptest.NewRecorder(), first)
+	}()
+	waitFor(t, func() bool { return agent.sawCommand("prompt") }, "the first turn to start")
+
+	second := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(imgBody("REVG")))
+	second.Header.Set("Content-Type", "application/json")
+	second.Header.Set("Authorization", "Bearer test-token")
+	second.Header.Set("X-Hermes-Session-Id", "conv-img")
+	secondRec := httptest.NewRecorder()
+	srv.ServeHTTP(secondRec, second)
+
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("different images: got %d, want 429. body=%s", secondRec.Code, secondRec.Body)
+	}
+	if secondRec.Header().Get("X-Agento-Run-Id") == "" {
+		t.Fatal("429 must name the in-flight run")
+	}
+	close(release)
+	<-firstDone
+}
+
+// A busy profile names its in-flight run even for a request on another
+// conversation, so that client can look at the run instead of guessing.
+func TestBusyProfileOtherConversationStillNamesRun(t *testing.T) {
+	agent := newFakeAgent()
+	srv := newTestServer(t, agent, Config{})
+
+	release := make(chan struct{})
+	agent.mu.Lock()
+	agent.onPrompt = func() { <-release }
+	agent.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(validBody))
+	first = first.WithContext(ctx)
+	first.Header.Set("Content-Type", "application/json")
+	first.Header.Set("Authorization", "Bearer test-token")
+	first.Header.Set("X-Hermes-Session-Id", "conv-one")
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		srv.ServeHTTP(httptest.NewRecorder(), first)
+	}()
+	var id string
+	waitFor(t, func() bool {
+		list := listRuns(t, srv, "?conversation_id=conv-one")
+		if len(list) == 0 {
+			return false
+		}
+		id = list[0].ID
+		return true
+	}, "the run to be recorded")
+
+	second := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(strings.Replace(validBody, `"content":"hi"`, `"content":"another turn"`, 1)))
+	second.Header.Set("Content-Type", "application/json")
+	second.Header.Set("Authorization", "Bearer test-token")
+	second.Header.Set("X-Hermes-Session-Id", "conv-two")
+	secondRec := httptest.NewRecorder()
+	srv.ServeHTTP(secondRec, second)
+
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second conversation: got %d, want 429. body=%s", secondRec.Code, secondRec.Body)
+	}
+	if got := secondRec.Header().Get("X-Agento-Run-Id"); got != id {
+		t.Fatalf("429 named run %q, want %q", got, id)
+	}
+	close(release)
+	<-firstDone
+}
+
+// The list shows a preview of each run's output, not the whole turn: a full
+// list at cap with large turns must stay a small response. Detail keeps all.
+func TestRunListShowsPreviewDetailKeepsFull(t *testing.T) {
+	agent := newFakeAgent()
+	big := strings.Repeat("x", 5000)
+	agent.events = []pi.Record{textDelta(t, big), {Type: pi.TypeAgentSettled}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token", validBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat: got %d", rec.Code)
+	}
+	list := listRuns(t, srv, "")
+	if len(list) != 1 {
+		t.Fatalf("runs = %+v, want one", list)
+	}
+	if len(list[0].Output) >= len(big) {
+		t.Fatalf("list output is %d bytes for a 5000-byte turn; it must be a preview", len(list[0].Output))
+	}
+	if !strings.Contains(list[0].Output, "… (truncated)") {
+		t.Fatalf("list preview must say it is truncated: %q", list[0].Output[:100])
+	}
+	full := getRun(t, srv, list[0].ID)
+	if full.Output != big {
+		t.Fatalf("detail output is %d bytes, want the full 5000", len(full.Output))
+	}
+}
+
 func TestSteerAndCancelWhileRunning(t *testing.T) {
 	agent := newFakeAgent()
 	srv := newTestServer(t, agent, Config{})
@@ -461,11 +590,9 @@ func TestSamePromptReattachesInsteadOfRerunning(t *testing.T) {
 	agent := newFakeAgent()
 	srv := newTestServer(t, agent, Config{})
 
-	prompted := make(chan struct{})
 	release := make(chan struct{})
 	agent.mu.Lock()
 	agent.onPrompt = func() {
-		close(prompted)
 		<-release
 	}
 	agent.events = []pi.Record{textDelta(t, "once"), {Type: pi.TypeAgentSettled}}
@@ -495,6 +622,25 @@ func TestSamePromptReattachesInsteadOfRerunning(t *testing.T) {
 		defer close(secondDone)
 		srv.ServeHTTP(secondRec, second)
 	}()
+
+	// Wait until the second request has attached to the live run before
+	// releasing the turn. Without this the test races the server: a second
+	// handler descheduled past close(release) below finds a COMPLETED run,
+	// legitimately starts a new turn, and the test fails for scheduling
+	// reasons rather than gateway behaviour. Two subscribers means attached.
+	waitFor(t, func() bool {
+		srv.runs.mu.Lock()
+		defer srv.runs.mu.Unlock()
+		for _, lr := range srv.runs.live {
+			lr.mu.Lock()
+			n := len(lr.subs)
+			lr.mu.Unlock()
+			if n >= 2 {
+				return true
+			}
+		}
+		return false
+	}, "the second request to attach to the run")
 
 	// Release the turn: the reattached request should stream it out.
 	cancel()

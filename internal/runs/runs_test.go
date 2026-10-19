@@ -44,6 +44,27 @@ func TestCapTextLeavesShortTextAlone(t *testing.T) {
 	}
 }
 
+func TestCapTextIsIdempotent(t *testing.T) {
+	// A prompt trimmed by TrimPrompt and then stored through Capped passes
+	// through CapText twice; the second pass must not cut and mark again.
+	once := CapText(strings.Repeat("x", 5000), MaxPrompt)
+	twice := CapText(once, MaxPrompt)
+	if twice != once {
+		t.Fatalf("second cap changed the value: %d bytes vs %d", len(twice), len(once))
+	}
+	if n := strings.Count(twice, "… (truncated)"); n != 1 {
+		t.Fatalf("marker appears %d times, want 1", n)
+	}
+}
+
+func TestSaveNeedsAnID(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	if err := m.Save(ctx, Run{Status: StatusRunning}); err == nil {
+		t.Fatal("Save with no id should fail, not store under an empty key")
+	}
+}
+
 func TestMemoryStoreLifecycle(t *testing.T) {
 	ctx := context.Background()
 	m := NewMemoryStore()

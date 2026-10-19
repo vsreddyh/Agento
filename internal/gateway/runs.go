@@ -3,9 +3,12 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,13 +48,16 @@ type runFrame struct {
 }
 
 type runSnapshot struct {
-	ID         string   `json:"id"`
-	Status     string   `json:"status"`
-	Seq        int64    `json:"seq"`
-	Model      string   `json:"model,omitempty"`
-	Output     string   `json:"output,omitempty"`
-	Reasoning  string   `json:"reasoning,omitempty"`
-	Tools      []string `json:"tools,omitempty"`
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	Seq       int64  `json:"seq"`
+	Model     string `json:"model,omitempty"`
+	Output    string `json:"output,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
+	// Tools is always present, even when empty, matching runWire: the app
+	// parses the snapshot and the list/detail shapes with one helper, and an
+	// omitted-vs-empty difference would make that helper branch for nothing.
+	Tools      []string `json:"tools"`
 	Usage      *usage   `json:"usage,omitempty"`
 	Error      string   `json:"error,omitempty"`
 	CreatedAt  int64    `json:"created_at,omitempty"`
@@ -122,6 +128,19 @@ type liveRun struct {
 	// bounded for storage, but a reattach compares the full text: two different
 	// prompts that share a 4 KB prefix are not the same turn.
 	promptFull string
+	// imagesSig identifies the turn's image set for the reattach comparison.
+	// Text equality alone would attach a new turn carrying different images to
+	// the old one, showing progress for work that is not running.
+	imagesSig string
+
+	// persistCh carries snapshots to the background persist loop, and
+	// persistDone closes when that loop has drained. The executor offers each
+	// tick's snapshot without blocking (a full channel means the store is
+	// slower than the turn, and dropping one interval of detail beats stalling
+	// the live stream); finish closes the channel and waits, so the final
+	// synchronous write is strictly newer than anything the loop wrote.
+	persistCh   chan runs.Run
+	persistDone chan struct{}
 
 	// done closes when the executor has finished (after the store write).
 	done chan struct{}
@@ -134,7 +153,24 @@ func newLiveRun(r runs.Run, agent Agent, completionID string) *liveRun {
 		completionID: completionID,
 		subs:         map[chan runEvent]struct{}{},
 		done:         make(chan struct{}),
+		persistCh:    make(chan runs.Run, 1),
+		persistDone:  make(chan struct{}),
 	}
+}
+
+// imagesSigOf hashes a turn's image set for the reattach comparison. Lengths
+// and MIME types are hashed alongside the bytes: same pixels re-encoded under
+// a different type are not the same turn for the agent.
+func imagesSigOf(images []piImage) string {
+	if len(images) == 0 {
+		return ""
+	}
+	h := sha256.New()
+	for _, img := range images {
+		fmt.Fprintf(h, "%s\x00%d\x00", img.MimeType, len(img.Data))
+		h.Write([]byte(img.Data))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
 func (lr *liveRun) id() string { return lr.run.ID }
@@ -277,8 +313,11 @@ func (lr *liveRun) publishDelta(text, reasoning string, frame chunk) int64 {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 	lr.out.WriteString(text)
-	if lr.reason.Len() < runs.MaxReasoning {
-		lr.reason.WriteString(reasoning)
+	// The live copy is capped like the stored one, but partially rather than
+	// by dropping the whole chunk at the boundary: a long reasoning trace
+	// still shows its head in the snapshot instead of stopping mid-turn.
+	if remaining := runs.MaxReasoning - lr.reason.Len(); remaining > 0 {
+		lr.reason.WriteString(truncateBytes(reasoning, remaining))
 	}
 	lr.seq++
 	ev := runEvent{Seq: lr.seq, Data: data}
@@ -399,10 +438,13 @@ func conversationKey(profile, conversationID string) string {
 
 // begin creates the run record and publishes it to the live map.
 //
-// Store failure is logged, not fatal: a turn that can still run and be observed
-// in this process is better than refusing to answer because the history
-// database is down.
-func (m *runManager) begin(r runs.Run, agent Agent, completionID string, now time.Time) *liveRun {
+// The live registration is synchronous — a client reattaching a millisecond
+// later must find it — but the store Create runs in the background. The caller
+// holds the profile's turnMu here, and a slow database must not hold the
+// profile's only turn slot before the first frame. Save upserts, so a Create
+// that lands after a persist still converges; a duplicate-key failure from
+// that ordering is logged and harmless.
+func (m *runManager) begin(r runs.Run, agent Agent, completionID, imagesSig string, now time.Time) *liveRun {
 	if r.ID == "" {
 		r.ID = runs.NewID()
 	}
@@ -412,6 +454,7 @@ func (m *runManager) begin(r runs.Run, agent Agent, completionID string, now tim
 	r.ExpiresAt = now.Add(runs.DefaultTTL)
 	lr := newLiveRun(r, agent, completionID)
 	lr.promptFull = r.Prompt
+	lr.imagesSig = imagesSig
 	r.Prompt = runs.TrimPrompt(r.Prompt)
 
 	m.mu.Lock()
@@ -421,11 +464,16 @@ func (m *runManager) begin(r runs.Run, agent Agent, completionID string, now tim
 	}
 	m.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := m.store.Create(ctx, r); err != nil {
-		m.logf("runs: create %s: %v (the run continues, unrecorded)", r.ID, err)
-	}
+	go m.persistLoop(lr)
+
+	create := r
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.store.Create(ctx, create); err != nil {
+			m.logf("runs: create %s: %v (the run continues, unrecorded)", create.ID, err)
+		}
+	}()
 	return lr
 }
 
@@ -447,10 +495,33 @@ func (m *runManager) activeForConversation(profile, conversationID string) (*liv
 		return nil, false
 	}
 	lr, ok := m.byID(id)
-	if !ok || !lr.isRunning() {
+	if !ok {
+		return nil, false
+	}
+	if !lr.isRunning() {
 		return nil, false
 	}
 	return lr, true
+}
+
+// activeForProfile returns the profile's in-flight run for any conversation,
+// or false when the profile is idle. Used for the 429: a client on another
+// conversation gets a bare refusal otherwise, with no run to reattach to or
+// cancel.
+func (m *runManager) activeForProfile(profile string) (*liveRun, bool) {
+	m.mu.Lock()
+	lives := make([]*liveRun, 0, len(m.live))
+	for _, lr := range m.live {
+		lives = append(lives, lr)
+	}
+	m.mu.Unlock()
+	for _, lr := range lives {
+		snap := lr.snapshot()
+		if snap.Profile == profile && !snap.Status.Terminal() {
+			return lr, true
+		}
+	}
+	return nil, false
 }
 
 // get returns the live snapshot when the run is executing here, and the stored
@@ -463,29 +534,91 @@ func (m *runManager) get(ctx context.Context, id string) (runs.Run, error) {
 }
 
 func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error) {
-	return m.store.List(ctx, f)
+	stored, err := m.store.List(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	// Overlay the live runs. The store lags the executor by design now — the
+	// Create is background and persists are offered without blocking — so a
+	// list taken mid-turn must show the live state, not the last write. A live
+	// snapshot replaces its stored row, or joins the list when the Create has
+	// not landed yet.
+	m.mu.Lock()
+	lives := make([]*liveRun, 0, len(m.live))
+	for _, lr := range m.live {
+		lives = append(lives, lr)
+	}
+	m.mu.Unlock()
+	byID := make(map[string]int, len(stored)+len(lives))
+	for i, r := range stored {
+		byID[r.ID] = i
+	}
+	for _, lr := range lives {
+		snap := lr.snapshot()
+		if f.Profile != "" && snap.Profile != f.Profile {
+			continue
+		}
+		if f.ConversationID != "" && snap.ConversationID != f.ConversationID {
+			continue
+		}
+		if f.Status != "" && snap.Status != f.Status {
+			continue
+		}
+		if i, ok := byID[snap.ID]; ok {
+			stored[i] = snap
+		} else {
+			byID[snap.ID] = len(stored)
+			stored = append(stored, snap)
+		}
+	}
+	sort.Slice(stored, func(i, j int) bool { return stored[i].CreatedAt > stored[j].CreatedAt })
+	limit := f.Limit
+	if limit <= 0 || limit > runs.ListCap {
+		limit = runs.ListCap
+	}
+	if len(stored) > limit {
+		stored = stored[:limit]
+	}
+	return stored, nil
 }
 
-// persist writes the current accumulated state. Best-effort: a failed write is
-// logged, and the next tick retries with the then-current state, so a short
-// outage loses at most one interval of detail rather than the run.
-func (m *runManager) persist(lr *liveRun) {
+// offerPersist queues one snapshot for the background persist loop without
+// blocking. A full channel means the store is slower than the turn; the tick
+// is dropped and the next one retries, so the live stream never stalls on the
+// database.
+func (m *runManager) offerPersist(lr *liveRun) {
 	snap, changed := lr.persistState()
 	if !changed {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := m.store.Save(ctx, snap); err != nil {
-		m.logf("runs: persist %s: %v", snap.ID, err)
+	select {
+	case lr.persistCh <- snap:
+	default:
+	}
+}
+
+// persistLoop writes offered snapshots until the run finishes. It is the only
+// writer besides the final save in finish, and finish waits for it to drain,
+// so the terminal write is strictly the newest.
+func (m *runManager) persistLoop(lr *liveRun) {
+	defer close(lr.persistDone)
+	for snap := range lr.persistCh {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := m.store.Save(ctx, snap); err != nil {
+			m.logf("runs: persist %s: %v", snap.ID, err)
+		}
+		cancel()
 	}
 }
 
 // finish persists the terminal state, removes the run from the live maps, and
-// closes done so a buffered caller can answer. Persistence happens BEFORE the
-// live entry is dropped, so a client that reattaches in the gap still finds the
-// run.
+// closes done so a buffered caller can answer. The persist loop is drained
+// first, so the terminal write is the newest one; persistence still happens
+// BEFORE the live entry is dropped, so a client that reattaches in the gap
+// still finds the run.
 func (m *runManager) finish(lr *liveRun, now time.Time) {
+	close(lr.persistCh)
+	<-lr.persistDone
 	snap := lr.snapshot()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -532,6 +665,20 @@ func containsString(list []string, want string) bool {
 	return false
 }
 
+// truncateBytes bounds s to at most limit bytes without cutting a UTF-8 rune
+// in half. Unlike runs.CapText it adds no marker: it trims a live buffer that
+// is still growing, not a stored value a reader might mistake for complete.
+func truncateBytes(s string, limit int) string {
+	if limit <= 0 || len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && (s[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return s[:cut]
+}
+
 // handleRuns serves /api/runs. Reached with and without a profile segment, like
 // /api/jobs: runs are listed globally, with `profile` as an optional filter.
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string) {
@@ -572,7 +719,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		}
 		out := make([]any, 0, len(list))
 		for _, run := range list {
-			out = append(out, runWire(run))
+			out = append(out, runListWire(run))
 		}
 		writeJSONResponse(w, http.StatusOK, map[string]any{"runs": out})
 		return
@@ -610,7 +757,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		}
 		if len(msg) > runs.MaxPrompt {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "message",
-				"message is too long")
+				"message is too long (at most "+strconv.Itoa(runs.MaxPrompt)+" characters)")
 			return
 		}
 		lr, ok := s.runs.byID(id)
@@ -722,12 +869,11 @@ func (s *Server) replayTerminal(sse *sseWriter, run runs.Run) {
 		_ = sse.write(newChunk(completionIDFor(run.ConversationID), run.Model,
 			run.Output, run.Reasoning))
 	}
-	switch run.Status {
-	case runs.StatusFailed, runs.StatusInterrupted:
-		_ = sse.write(errorFrame{Error: run.Error})
-		return
-	}
-	if run.Status == runs.StatusCompleted && run.Usage.NonZero() {
+	// Usage rides along for every terminal state that has any, not just
+	// completions: a failed or cancelled turn still spent tokens, and an old
+	// client that only reads chat chunks would otherwise lose the accounting
+	// the snapshot carries.
+	if run.Usage.NonZero() {
 		_ = sse.write(chunk{
 			ID:      completionIDFor(run.ConversationID),
 			Object:  "chat.completion.chunk",
@@ -735,6 +881,11 @@ func (s *Server) replayTerminal(sse *sseWriter, run runs.Run) {
 			Model:   run.Model,
 			Usage:   usageWire(run.Usage),
 		})
+	}
+	switch run.Status {
+	case runs.StatusFailed, runs.StatusInterrupted:
+		_ = sse.write(errorFrame{Error: run.Error})
+		return
 	}
 	_ = sse.done()
 }
@@ -821,6 +972,13 @@ func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liv
 		apiError(w, http.StatusConflict, "invalid_request_error", "",
 			"the run was cancelled")
 		return
+	case runs.StatusInterrupted:
+		// A restart is not an upstream failure: the agent did nothing wrong,
+		// and the client should not retry as if Pi had failed. 409 names the
+		// cause so the app reports it instead of retrying it.
+		apiError(w, http.StatusConflict, "invalid_request_error", "",
+			"the gateway restarted while this run was in flight; the partial output is preserved")
+		return
 	default:
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"the run ended without finishing")
@@ -847,7 +1005,17 @@ func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liv
 	_ = writeJSON(w, body)
 }
 
-// runWire is the run list/detail shape. It reuses the chat stream's usage
+// runListWire is the run list shape. Same fields as the detail, but output
+// and reasoning are previews: a full list at ListCap with 256 KiB turns would
+// be tens of megabytes in one response, and the list shows what a turn was
+// about, not a second copy of it. The detail route keeps the whole text.
+func runListWire(r runs.Run) map[string]any {
+	r.Output = runs.CapText(r.Output, runs.ListPreviewOutput)
+	r.Reasoning = runs.CapText(r.Reasoning, runs.ListPreviewReasoning)
+	return runWire(r)
+}
+
+// runWire is the run detail shape. It reuses the chat stream's usage
 // spelling so the app parses both with one helper.
 func runWire(r runs.Run) map[string]any {
 	out := map[string]any{
@@ -971,7 +1139,7 @@ func (s *Server) executeRun(
 			}
 			return
 		case <-ticker.C:
-			s.runs.persist(lr)
+			s.runs.offerPersist(lr)
 
 		case rec, open := <-events:
 			if !open {

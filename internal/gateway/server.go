@@ -609,7 +609,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// and starting another would either duplicate work or be refused. Same
 	// conversation + same prompt is a reattach, not a new turn.
 	if lr, ok := s.runs.activeForConversation(h.profile, conversationID); ok &&
-		lr.prompt() == userTurn.Text {
+		lr.prompt() == userTurn.Text && lr.imagesSig == imagesSigOf(userTurn.Images) {
 		w.Header().Set("X-Agento-Run-Id", lr.id())
 		if !req.Stream {
 			s.respondBuffered(w, r, lr)
@@ -623,9 +623,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// the reasoning level, and the turn itself.
 	if !h.turnMu.TryLock() {
 		w.Header().Set("Retry-After", "5")
-		// Name the in-flight run when there is one, so a client can reattach or
-		// cancel instead of guessing why the profile is busy.
+		// Name the in-flight run, so a client can reattach or cancel instead
+		// of guessing why the profile is busy. Prefer the run for this
+		// conversation, but fall back to whatever the profile is running: a
+		// different conversation on the same busy profile otherwise gets a
+		// bare refusal with no run to look at.
 		if lr, ok := s.runs.activeForConversation(h.profile, conversationID); ok {
+			w.Header().Set("X-Agento-Run-Id", lr.id())
+		} else if lr, ok := s.runs.activeForProfile(h.profile); ok {
 			w.Header().Set("X-Agento-Run-Id", lr.id())
 		}
 		apiError(w, http.StatusTooManyRequests, "rate_limit_error", "",
@@ -821,7 +826,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		Provider:       wantProvider,
 		Model:          req.Model,
 		Effort:         level,
-	}, h.runner.agent, completionID, time.Now())
+	}, h.runner.agent, completionID, imagesSigOf(userTurn.Images), time.Now())
 
 	// The executor owns the lock, the subscription and the turn context from
 	// here. The request becomes a subscriber, so a disconnect no longer ends
