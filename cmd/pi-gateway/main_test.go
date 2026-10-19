@@ -313,7 +313,7 @@ func TestGatewayConfigPassesEveryBudgetThrough(t *testing.T) {
 	} {
 		t.Run(tc.env, func(t *testing.T) {
 			t.Setenv(tc.env, tc.value)
-			cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, func(string, ...any) {})
+			cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, func(string, ...any) {})
 			if got := tc.get(cfg); got != tc.want {
 				t.Fatalf("%s=%s did not reach the config: got %v, want %v",
 					tc.env, tc.value, got, tc.want)
@@ -325,7 +325,7 @@ func TestGatewayConfigPassesEveryBudgetThrough(t *testing.T) {
 	for _, k := range []string{"PI_TURN_TIMEOUT", "PI_KEEPALIVE", "PI_INVENTORY_TIMEOUT"} {
 		os.Unsetenv(k)
 	}
-	cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, func(string, ...any) {})
+	cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, func(string, ...any) {})
 	for label, got := range map[string]time.Duration{
 		"TurnTimeout":       cfg.TurnTimeout,
 		"KeepaliveInterval": cfg.KeepaliveInterval,
@@ -350,7 +350,7 @@ func TestGatewayConfigPassesEveryBudgetThrough(t *testing.T) {
 // through secondsEnvAllowDisabled in isolation.
 func TestGatewayConfigKeepaliveZeroStaysDisabled(t *testing.T) {
 	t.Setenv("PI_KEEPALIVE", "0")
-	cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, func(string, ...any) {})
+	cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, func(string, ...any) {})
 	if cfg.KeepaliveInterval != gateway.KeepaliveDisabled {
 		t.Fatalf("PI_KEEPALIVE=0 gave %v, want KeepaliveDisabled", cfg.KeepaliveInterval)
 	}

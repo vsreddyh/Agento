@@ -202,6 +202,31 @@ curl http://<host>:8643/p/chat/v1/chat/completions \
 - Chat history is threaded and persisted on-device (survives restarts; the switcher revisits/deletes threads). Tasks, reminders, and threads are included in Settings backup exports.
 - Config lives in the `pi` service (`docker/docker-compose.yml`): the bearer token is `PASSWORD` and the bind port is `PI_SERVER_PORT` (`8643`), published as `${PI_HOST_PORT:-8643}:8643`. Through the proxy the same `PASSWORD` authenticates, which is why the cutover needed no app change.
 
+### Resumable runs (#311)
+
+A chat turn is a **run**, not the lifetime of the HTTP request. The executor
+holds the profile lock and a background context; the request only subscribes.
+Closing the app no longer cancels the work, and a reconnecting client picks up
+where it left off:
+
+```bash
+# the app uses its profile path, so the proxy routes this to pi-gateway
+curl http://<host>:8080/p/chat/api/runs?conversation_id=<id> \
+  -H "Authorization: Bearer <PASSWORD>"
+curl -N http://<host>:8080/p/chat/api/runs/<run-id>/events \
+  -H "Authorization: Bearer <PASSWORD>"
+curl -X POST http://<host>:8080/p/chat/api/runs/<run-id>/cancel \
+  -H "Authorization: Bearer <PASSWORD>"
+```
+
+The events stream starts with one `{"agento_run":{...}}` snapshot (full output,
+reasoning, tools, usage, status) and then live frames. One turn executes per
+profile; a different prompt while busy returns `429` with `X-Agento-Run-Id`, and
+resending the same prompt on the same conversation reattaches instead. State is
+in the `agent_runs` Mongo collection with a 7-day TTL; a gateway restart cannot
+resume execution and marks stale runs `interrupted`. See
+`docs/adr/0001-resumable-runs.md`.
+
 ---
 
 ## Development Mode Isolation

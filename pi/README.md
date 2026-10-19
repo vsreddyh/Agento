@@ -218,6 +218,16 @@ through nginx — not `pi` itself.
 | `GET /{profile}/api/model/options` | yes — same handler, per-profile | `get_available_models` |
 | `GET /{profile}/v1/skills` | yes | `get_commands`, filtered to `source == "skill"` |
 | `GET /{profile}/v1/toolsets` | yes | `<agent-dir>/mcp.json` |
+| `GET /api/runs` (+ `/{profile}/api/runs`) | yes — filters `profile`, `conversation_id`, `status`, `limit` | `agent_runs` (Mongo), memory fallback |
+| `GET /api/runs/{id}` | yes | live snapshot, else the stored record |
+| `GET /api/runs/{id}/events` | yes — SSE snapshot, then live frames | run subscription |
+| `POST /api/runs/{id}/steer` | yes — queues an instruction into the running turn | Pi RPC `steer` |
+| `POST /api/runs/{id}/cancel` | yes — aborts, keeps partial output | Pi RPC `abort` |
+
+Runs are the resumable chat-turn surface (#311): one executing turn per profile,
+state in Mongo with a 7-day TTL, and a gateway restart marks stale rows
+`interrupted` rather than resuming them. They are a sibling of `/api/jobs`, not a
+reuse of it — see `docs/adr/0001-resumable-runs.md`.
 
 All three inventory routes were capability loss until this PR: `ChatApi.fetchCatalog`
 and both `ServerApi` calls request them, and nginx routes them to the gateway
