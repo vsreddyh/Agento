@@ -644,7 +644,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Opens the runs sheet for the active thread and loads its runs (#311). */
     fun openRuns() {
         if (!_state.value.ready || threadId.isBlank()) return
-        _state.value = _state.value.copy(showRuns = true)
+        _state.value = _state.value.copy(showRuns = true, runsError = "")
         refreshRuns()
     }
 
@@ -725,8 +725,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // state would be missed by a `status=running` query, and the
             // client-side !isTerminal check below is the real gate. The
             // wider window is bounded (20 rows of one conversation).
-            val runs = runsApi.list(path, conversationId = threadId, limit = 20)
-                .getOrNull().orEmpty()
+            val result = runsApi.list(path, conversationId = threadId, limit = 20)
+            result.onFailure {
+                runCatching { Log.w("ChatRuns", "resume list failed", it) }
+            }
+            val runs = result.getOrNull().orEmpty()
             // Belt and braces on the status: the query already filters, but a
             // stale row must never trigger a resend on its own. Anything not
             // terminal is live (running, cancelling, or a future state) —
@@ -981,20 +984,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         } else {
                             msgs
                         }
-                        val text = history.lastOrNull { it.role == "user" }?.content.orEmpty()
-                        // Follow-up typed before the refusal arrived joins the
-                        // queue behind any parked text instead of dropping.
-                        // The failed prompt itself stays out of the composer:
-                        // it is already the history tail, and copying it
-                        // there too would send it twice on the next tap. (If
-                        // the composer already holds exactly that text — e.g.
-                        // nothing new was typed — there is no follow-up.)
-                        // Retry (error banner) resends the tail when ready.
-                        val followUp = _state.value.pending
-                            .takeIf { it.trim() != text.trim() }.orEmpty()
-                        val queued = listOf(_state.value.queued, followUp)
-                            .filter { it.isNotBlank() }
-                            .joinToString("\n")
+                        // Newer typing stays in the composer untouched: the
+                        // failed prompt lives in history for Retry, and the
+                        // follow-up sends when the user taps send. Nothing is
+                        // queued — queueing it too would send it twice (once
+                        // from the composer, once from the queue).
                         streamJob = null
                         _state.value = _state.value.copy(
                             messages = unposted, streaming = false,
@@ -1008,10 +1002,6 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             // started. Only busyRunId keeps it (sheet cancel).
                             activeRunId = "",
                             busyRunId = event.runId,
-                            // Composer untouched: the failed prompt lives in
-                            // history for Retry, and any newer typing stays
-                            // put. Queued above carries the follow-up.
-                            queued = queued,
                         )
                     }
                     is ChatEvent.ToolProgress -> {

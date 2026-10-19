@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -137,7 +138,11 @@ class RunsApi(context: Context) {
 
     private fun parseList(body: String): List<AgentRun> {
         val out = mutableListOf<AgentRun>()
-        val root = runCatching { JSONObject(body) }.getOrNull() ?: return out
+        val root = runCatching { JSONObject(body) }.getOrNull()
+        if (root == null) {
+            runCatching { Log.w("RunsApi", "unparseable runs body: ${body.take(120)}") }
+            return out
+        }
         val arr = root.optJSONArray("runs") ?: return out
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
