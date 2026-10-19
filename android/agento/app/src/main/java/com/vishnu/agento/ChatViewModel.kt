@@ -273,6 +273,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // Run ids belong to the old thread's turn: a switch must not
             // highlight (or stop, via a stale read) another thread's run.
             activeRunId = "", busyRunId = "",
+            showRuns = false,
         )
         refreshServerTotals()
         maybeResume(id, ChatThreads.toUi(target.messages))
@@ -331,6 +332,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 serverTokens = null,
                 queued = "",
                 activeRunId = "", busyRunId = "",
+                showRuns = false,
             )
             refreshServerTotals()
             maybeResume(id, ChatThreads.toUi(target.messages))
@@ -373,6 +375,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             serverTokens = null,
             queued = "",
             activeRunId = "", busyRunId = "",
+            showRuns = false,
         )
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
@@ -407,6 +410,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
                 serverTokens = null, queued = "",
+                activeRunId = "", busyRunId = "",
+                showRuns = false,
             )
         }
         _state.value = _state.value.copy(threads = summaries())
@@ -965,10 +970,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     }
                     is ChatEvent.RateLimited -> {
                         // The profile is busy with a different turn: drop the
-                        // placeholder (this prompt was never sent), park the
-                        // text back in the composer, and remember the blocking
-                        // run for the runs sheet. No auto-retry: a timer would
-                        // turn a busy profile into a self-DDoS.
+                        // placeholder (this prompt was never sent) and remember
+                        // the blocking run for the runs sheet. The failed
+                        // prompt stays in history for Retry; newer typing
+                        // joins the queue. No auto-retry: a timer would turn
+                        // a busy profile into a self-DDoS.
                         val msgs = _state.value.messages
                         val unposted = if (msgs.lastOrNull()?.role == "assistant") {
                             msgs.dropLast(1)
@@ -977,10 +983,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         }
                         val text = history.lastOrNull { it.role == "user" }?.content.orEmpty()
                         // Follow-up typed before the refusal arrived joins the
-                        // queue behind any parked text instead of dropping:
-                        // the failed prompt takes the composer, everything
-                        // typed fires in order after the next clean Done.
+                        // queue behind any parked text instead of dropping.
+                        // The failed prompt itself stays out of the composer:
+                        // it is already the history tail, and copying it
+                        // there too would send it twice on the next tap. (If
+                        // the composer already holds exactly that text — e.g.
+                        // nothing new was typed — there is no follow-up.)
+                        // Retry (error banner) resends the tail when ready.
                         val followUp = _state.value.pending
+                            .takeIf { it.trim() != text.trim() }.orEmpty()
                         val queued = listOf(_state.value.queued, followUp)
                             .filter { it.isNotBlank() }
                             .joinToString("\n")
@@ -997,7 +1008,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             // started. Only busyRunId keeps it (sheet cancel).
                             activeRunId = "",
                             busyRunId = event.runId,
-                            pending = text.ifBlank { _state.value.pending },
+                            // Composer untouched: the failed prompt lives in
+                            // history for Retry, and any newer typing stays
+                            // put. Queued above carries the follow-up.
                             queued = queued,
                         )
                     }
