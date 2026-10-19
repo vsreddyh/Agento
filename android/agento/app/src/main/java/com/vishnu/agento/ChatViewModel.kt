@@ -73,6 +73,16 @@ data class ChatUiState(
      * chat error banner (whose Retry resends a turn — a runs-list outage
      * must not offer that). */
     val runsError: String = "",
+    /** Approvals sheet for held tool calls (#313): pending cards with
+     * approve/deny, plus the audit trail below. */
+    val showApprovals: Boolean = false,
+    val approvals: List<GateApproval> = emptyList(),
+    val approvalsLoading: Boolean = false,
+    val approvalsError: String = "",
+    val auditRows: List<AuditRow> = emptyList(),
+    /** Pending approvals right now: badges the approvals entry and raises
+     * the in-turn banner while streaming. */
+    val pendingApprovalCount: Int = 0,
 )
 
 /** Device-observed usage for one conversation thread, summed from
@@ -135,6 +145,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     private val api = ChatApi(app)
     private val runsApi = RunsApi(app)
+    private val approvalsApi = ApprovalsApi(app)
     private val serverApi = ServerApi(app)
     private val appCtx: Application = app
 
@@ -158,6 +169,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * newer open or a thread change cancels the older one, so stale rows
      * can never land on another thread. */
     private var runsJob: Job? = null
+
+    /** Approval watch while a turn streams: a held call stalls the stream
+     * with no frames, which otherwise reads as thinking. Polls pending
+     * approvals so the banner can point at the approvals sheet. */
+    private var approvalWatch: Job? = null
 
     /** Drops a pending recovery, if any. Called on every active-thread
      * change (switch/new/delete/fork), send, and stop — recovery belongs
@@ -266,6 +282,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threadId = id
         cancelRecovery()
         runsJob?.cancel()
+        stopApprovalWatch()
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
@@ -328,6 +345,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             threadId = id
             cancelRecovery()
             runsJob?.cancel()
+            stopApprovalWatch()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(target.messages),
                 threads = summaries(),
@@ -376,6 +394,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threadId = fresh.id
         cancelRecovery()
         runsJob?.cancel()
+        stopApprovalWatch()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
@@ -415,6 +434,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             threadId = next.id
             cancelRecovery()
             runsJob?.cancel()
+            stopApprovalWatch()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
@@ -503,6 +523,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // A pending recovery belongs to the turn just stopped: it must not
         // resurrect text behind whatever the user does next.
         cancelRecovery()
+        stopApprovalWatch()
         // Stop the server-side run this tab started, not just the local
         // socket (#311): closing the stream no longer cancels the work, so a
         // stop that stayed local would leave the agent running invisibly.
@@ -729,6 +750,91 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
+    /** Opens the approvals sheet and loads pending cards + audit (#313). */
+    fun openApprovals() {
+        if (!_state.value.ready) return
+        _state.value = _state.value.copy(showApprovals = true, approvalsError = "")
+        refreshApprovals()
+    }
+
+    fun closeApprovals() {
+        _state.value = _state.value.copy(showApprovals = false)
+    }
+
+    /** Reloads pending approvals and the recent audit trail. */
+    fun refreshApprovals() {
+        val path = _state.value.path
+        _state.value = _state.value.copy(approvalsLoading = true, approvalsError = "")
+        viewModelScope.launch(Dispatchers.IO) {
+            val pending = loadApprovalSheet(path)
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(
+                    approvals = pending.first,
+                    auditRows = pending.second,
+                    approvalsLoading = false,
+                    pendingApprovalCount = pending.first.size,
+                )
+            }
+        }
+    }
+
+    /** Decides a held call: approve runs it, deny fails it back to the turn
+     * as a tool error. A 409 (someone else decided) just reloads. */
+    fun decideApproval(id: String, approve: Boolean) {
+        if (id.isBlank()) return
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = approvalsApi.decide(path, id, approve)
+            withContext(Dispatchers.Main) {
+                result.onFailure {
+                    _state.value = _state.value.copy(
+                        approvalsError = "Decision failed (${it.message?.take(120) ?: "unknown"}) — try again.",
+                    )
+                }
+                if (_state.value.showApprovals) refreshApprovals()
+                refreshApprovalCount()
+            }
+        }
+    }
+
+    /** Light pending count for the badge/banner, without touching rows. */
+    private fun refreshApprovalCount() {
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val n = approvalsApi.listApprovals(path, status = "pending", limit = 5)
+                .getOrNull()?.size ?: 0
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(pendingApprovalCount = n)
+            }
+        }
+    }
+
+    private fun loadApprovalSheet(path: String): Pair<List<GateApproval>, List<AuditRow>> {
+        val pending = approvalsApi.listApprovals(path, status = "pending", limit = 50)
+            .getOrNull().orEmpty()
+        val audit = approvalsApi.listAudit(path, limit = 50).getOrNull().orEmpty()
+        return pending to audit
+    }
+
+    private fun startApprovalWatch(path: String) {
+        approvalWatch?.cancel()
+        approvalWatch = viewModelScope.launch(Dispatchers.IO) {
+            while (true) {
+                delay(20_000)
+                val n = approvalsApi.listApprovals(path, status = "pending", limit = 5)
+                    .getOrNull()?.size ?: 0
+                withContext(Dispatchers.Main) {
+                    _state.value = _state.value.copy(pendingApprovalCount = n)
+                }
+            }
+        }
+    }
+
+    private fun stopApprovalWatch() {
+        approvalWatch?.cancel()
+        approvalWatch = null
+    }
+
     /**
      * Reattaches an app-killed turn (#311): a trailing user message plus a
      * live server run with the same prompt means resending streams the
@@ -893,6 +999,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threadId = fresh.id
         cancelRecovery()
         runsJob?.cancel()
+        stopApprovalWatch()
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
@@ -941,6 +1048,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         streamJob?.cancel()
         // A new turn supersedes any pending recovery of the previous one.
         cancelRecovery()
+        // Watch for held approvals while this turn streams: a gate stalls
+        // the stream with no frames, and the banner is the only signal.
+        stopApprovalWatch()
+        startApprovalWatch(path)
         // Fresh generation: events from any older turn still buffered go
         // stale (see stop()). Captured below; every handler checks it.
         sendGen++
@@ -1193,6 +1304,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // so the queued send's doSend never "cancels" the
                         // just-finished collection it runs inside of.
                         streamJob = null
+                        stopApprovalWatch()
+                        refreshApprovalCount()
                         if (event.interrupted || cancelled) {
                             // A dropped stream does NOT auto-fire the queued send.
                             //
@@ -1251,6 +1364,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // A queued send never auto-fires after a failure (no failure
                         // cascades): hand it back to the composer instead.
                         parkQueued()
+                        stopApprovalWatch()
+                        refreshApprovalCount()
                         if (kept.size == msgs.size) upsertActive(kept)
                         persist()
                         // A kept partial is a flagged cut-off turn exactly
