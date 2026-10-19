@@ -524,6 +524,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // resurrect text behind whatever the user does next.
         cancelRecovery()
         stopApprovalWatch()
+        // The badge may still name a gate held at stop time: refresh it like
+        // the Done/Error paths do, instead of freezing the pre-turn count.
+        refreshApprovalCount()
         // Stop the server-side run this tab started, not just the local
         // socket (#311): closing the stream no longer cancels the work, so a
         // stop that stayed local would leave the agent running invisibly.
@@ -753,7 +756,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Opens the approvals sheet and loads pending cards + audit (#313). */
     fun openApprovals() {
         if (!_state.value.ready) return
-        _state.value = _state.value.copy(showApprovals = true, approvalsError = "")
+        // Drop stale rows up front: the first paint is the spinner, never
+        // the previous session's cards.
+        _state.value = _state.value.copy(
+            showApprovals = true, approvalsError = "",
+            approvals = emptyList(), auditRows = emptyList(),
+        )
         refreshApprovals()
     }
 
@@ -767,8 +775,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Reloads pending approvals and the recent audit trail. Single-flight:
      * a newer open or manual refresh cancels the older load. Failures keep
-     * the old rows and report inside the sheet (never the chat banner). */
-    fun refreshApprovals() {
+     * the old rows and report inside the sheet (never the chat banner). A
+     * [notice] survives a successful load (e.g. "already decided"). */
+    fun refreshApprovals(notice: String? = null) {
         val path = _state.value.path
         _state.value = _state.value.copy(approvalsLoading = true)
         approvalsJob?.cancel()
@@ -776,20 +785,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val pending = approvalsApi.listApprovals(path, status = "pending", limit = 50)
             val audit = approvalsApi.listAudit(path, limit = 50)
             withContext(Dispatchers.Main) {
-                // Per-half: a half that loaded replaces its rows; a half
+                // Per-half: a half that loaded replaces its rows; any half
                 // that failed reports without wiping the good half.
-                if (pending.isFailure && audit.isFailure) {
-                    _state.value = _state.value.copy(
-                        approvalsLoading = false,
-                        approvalsError = "Couldn't load approvals (${pending.exceptionOrNull()?.message?.take(120) ?: "unknown"}).",
-                    )
-                    return@withContext
-                }
+                val failedMsg = pending.exceptionOrNull()?.message
+                    ?: audit.exceptionOrNull()?.message
                 _state.value = _state.value.copy(
                     approvals = pending.getOrNull() ?: _state.value.approvals,
                     auditRows = audit.getOrNull() ?: _state.value.auditRows,
                     approvalsLoading = false,
-                    approvalsError = "",
+                    approvalsError = if (failedMsg != null) {
+                        "Couldn't load approvals (${failedMsg.take(120).ifBlank { "unknown" }})."
+                    } else {
+                        notice.orEmpty()
+                    },
                     pendingApprovalCount = pending.getOrNull()?.size
                         ?: _state.value.pendingApprovalCount,
                 )
@@ -798,16 +806,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     /** Decides a held call: approve runs it, deny fails it back to the turn
-     * as a tool error. A 409 (someone else decided) just reloads. */
+     * as a tool error. Double-taps collapse into one call; a 409 (someone
+     * else decided) reloads with a transient note instead of a retry prompt. */
+    private val deciding = mutableSetOf<String>()
+
     fun decideApproval(id: String, approve: Boolean) {
-        if (id.isBlank()) return
+        if (id.isBlank() || !deciding.add(id)) return
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
             val result = approvalsApi.decide(path, id, approve)
             withContext(Dispatchers.Main) {
-                // A 409 means someone else decided first: just reload — the
-                // row leaves pending on refresh, which says it better than a
-                // message asking for a retry that would 409 again.
+                deciding.remove(id)
+                // A 409 means someone else decided first: reload (the row
+                // leaves pending) with a transient note, never a retry
+                // prompt — retrying a decided id 409s again.
                 if (result.isFailure &&
                     "409" !in result.exceptionOrNull()?.message.orEmpty()
                 ) {
@@ -816,7 +828,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         approvalsError = "Decision failed (${failedMsg.take(120).ifBlank { "unknown" }}) — try again.",
                     )
                 } else if (_state.value.showApprovals) {
-                    refreshApprovals()
+                    refreshApprovals(
+                        if (result.isFailure) "Already decided — refreshed." else null,
+                    )
                 }
                 refreshApprovalCount()
             }

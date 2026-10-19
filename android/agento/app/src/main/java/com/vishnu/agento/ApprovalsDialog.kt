@@ -17,7 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** Millis instant as "just now / Nm ago / Nh ago / Nd ago", "" when unknown. */
+/** Millis instant as "just now / Nm ago / Nh ago / Nd ago", "" when unknown.
+ * Future instants clamp to "just now": clock skew is not a time machine. */
 private fun relativeAgo(at: Long): String {
     if (at <= 0) return ""
     val s = (System.currentTimeMillis() - at) / 1000
