@@ -198,9 +198,44 @@ curl http://<host>:8643/p/chat/v1/chat/completions \
 ```
 
 - One port, one profile path (`/p/chat`). **Verify live via `GET /p/chat/v1/models`**, the source of truth for which models the profile can actually switch to.
-- Provider + model are picked from the Chat tab's own model sheet (top-bar button) backed by live dropdowns from `GET /p/chat/api/model/options` (explicit selection required — pi-gateway has no default). The provider key lives ONLY in the git-ignored root `.env` on the VPS — never in git.
+- Provider + model are picked from the Chat tab's own model sheet (top-bar button) backed by live dropdowns from `GET /p/chat/api/model/options` (the app always selects explicitly; the gateway falls back to the running model when none is sent). The provider key lives ONLY in the git-ignored root `.env` on the VPS — never in git.
 - Chat history is threaded and persisted on-device (survives restarts; the switcher revisits/deletes threads). Tasks, reminders, and threads are included in Settings backup exports.
 - Config lives in the `pi` service (`docker/docker-compose.yml`): the bearer token is `PASSWORD` and the bind port is `PI_SERVER_PORT` (`8643`), published as `${PI_HOST_PORT:-8643}:8643`. Through the proxy the same `PASSWORD` authenticates, which is why the cutover needed no app change.
+
+### Resumable runs (#311)
+
+A chat turn is a **run**, not the lifetime of the HTTP request. The executor
+holds the profile lock and a background context; the request only subscribes.
+Closing the app no longer cancels the work, and a reconnecting client picks up
+where it left off:
+
+```bash
+# the app uses its profile path, so the proxy routes this to pi-gateway
+curl http://<host>:8080/p/chat/api/runs?conversation_id=<id> \
+  -H "Authorization: Bearer <PASSWORD>"
+curl -N http://<host>:8080/p/chat/api/runs/<run-id>/events \
+  -H "Authorization: Bearer <PASSWORD>"
+curl -X POST http://<host>:8080/p/chat/api/runs/<run-id>/cancel \
+  -H "Authorization: Bearer <PASSWORD>"
+```
+
+The events stream starts with one `{"agento_run":{...}}` snapshot (full output,
+reasoning, tools, usage, status) and then live frames — that stream is the
+progress path. The detail route keeps the full text but is a point read, not a
+watch: poll the list for status, watch `/events` for progress, read detail for
+the record — one detail read can serve up to 256 KiB, so never poll it per
+second for progress. One turn executes per
+profile; a different prompt while busy returns `429` with `X-Agento-Run-Id`, and
+resending the same prompt on the same conversation reattaches instead. The list
+shows previews (2 KB output, 1 KB reasoning — marked once the run settles,
+unmarked heads while it is still running);
+`limit` defaults to 100,
+is capped at 100, and `limit=0` — or an absent or empty `limit` — means the
+default, not an empty list. Only a present non-numeric or negative value 400s. The
+detail route keeps the full stored text (capped). State is
+in the `agent_runs` Mongo collection with a 7-day TTL; a gateway restart cannot
+resume execution and marks stale runs `interrupted`. See
+`docs/adr/0001-resumable-runs.md`.
 
 ---
 

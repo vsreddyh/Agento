@@ -216,7 +216,7 @@ func TestStreamedCompletionIDIsBounded(t *testing.T) {
 
 	// Long but legal: the id is length-bounded, so use a value right at the limit.
 	// Echoing even this verbatim would put 256 bytes of client input in every frame.
-	huge := strings.Repeat("q", maxConversationIDLen)
+	huge := strings.Repeat("q", maxFilterLen)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(validBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -225,8 +225,28 @@ func TestStreamedCompletionIDIsBounded(t *testing.T) {
 	srv.ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	if strings.Contains(body, huge[:64]) {
-		t.Fatal("the raw conversation id was echoed into the stream")
+	payloads, _ := sseFrames(t, body)
+	// The agento_run snapshot names the conversation once per stream so a
+	// client handed a cross-conversation run can correlate it — that echo is
+	// load-bearing, not amplification. Chat chunks must never carry it: they
+	// repeat per delta, which is where an echo becomes a leak.
+	for _, p := range payloads {
+		var frame struct {
+			Choices json.RawMessage `json:"choices"`
+			Run     *runSnapshot    `json:"agento_run"`
+		}
+		if err := json.Unmarshal([]byte(p), &frame); err != nil {
+			t.Fatalf("frame is not JSON: %q", p)
+		}
+		if frame.Run != nil {
+			if frame.Run.ConversationID != huge {
+				t.Fatalf("snapshot conversation = %q, want the full id for correlation", frame.Run.ConversationID)
+			}
+			continue
+		}
+		if frame.Choices != nil && strings.Contains(p, huge[:64]) {
+			t.Fatal("the raw conversation id was echoed into a chat chunk")
+		}
 	}
 	if !strings.Contains(body, completionIDFor(huge)) {
 		t.Fatal("stream did not carry the derived completion id")
@@ -757,7 +777,7 @@ func TestOversizedSessionIDRejected(t *testing.T) {
 		return rec
 	}
 
-	if rec := send(strings.Repeat("x", maxConversationIDLen+1)); rec.Code != http.StatusBadRequest {
+	if rec := send(strings.Repeat("x", maxFilterLen+1)); rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized session id: got %d, want 400. body=%s", rec.Code, rec.Body)
 	}
 	if agent.sawCommand("prompt") {
@@ -765,7 +785,7 @@ func TestOversizedSessionIDRejected(t *testing.T) {
 	}
 
 	// The boundary itself is accepted.
-	if rec := send(strings.Repeat("x", maxConversationIDLen)); rec.Code != http.StatusOK {
+	if rec := send(strings.Repeat("x", maxFilterLen)); rec.Code != http.StatusOK {
 		t.Fatalf("session id at the limit: got %d, want 200. body=%s", rec.Code, rec.Body)
 	}
 }
@@ -878,7 +898,7 @@ func TestOversizedSessionIDIsNotMaskedByContention(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(validBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-token")
-	req.Header.Set("X-Hermes-Session-Id", strings.Repeat("x", maxConversationIDLen+1))
+	req.Header.Set("X-Hermes-Session-Id", strings.Repeat("x", maxFilterLen+1))
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
@@ -911,7 +931,7 @@ func TestOversizedSessionIDDoesNotHoldTheProfile(t *testing.T) {
 
 	// Interleave rejections with a valid turn; every valid turn must be served.
 	for i := 0; i < 5; i++ {
-		if got := send(strings.Repeat("x", maxConversationIDLen+1)); got != http.StatusBadRequest {
+		if got := send(strings.Repeat("x", maxFilterLen+1)); got != http.StatusBadRequest {
 			t.Fatalf("iteration %d: oversized id got %d, want 400", i, got)
 		}
 		if got := send("valid-conv"); got != http.StatusOK {

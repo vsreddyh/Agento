@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"agento/internal/crashlog"
-	"agento/internal/pi"
+	"agento/internal/runs"
 )
 
 var (
@@ -35,10 +35,18 @@ var (
 		"rather than an empty message")
 )
 
-// maxConversationIDLen bounds X-Hermes-Session-Id. The store's entry COUNT is
-// LRU-capped, but an unbounded key would let a client drive memory growth per
-// request regardless of the cap.
-const maxConversationIDLen = 256
+// maxFilterLen bounds client-supplied id strings: X-Hermes-Session-Id and the
+// runs list filters. Entry counts are bounded per store (memoryCap eviction,
+// Mongo TTL, one live run per profile), but an unbounded key would let a
+// client drive per-request memory growth regardless of those counts.
+const maxFilterLen = 256
+
+// setupCallTimeout bounds one pre-prompt agent call (session resolution,
+// level inventory, level set). They run on the turn context by default, which
+// is the whole TurnTimeout — a wedged Pi on any of them would burn the entire
+// turn budget before the prompt is ever sent. Local IPC answers in
+// milliseconds; 30s is fail-fast without troubling a slow-but-working agent.
+const setupCallTimeout = 30 * time.Second
 
 // Config configures a Server.
 type Config struct {
@@ -102,6 +110,12 @@ type Config struct {
 	// and a scheduled fire can never overlap a job.
 	CronFire CronFire
 
+	// RunStore persists conversation-attached runs (#311). Nil means an
+	// in-memory store: turns still outlive the request that started them,
+	// they just do not survive a gateway restart, and /api/runs answers from
+	// memory. main sets a Mongo store when the database is reachable.
+	RunStore runs.Store
+
 	// Logf receives operational messages. Nil discards them.
 	Logf func(format string, args ...any)
 }
@@ -153,6 +167,11 @@ type Server struct {
 	handlers map[string]*agentHandler
 	mux      *http.ServeMux
 
+	// runs owns every executing turn and its persisted record. One manager
+	// for the whole gateway: runs are keyed by id and listed globally, and a
+	// profile's one-turn-at-a-time rule is still enforced by its turnMu.
+	runs *runManager
+
 	// mcpServers is the configured MCP server set, read once at startup. Empty when
 	// there is no agent directory or no readable mcp.json, which is a valid state.
 	mcpServers []string
@@ -188,6 +207,7 @@ func New(cfg Config, agents map[string]Agent) (*Server, error) {
 		handlers: make(map[string]*agentHandler, len(agents)),
 		mux:      http.NewServeMux(),
 	}
+	s.runs = newRunManager(cfg.RunStore, cfg.Logf)
 
 	// Read once, here, rather than per request. mcp.json is fixed for the life of
 	// the process: the entrypoint runs `pi mcp list` at boot and refuses to start if
@@ -476,6 +496,13 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resumable conversation runs (#311). A sibling of /api/jobs, never an
+	// alias: jobs stay fire-and-forget, runs are observable and steerable.
+	if rest == "api/runs" || strings.HasPrefix(rest, "api/runs/") {
+		s.handleRuns(w, r, rest)
+		return
+	}
+
 	switch rest {
 	case "v1/chat/completions":
 		// A known endpoint reached with the wrong verb is 405, not 404: the
@@ -578,29 +605,112 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// instead of 400 whenever the profile was busy. None of this touches the
 	// agent, so none of it needs the lock.
 	conversationID := strings.TrimSpace(r.Header.Get("X-Hermes-Session-Id"))
-	if len(conversationID) > maxConversationIDLen {
+	if strings.ContainsRune(conversationID, 0) {
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "X-Hermes-Session-Id",
+			"X-Hermes-Session-Id must not contain NUL")
+		return
+	}
+	if len([]rune(conversationID)) > maxFilterLen {
 		apiError(w, http.StatusBadRequest, "invalid_request_error", "X-Hermes-Session-Id",
 			"X-Hermes-Session-Id must be at most 256 characters")
 		return
+	}
+
+	// Reattach before taking the profile lock (#311). A dropped stream is
+	// recovered by the app resending the same last user turn; if a run for this
+	// conversation is still in flight with that prompt, the turn already exists
+	// and starting another would either duplicate work or be refused. Same
+	// conversation + same prompt (text and images) is a reattach, not a new
+	// turn. Deliberately not keyed on model/provider/effort: those are
+	// validated under the profile lock below, and a switch takes effect on the
+	// next turn. The snapshot carries the model actually running, so a client
+	// that switched mid-turn can see which one answered.
+	//
+	// Compared trimmed: a resend after an app kill can gain or lose trailing
+	// whitespace (a paste, a re-render), and that must not turn the client's
+	// own turn into a 429. promptFull stays exact for the record; only the
+	// comparison forgives the edges.
+	//
+	// Hashed once up front: both the pre-lock check here and the post-lock
+	// duplicate check below need the image signature, and hashing multi-MB
+	// images twice on the contended path is waste for identical input.
+	imgSig := imagesSigOf(userTurn.Images)
+	if lr, ok := s.runs.activeForConversation(h.profile, conversationID); ok {
+		prompt, images := lr.reattachKey()
+		if strings.TrimSpace(prompt) == strings.TrimSpace(userTurn.Text) &&
+			images == imgSig {
+			w.Header().Set("X-Agento-Run-Id", lr.id())
+			if !req.Stream {
+				s.respondBuffered(w, r, lr)
+				return
+			}
+			s.streamLiveRun(w, r, lr)
+			return
+		}
 	}
 
 	// The profile lock is held only for the agent interaction: session resolution,
 	// the reasoning level, and the turn itself.
 	if !h.turnMu.TryLock() {
 		w.Header().Set("Retry-After", "5")
+		// Name the in-flight run, so a client can reattach or cancel instead
+		// of guessing why the profile is busy. Prefer the run for this
+		// conversation, but fall back to whatever the profile is running: a
+		// different conversation on the same busy profile otherwise gets a
+		// bare refusal with no run to look at.
+		if lr, ok := s.runs.activeForConversation(h.profile, conversationID); ok {
+			w.Header().Set("X-Agento-Run-Id", lr.id())
+			// Start race, second half: two identical POSTs landing when idle
+			// both missed the pre-lock check, and the winner has begun since.
+			// An exact duplicate reattaches here instead of 429ing — a retry
+			// a millisecond later would, so the loser should too. Anything
+			// else is still a refusal with the run named.
+			prompt, images := lr.reattachKey()
+			if strings.TrimSpace(prompt) == strings.TrimSpace(userTurn.Text) &&
+				images == imgSig {
+				if !req.Stream {
+					s.respondBuffered(w, r, lr)
+					return
+				}
+				s.streamLiveRun(w, r, lr)
+				return
+			}
+		} else if lr, ok := s.runs.activeForProfile(h.profile); ok {
+			w.Header().Set("X-Agento-Run-Id", lr.id())
+		}
 		apiError(w, http.StatusTooManyRequests, "rate_limit_error", "",
 			"this profile is already answering a turn. One turn runs at a time per "+
 				"profile, because the agent holds a single session and streaming turns "+
-				"concurrently would interleave them.")
+				"concurrently would interleave them. If this is the same turn, reattach "+
+				"with GET /api/runs/{id}/events.")
 		return
 	}
-	defer h.turnMu.Unlock()
+	// Ownership of the lock transfers to the run executor below. Until it does,
+	// every return path has to release it. One shared OnceFunc with the
+	// executor: anything below that panics in the requesting goroutine —
+	// subscribe, snapshot, header writes — still releases exactly once, and
+	// the executor's own release is the same call, never a second unlock.
+	unlock := sync.OnceFunc(h.turnMu.Unlock)
+	runStarted := false
+	defer func() {
+		if !runStarted {
+			unlock()
+		}
+	}()
 
 	// The turn budget starts only once the profile is held, so time spent
 	// contending for the lock is not charged to the turn — and the 429 path does
 	// not leave a timer running.
-	turnCtx, cancel := context.WithTimeout(r.Context(), s.cfg.TurnTimeout)
-	defer cancel()
+	//
+	// Detached from r.Context() deliberately: the point of a run is that the
+	// work outlives the request that started it. A client that closes the app
+	// mid-turn must not cancel the agent.
+	turnCtx, cancel := context.WithTimeout(context.Background(), s.cfg.TurnTimeout)
+	defer func() {
+		if !runStarted {
+			cancel()
+		}
+	}()
 
 	// Apply the client's provider/model selection before anything that reads
 	// model-dependent state (#251). selectModel validates against the live
@@ -655,7 +765,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		}
 	}
 
-	agentState, err := h.runner.resolveSession(turnCtx, conversationID)
+	setupCtx, setupCancel := context.WithTimeout(turnCtx, setupCallTimeout)
+	defer setupCancel()
+	agentState, err := h.runner.resolveSession(setupCtx, conversationID)
 	if err != nil {
 		revertModel()
 		s.cfg.Logf("gateway: resolving session: %v", err)
@@ -672,7 +784,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// applied model's levels, so a bad-effort request is refused after the
 	// switch — and the refusal path reverts to the pre-switch model, or one
 	// bad request would silently repoint every following turn.
-	levels, err := h.runner.thinkingLevels(turnCtx)
+	levelsCtx, levelsCancel := context.WithTimeout(turnCtx, setupCallTimeout)
+	defer levelsCancel()
+	levels, err := h.runner.thinkingLevels(levelsCtx)
 	if err != nil {
 		// Tail, not verbatim: a wedged agent can emit megabytes of stderr and this
 		// runs on every failed turn, so one bad agent would grow the log without
@@ -717,6 +831,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	}
 	req.Model = model
 
+	// Same rule for the provider, for the same reason the run record must name
+	// what is actually running: selectModel can default an empty claim, so the
+	// raw wantProvider may be blank next to a canonical model. Resolved first,
+	// claimed as fallback, bounded either way.
+	provider := bounded(agentState.Model.Provider)
+	if provider == "" {
+		provider = bounded(wantProvider)
+	}
+
 	// Always sent, even when agentState already reports this level, and that is
 	// deliberate rather than an oversight. Skipping it when
 	// agentState.ThinkingLevel == level would save one local IPC round trip per
@@ -744,7 +867,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// does not touch. Paying microseconds to keep one setting unconditional is the
 	// trade, and the round trip added after a session switch was made for the same
 	// reason: prefer a provably-correct state over a saved local call.
-	if _, err := h.runner.agent.Call(turnCtx, "set_thinking_level",
+	applyCtx, applyCancel := context.WithTimeout(turnCtx, setupCallTimeout)
+	defer applyCancel()
+	if _, err := h.runner.agent.Call(applyCtx, "set_thinking_level",
 		map[string]any{"level": level}); err != nil {
 		revertModel()
 		s.cfg.Logf("gateway: set_thinking_level(%s): %v", level, err)
@@ -756,226 +881,41 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// Subscribe before prompting: Pi can begin streaming before the prompt
 	// response arrives, and subscribing afterwards would lose the first deltas.
 	events, unsubscribe := h.runner.agent.Subscribe()
-	defer unsubscribe()
 
-	// The request may ask for a single JSON response; the app always streams, but
-	// a non-streaming client must not hang waiting for SSE.
+	completionID := completionIDFor(conversationID)
+	lr := s.runs.begin(runs.Run{
+		Profile:        h.profile,
+		ConversationID: conversationID,
+		Prompt:         userTurn.Text,
+		Provider:       provider,
+		Model:          req.Model,
+		Effort:         level,
+	}, h.runner.agent, completionID, imgSig, time.Now())
+
+	// The executor owns the lock, the subscription and the turn context from
+	// here. The request becomes a subscriber, so a disconnect no longer ends
+	// the work.
+	runStarted = true
+
 	if !req.Stream {
-		s.handleChatBuffered(w, turnCtx, h, events, userTurn, conversationID, req, revertModel)
+		go s.executeRun(lr, h, turnCtx, cancel, events, unsubscribe, userTurn, req.Model, revertModel, unlock)
+		w.Header().Set("X-Agento-Run-Id", lr.id())
+		s.respondBuffered(w, r, lr)
 		return
 	}
 
-	sse := newSSEWriter(w)
-	sse.headers()
-	w.WriteHeader(http.StatusOK)
-	if err := sse.comment("stream open"); err != nil {
-		return
-	}
+	// Subscribe and snapshot BEFORE the executor starts, for the same reason
+	// the Pi subscription above happens before the prompt: a turn can begin —
+	// and, against a fast agent, finish — before the response starts. Taken
+	// after the executor, a fast turn would collapse into a single terminal
+	// snapshot and an older client would see no frames at all.
+	runEvents, runUnsubscribe := lr.subscribe()
+	defer runUnsubscribe()
+	snap := lr.snapshot()
+	go s.executeRun(lr, h, turnCtx, cancel, events, unsubscribe, userTurn, req.Model, revertModel, unlock)
 
-	completionID := completionIDFor(conversationID)
-
-	// Usage is cumulative on Pi's side; the app takes the last frame that carries
-	// it, so it is attached once at the end of the turn.
-	var lastUsage piUsage
-
-	keepalive := startKeepalive(turnCtx, sse, s.cfg.KeepaliveInterval)
-	defer keepalive()
-
-	if err := h.runner.agent.Send(turnCtx, "prompt", promptPayload(userTurn)); err != nil {
-		// The turn never executed: revert like any other pre-prompt failure
-		// rather than leaving the switch sticky.
-		revertModel()
-		s.writeStreamError(sse, "could not deliver the prompt to the agent")
-		return
-	}
-
-	for {
-		select {
-		case <-turnCtx.Done():
-			s.writeStreamError(sse, "the agent did not finish this turn in time")
-			return
-
-		case rec, open := <-events:
-			if !open {
-				// The agent exited; subscribers are closed on process death.
-				s.writeStreamError(sse, "the agent stopped before finishing this turn")
-				return
-			}
-
-			// Usage is cumulative and reported on message_update today, but it is
-			// decoded for EVERY record rather than inside one case: Pi also nests it
-			// under other events (compaction_end carries result.usage), and a record
-			// whose final counts were never read would silently report zero tokens
-			// for a completed turn.
-			if u, ok := decodeUsage(rec); ok {
-				lastUsage = u
-			}
-			// A turn Pi could not complete is reported as an error, not as an empty
-			// success. Checked before the delta switch because an errored turn emits no
-			// content at all, so without this the stream would end cleanly and the client
-			// would see a 200 with `finish_reason: stop` and no text.
-			if msg, failed := decodeTurnError(rec); failed {
-				s.writeStreamError(sse, msg)
-				return
-			}
-
-			switch rec.Type {
-			case "message_update":
-				text, reasoning, isDelta, ok := decodeMessageUpdate(rec)
-				if !ok || !isDelta {
-					continue
-				}
-				if text == "" && reasoning == "" {
-					continue
-				}
-				frame := newChunk(completionID, req.Model, text, reasoning)
-				if err := sse.write(frame); err != nil {
-					return
-				}
-
-			default:
-				// Tool progress. A known lifecycle event always renders; an
-				// unfamiliar one renders only if it names a tool, so a future Pi
-				// event about a tool does not make it vanish mid-execution while an
-				// unrelated event is not mislabelled as one. Without a tool name
-				// there is nothing to attribute, and the app skips unattributable
-				// frames anyway.
-				name, named := decodeToolEvent(rec)
-				if !named {
-					break
-				}
-				status := toolStatus(rec.Type)
-				if !isToolEvent(rec.Type) {
-					// Unfamiliar type that still names a tool: say it is running
-					// rather than claiming a start or end we did not observe.
-					status = "running"
-				}
-				if err := sse.write(toolFrame{Tool: name, Status: status}); err != nil {
-					return
-				}
-
-			case pi.TypeAgentSettled:
-				// The end signal for the turn. Usage goes on its own frame so the
-				// app's last-seen-wins parsing picks it up before [DONE].
-				if u := lastUsage.toWire(); u.nonZero() {
-					if err := sse.write(chunk{
-						ID:      completionID,
-						Object:  "chat.completion.chunk",
-						Created: nowUnix(),
-						Model:   req.Model,
-						Usage:   u,
-					}); err != nil {
-						return
-					}
-				}
-				_ = sse.done()
-				return
-			}
-		}
-	}
-}
-
-// handleChatBuffered answers a non-streaming request with one JSON body, for
-// clients other than the app. The app always sets stream=true.
-//
-// Tool progress is deliberately NOT reported here. These frames exist to drive the
-// app's live progress UI, and a buffered response has no timeline to attach them
-// to; emitting them into a single JSON body would mean inventing an ordering the
-// caller never asked for. The asymmetry with the streaming path is intentional.
-// handleChatBuffered serves a non-streamed completion.
-//
-// Unlike the streaming path this puts NOTHING on the wire until the turn is done,
-// so it holds the profile lock in silence for as long as the agent takes. Two
-// consequences worth knowing before pointing a proxy at it:
-//
-//   - A proxy read timeout shorter than TurnTimeout cuts the connection with no
-//     partial output to show for it, and the client cannot resume from a session
-//     the way it can from a dropped stream. The deployed chain is now ordered
-//     outermost-first — nginx 990s idle, this TurnTimeout 960s (PI_TURN_TIMEOUT),
-//     and under that the 900s + 30s spawn_subagent delegation ceiling — so the
-//     layer that fires is the innermost one that has an answer to give. A proxy
-//     shorter than this one would turn every long turn into an unexplained 504;
-//     the app never hits the buffered path anyway because it always streams.
-//   - The profile is blocked for the whole turn either way. Streaming occupies it
-//     too, so switching a client to non-streamed buys nothing but removes the
-//     progress signal.
-func (s *Server) handleChatBuffered(
-	w http.ResponseWriter, ctx context.Context, h *agentHandler,
-	events <-chan pi.Record, userTurn *turn, conversationID string, req chatRequest,
-	revert func(),
-) {
-	// Same derived id as the streaming path, so a completion can be correlated
-	// from logs regardless of which mode served it.
-	completionID := completionIDFor(conversationID)
-	var text, reasoning strings.Builder
-	var lastUsage piUsage
-
-	if err := h.runner.agent.Send(ctx, "prompt", promptPayload(userTurn)); err != nil {
-		// Same rule as the streaming path: a turn that never executed must
-		// not leave the switch sticky.
-		revert()
-		apiError(w, http.StatusBadGateway, "upstream_error", "",
-			"could not deliver the prompt to the agent")
-		return
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			apiError(w, http.StatusGatewayTimeout, "timeout_error", "",
-				"the agent did not finish this turn in time")
-			return
-		case rec, open := <-events:
-			if !open {
-				apiError(w, http.StatusBadGateway, "upstream_error", "",
-					"the agent stopped before finishing this turn")
-				return
-			}
-			// Decoded for every record, not just message_update — see the streaming
-			// loop for why.
-			if u, ok := decodeUsage(rec); ok {
-				lastUsage = u
-			}
-			if msg, failed := decodeTurnError(rec); failed {
-				// 502, not 200-with-blanks: the gateway is healthy and the agent is not,
-				// and the caller has to be able to tell that apart from a short answer.
-				apiError(w, http.StatusBadGateway, "upstream_error", "", msg)
-				return
-			}
-
-			switch rec.Type {
-			case "message_update":
-				if t, r, isDelta, ok := decodeMessageUpdate(rec); ok && isDelta {
-					text.WriteString(t)
-					reasoning.WriteString(r)
-				}
-			case pi.TypeAgentSettled:
-				// choices[0].message, not choices[0].delta: this is the non-streaming
-				// response and a standard OpenAI client reads exactly that. Emitting
-				// the delta shape here handed such a client a 200 it could not parse.
-				body := completion{
-					ID:      completionID,
-					Object:  "chat.completion",
-					Created: nowUnix(),
-					Model:   req.Model,
-					Choices: []completionChoice{{
-						Message: delta{
-							Content:          text.String(),
-							ReasoningContent: reasoning.String(),
-						},
-						Finish: "stop",
-					}},
-				}
-				if u := lastUsage.toWire(); u.nonZero() {
-					body.Usage = u
-				}
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				_ = writeJSON(w, body)
-				return
-			}
-		}
-	}
+	w.Header().Set("X-Agento-Run-Id", lr.id())
+	s.streamRun(w, r, lr, runEvents, snap)
 }
 
 // promptPayload builds Pi's prompt command, carrying images when present.

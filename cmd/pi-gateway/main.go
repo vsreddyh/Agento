@@ -29,6 +29,7 @@ package main
 import (
 	"agento/internal/crashlog"
 	"agento/internal/cronjobs"
+	"agento/internal/runs"
 	"context"
 	"errors"
 	"fmt"
@@ -229,6 +230,36 @@ func run() error {
 		}()
 	}
 
+	// Conversation-attached runs (#311). Same Mongo database as the rest of
+	// the domain data, a sibling collection to cron jobs. Without it, runs
+	// still outlive their request in this process, but a restart loses the
+	// history — so a store failure is logged and the gateway keeps serving.
+	var runStore runs.Store
+	if store, err := runs.FromEnv(); err != nil {
+		logger.Printf("run history: falling back to in-memory: %v", err)
+		runStore = runs.NewMemoryStore()
+	} else {
+		runStore = store
+		store.Logf = logger.Printf
+		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+		if err := store.EnsureIndexes(indexCtx); err != nil {
+			logger.Printf("run history: index setup failed (records will not auto-expire): %v", err)
+		}
+		cancelIndex()
+		// Execution cannot survive a process restart. Mark what was running
+		// before serving, so the list never claims a dead run is in flight;
+		// the output produced before the restart stays readable. Bounded like
+		// the index setup above: a wedged database must not hang startup
+		// forever.
+		markCtx, cancelMark := context.WithTimeout(ctx, 10*time.Second)
+		if n, err := store.MarkInterrupted(markCtx, time.Now()); err != nil {
+			logger.Printf("run history: could not mark interrupted runs: %v", err)
+		} else if n > 0 {
+			logger.Printf("run history: marked %d in-flight run(s) interrupted after restart", n)
+		}
+		cancelMark()
+	}
+
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")
 	if _, ok := agents[defaultProfile]; !ok {
 		// Fall back to the first profile that actually STARTED, not the first one
@@ -245,7 +276,7 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, logger.Printf), agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, logger.Printf), agents)
 	if err != nil {
 		return err
 	}
@@ -445,7 +476,7 @@ func skillArgs(skillsDir string) []string {
 // InventoryTimeout line left every test green, because the test exercised secondsEnv
 // directly and never the wiring. A budget that cannot be shown to reach its field is
 // not configurable in any useful sense.
-func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, logf func(string, ...any)) gateway.Config {
+func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, logf func(string, ...any)) gateway.Config {
 	return gateway.Config{
 		Password: password,
 		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
@@ -461,6 +492,9 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStor
 		// store needs env and the fire path needs the worker.
 		CronJobs: cronStore,
 		CronFire: cronFire,
+		// Resumable run history, owned by run(): it needs env and the
+		// startup reconciliation that marks dead runs interrupted.
+		RunStore: runStore,
 		// Each budget is configurable for the same reason: the right value depends on
 		// the host, and changing it should not mean rebuilding the binary.
 		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),
