@@ -671,12 +671,12 @@ func (m *runManager) get(ctx context.Context, id string) (runs.Run, error) {
 }
 
 func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error) {
-	// Over-fetch for the overlay below: the store window applies before the
-	// merge, so a live run whose stored row falls outside it would be
-	// re-appended and sliced out again. Fetching room for every live run
-	// keeps them visible; past ListCap the window still wins (a hundred newer
-	// runs during one turn), and then detail/events serve what the list
-	// cannot — documented in the ADR.
+	// Reserve room for the overlay below instead of over-fetching: the store
+	// window applies before the merge, so fetching a full page of stored rows
+	// would slice a live run straight back out. The merged page holds at most
+	// `want` rows with live runs prioritized over the oldest stored ones;
+	// past ListCap the window still wins (a hundred newer runs during one
+	// turn), and then detail/events serve what the list cannot.
 	m.mu.Lock()
 	room := len(m.live)
 	m.mu.Unlock()
@@ -684,14 +684,14 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 	if want <= 0 || want > runs.ListCap {
 		want = runs.ListCap
 	}
-	fetch := want + room
-	if fetch > runs.ListCap {
-		fetch = runs.ListCap
-	}
-	f.Limit = fetch
-	stored, err := m.store.List(ctx, f)
-	if err != nil {
-		return nil, err
+	var stored []runs.Run
+	if fetch := want - room; fetch > 0 {
+		f.Limit = fetch
+		var err error
+		stored, err = m.store.List(ctx, f)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// Overlay the live runs. The store lags the executor by design now — the
 	// Create is background and persists are offered without blocking — so a

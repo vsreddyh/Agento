@@ -138,7 +138,12 @@ are stable contract; failures are 502 `upstream_error`.
 
 Error frames end the stream with EOF and no `[DONE]`, the same contract as
 the chat surface's `writeStreamError`: the app treats a closed stream without
-a terminator as failure, on both the live and the reattached path.
+a terminator as failure, on both the live and the reattached path — with one
+exception. A stream dropped for backpressure (the server sheds a subscriber
+that stops draining) also ends EOF mid-run with the run still `running`: that
+is not failure, it is a cue to reattach. The snapshot on reattach carries
+everything the dropped stream missed, so the rule is: EOF + run terminal =
+failure, EOF + run running = reattach and continue.
 
 Verb responses carry action states, not run states: `POST .../steer` answers
 `{"ok":true,"status":"queued"}` and an accepted `POST .../cancel` answers
