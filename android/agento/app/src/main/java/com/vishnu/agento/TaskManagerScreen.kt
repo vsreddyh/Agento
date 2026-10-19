@@ -114,8 +114,14 @@ internal fun TaskManagerScreen(
     // Persisted by enum name (enums have no default Saveable saver);
     // rotation used to reset these while the search query survived.
     var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
-    val filter = runCatching { ServerTaskFilter.valueOf(filterName) }
-        .getOrDefault(ServerTaskFilter.Open)
+    // Derived through a function rather than only as the local below: a
+    // coroutine armed in one composition (the safety-net timer in doComplete)
+    // runs after later ones, and has to see the filter that is showing when it
+    // fires — not the snapshot that was current when it was armed.
+    fun filterNow(): ServerTaskFilter =
+        runCatching { ServerTaskFilter.valueOf(filterName) }
+            .getOrDefault(ServerTaskFilter.Open)
+    val filter = filterNow()
     var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
     val sort = runCatching { ServerTaskSort.valueOf(sortName) }
         .getOrDefault(ServerTaskSort.Start)
@@ -136,19 +142,39 @@ internal fun TaskManagerScreen(
     // True while a background refresh is in flight; drives the thin bar that
     // stands in for the spinner on those runs.
     var refreshing by remember { mutableStateOf(false) }
-    // Rows playing their leave animation (#308). A completed row stays in
-    // `tasks` until its animation reports it has finished leaving, and a
-    // fetch that lands meanwhile carries it over rather than yanking it out
-    // from under the animation (see mergeRefresh).
-    var exitingIds by remember { mutableStateOf(setOf<String>()) }
-    // The task ids the list held the last time it was DRAWN (#308), or null
-    // before the first draw. A row animates in only when its id was not among
-    // them: that makes the first population, a filter switch, a re-sort and a
-    // search all draw in place, while a row that genuinely arrives — a
-    // repeat's next occurrence, a task created here or by the agent — still
-    // animates in. Null (not the empty set) is what marks "never drawn", so
-    // the very first task created into an empty list animates too.
-    var knownTaskIds by remember { mutableStateOf<Set<String>?>(null) }
+    // Rows playing their leave animation (#308), each mapped to the filter it
+    // is leaving UNDER. A completed row stays in `tasks` until its animation
+    // reports it has finished leaving, and a fetch that lands meanwhile
+    // carries it over rather than yanking it out from under the animation
+    // (see mergeRefresh).
+    //
+    // The filter is part of the entry because an exit belongs to the view it
+    // started in. All and Done legitimately list completed tasks, so a row
+    // completed on Open and carried into them must NOT play an exit there —
+    // it would blink out of a list that is supposed to show it. Reads go
+    // through [exitingHere], which is empty unless the filter is the one the
+    // exit was started under.
+    var exiting by remember { mutableStateOf(mapOf<String, ServerTaskFilter>()) }
+    // The exits that belong to the filter showing now (#308).
+    val exitingHere = remember(exiting, filter) {
+        exiting.filterValues { it == filter }.keys
+    }
+    // The task ids the list held per filter the last time that filter was
+    // DRAWN (#308), absent until it has been drawn once. A row animates in
+    // only when its id was not among them, so the first paint of a filter, a
+    // re-sort and a search draw in place while a row that genuinely arrives —
+    // a repeat's next occurrence, a task created here or by the agent — still
+    // animates in. Keyed by filter because "was this row already on screen" is
+    // a question about the list that was showing: a global set would cascade
+    // the whole page on the first visit to Done or All. Absent (not the empty
+    // set) marks "never drawn", so the first task created into an empty list
+    // animates too.
+    var knownIdsByFilter by remember { mutableStateOf(mapOf<String, Set<String>>()) }
+    // Which filter the rows in `tasks` actually came from (#308), set by the
+    // loader on success. The effect below files `tasks` under THIS name rather
+    // than the filter showing at the time it runs, so a filter change can never
+    // record one filter's ids under another's name.
+    var rowsFilterName by remember { mutableStateOf(filterName) }
     // True once the loader below has completed at least once (success or
     // failure). The resume check below must not refetch on the very first
     // resume: the initial load is already in flight, and re-bumping the tick
@@ -265,10 +291,16 @@ internal fun TaskManagerScreen(
                 // Rows still playing their leave animation are carried over
                 // the fresh page (#308): the server stops listing a task the
                 // moment it is completed, so without this the row would be
-                // pulled out mid-animation and the list would blink.
-                tasks = mergeRefresh(page.tasks, tasks, exitingIds)
+                // pulled out mid-animation and the list would blink. Only the
+                // exits belonging to the filter being fetched — an exit
+                // started on Open must not follow the row into All/Done.
+                tasks = mergeRefresh(page.tasks, tasks, exitingHere)
                 listTruncated = page.truncated
                 error = ""
+                // Which filter these rows are the answer for (#308): recorded
+                // with the rows themselves, so the enter-animation effect never
+                // files one filter's ids under another's name.
+                rowsFilterName = filter.name
                 // List-level last fetch, persisted (#288): set on success
                 // only, so a failed fetch leaves the old stamp untouched.
                 lastSyncedAt = System.currentTimeMillis()
@@ -319,10 +351,13 @@ internal fun TaskManagerScreen(
     // Recorded only AFTER the rows have actually been on screen once (#308),
     // so the paint that first shows them is not treated as an arrival: an
     // effect runs after composition, which is exactly what makes this the
-    // "what was on screen last time" set rather than one the first paint
-    // already sees.
-    LaunchedEffect(tasks, loading, error) {
-        if (!loading && error.isEmpty()) knownTaskIds = tasks.mapTo(HashSet()) { it.id }
+    // "what this filter was showing last time" set rather than one the paint
+    // that first shows it already sees.
+    LaunchedEffect(tasks, rowsFilterName, loading, error) {
+        if (!loading && error.isEmpty()) {
+            knownIdsByFilter = knownIdsByFilter +
+                (rowsFilterName to tasks.map { it.id }.toSet())
+        }
     }
 
     // Coming back to a screen the agent may have written to while we were away
@@ -423,18 +458,35 @@ internal fun TaskManagerScreen(
      * call a no-op, and stops a row the user has since got back (a completed
      * request that failed and was reverted) from being removed here.
      *
-     * The list is only touched while the Open filter is still showing: that is
-     * the filter a completed row has to leave. If the user switched filters
-     * while it was on its way out, the other filter's own fetch decides what
-     * belongs on screen (a completed row belongs on All/Done), so removing it
-     * here would fight that.
+     * The list is only touched while the filter the exit was started under is
+     * still the one showing: that is the filter a completed row has to leave.
+     * If the user switched filters while it was on its way out, the other
+     * filter's own fetch decides what belongs on screen (a completed row
+     * belongs on All/Done), so removing it here would fight that. Either way
+     * the id is dropped from [exiting], so the transition is not left open.
      */
     fun onRowExited(id: String) {
-        if (id !in exitingIds) return
-        exitingIds = exitingIds - id
-        if (filter == ServerTaskFilter.Open) {
+        val under = exiting[id] ?: return
+        exiting = exiting - id
+        if (filterNow() == under) {
             tasks = tasks.filterNot { it.id == id }
         }
+    }
+
+    /**
+     * Marks [id] as already on screen for the filter these rows belong to
+     * (#308).
+     *
+     * An optimistic placeholder is swapped for the server's row when the
+     * request lands, which changes the row's key — without this the row would
+     * replay its entrance on the swap even though it never left, and the
+     * collapse-and-grow would bounce everything below it. Best-effort: the
+     * effect that records the drawn ids would catch up on the next paint
+     * anyway, this only covers the paint the swap itself lands on.
+     */
+    fun noteRowShown(id: String) {
+        val known = knownIdsByFilter[rowsFilterName].orEmpty()
+        knownIdsByFilter = knownIdsByFilter + (rowsFilterName to (known + id))
     }
 
     fun onBell() {
@@ -510,6 +562,10 @@ internal fun TaskManagerScreen(
             ).fold(
                 onSuccess = { copy ->
                     editing = null
+                    // Only when the placeholder is still there to be replaced:
+                    // if a filter change already dropped it, the server row is
+                    // a genuine arrival and must animate in (#308).
+                    if (tasks.any { it.id == tempId }) noteRowShown(copy.id)
                     tasks = tasks.map { if (it.id == tempId) copy else it }
                     pokeWidget()
                     toasts.toast("Copied \u201c${copy.name}\u201d.", ToastKind.Success)
@@ -530,7 +586,7 @@ internal fun TaskManagerScreen(
         // `tasks = prev` — leaving the completed row stuck in the Open list.
         // The row is disabled while busy/exiting, and this covers every other
         // caller (the detail sheet, a deep link) as well.
-        if (t.id in exitingIds || t.id in busyIds) return
+        if (t.id in exiting || t.id in busyIds) return
         // The sheet is already dismissed by the caller. On the Open filter the
         // row is NOT removed here (#308): it is marked as leaving and plays its
         // exit animation, then onRowExited drops it. The request runs in the
@@ -538,7 +594,11 @@ internal fun TaskManagerScreen(
         selected = null
         val prev = tasks
         if (filter == ServerTaskFilter.Open) {
-            exitingIds = exitingIds + t.id
+            // The filter is recorded with the id: if the user switches filters
+            // before the animation ends, the new list is authoritative about
+            // this row (All and Done list completed tasks) and the exit must
+            // not play there.
+            exiting = exiting + (t.id to filter)
             // The row is left in `tasks` exactly as it is until it has
             // finished leaving: marking it completed would move it to the
             // Completed bucket (dueBucket keys off `isOpen`) and teleport it
@@ -632,7 +692,7 @@ internal fun TaskManagerScreen(
                     // Restoring `prev` also covers the case where the
                     // animation had already finished and onRowExited had
                     // dropped the row.
-                    exitingIds = exitingIds - t.id
+                    exiting = exiting - t.id
                     tasks = prev
                     fail(e)
                 },
@@ -942,11 +1002,12 @@ internal fun TaskManagerScreen(
                                 key(t.id) {
                                     TaskRowSlot(
                                         taskId = t.id,
-                                        exiting = t.id in exitingIds,
-                                        // A row whose id the list was already
-                                        // showing is drawn in place; only a
-                                        // genuinely new one animates in.
-                                        animateEnter = knownTaskIds?.contains(t.id) == false,
+                                        exiting = t.id in exitingHere,
+                                        // A row whose id this filter was
+                                        // already showing is drawn in place;
+                                        // only a genuinely new one animates.
+                                        animateEnter = knownIdsByFilter[rowsFilterName]
+                                            ?.contains(t.id) == false,
                                         onExited = ::onRowExited,
                                     ) {
                                         Column {
@@ -965,20 +1026,20 @@ internal fun TaskManagerScreen(
                                                 // leaving (#308), which must not
                                                 // accept a second tap.
                                                 actionsEnabled = t.id !in busyIds &&
-                                                    t.id !in exitingIds,
+                                                    t.id !in exitingHere,
                                                 // Leaving (#308): it reads as
                                                 // completed while it goes, but
                                                 // only in what is drawn — the
                                                 // row keeps its own data so the
                                                 // bucket it was in does not
                                                 // change underneath it.
-                                                completed = t.id in exitingIds,
+                                                completed = t.id in exitingHere,
                                                 // A leaving row is not a
                                                 // target: opening it would
                                                 // race the request that is
                                                 // taking it away.
                                                 onOpen = {
-                                                    if (t.id !in exitingIds) selected = t
+                                                    if (t.id !in exitingHere) selected = t
                                                 },
                                                 onToggle = {
                                                     if (t.isOpen()) doComplete(t) else doReopen(t)
@@ -1035,10 +1096,10 @@ internal fun TaskManagerScreen(
                     val rep = next.repeatOrNull()
                     val tempId = "__pending__${System.nanoTime()}"
                     val prev = tasks
+                    // Open task on the Done filter: nothing visible to patch
+                    // (see doDuplicate); the reload on the next resume
+                    // converges.
                     tasks = if (filter == ServerTaskFilter.Done) {
-                        // Open task on the Done filter: nothing visible to
-                        // patch (see doDuplicate); the reload on the next
-                        // resume converges.
                         prev
                     } else {
                         listOf(
@@ -1077,6 +1138,11 @@ internal fun TaskManagerScreen(
                             parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { created ->
+                                // Only when the placeholder is still there to
+                                // be replaced: if a filter change already
+                                // dropped it, the server row is a genuine
+                                // arrival and must animate in (#308).
+                                if (tasks.any { it.id == tempId }) noteRowShown(created.id)
                                 tasks = tasks.map { if (it.id == tempId) created else it }
                                 pokeWidget()
                             },
@@ -1206,7 +1272,7 @@ internal fun TaskManagerScreen(
             task = open,
             overdue = open.isOverdue(sheetDay.toString(), sheetNow),
             today = sheetDay,
-            actionsEnabled = open.id !in busyIds && open.id !in exitingIds,
+            actionsEnabled = open.id !in busyIds && open.id !in exitingHere,
             onDismiss = { selected = null },
             onEdit = {
                 selected = null
