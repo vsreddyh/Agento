@@ -171,10 +171,12 @@ var gatedTools = map[string]map[string]bool{
 	},
 }
 
-// Redact returns a copy of args with secret-shaped values masked. None of
-// today's tools take passwords, but arguments are persisted and rendered,
-// so anything named like a credential is masked by rule rather than by audit
-// of each tool's schema.
+// Redact returns a copy of args with secret-shaped values masked, recursing
+// into nested objects and arrays — tool arguments nest (a "params" object
+// carrying a token must not survive because the secret sits one level down).
+// None of today's tools take passwords, but arguments are persisted for 90
+// days and rendered in the app, so anything named like a credential is masked
+// by rule rather than by audit of each tool's schema.
 func Redact(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return map[string]any{}
@@ -185,14 +187,32 @@ func Redact(args map[string]any) map[string]any {
 			out[k] = "***"
 			continue
 		}
-		out[k] = v
+		out[k] = redactValue(v)
 	}
 	return out
 }
 
+func redactValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return Redact(t)
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = redactValue(e)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 func isSecretKey(k string) bool {
 	k = strings.ToLower(k)
-	for _, sub := range []string{"password", "secret", "token", "2fa", "otp", "api_key", "apikey", "private_key", "credential"} {
+	for _, sub := range []string{
+		"password", "passwd", "pwd", "passcode", "secret", "token",
+		"2fa", "otp", "api_key", "apikey", "private_key", "credential",
+	} {
 		if strings.Contains(k, sub) {
 			return true
 		}
@@ -249,7 +269,13 @@ func NewID() string { return primitive.NewObjectID().Hex() }
 
 // Store is the persistence surface. *MongoStore and *MemoryStore implement
 // it; the relay and the gateway share one.
+//
+// Shared reports whether this store is visible to other processes. Only a
+// shared (Mongo) store lets a relay-held call be decided from the gateway:
+// two memory fallbacks in two processes can never meet, so without Mongo
+// every gated call waits out its hold and expires by design.
 type Store interface {
+	Shared() bool
 	CreateApproval(ctx context.Context, a Approval) error
 	GetApproval(ctx context.Context, id string) (Approval, error)
 	// DecideApproval flips a pending approval terminal. Anything else is an

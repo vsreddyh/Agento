@@ -106,10 +106,22 @@ func TestPolicyTableIsComplete(t *testing.T) {
 }
 
 func TestRedactMasksSecrets(t *testing.T) {
-	in := map[string]any{"amount": 5, "api_token": "sekret", "Note": "x"}
+	in := map[string]any{
+		"amount": 5, "api_token": "sekret", "Note": "x",
+		"params": map[string]any{"passwd": "hunter2", "limit": 3},
+		"tags":   []any{"a", map[string]any{"pwd": "y"}},
+	}
 	out := Redact(in)
 	if out["api_token"] != "***" {
 		t.Errorf("token not masked: %v", out)
+	}
+	nested, _ := out["params"].(map[string]any)
+	if nested["passwd"] != "***" || nested["limit"] != 3 {
+		t.Errorf("nested not masked: %v", out)
+	}
+	tags, _ := out["tags"].([]any)
+	if m, _ := tags[1].(map[string]any); m["pwd"] != "***" {
+		t.Errorf("array-nested not masked: %v", out)
 	}
 	if out["amount"] != 5 || in["api_token"] != "sekret" {
 		t.Errorf("redact mutated input or dropped fields: %v", out)

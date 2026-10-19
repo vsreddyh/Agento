@@ -24,6 +24,7 @@ func testRelay(store approvals.Store) *relay {
 		waitFor: 300 * time.Millisecond,
 		pollFor: 10 * time.Millisecond,
 		pending: map[string]*callState{},
+		holds:   map[string]context.CancelFunc{},
 	}
 }
 

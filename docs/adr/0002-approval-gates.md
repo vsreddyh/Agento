@@ -59,10 +59,14 @@ tool), and reads never gate. Unknown servers and unknown tools hold.
 `approvals` (15-minute TTL) and `audit_log` (90-day TTL) in the shared
 database, through `internal/approvals` — the same Store-interface +
 memory-fallback shape as runs. The relay and the gateway open the same
-collections from their own processes and fall back independently: gating
-never depends on Mongo being up, only the cross-restart record does. A
-restart expires pending rows (nothing will ever decide them) and deletes
-expired ones.
+collections from their own processes and fall back independently. That
+independence has one hard edge worth stating plainly: a *decision* needs a
+store both processes see. Without Mongo the relay and the gateway hold
+separate memories, so every gated call waits out its hold and expires — by
+design, loudly (error-level log naming the server, expired audit row). The
+cross-restart record is the convenience; the cross-process record is the
+requirement. A restart expires pending rows (nothing will ever decide them)
+and deletes expired ones.
 
 ### The app decides, never with secrets
 

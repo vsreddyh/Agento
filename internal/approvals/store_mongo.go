@@ -20,6 +20,11 @@ type MongoStore struct {
 	Logf func(string, ...any)
 }
 
+// Shared reports true: Mongo is visible to every process holding the
+// same URI, which is what makes relay-held calls decidable from the
+// gateway.
+func (s *MongoStore) Shared() bool { return true }
+
 func (s *MongoStore) logf(format string, args ...any) {
 	if s.Logf != nil {
 		s.Logf(format, args...)

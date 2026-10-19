@@ -95,12 +95,21 @@ type relay struct {
 	waitFor time.Duration
 	pollFor time.Duration
 
-	mu      sync.Mutex
+	// outMu guards Pi-bound writes, childMu server-bound ones: a slow or
+	// dead direction must not head-of-line-block the other behind one lock.
+	outMu   sync.Mutex
+	childMu sync.Mutex
 	out     io.Writer
 	childIn io.Writer
-	// pending tracks forwarded tools/call ids so responses can be audited.
-	// Held calls are NOT in here until approved and forwarded.
+
+	mu      sync.Mutex
 	pending map[string]*callState
+	// holds cancels parked waits at teardown, so a Pi disconnect does not
+	// leave approvals pending that nothing will ever decide.
+	holds map[string]context.CancelFunc
+	// holdCtx is the teardown scope parked waits observe. Set once in run
+	// before the pumps start; read-only after.
+	holdCtx context.Context
 }
 
 type callState struct {
@@ -133,7 +142,13 @@ func (r *relay) run(
 	r.out = piOut
 	r.childIn = childStdin
 	r.pending = map[string]*callState{}
+	r.holds = map[string]context.CancelFunc{}
+	// Holds die with the pair (see holdCall): captured before the pumps
+	// start, so every parked wait observes teardown.
+	holdCtx, cancelHolds := context.WithCancel(context.Background())
+	r.holdCtx = holdCtx
 	r.mu.Unlock()
+	defer cancelHolds()
 
 	done := make(chan error, 2)
 	go func() { done <- r.pumpPiToChild(piIn) }()
@@ -145,9 +160,21 @@ func (r *relay) run(
 	// closed stdin means Pi is gone. stop() SIGKILLs a live child; the
 	// blocked reader is abandoned on the exit path, which is safe because
 	// the process is leaving.
+	cancelHolds()
 	stop()
 	child.Wait()
 	return err
+}
+
+// holdCtxOrBackground returns the teardown scope, or Background when the
+// relay runs outside run() (unit tests drive holdCall directly).
+func (r *relay) holdCtxOrBackground() context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.holdCtx == nil {
+		return context.Background()
+	}
+	return r.holdCtx
 }
 
 // pumpPiToChild forwards Pi traffic, holding gated calls.
@@ -163,17 +190,26 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 		}
 		var env envelope
 		if json.Unmarshal(line, &env) != nil || env.Method != "tools/call" {
-			r.writeChild(line)
+			if err := r.writeChild(line); err != nil {
+				r.log.Printf("write to server failed: %v", err)
+				return err
+			}
 			continue
 		}
 		var params callParams
 		if json.Unmarshal(env.Params, &params) != nil || params.Name == "" {
-			r.writeChild(line)
+			if err := r.writeChild(line); err != nil {
+				r.log.Printf("write to server failed: %v", err)
+				return err
+			}
 			continue
 		}
 		if !approvals.NeedsApproval(r.server, params.Name, params.Arguments) {
-			r.track(string(env.ID), params.Name, params.Arguments)
-			r.writeChild(line)
+			r.track(string(env.ID), params.Name, approvals.Redact(params.Arguments))
+			if err := r.writeChild(line); err != nil {
+				r.log.Printf("write to server failed: %v", err)
+				return err
+			}
 			continue
 		}
 		go r.holdCall(line, env, params)
@@ -198,28 +234,67 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 		r.audit(params.Name, redacted, approvals.DispositionDenied, "approval store unavailable", "")
 		return
 	}
+	if !r.store.Shared() {
+		// Split-brain guard: this store is process-local, so no gateway
+		// will ever decide this row. Loud, so a Mongo-less deployment
+		// reads as what it is (gated calls expire by design) rather than a
+		// hung turn nobody can explain.
+		r.log.Printf("ERROR holding %s/%s with no shared store: configure MONGODB_URI or every gated call expires", r.server, params.Name)
+	}
 	r.log.Printf("holding %s/%s for approval %s", r.server, params.Name, a.ID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), r.waitFor)
+	holdCtx, unhold := context.WithCancel(r.holdCtxOrBackground())
+	r.mu.Lock()
+	r.holds[a.ID] = unhold
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.holds, a.ID)
+		r.mu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(holdCtx, r.waitFor)
 	defer cancel()
 	ticker := time.NewTicker(r.pollFor)
 	defer ticker.Stop()
+	expire := func(reason string) {
+		r.log.Printf("approval %s %s", a.ID, reason)
+		if err := r.store.TimeoutApproval(context.Background(), a.ID, time.Now()); err != nil {
+			r.log.Printf("timeout approval %s: %v", a.ID, err)
+		}
+		r.writePi(rpcError(env.ID, -32000, "approval "+a.ID+" "+reason+"; failing closed"))
+		r.audit(params.Name, redacted, approvals.DispositionExpired, reason, a.ID)
+	}
+	pollFails := 0
 	for {
 		select {
 		case <-ctx.Done():
-			r.log.Printf("approval %s expired with no decision", a.ID)
-			r.store.TimeoutApproval(context.Background(), a.ID, time.Now())
-			r.writePi(rpcError(env.ID, -32000, "approval "+a.ID+" expired with no decision; failing closed"))
-			r.audit(params.Name, redacted, approvals.DispositionExpired, "no decision in time", a.ID)
+			// Teardown (Pi gone) and timeout share the expiry: either way
+			// nobody will decide, so the row must not stay pending. The
+			// message says which, for the audit reader.
+			if holdCtx.Err() != nil {
+				expire("abandoned at teardown")
+			} else {
+				expire("expired with no decision")
+			}
 			return
 		case <-ticker.C:
 			got, err := r.store.GetApproval(context.Background(), a.ID)
 			if err != nil {
+				// A store outage spins here until expiry; log sparsely so
+				// triage sees it without one line per poll.
+				pollFails++
+				if pollFails%30 == 1 {
+					r.log.Printf("approval %s poll failed %d times: %v", a.ID, pollFails, err)
+				}
 				continue
 			}
 			switch got.Status {
 			case approvals.StatusApproved:
-				r.track(id, params.Name, params.Arguments)
+				// Track redacted: the pending map lives until the response
+				// arrives, and raw args must not sit in it. Audit redacts
+				// again — same output, safe in-memory copy.
+				r.track(id, params.Name, redacted)
 				r.writeChild(line)
 				r.audit(params.Name, redacted, approvals.DispositionApproved, "", a.ID)
 				return
@@ -250,7 +325,10 @@ func (r *relay) pumpChildToPi(childOut io.Reader) error {
 				r.auditResponse(st, line)
 			}
 		}
-		r.writePi(line)
+		if err := r.writePi(line); err != nil {
+			r.log.Printf("write to Pi failed: %v", err)
+			return err
+		}
 	}
 }
 
@@ -312,18 +390,24 @@ func (r *relay) take(id string) *callState {
 	return st
 }
 
-func (r *relay) writeChild(line []byte) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.childIn.Write(line)
-	r.childIn.Write([]byte("\n"))
+func (r *relay) writeChild(line []byte) error {
+	r.childMu.Lock()
+	defer r.childMu.Unlock()
+	if _, err := r.childIn.Write(line); err != nil {
+		return err
+	}
+	_, err := r.childIn.Write([]byte("\n"))
+	return err
 }
 
-func (r *relay) writePi(line []byte) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.out.Write(line)
-	r.out.Write([]byte("\n"))
+func (r *relay) writePi(line []byte) error {
+	r.outMu.Lock()
+	defer r.outMu.Unlock()
+	if _, err := r.out.Write(line); err != nil {
+		return err
+	}
+	_, err := r.out.Write([]byte("\n"))
+	return err
 }
 
 // readLine reads one LF-terminated frame, bounded. The trailing newline is

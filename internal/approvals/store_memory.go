@@ -18,6 +18,9 @@ type MemoryStore struct {
 	now       func() time.Time
 }
 
+// Shared reports false: this store lives in one process only.
+func (m *MemoryStore) Shared() bool { return false }
+
 // NewMemoryStore builds empty stores.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
