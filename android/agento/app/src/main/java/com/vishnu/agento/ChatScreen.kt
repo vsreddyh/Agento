@@ -34,6 +34,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Approval
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -142,7 +143,11 @@ internal fun ChatTab(
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop,
         onSteer = vm::steer, onRuns = vm::openRuns,
         onCloseRuns = vm::closeRuns, onCancelRun = vm::cancelRun,
-        onRefreshRuns = vm::refreshRuns,
+        onRefreshRuns = vm::refreshRuns, onApprovals = vm::openApprovals,
+        onCloseApprovals = vm::closeApprovals,
+        onApprove = { vm.decideApproval(it, true) },
+        onDeny = { vm.decideApproval(it, false) },
+        onRefreshApprovals = vm::refreshApprovals,
         onNew = vm::newConversation, onRetry = vm::retry,
         onRegenerate = vm::regenerate, onContinue = vm::continueTurn,
         onReplace = vm::replaceAndResend, onFork = vm::forkAndResend,
@@ -556,6 +561,11 @@ internal fun ChatScreen(
     onCloseRuns: () -> Unit = {},
     onCancelRun: (String) -> Unit = {},
     onRefreshRuns: () -> Unit = {},
+    onApprovals: () -> Unit = {},
+    onCloseApprovals: () -> Unit = {},
+    onApprove: (String) -> Unit = {},
+    onDeny: (String) -> Unit = {},
+    onRefreshApprovals: () -> Unit = {},
     onNew: () -> Unit,
     onRetry: () -> Unit,
     onRegenerate: () -> Unit = {},
@@ -943,6 +953,24 @@ internal fun ChatScreen(
                     ) {
                         Icon(Icons.Filled.List, contentDescription = "Runs")
                     }
+                    // Approvals (#313): held tool calls need an explicit
+                    // decision, and a gate stalls the stream with no frames.
+                    // Badged with the pending count; always enabled once
+                    // ready — approvals are global, not per-thread.
+                    BadgedBox(
+                        badge = {
+                            if (state.pendingApprovalCount > 0) {
+                                Badge { Text("${state.pendingApprovalCount}") }
+                            }
+                        },
+                    ) {
+                        IconButton(
+                            onClick = onApprovals,
+                            enabled = state.ready,
+                        ) {
+                            Icon(Icons.Filled.Approval, contentDescription = "Approvals")
+                        }
+                    }
                     // Auto-read: speak each finished reply aloud.
                     //
                     // role = Switch (#283): the icon's description already
@@ -993,8 +1021,7 @@ internal fun ChatScreen(
                                 .semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
-                    if (state.streaming && state.activeTools.isNotEmpty()) {
-                        val shown = state.activeTools.take(3).joinToString(", ") +
+                    if (state.streaming && state.activeTools.isNotEmpty()) {                        val shown = state.activeTools.take(3).joinToString(", ") +
                             if (state.activeTools.size > 3) {
                                 " +${state.activeTools.size - 3} more"
                             } else ""
@@ -1011,6 +1038,19 @@ internal fun ChatScreen(
                                 // it happens (#283), for the same reason.
                                 .semantics { liveRegion = LiveRegionMode.Polite },
                         )
+                    }
+                    // Held approval (#313): a gate stalls the stream with no
+                    // frames, which otherwise reads as thinking. The watch
+                    // raises the count; the banner points at the sheet.
+                    if (state.streaming && state.pendingApprovalCount > 0) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            TextButton(onClick = onApprovals) {
+                                Text("Approval needed (${state.pendingApprovalCount})")
+                            }
+                        }
                     }
                     // Queue-or-send (#122): the composer stays live while
                     // streaming. Parking a send here auto-fires it on Done;
@@ -1552,6 +1592,19 @@ internal fun ChatScreen(
                 onRefresh = onRefreshRuns,
                 onCancel = onCancelRun,
                 onClose = onCloseRuns,
+            )
+        }
+        // Approval gates (#313): pending cards with approve/deny, audit below.
+        if (state.showApprovals) {
+            ApprovalsDialog(
+                approvals = state.approvals,
+                auditRows = state.auditRows,
+                loading = state.approvalsLoading,
+                error = state.approvalsError,
+                onApprove = onApprove,
+                onDeny = onDeny,
+                onRefresh = onRefreshApprovals,
+                onClose = onCloseApprovals,
             )
         }
     }

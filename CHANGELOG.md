@@ -8,6 +8,17 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.7.0]
+- **Approval gates: sensitive agent actions pause for your decision**
+  (#313). Money writes, deletes, archives and destructive rewrites no longer
+  execute on model say-so: the turn holds, the app raises an **Approvals**
+  entry (badged, with a banner while streaming), and you approve or deny
+  with the redacted arguments in front of you. Deny fails the call back to
+  the turn as a tool error — the reply continues, nothing breaks. The sheet
+  also carries the recent **audit trail**: every gated or sensitive call,
+  what was decided, and when. Reads and routine writes run free, and older
+  servers (no gate surface) behave exactly as before.
+
 ## [5.6.0]
 - **Chat turns survive app kills: resumable runs with steer, stop and a
   runs list** (#311). A turn is now a server-side run, not the lifetime of
