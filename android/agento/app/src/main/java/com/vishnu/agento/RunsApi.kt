@@ -55,8 +55,8 @@ sealed interface CancelOutcome {
 /**
  * Client over the gateway's native Runs API (same bearer auth as chat,
  * served through the proxy's /p/ route like the Jobs API — always call with
- * the profile path, e.g. `/p/chat`, since unprefixed `/api/*` belongs to
- * health-api). Parsing is lenient across gateway versions; missing fields
+ * the profile path, e.g. `/p/chat`, since an unprefixed `/api/` path belongs
+ * to health-api). Parsing is lenient across gateway versions; missing fields
  * show as blank rather than failing the whole list.
  */
 class RunsApi(context: Context) {
