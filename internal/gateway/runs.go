@@ -1172,6 +1172,9 @@ func (s *Server) streamRun(
 // buffered handler was: the timeout chain is ordered outermost-first — nginx
 // 990s idle, TurnTimeout 960s, the 900s+30s delegation ceiling — so the layer
 // that fires is the innermost one with an answer, never a bare proxy 504.
+// Worst case is TurnTimeout plus the post-settle bound (5s persist drain, 10s
+// terminal retry ≈ 15s): still inside nginx, but only just — widening either
+// post-settle budget without widening the proxy inverts the chain.
 func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liveRun) {
 	select {
 	case <-lr.done:
@@ -1239,11 +1242,12 @@ func runListWire(r runs.Run) map[string]any {
 }
 
 // runWire is the run detail shape. It reuses the chat stream's usage
-// spelling so the app parses both with one helper. Scalar empties are emitted
-// rather than omitted ("" output/error, 0 seq/timestamps), while the snapshot
-// frame omits empty output/reasoning via omitempty: the list/detail shapes are
-// stored records with stable keys, the snapshot is a live frame where absent
-// means "nothing yet". A parser must tolerate both.
+// spelling so the app parses both with one helper. Always present: id,
+// profile, status, output, error, seq, created_at, updated_at, finished_at
+// (0 means "not finished"), tools (possibly []). Present only when set:
+// conversation_id, prompt, provider, model, effort, reasoning, usage. The
+// snapshot frame omits empty output/reasoning via omitempty (absent means
+// "nothing yet"); a parser must tolerate both spellings.
 func runWire(r runs.Run) map[string]any {
 	out := map[string]any{
 		"id":          r.ID,

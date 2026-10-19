@@ -80,12 +80,19 @@ func (m *MemoryStore) evictLocked() {
 	}
 }
 
-// Get returns one run.
+// Get returns one run. Rows past ExpiresAt read as NotFound, matching the
+// Mongo TTL: the fallback honors expiry per read instead of a background
+// sweeper. A zero ExpiresAt never expires (tests and callers that do not set
+// one), so only timestamped rows age out.
 func (m *MemoryStore) Get(_ context.Context, id string) (Run, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, ok := m.byID[id]
 	if !ok {
+		return Run{}, &StoreError{Msg: "unknown run " + id, NotFound: true}
+	}
+	if expired(m.now(), r) {
+		delete(m.byID, id)
 		return Run{}, &StoreError{Msg: "unknown run " + id, NotFound: true}
 	}
 	return r.Clone(), nil
@@ -116,7 +123,13 @@ func (m *MemoryStore) List(_ context.Context, f Filter) ([]Run, error) {
 		limit = ListCap
 	}
 	out := make([]Run, 0, len(m.byID))
-	for _, r := range m.byID {
+	now := m.now()
+	for id, r := range m.byID {
+		// Expired rows are dropped lazily here, like in Get — no sweeper.
+		if expired(now, r) {
+			delete(m.byID, id)
+			continue
+		}
 		if f.Profile != "" && r.Profile != f.Profile {
 			continue
 		}
@@ -138,6 +151,11 @@ func (m *MemoryStore) List(_ context.Context, f Filter) ([]Run, error) {
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// expired reports whether r aged out at now. A zero ExpiresAt never expires.
+func expired(now time.Time, r Run) bool {
+	return !r.ExpiresAt.IsZero() && !r.ExpiresAt.After(now)
 }
 
 // MarkInterrupted flips every running record, reporting how many changed.

@@ -190,3 +190,30 @@ func TestMemoryStoreEvictsOldestPastCap(t *testing.T) {
 		t.Fatalf("newest run was evicted: %v", err)
 	}
 }
+
+func TestMemoryStoreExpiry(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	now := time.Now()
+	m.now = func() time.Time { return now }
+	old := Run{ID: "old", Status: StatusCompleted, CreatedAt: now.UnixMilli(), ExpiresAt: now.Add(-time.Second)}
+	fresh := Run{ID: "fresh", Status: StatusCompleted, CreatedAt: now.UnixMilli(), ExpiresAt: now.Add(time.Hour)}
+	ageless := Run{ID: "ageless", Status: StatusCompleted, CreatedAt: now.UnixMilli()}
+	for _, r := range []Run{old, fresh, ageless} {
+		if err := m.Create(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := m.Get(ctx, "old"); !NotFound(err) {
+		t.Fatalf("expired Get = %v, want NotFound", err)
+	}
+	for _, id := range []string{"fresh", "ageless"} {
+		if _, err := m.Get(ctx, id); err != nil {
+			t.Fatalf("Get(%s) = %v, want the row", id, err)
+		}
+	}
+	list, _ := m.List(ctx, Filter{})
+	if len(list) != 2 {
+		t.Fatalf("list holds %d rows, want 2 (expired dropped)", len(list))
+	}
+}
