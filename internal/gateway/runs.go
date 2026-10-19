@@ -48,12 +48,18 @@ type runFrame struct {
 }
 
 type runSnapshot struct {
-	ID        string `json:"id"`
-	Status    string `json:"status"`
-	Seq       int64  `json:"seq"`
-	Model     string `json:"model,omitempty"`
-	Output    string `json:"output,omitempty"`
-	Reasoning string `json:"reasoning,omitempty"`
+	ID string `json:"id"`
+	// Profile and conversation travel with every snapshot so a client handed
+	// a run ID from another conversation (the cross-conversation 429) can
+	// correlate what it attached to without a second round trip. Prompt does
+	// not: the snapshot is progress, and the preview lives in the record.
+	Profile        string `json:"profile,omitempty"`
+	ConversationID string `json:"conversation_id,omitempty"`
+	Status         string `json:"status"`
+	Seq            int64  `json:"seq"`
+	Model          string `json:"model,omitempty"`
+	Output         string `json:"output,omitempty"`
+	Reasoning      string `json:"reasoning,omitempty"`
 	// Tools is always present, even when empty, matching runWire: the app
 	// parses the snapshot and the list/detail shapes with one helper, and an
 	// omitted-vs-empty difference would make that helper branch for nothing.
@@ -79,17 +85,19 @@ func usageWire(u runs.Usage) *usage {
 
 func snapshotOf(r runs.Run) runSnapshot {
 	s := runSnapshot{
-		ID:         r.ID,
-		Status:     string(r.Status),
-		Seq:        r.Seq,
-		Model:      r.Model,
-		Output:     r.Output,
-		Reasoning:  r.Reasoning,
-		Tools:      append([]string(nil), r.Tools...),
-		Error:      r.Error,
-		CreatedAt:  r.CreatedAt,
-		UpdatedAt:  r.UpdatedAt,
-		FinishedAt: r.FinishedAt,
+		ID:             r.ID,
+		Profile:        r.Profile,
+		ConversationID: r.ConversationID,
+		Status:         string(r.Status),
+		Seq:            r.Seq,
+		Model:          r.Model,
+		Output:         r.Output,
+		Reasoning:      r.Reasoning,
+		Tools:          append([]string(nil), r.Tools...),
+		Error:          r.Error,
+		CreatedAt:      r.CreatedAt,
+		UpdatedAt:      r.UpdatedAt,
+		FinishedAt:     r.FinishedAt,
 	}
 	if r.Usage.NonZero() {
 		s.Usage = usageWire(r.Usage)

@@ -225,8 +225,28 @@ func TestStreamedCompletionIDIsBounded(t *testing.T) {
 	srv.ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	if strings.Contains(body, huge[:64]) {
-		t.Fatal("the raw conversation id was echoed into the stream")
+	payloads, _ := sseFrames(t, body)
+	// The agento_run snapshot names the conversation once per stream so a
+	// client handed a cross-conversation run can correlate it — that echo is
+	// load-bearing, not amplification. Chat chunks must never carry it: they
+	// repeat per delta, which is where an echo becomes a leak.
+	for _, p := range payloads {
+		var frame struct {
+			Choices json.RawMessage `json:"choices"`
+			Run     *runSnapshot    `json:"agento_run"`
+		}
+		if err := json.Unmarshal([]byte(p), &frame); err != nil {
+			t.Fatalf("frame is not JSON: %q", p)
+		}
+		if frame.Run != nil {
+			if frame.Run.ConversationID != huge {
+				t.Fatalf("snapshot conversation = %q, want the full id for correlation", frame.Run.ConversationID)
+			}
+			continue
+		}
+		if frame.Choices != nil && strings.Contains(p, huge[:64]) {
+			t.Fatal("the raw conversation id was echoed into a chat chunk")
+		}
 	}
 	if !strings.Contains(body, completionIDFor(huge)) {
 		t.Fatal("stream did not carry the derived completion id")

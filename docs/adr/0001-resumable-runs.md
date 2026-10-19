@@ -97,8 +97,17 @@ gets an answer rather than an empty stream.
 Wire shapes for the app parser: the snapshot frame omits empty `output` /
 `reasoning` (`omitempty` — absent means "nothing yet"), while the list/detail
 records always emit their keys (`"output":""`, `"error":""`, `seq`,
-timestamps). `tools` is always an array in both. Parse leniently: tolerate a
-missing key wherever the other shape sends an empty value.
+timestamps). `tools` is always an array in both. The snapshot carries `id`,
+`profile`, `conversation_id`, `status` and `seq` on every frame (no second
+round trip to learn ownership); the prompt preview lives only in the record.
+Parse leniently: tolerate a missing key wherever the other shape sends an
+empty value.
+
+Two accepted asymmetries for pre-`agento_run` clients: a `cancelled` run
+replays as partial output + `[DONE]`, which an old client reads as a
+completion — only the snapshot status tells them apart. And a run named by a
+429 may already be terminal when the client reattaches; the snapshot status is
+authoritative, live frames are not promised.
 
 ### Stop is a server-side cancel
 
