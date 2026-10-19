@@ -232,11 +232,10 @@ func (lr *liveRun) snapshot() runs.Run {
 // changed since the last acknowledged write. A run parked in a long tool call
 // would otherwise rewrite an unchanging document once a second.
 //
-// Split from the acknowledgement on purpose: the caller marks a sequence saved
-// only after the store write (or a successful queue offer) for that exact
-// sequence. Marking before offering would let a dropped offer retire a
-// snapshot that never reached the store, and the next tick would report
-// "unchanged" and never retry it.
+// Split from the acknowledgement on purpose: the persist loop marks a
+// sequence saved only after its store write lands. Marking on offer would let
+// a failed Save retire a snapshot that never reached the store, and the next
+// tick would report "unchanged" and never retry it.
 func (lr *liveRun) persistState() (runs.Run, int64, bool) {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
@@ -697,13 +696,12 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 // is dropped and the next one retries, so the live stream never stalls on the
 // database.
 func (m *runManager) offerPersist(lr *liveRun) {
-	snap, seq, changed := lr.persistState()
+	snap, _, changed := lr.persistState()
 	if !changed {
 		return
 	}
 	select {
 	case lr.persistCh <- snap:
-		lr.markSaved(seq)
 	default:
 		// The store is slower than the turn; the tick is dropped and the
 		// next one retries with the then-current state, so the live stream
@@ -711,18 +709,37 @@ func (m *runManager) offerPersist(lr *liveRun) {
 	}
 }
 
-// persistLoop writes offered snapshots until the run finishes. It is the only
-// writer besides the final save in finish, and finish waits for it to drain,
-// so the terminal write is strictly the newest.
+// persistLoop writes offered snapshots until the run finishes. It marks the
+// watermark only after a successful store write — never on offer — so a
+// failed Save leaves the tick unacknowledged and the next one retries with
+// the then-current cumulative snapshot. It is the only writer besides the
+// final save in finish, and finish waits for it to drain, so the terminal
+// write is strictly the newest.
 func (m *runManager) persistLoop(lr *liveRun) {
 	defer close(lr.persistDone)
 	for snap := range lr.persistCh {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := m.store.Save(ctx, snap); err != nil {
 			m.logf("runs: persist %s: %v", snap.ID, err)
+		} else {
+			lr.markSaved(snap.Seq)
 		}
 		cancel()
 	}
+}
+
+// saveRun writes one snapshot with a single retry on a fresh context. Used
+// for the terminal write, which must land or the row lies until restart.
+func (m *runManager) saveRun(snap runs.Run) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := m.store.Save(ctx, snap)
+	cancel()
+	if err == nil {
+		return nil
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.store.Save(ctx, snap)
 }
 
 // finish persists the terminal state, removes the run from the live maps, and
@@ -734,10 +751,12 @@ func (m *runManager) finish(lr *liveRun, now time.Time) {
 	close(lr.persistCh)
 	<-lr.persistDone
 	snap := lr.snapshot()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := m.store.Save(ctx, snap); err != nil {
-		m.logf("runs: final persist %s: %v", snap.ID, err)
+	// The terminal write must land: without it the stored row stays running
+	// forever (only the next restart would correct it via MarkInterrupted).
+	// One retry on a fresh context, then a loud log — teardown is bounded,
+	// and the subscribers already have their terminator either way.
+	if err := m.saveRun(snap); err != nil {
+		m.logf("runs: ERROR final persist %s failed twice, record stays stale until restart: %v", snap.ID, err)
 	}
 
 	m.mu.Lock()
@@ -822,6 +841,14 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		f := runs.Filter{
 			Profile:        strings.TrimSpace(r.URL.Query().Get("profile")),
 			ConversationID: strings.TrimSpace(r.URL.Query().Get("conversation_id")),
+		}
+		// The filters go straight into the Mongo query: bound them like the
+		// chat header so a megabyte of query string cannot become a full
+		// equality scan.
+		if len(f.Profile) > maxConversationIDLen || len(f.ConversationID) > maxConversationIDLen {
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "profile",
+				"filter values must be at most 256 characters")
+			return
 		}
 		if raw := strings.TrimSpace(r.URL.Query().Get("status")); raw != "" {
 			st := runs.Status(raw)

@@ -216,7 +216,7 @@ func (r Run) Capped() Run {
 	r.Output = CapText(r.Output, MaxOutput)
 	r.Reasoning = CapText(r.Reasoning, MaxReasoning)
 	if len(r.Tools) > MaxTools {
-		r.Tools = r.Tools[:MaxTools]
+		r.Tools = append([]string(nil), r.Tools[:MaxTools]...)
 	}
 	return r
 }
