@@ -140,6 +140,9 @@ internal fun ChatTab(
         onHistory = { showThreads = true },
         onCheckConnection = vm::checkReachability,
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop,
+        onSteer = vm::steer, onRuns = vm::openRuns,
+        onCloseRuns = vm::closeRuns, onCancelRun = vm::cancelRun,
+        onRefreshRuns = vm::refreshRuns,
         onNew = vm::newConversation, onRetry = vm::retry,
         onRegenerate = vm::regenerate, onContinue = vm::continueTurn,
         onReplace = vm::replaceAndResend, onFork = vm::forkAndResend,
@@ -548,6 +551,11 @@ internal fun ChatScreen(
     onPending: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onSteer: () -> Unit = {},
+    onRuns: () -> Unit = {},
+    onCloseRuns: () -> Unit = {},
+    onCancelRun: (String) -> Unit = {},
+    onRefreshRuns: () -> Unit = {},
     onNew: () -> Unit,
     onRetry: () -> Unit,
     onRegenerate: () -> Unit = {},
@@ -926,6 +934,15 @@ internal fun ChatScreen(
                     IconButton(onClick = onHistory, enabled = !state.streaming) {
                         Icon(Icons.Filled.History, contentDescription = "Conversations")
                     }
+                    // Runs (#311): the thread's server-side turns, in-flight
+                    // and finished. Gated on a loaded thread: a blank thread
+                    // would list every conversation's runs unscoped.
+                    IconButton(
+                        onClick = onRuns,
+                        enabled = state.ready && state.threadId.isNotBlank(),
+                    ) {
+                        Icon(Icons.Filled.List, contentDescription = "Runs")
+                    }
                     // Auto-read: speak each finished reply aloud.
                     //
                     // role = Switch (#283): the icon's description already
@@ -998,12 +1015,23 @@ internal fun ChatScreen(
                     // Queue-or-send (#122): the composer stays live while
                     // streaming. Parking a send here auto-fires it on Done;
                     // a queued send returns to the composer on failure/stop.
-                    if (state.streaming && state.queued.isBlank() && state.pending.isNotBlank()) {
+                    // Steer (#311) sends the text into the running turn
+                    // instead of behind it — shown independently of the
+                    // queue, since steering matters most mid-turn. Needs a
+                    // known run id: on older servers (or before headers
+                    // arrive) there is nothing to steer into, so only Queue
+                    // shows and send() takes the normal path.
+                    if (state.streaming && state.pending.isNotBlank()) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End,
                         ) {
-                            TextButton(onClick = onSend) { Text("Queue send") }
+                            if (state.activeRunId.isNotBlank()) {
+                                TextButton(onClick = onSteer) { Text("Steer") }
+                            }
+                            if (state.queued.isBlank()) {
+                                TextButton(onClick = onSend) { Text("Queue send") }
+                            }
                         }
                     }
                     if (state.streaming && state.queued.isNotBlank()) {
@@ -1511,6 +1539,19 @@ internal fun ChatScreen(
                 thinking = state.streaming,
                 partial = livePartial,
                 onEnd = { endLive() },
+            )
+        }
+        // Resumable runs (#311): the thread's server-side turns, in-flight
+        // and finished, with cancel for the running ones.
+        if (state.showRuns) {
+            RunsDialog(
+                runs = state.runs,
+                loading = state.runsLoading,
+                runsError = state.runsError,
+                highlightId = state.activeRunId.ifBlank { state.busyRunId },
+                onRefresh = onRefreshRuns,
+                onCancel = onCancelRun,
+                onClose = onCloseRuns,
             )
         }
     }

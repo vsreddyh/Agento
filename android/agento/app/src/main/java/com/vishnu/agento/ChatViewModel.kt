@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.app.Application
+import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
@@ -56,6 +57,22 @@ data class ChatUiState(
     /** Text queued while streaming (#122): auto-sends when the reply
      * finishes cleanly, restored to the composer on failure/stop. */
     val queued: String = "",
+    /** Id of the server-side run backing the in-flight turn (#311), from
+     * the `X-Agento-Run-Id` response header. Powers stop→cancel, steer and
+     * the runs sheet; blank when the turn predates runs or already ended. */
+    val activeRunId: String = "",
+    /** Run named by a 429 refusal: the profile is busy with a turn this tab
+     * did not start. Kept for the runs sheet (watch/cancel) after the text
+     * is parked back in the composer. */
+    val busyRunId: String = "",
+    /** Runs sheet visibility + its rows for the active thread (#311). */
+    val showRuns: Boolean = false,
+    val runs: List<AgentRun> = emptyList(),
+    val runsLoading: Boolean = false,
+    /** Sheet-scoped error: rendered inside the runs sheet, never in the
+     * chat error banner (whose Retry resends a turn — a runs-list outage
+     * must not offer that). */
+    val runsError: String = "",
 )
 
 /** Device-observed usage for one conversation thread, summed from
@@ -117,6 +134,7 @@ fun threadUsageOf(messages: List<ChatMessage>): ThreadUsage {
 class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     private val api = ChatApi(app)
+    private val runsApi = RunsApi(app)
     private val serverApi = ServerApi(app)
     private val appCtx: Application = app
 
@@ -136,6 +154,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * the user has already moved past. */
     private var recoveryJob: Job? = null
 
+    /** One runs-sheet load at a time (same shape as serverTotalsJob): a
+     * newer open or a thread change cancels the older one, so stale rows
+     * can never land on another thread. */
+    private var runsJob: Job? = null
+
     /** Drops a pending recovery, if any. Called on every active-thread
      * change (switch/new/delete/fork), send, and stop — recovery belongs
      * to one tail of one thread, and anything that moves past it ends it
@@ -148,6 +171,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * buffered Done/Error/Delta (callbackFlow is UNLIMITED) from a
      * cancelled turn can never overwrite a newer turn's state. */
     private var sendGen = 0
+    /** Last `agento_run` snapshot status this turn (#311): null before the
+     * first snapshot. Drives the cancelled-Done mapping and the replay
+     * ignore below; reset per turn in doSend. */
+    private var lastRunStatus: String? = null
+    /** Threads already offered auto-resume: fires once per thread so a
+     * failed resend never loops. */
+    private var resumedThreads = mutableSetOf<String>()
     private var threadId: String = ""
     private var threads: List<ChatThread> = emptyList()
 
@@ -172,6 +202,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 ready = true,
             )
             refreshServerTotals()
+            // App-killed turn recovery (#311): an unanswered user tail with
+            // a live server run resends into the existing run.
+            maybeResume(threadId, ChatThreads.toUi(active.messages))
         }
         checkReachability()
     }
@@ -232,6 +265,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val target = threads.firstOrNull { it.id == id } ?: return
         threadId = id
         cancelRecovery()
+        runsJob?.cancel()
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
@@ -242,8 +276,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeToolLabel = "",
             serverTokens = null,
             queued = "",
+            // Run ids belong to the old thread's turn: a switch must not
+            // highlight (or stop, via a stale read) another thread's run.
+            activeRunId = "", busyRunId = "",
+            showRuns = false, runsLoading = false,
         )
         refreshServerTotals()
+        maybeResume(id, ChatThreads.toUi(target.messages))
     }
 
     /**
@@ -288,6 +327,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (_state.value.streaming) return false
             threadId = id
             cancelRecovery()
+            runsJob?.cancel()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(target.messages),
                 threads = summaries(),
@@ -298,8 +338,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 activeToolLabel = "",
                 serverTokens = null,
                 queued = "",
+                activeRunId = "", busyRunId = "",
+                showRuns = false, runsLoading = false,
             )
             refreshServerTotals()
+            maybeResume(id, ChatThreads.toUi(target.messages))
         }
         if (!autosend || _state.value.streaming) return true
         val msgs = _state.value.messages
@@ -332,12 +375,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
         threadId = fresh.id
         cancelRecovery()
+        runsJob?.cancel()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
             queued = "",
+            activeRunId = "", busyRunId = "",
+            showRuns = false, runsLoading = false,
         )
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
@@ -368,10 +414,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (threads.none { it.id == next.id }) threads = listOf(next) + threads
             threadId = next.id
             cancelRecovery()
+            runsJob?.cancel()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
                 serverTokens = null, queued = "",
+                activeRunId = "", busyRunId = "",
+                showRuns = false, runsLoading = false,
             )
         }
         _state.value = _state.value.copy(threads = summaries())
@@ -454,6 +503,22 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // A pending recovery belongs to the turn just stopped: it must not
         // resurrect text behind whatever the user does next.
         cancelRecovery()
+        // Stop the server-side run this tab started, not just the local
+        // socket (#311): closing the stream no longer cancels the work, so a
+        // stop that stayed local would leave the agent running invisibly.
+        // Only the active run: a 429-parked busy run belongs to another turn
+        // and is cancelled from the Runs sheet, never as a side effect here.
+        // Fire and forget — the cancelled stream ending (or its absence, when
+        // the run already settled) is the confirmation; failures are logged,
+        // never silent, so a cleared id always means "asked to stop".
+        val runToCancel = _state.value.activeRunId
+        val cancelPath = _state.value.path
+        if (runToCancel.isNotBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { runsApi.cancel(cancelPath, runToCancel) }
+                    .onFailure { runCatching { Log.w("ChatRuns", "cancel $runToCancel failed", it) } }
+            }
+        }
         // Mark the in-flight reply as stopped (#122): the partial text
         // stays with an explicit interrupted flag (Continue/Regenerate
         // offered in the UI). A queued send is restored to the composer
@@ -479,6 +544,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             messages = patched, streaming = false,
             activeTools = emptyList(), activeToolLabel = "",
             queued = "",
+            activeRunId = "",
+            // A no-op stop (idle tab after a 429) keeps the parked busy run:
+            // clearing it would wipe the sheet highlight for no reason.
+            busyRunId = if (wasStreaming) "" else _state.value.busyRunId,
             pending = if (queued.isNotBlank() && _state.value.pending.isBlank()) queued
                 else _state.value.pending,
         )
@@ -533,6 +602,215 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             ChatMessage("user", text, ChatThreads.now())
         _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
         doSend(history, path, provider, model, effort)
+    }
+
+    /**
+     * Appends the composer text to the running turn as a steering instruction
+     * (#311) instead of queueing it behind the turn. Falls back to [send]
+     * when nothing is running (which queues while streaming, sends when
+     * idle). A settled race (409) also falls back to [send]: the text becomes
+     * the next turn rather than vanishing.
+     */
+    fun steer() {
+        val text = _state.value.pending.trim()
+        if (text.isEmpty() || !_state.value.ready) return
+        if (!_state.value.streaming || _state.value.activeRunId.isBlank()) {
+            send()
+            return
+        }
+        val runId = _state.value.activeRunId
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runsApi.steer(path, runId, text)
+            val outcome = result.getOrNull()
+            withContext(Dispatchers.Main) {
+                // Stale steer (a stop landed meanwhile): never touch state —
+                // the composer text belongs to whatever the user does next.
+                if (!_state.value.streaming || _state.value.activeRunId != runId) return@withContext
+                when (outcome) {
+                    // Clear only what this steer sent: typing that landed
+                    // mid-round-trip belongs to the user, not the turn.
+                    is SteerOutcome.Queued ->
+                        if (_state.value.pending.trim() == text) {
+                            _state.value = _state.value.copy(pending = "")
+                        }
+                    // Settled race: the text becomes the next turn. When the
+                    // queue was already occupied send() parks nothing and the
+                    // composer keeps the text, so say the queue is full
+                    // rather than claiming it queued behind.
+                    is SteerOutcome.Conflict -> {
+                        val queuedWasOccupied = _state.value.queued.isNotBlank()
+                        send()
+                        if (queuedWasOccupied && _state.value.streaming) {
+                            _state.value = _state.value.copy(
+                                error = "Turn ended — queue is full, text kept in composer.",
+                            )
+                        }
+                    }
+                    null -> _state.value = _state.value.copy(
+                        error = "Steer failed" +
+                            (result.exceptionOrNull()?.message?.take(120)?.let { ": $it" } ?: "") +
+                            " — the text stays in the composer.",
+                    )
+                }
+            }
+        }
+    }
+
+    /** Opens the runs sheet for the active thread and loads its runs (#311). */
+    fun openRuns() {
+        if (!_state.value.ready || threadId.isBlank()) return
+        // Drop the previous thread's rows up front: the first paint is the
+        // spinner, never stale rows under a new thread id.
+        _state.value = _state.value.copy(showRuns = true, runsError = "", runs = emptyList())
+        refreshRuns()
+    }
+
+    fun closeRuns() {
+        _state.value = _state.value.copy(showRuns = false)
+    }
+
+    /** Reloads the runs sheet rows: newest first, in-flight and finished. */
+    fun refreshRuns() {
+        if (!_state.value.ready || threadId.isBlank()) {
+            _state.value = _state.value.copy(runsLoading = false)
+            return
+        }
+        val path = _state.value.path
+        val conversationId = threadId
+        _state.value = _state.value.copy(runsLoading = true, runsError = "")
+        runsJob?.cancel()
+        runsJob = viewModelScope.launch(Dispatchers.IO) {
+            val result = runsApi.list(path, conversationId = conversationId, limit = 50)
+            withContext(Dispatchers.Main) {
+                // Stale load (thread switched mid-flight): never write
+                // another thread's rows or errors here.
+                if (conversationId != threadId) return@withContext
+                // A failed load keeps the old rows (never blanked into a
+                // lying "no runs yet") and reports inside the sheet: the
+                // chat error banner's Retry would resend a turn, which a
+                // list outage must never offer.
+                result.onFailure {
+                    _state.value = _state.value.copy(
+                        runsLoading = false,
+                        runsError = "Couldn't load runs (${it.message?.take(120) ?: "unknown"}).",
+                    )
+                }.onSuccess { rows ->
+                    _state.value = _state.value.copy(
+                        runs = rows, runsLoading = false, runsError = "",
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Cancels a run from the sheet, then reloads. When it is the active
+     * turn, its stream ends through the normal cancelled path (explicit
+     * status frame + Done), so no local patching happens here. A failed
+     * cancel surfaces instead of silently refreshing.
+     */
+    fun cancelRun(id: String) {
+        if (id.isBlank()) return
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runsApi.cancel(path, id)
+            withContext(Dispatchers.Main) {
+                // Failed cancel reports inside the sheet and skips the
+                // reload, so the refresh error cannot overwrite it.
+                result.onFailure {
+                    _state.value = _state.value.copy(
+                        runsError = "Cancel failed (${it.message?.take(120) ?: "unknown"}) — try again.",
+                    )
+                }.onSuccess {
+                    if (_state.value.showRuns) refreshRuns()
+                }
+            }
+        }
+    }
+
+    /**
+     * Reattaches an app-killed turn (#311): a trailing user message plus a
+     * live server run with the same prompt means resending streams the
+     * existing run instead of starting a duplicate (the server reattaches
+     * same conversation + same prompt). Fires once per thread, only for an
+     * unanswered user tail — anything else (assistant tail, failure, stop)
+     * stays for the user to drive.
+     *
+     * Safe beside openThread autosend: autosend sets streaming synchronously
+     * before any resume lookup can return, and the Main guard below returns
+     * on streaming — so the same tail can never fire as two turns even if
+     * both paths trigger.
+     */
+    private fun maybeResume(threadId: String, messages: List<ChatMessage>) {
+        val last = messages.lastOrNull() ?: return
+        if (last.role != "user" || last.content.isBlank()) return
+        if (threadId in resumedThreads) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val path = api.pathFor(tab)
+            // Query unfiltered by status: a future `cancelling`/`queued`
+            // state would be missed by a `status=running` query, and the
+            // client-side !isTerminal check below is the real gate. The
+            // wider window is bounded (20 rows of one conversation).
+            val result = runsApi.list(path, conversationId = threadId, limit = 20)
+            result.onFailure {
+                runCatching { Log.w("ChatRuns", "resume list failed", it) }
+            }
+            val runs = result.getOrNull().orEmpty()
+            // Belt and braces on the status: the query already filters, but a
+            // stale row must never trigger a resend on its own. Anything not
+            // terminal is live (running, cancelling, or a future state) —
+            // narrowing to `running` would strand exactly the edge cases
+            // resume exists for.
+            val run = runs.firstOrNull {
+                !it.isTerminal() && it.conversationId == threadId && promptMatches(last.content, it.prompt)
+            } ?: return@launch
+            // Bounded: re-clearing only loses the once-guard for threads long
+            // dead, whose resend finds no live run and no-ops.
+            withContext(Dispatchers.Main) {
+                if (threadId != this@ChatViewModel.threadId || _state.value.streaming || !_state.value.ready) {
+                    return@withContext
+                }
+                val cur = _state.value.messages
+                if (cur.lastOrNull()?.role != "user") return@withContext
+                // Re-check under Main: two concurrent opens would otherwise
+                // both pass the entry check and resend twice.
+                if (threadId in resumedThreads) return@withContext
+                // Marked only when the resend actually fires: an earlier mark
+                // would strand the thread if the guards above skipped it
+                // (switch-away-and-back would never retry).
+                if (resumedThreads.size >= 200) resumedThreads.clear()
+                resumedThreads.add(threadId)
+                // Deliberately fresh provider/model/effort, matched on prompt
+                // only: the server reattach ignores model switches by design
+                // (same conversation + same prompt reattaches), so this
+                // streams the running model's run — no duplicate turn.
+                val provider = api.providerFor(tab)
+                val model = api.modelFor(tab)
+                val effort = api.effortFor(tab, model)
+                _state.value = _state.value.copy(
+                    provider = provider, model = model, effort = effort, path = path,
+                )
+                doSend(cur, path, provider, model, effort)
+            }
+        }
+    }
+
+    /**
+     * The stored prompt is a bounded preview: exact when short, a truncated
+     * prefix when marked. Compared trim-tolerant — the server trimmed its
+     * copy too, and this check is best-effort anyway (the server reattach
+     * compares the full text and 429s on mismatch).
+     */
+    private fun promptMatches(full: String, preview: String): Boolean {
+        if (preview.isEmpty()) return false
+        val marker = "… (truncated)"
+        val text = full.trim()
+        if (!preview.endsWith(marker)) return text == preview.trim()
+        // A literal trailing marker in a short prompt must not read as a
+        // truncation prefix: the full text has to actually exceed the core.
+        val core = preview.dropLast(marker.length)
+        return text.length > core.length && text.startsWith(core)
     }
 
     /** Regenerates the last reply (#122, v1 replace semantics): drops the
@@ -614,12 +892,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threads = listOf(fresh) + threads
         threadId = fresh.id
         cancelRecovery()
+        runsJob?.cancel()
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
             error = "", pending = "", streaming = true, queued = "",
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
+            activeRunId = "", busyRunId = "",
+            showRuns = false, runsLoading = false,
         )
         persist()
         doSend(forked, path, provider, model, effort)
@@ -635,6 +916,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             streaming = true, error = "",
             activeTools = emptyList(), activeToolLabel = "",
+            activeRunId = "", busyRunId = "",
         )
         // Placeholder assistant message that deltas append to. Its timestamp
         // and model are fixed up front: rebuilding it per token must not
@@ -663,6 +945,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // stale (see stop()). Captured below; every handler checks it.
         sendGen++
         val gen = sendGen
+        lastRunStatus = null
+        // Model actually serving this turn: the request model until a
+        // snapshot names the running one (mid-turn switch). Every render
+        // below reads this, never the request model, so the meta line
+        // cannot flicker back on the next token.
+        var servingModel = model
         streamJob = viewModelScope.launch {
             api.streamChat(path, provider, model, history, stableSessionId, effort).collect { event ->
                 // Stale turn (cancelled after this event buffered): never
@@ -670,6 +958,88 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // placeholder or clear a newer turn's interrupted flag.
                 if (gen != sendGen) return@collect
                 when (event) {
+                    is ChatEvent.RunId -> {
+                        _state.value = _state.value.copy(activeRunId = event.id)
+                    }
+                    is ChatEvent.RunState -> {
+                        val snap = event.snapshot
+                        // A blank status carries no information (lenient parse
+                        // of an odd frame): keep the prior one rather than
+                        // clearing a known cancelled/running.
+                        if (snap.status.isNotBlank()) lastRunStatus = snap.status
+                        if (snap.tools.isNotEmpty()) {
+                            for (t in snap.tools) {
+                                val name = t.trim()
+                                if (name.isNotEmpty() && name !in liveTools && liveTools.size < 20) {
+                                    liveTools.add(name)
+                                }
+                            }
+                            _state.value = _state.value.copy(activeTools = liveTools.toList())
+                        }
+                        // Prefer the snapshot's model whenever it names one: a
+                        // mid-turn switch means the running model, not the
+                        // requested one, is serving this stream.
+                        if (snap.model.isNotBlank()) {
+                            servingModel = snap.model.trim()
+                            patchPlaceholder(
+                                content = null, reasoning = null,
+                                model = servingModel,
+                            )
+                        }
+                        // Seed the accumulators from the authoritative snapshot
+                        // when this stream opened on one (reattach): the server
+                        // only relays newer frames, so the head would otherwise
+                        // never render. Fresh sends snapshot empty output and
+                        // skip this; terminal snapshots seed too, and their
+                        // replay deltas never arrive (the parser skips them).
+                        if (snap.output.isNotEmpty() && acc.isEmpty()) {
+                            acc.append(snap.output)
+                            patchPlaceholder(
+                                content = acc.toString(), reasoning = null,
+                                model = servingModel,
+                            )
+                        }
+                        if (snap.reasoning.isNotEmpty() && racc.isEmpty()) {
+                            racc.append(snap.reasoning.take(REASONING_CAP - racc.length))
+                            patchPlaceholder(
+                                content = null, reasoning = racc.toString(),
+                                model = servingModel,
+                            )
+                        }
+                    }
+                    is ChatEvent.RateLimited -> {
+                        // The profile is busy with a different turn: drop the
+                        // placeholder (this prompt was never sent) and remember
+                        // the blocking run for the runs sheet. The failed
+                        // prompt stays in history for Retry; newer typing
+                        // stays in the composer untouched. No auto-retry: a
+                        // timer would turn a busy profile into a self-DDoS.
+                        val msgs = _state.value.messages
+                        val unposted = if (msgs.lastOrNull()?.role == "assistant") {
+                            msgs.dropLast(1)
+                        } else {
+                            msgs
+                        }
+                        // Newer typing stays in the composer untouched: the
+                        // failed prompt lives in history for Retry, and the
+                        // follow-up sends when the user taps send. Nothing is
+                        // queued — queueing it too would send it twice (once
+                        // from the composer, once from the queue).
+                        streamJob = null
+                        _state.value = _state.value.copy(
+                            messages = unposted, streaming = false,
+                            error = "Profile busy — a run is already answering" +
+                                (if (event.runId.isNotBlank()) " (${event.runId.take(8)}…)" else "") +
+                                ". Wait or stop it from Runs.",
+                            activeTools = emptyList(), activeToolLabel = "",
+                            // The RunId event ahead of this one already set
+                            // activeRunId to the blocking run: clear it, or a
+                            // later stop() would cancel a turn this tab never
+                            // started. Only busyRunId keeps it (sheet cancel).
+                            activeRunId = "",
+                            busyRunId = event.runId,
+                        )
+                    }
                     is ChatEvent.ToolProgress -> {
                         val name = event.tool.trim()
                         // Capped during collection: a flood of frames must
@@ -695,7 +1065,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         _state.value = _state.value.copy(
                             messages = msgs.dropLast(1) + ChatMessage(
                                 "assistant", acc.toString(), placeholderTs,
-                                reasoning = kept, model = model,
+                                reasoning = kept, model = servingModel,
                             ),
                         )
                     }
@@ -705,6 +1075,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         }
                         val msgs = _state.value.messages
                         val last = msgs.lastOrNull()
+                        // copy() preserves the serving model patched by the
+                        // RunState handler: safe only because the snapshot is
+                        // always frame one. A future frame reorder that puts
+                        // reasoning first would reintroduce the flicker.
                         if (last?.role == "assistant") {
                             _state.value = _state.value.copy(
                                 messages = msgs.dropLast(1) + last.copy(reasoning = racc.toString()),
@@ -714,6 +1088,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     is ChatEvent.Done -> {
                         val final = event.fullText.ifEmpty { acc.toString() }
                         val finishedAt = ChatThreads.now()
+                        // A cancelled turn ends with an explicit `cancelled`
+                        // snapshot plus `[DONE]` (#311): the stream is clean,
+                        // but the reply is user-stopped, not finished. It must
+                        // read like stop(), not like a reply — parked queue,
+                        // no recovery (the turn is over, output complete), no
+                        // notification, USER attribution (not DROP). Keyed on
+                        // "cancelled" only: failed/interrupted runs end via
+                        // error frames (the Error path), never clean Done.
+                        val cancelled = lastRunStatus == "cancelled"
                         // A dropped turn that produced NOTHING leaves an empty assistant
                         // bubble carrying only the "Connection lost" label. The `Error` and
                         // user-stop paths both drop an empty placeholder instead, so this
@@ -725,11 +1108,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // is a real (if useless) answer, and dropping it would hide that
                         // the server responded at all.
                         val nothingArrived = final.isBlank() && racc.toString().isBlank()
-                        val finished = if (event.interrupted && nothingArrived) {
+                        val finished = if ((event.interrupted || cancelled) && nothingArrived) {
                             _state.value.messages.dropLast(1)
                         } else msgsDropLastPlusAssistant(
                             final, finishedAt, liveTools.toList(), event.usage,
-                            racc.toString(), model,
+                            racc.toString(), servingModel,
                             // #214: the stream ended without `[DONE]`, so this
                             // reply is a fragment of a turn that is still
                             // executing server-side. The text is kept — it is
@@ -737,27 +1120,45 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             // dropped turn as a finished one is what made the
                             // user resend and duplicate work that had already
                             // been done by the agent's tool calls.
-                            interrupted = event.interrupted,
+                            interrupted = event.interrupted || cancelled,
                         )
+                        // A cancelled finish is user-stopped: fix the
+                        // attribution the helper derives (interrupted reads
+                        // as DROP there, which blames the network for a
+                        // deliberate stop).
+                        val doneMessages = if (cancelled) {
+                            val tail = finished.lastOrNull()
+                            if (tail?.role == "assistant" && tail.interrupted) {
+                                finished.dropLast(1) + tail.copy(
+                                    interruptedBy = InterruptedBy.USER,
+                                )
+                            } else {
+                                finished
+                            }
+                        } else {
+                            finished
+                        }
                         _state.value = _state.value.copy(
-                            messages = finished,
+                            messages = doneMessages,
                             streaming = false,
                             online = true,
                             activeTools = emptyList(),
                             activeToolLabel = "",
+                            activeRunId = "",
+                            busyRunId = "",
                         )
                         addTokens(event.usage)
-                        upsertActive(finished)
+                        upsertActive(doneMessages)
                         persist()
                         // Skipped when the empty bubble was dropped: there is
                         // no message at finished.size - 1 to attach tools to
                         // (it points at the previous user row), and the ts
                         // lookup would miss anyway.
-                        if (!(event.interrupted && nothingArrived)) {
-                            backfillUsage(path, stableSessionId, finishedAt, final, finished.size - 1)
+                        if (!((event.interrupted || cancelled) && nothingArrived)) {
+                            backfillUsage(path, stableSessionId, finishedAt, final, doneMessages.size - 1)
                         }
                         refreshServerTotals(path, stableSessionId)
-                        if (event.interrupted && !nothingArrived) {
+                        if (event.interrupted && !nothingArrived && !cancelled) {
                             // The stream died but the turn may have completed
                             // server-side: go try to return it (#214). Skipped
                             // when the bubble was dropped — there is no
@@ -775,7 +1176,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // Replied vs crashed (#287): a clean finish pings as a
                         // reply; a cut-off turn pings as a failure, so the
                         // lock screen never reports a fragment as an answer.
-                        if (!ForegroundTracker.isForeground) {
+                        // A user-cancelled turn pings as neither: stopping
+                        // is deliberate, not news.
+                        if (!ForegroundTracker.isForeground && !cancelled) {
                             val snippet = final.ifEmpty { acc.toString() }.trim()
                                 .replace(Regex("\\s+"), " ").take(160)
                             if (snippet.isNotEmpty()) {
@@ -790,7 +1193,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // so the queued send's doSend never "cancels" the
                         // just-finished collection it runs inside of.
                         streamJob = null
-                        if (event.interrupted) {
+                        if (event.interrupted || cancelled) {
                             // A dropped stream does NOT auto-fire the queued send.
                             //
                             // The turn is a fragment: the reply is truncated and the
@@ -838,6 +1241,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         _state.value = _state.value.copy(
                             messages = kept, streaming = false, error = event.message,
                             activeTools = emptyList(), activeToolLabel = "",
+                            // Keep a possibly-live id for the sheet: the API
+                            // forwards X-Agento-Run-Id ahead of errors, and a
+                            // 500 after the run started leaves it executing.
+                            // Dead ids are harmless — cancelling one 409s.
+                            busyRunId = _state.value.activeRunId.ifBlank { _state.value.busyRunId },
+                            activeRunId = "",
                         )
                         // A queued send never auto-fires after a failure (no failure
                         // cascades): hand it back to the composer instead.
@@ -876,6 +1285,29 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    /**
+     * Rebuilds the trailing assistant placeholder, replacing only the halves
+     * passed non-null. Used by snapshot handling (#311), where the text and
+     * the reasoning trace arrive on different frames and neither may wipe
+     * the other — the same rule the Delta/Reasoning branches follow inline.
+     */
+    private fun patchPlaceholder(
+        content: String?,
+        reasoning: String?,
+        model: String,
+    ) {
+        val msgs = _state.value.messages
+        val prior = msgs.lastOrNull()
+        if (prior?.role != "assistant") return
+        _state.value = _state.value.copy(
+            messages = msgs.dropLast(1) + prior.copy(
+                content = content ?: prior.content,
+                reasoning = reasoning ?: prior.reasoning,
+                model = model,
+            ),
+        )
     }
 
     /** Finished assistant message with the live-seen tools and the turn's

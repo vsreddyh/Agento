@@ -8,6 +8,20 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.6.0]
+- **Chat turns survive app kills: resumable runs with steer, stop and a
+  runs list** (#311). A turn is now a server-side run, not the lifetime of
+  its stream: killing the app mid-reply no longer kills the work, and
+  reopening the thread picks up the same run's continued progress instead
+  of starting over. While a turn runs, the composer offers **Steer** (sends
+  the text into the running turn) next to Queue send, and the stop button
+  cancels the server run too — the cancelled reply lands marked stopped,
+  not lost. A busy profile answers 429 naming the in-flight run instead of
+  failing blindly, and the new **Runs** sheet lists the thread's turns with
+  status and last output, in-flight vs finished, with cancel for the
+  running ones. Older servers (no runs surface) behave exactly as before:
+  local stop, queue and the #214 drop recovery are unchanged.
+
 ## [5.5.1]
 - **Task Manager: completing a task animates, instead of reloading the
   list** (#308). Ticking a task off no longer blanks the list to a spinner:
