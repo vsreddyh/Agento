@@ -26,12 +26,17 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{byID: map[string]Run{}, now: time.Now}
 }
 
-// Create stores a copy of r.
+// Create stores a copy of r. Insert-only: a Create that lands after a later
+// Save (the Create runs in the background while the turn executes) must not
+// rewind the record to its initial running state.
 func (m *MemoryStore) Create(_ context.Context, r Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if r.ID == "" {
 		r.ID = NewID()
+	}
+	if _, exists := m.byID[r.ID]; exists {
+		return nil
 	}
 	r = r.Capped()
 	m.byID[r.ID] = r

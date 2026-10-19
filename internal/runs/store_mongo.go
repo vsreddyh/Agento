@@ -59,11 +59,16 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 }
 
 // Create inserts a run. The caller supplies the id so the HTTP response can
-// carry it before the write lands.
+// carry it before the write lands. A duplicate key means the terminal Save
+// already wrote the record (the Create runs in the background); that
+// converges to the newer state, so it is ignored rather than reported.
 func (s *MongoStore) Create(ctx context.Context, r Run) error {
 	r = r.Capped()
 	_, err := s.runs.InsertOne(ctx, r)
 	if err != nil {
+		if mongoDrv.IsDuplicateKeyError(err) {
+			return nil
+		}
 		return NewStoreError("run create failed: "+err.Error(), true)
 	}
 	return nil
@@ -117,7 +122,7 @@ func (s *MongoStore) List(ctx context.Context, f Filter) ([]Run, error) {
 		filter["status"] = string(f.Status)
 	}
 	cur, err := s.runs.Find(ctx, filter,
-		options.Find().SetSort(bson.M{"createdAt": -1}).SetLimit(int64(limit)))
+		options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(int64(limit)))
 	if err != nil {
 		return nil, NewStoreError("run list failed: "+err.Error(), true)
 	}

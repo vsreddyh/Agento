@@ -247,12 +247,16 @@ func run() error {
 		cancelIndex()
 		// Execution cannot survive a process restart. Mark what was running
 		// before serving, so the list never claims a dead run is in flight;
-		// the output produced before the restart stays readable.
-		if n, err := store.MarkInterrupted(ctx, time.Now()); err != nil {
+		// the output produced before the restart stays readable. Bounded like
+		// the index setup above: a wedged database must not hang startup
+		// forever.
+		markCtx, cancelMark := context.WithTimeout(ctx, 10*time.Second)
+		if n, err := store.MarkInterrupted(markCtx, time.Now()); err != nil {
 			logger.Printf("run history: could not mark interrupted runs: %v", err)
 		} else if n > 0 {
 			logger.Printf("run history: marked %d in-flight run(s) interrupted after restart", n)
 		}
+		cancelMark()
 	}
 
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")

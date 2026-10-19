@@ -170,15 +170,19 @@ func NewID() string { return primitive.NewObjectID().Hex() }
 // output. The stored document overshoots the limit by the marker (~14 bytes);
 // the bound is on the content kept, not the final field size.
 //
-// Idempotent: a value that already carries the marker is returned unchanged, so
-// a prompt trimmed by TrimPrompt and then stored through Capped is not cut and
-// marked twice.
+// Idempotent: a value that already carries the marker and fits is returned
+// unchanged, so a prompt trimmed by TrimPrompt and then stored through Capped
+// is not cut and marked twice. Length-aware, so text that merely ends with the
+// marker but still exceeds the limit is cut once and marked once.
 func CapText(s string, limit int) string {
 	if limit <= 0 || len(s) <= limit {
 		return s
 	}
 	if strings.HasSuffix(s, truncMarker) {
-		return s
+		if core := strings.TrimSuffix(s, truncMarker); len(core) <= limit {
+			return s
+		}
+		s = strings.TrimSuffix(s, truncMarker)
 	}
 	// Walk back to a rune boundary. At most 3 bytes of damage, and the result
 	// stays valid UTF-8.
@@ -222,6 +226,22 @@ type Filter struct {
 	ConversationID string
 	Status         Status
 	Limit          int
+}
+
+// Matches reports whether r satisfies the filter. The gateway's live overlay
+// refreshes stored rows with newer snapshots after the store already filtered,
+// so it re-applies the filter to the merged list rather than trusting it.
+func (f Filter) Matches(r Run) bool {
+	if f.Profile != "" && r.Profile != f.Profile {
+		return false
+	}
+	if f.ConversationID != "" && r.ConversationID != f.ConversationID {
+		return false
+	}
+	if f.Status != "" && r.Status != f.Status {
+		return false
+	}
+	return true
 }
 
 // StoreError is the domain error the HTTP layer maps onto status codes, the

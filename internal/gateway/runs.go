@@ -94,6 +94,11 @@ func snapshotOf(r runs.Run) runSnapshot {
 	if r.Usage.NonZero() {
 		s.Usage = usageWire(r.Usage)
 	}
+	if s.Tools == nil {
+		// append(nil) stays nil and encodes as `null`, not `[]`. The field
+		// is always present by contract (matching runWire), so normalize.
+		s.Tools = []string{}
+	}
 	return s
 }
 
@@ -308,7 +313,7 @@ func (lr *liveRun) publish(frame any, done bool) int64 {
 func (lr *liveRun) publishDelta(text, reasoning string, frame chunk) int64 {
 	data, err := jsonPayload(frame)
 	if err != nil {
-		return 0
+		return lr.seq
 	}
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
@@ -365,6 +370,11 @@ func (lr *liveRun) setUsage(u piUsage) {
 		Cached:     u.CacheRead,
 		CacheWrite: u.CacheWrite,
 	}
+	// Usage arrives without a frame of its own, but it still has to reach the
+	// store: persistState keys off seq, so an accounting-only tick would
+	// otherwise never persist until finish. Bumping seq without publishing is
+	// safe — subscribers filter by seq and no event carries this one.
+	lr.seq++
 }
 
 // closeSubs ends every attached stream. Safe to call more than once: the
@@ -452,10 +462,15 @@ func (m *runManager) begin(r runs.Run, agent Agent, completionID, imagesSig stri
 	r.CreatedAt = now.UnixMilli()
 	r.UpdatedAt = now.UnixMilli()
 	r.ExpiresAt = now.Add(runs.DefaultTTL)
-	lr := newLiveRun(r, agent, completionID)
-	lr.promptFull = r.Prompt
-	lr.imagesSig = imagesSig
+	// Trim before the live copy is made: promptFull keeps the full text for
+	// the reattach comparison, but lr.run.Prompt is what the live overlay in
+	// get/list exposes until finish saves — leaving it full would serve an up
+	// to 4 MiB prompt from every snapshot in the meantime.
+	promptFull := r.Prompt
 	r.Prompt = runs.TrimPrompt(r.Prompt)
+	lr := newLiveRun(r, agent, completionID)
+	lr.promptFull = promptFull
+	lr.imagesSig = imagesSig
 
 	m.mu.Lock()
 	m.live[r.ID] = lr
@@ -571,7 +586,23 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 			stored = append(stored, snap)
 		}
 	}
-	sort.Slice(stored, func(i, j int) bool { return stored[i].CreatedAt > stored[j].CreatedAt })
+	sort.Slice(stored, func(i, j int) bool {
+		if stored[i].CreatedAt == stored[j].CreatedAt {
+			return stored[i].ID > stored[j].ID
+		}
+		return stored[i].CreatedAt > stored[j].CreatedAt
+	})
+	// Re-apply the filter to the merged list. A stored row can be refreshed
+	// by a newer live snapshot that no longer matches (a run that settled
+	// after the store filtered it running), and without this the settled run
+	// leaks into a ?status=running list.
+	kept := stored[:0]
+	for _, r := range stored {
+		if f.Matches(r) {
+			kept = append(kept, r)
+		}
+	}
+	stored = kept
 	limit := f.Limit
 	if limit <= 0 || limit > runs.ListCap {
 		limit = runs.ListCap
@@ -762,7 +793,17 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		}
 		lr, ok := s.runs.byID(id)
 		if !ok {
-			if _, err := s.runs.store.Get(r.Context(), id); err != nil {
+			// Bounded: a slow store must not stall the verb until the client
+			// goes away. A timeout here is an upstream failure, not a 400.
+			getCtx, getCancel := context.WithTimeout(r.Context(), 5*time.Second)
+			_, err := s.runs.store.Get(getCtx, id)
+			getCancel()
+			if err != nil {
+				if getCtx.Err() == context.DeadlineExceeded {
+					apiError(w, http.StatusBadGateway, "upstream_error", "",
+						"the run store did not answer in time")
+					return
+				}
 				runsError(w, err)
 				return
 			}
@@ -790,8 +831,17 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		}
 		lr, ok := s.runs.byID(id)
 		if !ok {
-			run, err := s.runs.store.Get(r.Context(), id)
+			// Same bound as steer: distinguish finished from unknown without
+			// letting a slow store stall the verb.
+			getCtx, getCancel := context.WithTimeout(r.Context(), 5*time.Second)
+			run, err := s.runs.store.Get(getCtx, id)
+			getCancel()
 			if err != nil {
+				if getCtx.Err() == context.DeadlineExceeded {
+					apiError(w, http.StatusBadGateway, "upstream_error", "",
+						"the run store did not answer in time")
+					return
+				}
 				runsError(w, err)
 				return
 			}
