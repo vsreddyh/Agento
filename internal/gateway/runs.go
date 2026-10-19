@@ -969,6 +969,13 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		// shared client-id bound so a megabyte of query string cannot become
 		// a full equality scan. Each names its own field — trimming profile
 		// for a conversation_id overflow would send the app the wrong way.
+		// NUL is refused: the conversation map key joins on it, so a NUL
+		// inside a value could alias two different filters to one key.
+		if strings.ContainsRune(f.Profile, 0) || strings.ContainsRune(f.ConversationID, 0) {
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "profile",
+				"filter values must not contain NUL")
+			return
+		}
 		if len([]rune(f.Profile)) > maxFilterLen {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "profile",
 				"profile filter must be at most 256 characters")
@@ -1225,6 +1232,15 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 	w.Header().Set("X-Agento-Run-Id", id)
+	// A stored `running` row with no live entry means the terminal Save never
+	// landed (double failure at finish): nothing is executing, so replaying
+	// it as done would read as "turn completed". Answer 409 like the other
+	// gone-execution states instead of a snapshot-then-DONE that lies.
+	if run.Status == runs.StatusRunning {
+		apiError(w, http.StatusConflict, "invalid_request_error", "run_status",
+			"this run is no longer executing; its final record was not stored")
+		return
+	}
 	sse := newSSEWriter(w)
 	sse.headers()
 	w.WriteHeader(http.StatusOK)

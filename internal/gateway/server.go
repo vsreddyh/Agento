@@ -605,6 +605,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// instead of 400 whenever the profile was busy. None of this touches the
 	// agent, so none of it needs the lock.
 	conversationID := strings.TrimSpace(r.Header.Get("X-Hermes-Session-Id"))
+	if strings.ContainsRune(conversationID, 0) {
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "X-Hermes-Session-Id",
+			"X-Hermes-Session-Id must not contain NUL")
+		return
+	}
 	if len([]rune(conversationID)) > maxFilterLen {
 		apiError(w, http.StatusBadRequest, "invalid_request_error", "X-Hermes-Session-Id",
 			"X-Hermes-Session-Id must be at most 256 characters")

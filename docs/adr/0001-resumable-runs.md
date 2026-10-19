@@ -180,7 +180,10 @@ as a cancel, which is what the user asked for.
   buffers fill partially rather than dropping whole chunks at the boundary;
   past the cap the snapshot carries the head while live deltas flow in full.
 - The list route shows previews (2 KB output, 1 KB reasoning), not full turns;
-  the detail route keeps everything. The `prompt` preview is the same 4 KB in
+  the detail route keeps everything. Matching in-flight runs outrank stored
+  rows regardless of age: with `?limit=1` during your own turn you get your
+  run, not the latest settled row — the list is a progress surface first, a
+  history second. The `prompt` preview is the same 4 KB in
   both shapes; only output/reasoning shrink to previews. Previews carry the
   `… (truncated)` marker once the run settles, like every terminal shape;
   in-flight previews stay unmarked heads with more deltas still coming. A truncated value ends
