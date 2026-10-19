@@ -27,6 +27,7 @@
 package main
 
 import (
+	"agento/internal/approvals"
 	"agento/internal/crashlog"
 	"agento/internal/cronjobs"
 	"agento/internal/runs"
@@ -260,6 +261,34 @@ func run() error {
 		cancelMark()
 	}
 
+	// Approval gates + audit trail (#313). Same database, sibling
+	// collections to runs. Without it the gateway answers approvals from
+	// memory — and the relay falls back independently, so gating never
+	// depends on Mongo being up, only the cross-restart record does.
+	var approvalStore approvals.Store
+	if store, err := approvals.FromEnv(); err != nil {
+		logger.Printf("approvals: falling back to in-memory: %v", err)
+		approvalStore = approvals.NewMemoryStore()
+	} else {
+		approvalStore = store
+		store.Logf = logger.Printf
+		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+		if err := store.EnsureIndexes(indexCtx); err != nil {
+			logger.Printf("approvals: index setup failed (records will not auto-expire): %v", err)
+		}
+		cancelIndex()
+		// A restart orphans the relay that owned every pending wait.
+		// Expire them before serving so the list never shows a pending row
+		// nothing will ever decide.
+		markCtx, cancelMark := context.WithTimeout(ctx, 10*time.Second)
+		if n, err := store.MarkInterrupted(markCtx, time.Now()); err != nil {
+			logger.Printf("approvals: could not expire pending rows: %v", err)
+		} else if n > 0 {
+			logger.Printf("approvals: marked %d pending row(s) expired after restart", n)
+		}
+		cancelMark()
+	}
+
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")
 	if _, ok := agents[defaultProfile]; !ok {
 		// Fall back to the first profile that actually STARTED, not the first one
@@ -276,7 +305,7 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, logger.Printf), agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, logger.Printf), agents)
 	if err != nil {
 		return err
 	}
@@ -476,7 +505,7 @@ func skillArgs(skillsDir string) []string {
 // InventoryTimeout line left every test green, because the test exercised secondsEnv
 // directly and never the wiring. A budget that cannot be shown to reach its field is
 // not configurable in any useful sense.
-func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, logf func(string, ...any)) gateway.Config {
+func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, logf func(string, ...any)) gateway.Config {
 	return gateway.Config{
 		Password: password,
 		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
@@ -495,6 +524,8 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStor
 		// Resumable run history, owned by run(): it needs env and the
 		// startup reconciliation that marks dead runs interrupted.
 		RunStore: runStore,
+		// Approval + audit stores, owned by run() for the same reason.
+		ApprovalStore: approvalStore,
 		// Each budget is configurable for the same reason: the right value depends on
 		// the host, and changing it should not mean rebuilding the binary.
 		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),

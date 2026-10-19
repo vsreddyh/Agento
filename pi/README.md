@@ -223,6 +223,15 @@ through nginx — not `pi` itself.
 | `GET /api/runs/{id}/events` | yes — SSE snapshot, then live frames | run subscription |
 | `POST /api/runs/{id}/steer` | yes — queues an instruction into the running turn | Pi RPC `steer` |
 | `POST /api/runs/{id}/cancel` | yes — aborts, keeps partial output | Pi RPC `abort` |
+| `GET /api/approvals` (+ `/{profile}/api/approvals`) | yes — filters `status`, `limit` | `approvals` (Mongo), memory fallback |
+| `POST /api/approvals/{id}/approve` | yes — releases the held call, exactly once | approval store |
+| `POST /api/approvals/{id}/deny` | yes — refuses it, Pi gets a tool error | approval store |
+| `GET /api/audit` (+ `/{profile}/api/audit`) | yes — filters `server`, `tool`, `limit` | `audit_log` (Mongo, 90-day TTL) |
+
+Approval gates (#313) hold sensitive tool calls in `mcp-gate`, the relay every
+`mcp.json` entry points through: money writes, deletes, rewrites and real
+prunes wait up to 14 minutes for a decision here, then run or fail closed.
+See `docs/adr/0002-approval-gates.md`.
 
 Runs are the resumable chat-turn surface (#311): one executing turn per profile,
 state in Mongo with a 7-day TTL, and a gateway restart marks stale rows

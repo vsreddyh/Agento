@@ -1,0 +1,231 @@
+package approvals
+
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+func TestStatusTerminal(t *testing.T) {
+	for _, s := range []Status{StatusApproved, StatusDenied, StatusExpired} {
+		if !s.Terminal() {
+			t.Errorf("%s should be terminal", s)
+		}
+		if !s.Valid() {
+			t.Errorf("%s should be valid", s)
+		}
+	}
+	if StatusPending.Terminal() {
+		t.Error("pending must not be terminal")
+	}
+}
+
+func TestPolicyGatesMoneyAndDeletes(t *testing.T) {
+	gated := [][2]string{
+		{"miser-money", "log_transaction"},
+		{"miser-money", "delete_transactions"},
+		{"miser-money", "prune_old"},
+		{"cookbook", "delete_recipe"},
+		{"health-check", "delete_meals"},
+		{"task-manager", "delete_task"},
+		{"project-manager", "delete_project"},
+		{"notes", "delete_note"},
+		{"miser-money", "brand_new_tool"},
+		{"unknown-server", "list_things"},
+	}
+	for _, tc := range gated {
+		if !NeedsApproval(tc[0], tc[1], nil) {
+			t.Errorf("%s/%s should gate", tc[0], tc[1])
+		}
+	}
+	free := [][2]string{
+		{"miser-money", "list_accounts"},
+		{"miser-money", "query_transactions"},
+		{"cookbook", "list_recipes"},
+		{"health-check", "log_meal"},
+		{"task-manager", "create_task"},
+		{"task-manager", "complete_task"},
+		{"notes", "create_note"},
+	}
+	for _, tc := range free {
+		if NeedsApproval(tc[0], tc[1], nil) {
+			t.Errorf("%s/%s should run free", tc[0], tc[1])
+		}
+	}
+	// A counting prune changes nothing.
+	if NeedsApproval("miser-money", "prune_old", map[string]any{"dry_run": true}) {
+		t.Error("dry-run prune should run free")
+	}
+	// Missing dry_run fails closed.
+	if !NeedsApproval("miser-money", "prune_old", map[string]any{}) {
+		t.Error("prune without dry_run should gate")
+	}
+}
+
+// TestPolicyTableIsComplete pins the fail-closed contract: every tool the
+// six servers publish must have an explicit rule. A server that gains a tool
+// without a table entry fails this test — which is the point, forcing the
+// author to classify it as free or gated instead of silently allowing it.
+func TestPolicyTableIsComplete(t *testing.T) {
+	known := map[string][]string{
+		"miser-money": {"create_account", "list_accounts", "archive_account",
+			"get_balances", "log_transaction", "log_text", "query_transactions",
+			"summarize", "fix_last_transaction", "delete_transactions", "prune_old"},
+		"cookbook": {"add_ingredient", "list_ingredients", "delete_ingredient",
+			"add_recipe", "get_recipe", "list_recipes", "update_recipe",
+			"delete_recipe", "scale_recipe", "log_cook", "list_cooks"},
+		"health-check": {"log_meal", "fix_last_meal", "query_meals",
+			"delete_meals", "log_weight", "log_sleep", "log_workout",
+			"daily_summary", "prune_old"},
+		"task-manager": {"create_task", "list_tasks", "get_task", "update_task",
+			"complete_task", "skip_task", "reopen_task", "delete_task"},
+		"project-manager": {"create_project", "list_projects", "get_project",
+			"update_project", "delete_project"},
+		"notes": {"create_note", "get_note", "list_notes", "search_notes",
+			"update_note", "delete_note"},
+	}
+	n := 0
+	for server, tools := range known {
+		rules, ok := gatedTools[server]
+		if !ok {
+			t.Fatalf("server %s has no policy table", server)
+		}
+		for _, tool := range tools {
+			if _, ok := rules[tool]; !ok {
+				t.Errorf("tool %s/%s has no explicit rule", server, tool)
+			}
+			n++
+		}
+		if len(rules) != len(tools) {
+			t.Errorf("server %s table has %d rules for %d tools", server, len(rules), len(tools))
+		}
+	}
+	if n != 50 {
+		t.Errorf("pinned %d tools, want the 50 inventoried", n)
+	}
+}
+
+func TestRedactMasksSecrets(t *testing.T) {
+	in := map[string]any{"amount": 5, "api_token": "sekret", "Note": "x"}
+	out := Redact(in)
+	if out["api_token"] != "***" {
+		t.Errorf("token not masked: %v", out)
+	}
+	if out["amount"] != 5 || in["api_token"] != "sekret" {
+		t.Errorf("redact mutated input or dropped fields: %v", out)
+	}
+	if len(Redact(nil)) != 0 {
+		t.Error("nil args should give an empty map")
+	}
+}
+
+func TestMemoryApprovalLifecycle(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	a := Approval{
+		ID: NewID(), Server: "miser-money", Tool: "log_transaction",
+		Args: map[string]any{"amount": 5},
+	}
+	if err := m.CreateApproval(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.GetApproval(ctx, a.ID)
+	if err != nil || got.Status != StatusPending {
+		t.Fatalf("Get = %+v, %v", got, err)
+	}
+	decided, err := m.DecideApproval(ctx, a.ID, false, "app", time.Now())
+	if err != nil || decided.Status != StatusDenied {
+		t.Fatalf("Decide = %+v, %v", decided, err)
+	}
+	// A decision lands exactly once.
+	if _, err := m.DecideApproval(ctx, a.ID, true, "app", time.Now()); err == nil {
+		t.Fatal("second decision should fail")
+	} else if se, ok := err.(*StoreError); !ok || !se.Conflict {
+		t.Fatalf("second decision should conflict, got %v", err)
+	}
+	// Timeout on a decided row is a no-op.
+	if err := m.TimeoutApproval(ctx, a.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	list, err := m.ListApprovals(ctx, ApprovalFilter{Status: StatusDenied})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list denied = %d, %v", len(list), err)
+	}
+}
+
+func TestMemoryTimeoutAndExpiry(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	now := time.Now()
+	m.now = func() time.Time { return now }
+	a := Approval{ID: NewID(), Server: "notes", Tool: "delete_note"}
+	if err := m.CreateApproval(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.TimeoutApproval(ctx, a.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.GetApproval(ctx, a.ID)
+	if err != nil || got.Status != StatusExpired {
+		t.Fatalf("Get = %+v, %v", got, err)
+	}
+	// Past expiry the row reads gone.
+	m.now = func() time.Time { return now.Add(ApprovalTTL + time.Minute) }
+	if _, err := m.GetApproval(ctx, a.ID); err == nil {
+		t.Fatal("expired row should read NotFound")
+	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
+		t.Fatalf("wrong error: %v", err)
+	}
+}
+
+func TestMemoryMarkInterrupted(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	now := time.Now()
+	pending := Approval{ID: NewID(), Server: "notes", Tool: "delete_note"}
+	old := Approval{ID: NewID(), Server: "notes", Tool: "delete_note",
+		ExpiresAt: now.Add(-time.Minute)}
+	for _, a := range []Approval{pending, old} {
+		if err := m.CreateApproval(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := m.MarkInterrupted(ctx, now)
+	if err != nil || n != 1 {
+		t.Fatalf("marked %d, err %v", n, err)
+	}
+	got, err := m.GetApproval(ctx, pending.ID)
+	if err != nil || got.Status != StatusExpired {
+		t.Fatalf("pending row = %+v, %v", got, err)
+	}
+	if _, err := m.GetApproval(ctx, old.ID); err == nil {
+		t.Fatal("expired row should be deleted, not flipped")
+	}
+}
+
+func TestMemoryAuditCap(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	for i := 0; i < 10*ListCap+3; i++ {
+		if err := m.Audit(ctx, AuditEntry{
+			ID: NewID(), Server: "notes", Tool: "list_notes",
+			Disposition: DispositionAllow, At: int64(i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := m.ListAudit(ctx, AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// List itself caps at ListCap: assert the window holds the newest rows,
+	// which proves the oldest were evicted rather than kept.
+	if len(list) != ListCap {
+		t.Fatalf("audit list holds %d rows, want %d", len(list), ListCap)
+	}
+	for _, e := range list {
+		if e.At < 903 {
+			t.Fatalf("evicted row survived: at=%d", e.At)
+		}
+	}
+}

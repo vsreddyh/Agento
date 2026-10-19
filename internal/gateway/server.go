@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"agento/internal/approvals"
 	"agento/internal/crashlog"
 	"agento/internal/runs"
 )
@@ -116,6 +117,13 @@ type Config struct {
 	// memory. main sets a Mongo store when the database is reachable.
 	RunStore runs.Store
 
+	// ApprovalStore persists gate approvals and the audit trail (#313). Nil
+	// means an in-memory store. The relay (cmd/mcp-gate) opens the same
+	// collections from its own process via the shared MONGODB_URI/MONGODB_DB
+	// pair; both sides fall back to memory independently when Mongo is
+	// unreachable.
+	ApprovalStore approvals.Store
+
 	// Logf receives operational messages. Nil discards them.
 	Logf func(format string, args ...any)
 }
@@ -172,6 +180,10 @@ type Server struct {
 	// profile's one-turn-at-a-time rule is still enforced by its turnMu.
 	runs *runManager
 
+	// approvals serves the gate decision and audit reads. Stateless: the
+	// relay polls the store, so every gateway process answers identically.
+	approvals approvals.Store
+
 	// mcpServers is the configured MCP server set, read once at startup. Empty when
 	// there is no agent directory or no readable mcp.json, which is a valid state.
 	mcpServers []string
@@ -208,6 +220,10 @@ func New(cfg Config, agents map[string]Agent) (*Server, error) {
 		mux:      http.NewServeMux(),
 	}
 	s.runs = newRunManager(cfg.RunStore, cfg.Logf)
+	s.approvals = cfg.ApprovalStore
+	if s.approvals == nil {
+		s.approvals = approvals.NewMemoryStore()
+	}
 
 	// Read once, here, rather than per request. mcp.json is fixed for the life of
 	// the process: the entrypoint runs `pi mcp list` at boot and refuses to start if
@@ -500,6 +516,17 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// alias: jobs stay fire-and-forget, runs are observable and steerable.
 	if rest == "api/runs" || strings.HasPrefix(rest, "api/runs/") {
 		s.handleRuns(w, r, rest)
+		return
+	}
+
+	// Approval gates + audit trail (#313). A sibling of the above: the relay
+	// holds sensitive tool calls, the app decides them here.
+	if rest == "api/approvals" || strings.HasPrefix(rest, "api/approvals/") {
+		s.handleApprovals(w, r, rest)
+		return
+	}
+	if rest == "api/audit" || strings.HasPrefix(rest, "api/audit/") {
+		s.handleAudit(w, r, rest)
 		return
 	}
 
