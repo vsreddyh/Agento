@@ -191,7 +191,11 @@ func imagesSigOf(images []piImage) string {
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
-func (lr *liveRun) id() string { return lr.run.ID }
+func (lr *liveRun) id() string {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.run.ID
+}
 
 // profile reports the owning profile without copying the run: the 429 path
 // calls it for every live run, and a full snapshot would copy megabytes of
@@ -687,10 +691,18 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 		byID[r.ID] = i
 	}
 	for _, lr := range lives {
-		// Cheap pre-filter before the full snapshot: a snapshot copies up
-		// to 256 KiB of output, and a 1/sec list poller must not pay that
-		// for runs the filter excludes. The final Matches below stays
-		// authoritative — state can settle between this check and it.
+		// Refresh stored rows unconditionally, even when the live snapshot no
+		// longer matches the filter: a stored row can be staler than the live
+		// run (a Create that landed while the terminal Save is still in
+		// flight), and skipping the refresh serves the stale row. The final
+		// filter below decides what matches.
+		if i, ok := byID[lr.id()]; ok {
+			stored[i] = lr.snapshot()
+			continue
+		}
+		// Cheap pre-filter for the append path only: a full snapshot copies
+		// up to 256 KiB of output, and a 1/sec list poller must not pay that
+		// for runs the filter excludes.
 		if f.Profile != "" && lr.profile() != f.Profile {
 			continue
 		}
@@ -701,15 +713,6 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 			continue
 		}
 		snap := lr.snapshot()
-		if i, ok := byID[snap.ID]; ok {
-			// Refresh unconditionally, even when the snapshot no longer
-			// matches the filter: a stored row can be staler than the live
-			// run (a Create that landed while the terminal Save is still in
-			// flight), and skipping the refresh here serves the stale row.
-			// The final filter below decides what matches.
-			stored[i] = snap
-			continue
-		}
 		if !f.Matches(snap) {
 			continue
 		}
