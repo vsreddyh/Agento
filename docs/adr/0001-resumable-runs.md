@@ -83,7 +83,9 @@ event log and no replay: a client that reattaches reconstructs its display from
 the snapshot and continues from the live stream.
 
 The reattach key is the conversation plus the full user turn — text and image
-set — while the run is in flight. A same-prompt resend that lands after the
+set — while the run is in flight. Runs without a conversation id are not
+reattachable (there is nothing to key on); the app must always send one.
+A same-prompt resend that lands after the
 run settled starts a new run rather than replaying the terminal one: that is
 the right semantic (a completed turn resent is a new turn), and the 429 path
 only names in-flight runs. Same text with different images is a different turn

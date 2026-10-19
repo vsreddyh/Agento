@@ -89,6 +89,12 @@ const (
 	StatusInterrupted Status = "interrupted"
 )
 
+// InterruptedError is the error recorded on runs in flight across a gateway
+// restart, and the message of the buffered 409 that reports one. One string
+// in both places so nobody branches on free text: the app tells states apart
+// by status / param run_status, and both wordings below stay stable.
+const InterruptedError = "the gateway restarted while this run was in flight; the partial output is preserved"
+
 // Terminal reports whether no further execution will happen.
 func (s Status) Terminal() bool {
 	switch s {

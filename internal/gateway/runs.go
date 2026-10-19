@@ -1134,6 +1134,11 @@ func (s *Server) streamRun(
 // The wait is on the run, not on the request: a client that disconnects does
 // not cancel the executor, so the work still completes and remains retrievable
 // through /api/runs.
+//
+// Holding the connection this long is safe for the same reason the old
+// buffered handler was: the timeout chain is ordered outermost-first — nginx
+// 990s idle, TurnTimeout 960s, the 900s+30s delegation ceiling — so the layer
+// that fires is the innermost one with an answer, never a bare proxy 504.
 func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liveRun) {
 	select {
 	case <-lr.done:
@@ -1148,9 +1153,9 @@ func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liv
 		return
 	case runs.StatusCancelled:
 		// Param run_status (not a message match) tells "user stopped it"
-		// apart from "gateway restarted" below. The app branches on it; the
-		// two message strings are documented in docs/adr/0001-resumable-runs.md
-		// and must stay stable.
+		// apart from "gateway restarted" below. The app branches on status /
+		// param; both messages are runs.InterruptedError / the cancel string,
+		// documented stable in docs/adr/0001-resumable-runs.md.
 		apiError(w, http.StatusConflict, "invalid_request_error", "run_status",
 			"the run was cancelled")
 		return
@@ -1159,7 +1164,7 @@ func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liv
 		// and the client should not retry as if Pi had failed. 409 names the
 		// cause so the app reports it instead of retrying it.
 		apiError(w, http.StatusConflict, "invalid_request_error", "run_status",
-			"the gateway restarted while this run was in flight; the partial output is preserved")
+			runs.InterruptedError)
 		return
 	default:
 		apiError(w, http.StatusBadGateway, "upstream_error", "",

@@ -51,6 +51,14 @@ func (m *MemoryStore) Create(_ context.Context, r Run) error {
 	}
 	r = r.Capped()
 	m.byID[r.ID] = r
+	m.evictLocked()
+	return nil
+}
+
+// evictLocked drops oldest-first past memoryCap. Callers hold m.mu. Both
+// Create and Save enforce it: the bound is on the store, not the verb, so no
+// future direct-Save caller can fork an unbounded path next to a bounded one.
+func (m *MemoryStore) evictLocked() {
 	// Evict oldest past the cap. Linear scan on insert past cap only — the
 	// fallback holds at most memoryCap+1 rows, so this is not a hot loop.
 	for len(m.byID) > memoryCap {
@@ -70,7 +78,6 @@ func (m *MemoryStore) Create(_ context.Context, r Run) error {
 		}
 		delete(m.byID, oldest)
 	}
-	return nil
 }
 
 // Get returns one run.
@@ -95,6 +102,7 @@ func (m *MemoryStore) Save(_ context.Context, r Run) error {
 		return NewStoreError("run save needs an id", false)
 	}
 	m.byID[r.ID] = r.Capped()
+	m.evictLocked()
 	return nil
 }
 
@@ -141,7 +149,7 @@ func (m *MemoryStore) MarkInterrupted(_ context.Context, at time.Time) (int64, e
 	for id, r := range m.byID {
 		if r.Status == StatusRunning {
 			r.Status = StatusInterrupted
-			r.Error = "gateway restarted while this run was in flight"
+			r.Error = InterruptedError
 			r.UpdatedAt = now
 			r.FinishedAt = now
 			r.ExpiresAt = at.Add(DefaultTTL)

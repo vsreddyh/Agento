@@ -156,7 +156,7 @@ func (s *MongoStore) MarkInterrupted(ctx context.Context, at time.Time) (int64, 
 		bson.M{"status": string(StatusRunning)},
 		bson.M{"$set": bson.M{
 			"status":     string(StatusInterrupted),
-			"error":      "gateway restarted while this run was in flight",
+			"error":      InterruptedError,
 			"updatedAt":  at.UnixMilli(),
 			"finishedAt": at.UnixMilli(),
 			"expiresAt":  at.Add(DefaultTTL),
