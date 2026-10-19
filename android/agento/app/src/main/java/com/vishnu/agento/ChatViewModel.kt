@@ -892,12 +892,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threads = listOf(fresh) + threads
         threadId = fresh.id
         cancelRecovery()
+        runsJob?.cancel()
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
             error = "", pending = "", streaming = true, queued = "",
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
+            activeRunId = "", busyRunId = "",
+            showRuns = false, runsLoading = false,
         )
         persist()
         doSend(forked, path, provider, model, effort)
