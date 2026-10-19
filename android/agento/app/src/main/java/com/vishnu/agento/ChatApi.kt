@@ -817,6 +817,19 @@ internal fun readSseStream(
             emit(ChatEvent.RunState(snapshot))
             continue
         }
+        // Gateway error frames ({"error": "..."}) are checked BEFORE the
+        // terminal skip below: a reattached failed run is snapshot-terminal
+        // plus an error frame, and skipping it would turn a failed turn into
+        // an EOF Done. Errors are terminal by contract either way.
+        val errMsg = runCatching {
+            JSONObject(data).optString("error", "").trim()
+        }.getOrDefault("")
+        if (errMsg.isNotEmpty()) {
+            // Terminal: no Done follows (same contract as the
+            // HTTP-error path), so the consumer must not
+            // expect further frames for this turn.
+            return SseEnd.ErrorFrame(errMsg)
+        }
         // Tool-progress frames carry {"tool","status",...} and no
         // choices array — surface them instead of dropping them. Skipped
         // after a terminal snapshot like deltas: the turn is over, and the
@@ -839,19 +852,6 @@ internal fun readSseStream(
         if (progress != null) {
             emit(progress)
             continue
-        }
-        // Gateway error frames ({"error": "..."}) carry no
-        // choices/tool payload — surface them instead of
-        // dropping, so the user never sees a bogus
-        // "empty reply" for a failed turn.
-        val errMsg = runCatching {
-            JSONObject(data).optString("error", "").trim()
-        }.getOrDefault("")
-        if (errMsg.isNotEmpty()) {
-            // Terminal: no Done follows (same contract as the
-            // HTTP-error path), so the consumer must not
-            // expect further frames for this turn.
-            return SseEnd.ErrorFrame(errMsg)
         }
         val delta = runCatching {
             val choices = JSONObject(data).optJSONArray("choices") ?: return@runCatching ""

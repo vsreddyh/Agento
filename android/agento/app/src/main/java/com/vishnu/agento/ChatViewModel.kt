@@ -616,8 +616,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // the composer text belongs to whatever the user does next.
                 if (!_state.value.streaming || _state.value.activeRunId != runId) return@withContext
                 when (outcome) {
+                    // Clear only what this steer sent: typing that landed
+                    // mid-round-trip belongs to the user, not the turn.
                     is SteerOutcome.Queued ->
-                        _state.value = _state.value.copy(pending = "")
+                        if (_state.value.pending.trim() == text) {
+                            _state.value = _state.value.copy(pending = "")
+                        }
                     // Settled race: the text becomes the next turn. When the
                     // queue was already occupied send() parks nothing and the
                     // composer keeps the text, so say the queue is full
@@ -660,10 +664,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         val path = _state.value.path
         val conversationId = threadId
-        _state.value = _state.value.copy(runsLoading = true)
+        _state.value = _state.value.copy(runsLoading = true, runsError = "")
         viewModelScope.launch(Dispatchers.IO) {
             val result = runsApi.list(path, conversationId = conversationId, limit = 50)
             withContext(Dispatchers.Main) {
+                // Stale load (thread switched mid-flight): never write
+                // another thread's rows or errors here.
+                if (conversationId != threadId) return@withContext
                 // A failed load keeps the old rows (never blanked into a
                 // lying "no runs yet") and reports inside the sheet: the
                 // chat error banner's Retry would resend a turn, which a
@@ -740,14 +747,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             } ?: return@launch
             // Bounded: re-clearing only loses the once-guard for threads long
             // dead, whose resend finds no live run and no-ops.
-            if (resumedThreads.size >= 200) resumedThreads.clear()
-            resumedThreads.add(threadId)
             withContext(Dispatchers.Main) {
                 if (threadId != this@ChatViewModel.threadId || _state.value.streaming || !_state.value.ready) {
                     return@withContext
                 }
                 val cur = _state.value.messages
                 if (cur.lastOrNull()?.role != "user") return@withContext
+                // Re-check under Main: two concurrent opens would otherwise
+                // both pass the entry check and resend twice.
+                if (threadId in resumedThreads) return@withContext
+                // Marked only when the resend actually fires: an earlier mark
+                // would strand the thread if the guards above skipped it
+                // (switch-away-and-back would never retry).
+                if (resumedThreads.size >= 200) resumedThreads.clear()
+                resumedThreads.add(threadId)
                 // Deliberately fresh provider/model/effort, matched on prompt
                 // only: the server reattach ignores model switches by design
                 // (same conversation + same prompt reattaches), so this
@@ -1039,6 +1052,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         }
                         val msgs = _state.value.messages
                         val last = msgs.lastOrNull()
+                        // copy() preserves the serving model patched by the
+                        // RunState handler: safe only because the snapshot is
+                        // always frame one. A future frame reorder that puts
+                        // reasoning first would reintroduce the flicker.
                         if (last?.role == "assistant") {
                             _state.value = _state.value.copy(
                                 messages = msgs.dropLast(1) + last.copy(reasoning = racc.toString()),

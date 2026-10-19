@@ -142,6 +142,31 @@ class RunSnapshotTest {
     }
 
     @Test
+    fun `error after terminal snapshot still surfaces`() {
+        // A reattached failed run is a terminal snapshot plus an error
+        // frame: the error check runs before the terminal skip, so the turn
+        // reports failed instead of ending as an EOF Done.
+        val raw = streamOf(
+            listOf(
+                frame(snapshot(status = "failed", output = "part")),
+                frame("""{"error":"boom"}"""),
+            ),
+        )
+        val full = StringBuilder()
+        val reasoned = StringBuilder()
+        val events = mutableListOf<ChatEvent>()
+        val end = readSseStream(
+            source = Buffer().writeUtf8(raw),
+            full = full,
+            reasoned = reasoned,
+            onUsage = {},
+            emit = { events += it },
+        )
+        assertTrue(end is SseEnd.ErrorFrame)
+        assertEquals("boom", (end as SseEnd.ErrorFrame).message)
+    }
+
+    @Test
     fun `runSnapshot parses leniently and JSONObject round-trips`() {
         val o = JSONObject("""{"id":"x","status":"running"}""")
         val snap = RunSnapshot.parse(o)
