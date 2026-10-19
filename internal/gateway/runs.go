@@ -695,21 +695,22 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 		// longer matches the filter: a stored row can be staler than the live
 		// run (a Create that landed while the terminal Save is still in
 		// flight), and skipping the refresh serves the stale row. The final
-		// filter below decides what matches.
-		if i, ok := byID[lr.id()]; ok {
-			stored[i] = lr.snapshot()
+		// filter below decides what matches. Snapshots copy up to 256 KiB, so
+		// they are taken only when either side can match: fresh data for an
+		// included row, or a refresh that drops a stale one. When both the
+		// stored row and the live state exclude, the row stays excluded
+		// without paying for the copy.
+		i, inStore := byID[lr.id()]
+		liveMatch := (f.Profile == "" || lr.profile() == f.Profile) &&
+			(f.ConversationID == "" || lr.conversation() == f.ConversationID) &&
+			(f.Status == "" || lr.status() == f.Status)
+		if inStore {
+			if liveMatch || f.Matches(stored[i]) {
+				stored[i] = lr.snapshot()
+			}
 			continue
 		}
-		// Cheap pre-filter for the append path only: a full snapshot copies
-		// up to 256 KiB of output, and a 1/sec list poller must not pay that
-		// for runs the filter excludes.
-		if f.Profile != "" && lr.profile() != f.Profile {
-			continue
-		}
-		if f.ConversationID != "" && lr.conversation() != f.ConversationID {
-			continue
-		}
-		if f.Status != "" && lr.status() != f.Status {
+		if !liveMatch {
 			continue
 		}
 		snap := lr.snapshot()

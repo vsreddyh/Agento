@@ -152,6 +152,10 @@ arrives only once the session is idle), keeps the text produced so far, and
 ends the stream with an explicit `{"agento_run": {"status": "cancelled"}}`
 frame. The app must call this endpoint, not just close its socket: closing the
 socket is exactly the case this feature exists to make non-destructive.
+Precedence is user-intent-wins: a turn that errors and is cancelled
+concurrently records `cancelled` with no error text. The agent's failure is
+dropped rather than merged — a failed turn the user happened to cancel reads
+as a cancel, which is what the user asked for.
 
 ## Consequences
 
