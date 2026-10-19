@@ -605,14 +605,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     is SteerOutcome.Queued ->
                         _state.value = _state.value.copy(pending = "")
                     // Settled race: the text becomes the next turn. When the
-                    // queue was already occupied send() parks nothing, so say
-                    // so instead of leaving the composer full with no signal.
+                    // queue was already occupied send() parks nothing and the
+                    // composer keeps the text, so say the queue is full
+                    // rather than claiming it queued behind.
                     is SteerOutcome.Conflict -> {
                         val queuedWasOccupied = _state.value.queued.isNotBlank()
                         send()
                         if (queuedWasOccupied && _state.value.streaming) {
                             _state.value = _state.value.copy(
-                                error = "Turn ended — queued behind the pending send.",
+                                error = "Turn ended — queue is full, text kept in composer.",
                             )
                         }
                     }
@@ -639,6 +640,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Reloads the runs sheet rows: newest first, in-flight and finished. */
     fun refreshRuns() {
+        if (!_state.value.ready || threadId.isBlank()) {
+            _state.value = _state.value.copy(runsLoading = false)
+            return
+        }
         val path = _state.value.path
         val conversationId = threadId
         _state.value = _state.value.copy(runsLoading = true)
@@ -698,11 +703,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val runs = runsApi.list(path, conversationId = threadId, status = "running", limit = 5)
                 .getOrNull().orEmpty()
             // Belt and braces on the status: the query already filters, but a
-            // stale row must never trigger a resend on its own. Marked only
-            // on a match, so a failed lookup or a not-yet-listed run retries
-            // on the next thread open instead of never.
+            // stale row must never trigger a resend on its own. Anything not
+            // terminal is live (running, cancelling, or a future state) —
+            // narrowing to `running` would strand exactly the edge cases
+            // resume exists for.
             val run = runs.firstOrNull {
-                it.isRunning() && it.conversationId == threadId && promptMatches(last.content, it.prompt)
+                !it.isTerminal() && it.conversationId == threadId && promptMatches(last.content, it.prompt)
             } ?: return@launch
             // Bounded: re-clearing only loses the once-guard for threads long
             // dead, whose resend finds no live run and no-ops.
@@ -714,6 +720,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 }
                 val cur = _state.value.messages
                 if (cur.lastOrNull()?.role != "user") return@withContext
+                // Deliberately fresh provider/model/effort, matched on prompt
+                // only: the server reattach ignores model switches by design
+                // (same conversation + same prompt reattaches), so this
+                // streams the running model's run — no duplicate turn.
                 val provider = api.providerFor(tab)
                 val model = api.modelFor(tab)
                 val effort = api.effortFor(tab, model)

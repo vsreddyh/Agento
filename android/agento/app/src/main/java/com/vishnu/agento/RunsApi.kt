@@ -45,13 +45,16 @@ sealed interface SteerOutcome {
     data class Conflict(val message: String) : SteerOutcome
 }
 
-/** Outcome of `POST /api/runs/{id}/cancel`. */
-sealed interface CancelOutcome {
-    /** The abort was accepted; the turn ends through the event loop. */
-    data object Cancelling : CancelOutcome
-    /** The run had already settled; carries its terminal status. */
-    data class Finished(val status: String) : CancelOutcome
-}
+    /**
+     * Aborts the run, keeping partial output. Success only acknowledges —
+     * the run's own status (via streams/records) is the source of truth.
+     */
+    suspend fun cancel(path: String, id: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            call("POST", "$path/api/runs/${encode(id)}/cancel").mapCatching {
+                if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
+            }
+        }
 
 /**
  * Client over the gateway's native Runs API (same bearer auth as chat,
@@ -188,18 +191,4 @@ class RunsApi(context: Context) {
                 }
         }
 
-    /**
-     * Aborts the run, keeping partial output. `cancelling` means the abort
-     * was accepted; any other 200 carries the already-terminal status.
-     */
-    suspend fun cancel(path: String, id: String): Result<CancelOutcome> =
-        withContext(Dispatchers.IO) {
-            call("POST", "$path/api/runs/${encode(id)}/cancel").mapCatching {
-                if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
-                val status = runCatching { JSONObject(it.body).optString("status", "") }
-                    .getOrDefault("").trim()
-                if (status.isEmpty() || status == "cancelling") CancelOutcome.Cancelling
-                else CancelOutcome.Finished(status)
-            }
-        }
 }

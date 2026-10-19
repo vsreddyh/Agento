@@ -88,14 +88,14 @@ internal fun RunsDialog(
                                             MaterialTheme.colorScheme.onSurfaceVariant
                                         },
                                     )
-                                    if (run.isRunning()) {
+                                    if (!run.isTerminal()) {
                                         TextButton(onClick = { onCancel(run.id) }) {
                                             Text("Cancel")
                                         }
                                     }
                                 }
-                                // Failed turns lead with the error even when output exists:
-                                // the output is a fragment, the error is the verdict.
+                                // A live run with nothing yet is still starting,
+                                // not broken: say so instead of a bare header.
                                 val body = if (run.status == "failed" && run.error.isNotBlank()) {
                                     run.error
                                 } else {
@@ -112,6 +112,13 @@ internal fun RunsDialog(
                                         },
                                         maxLines = 3,
                                         overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(top = 2.dp),
+                                    )
+                                } else if (run.isRunning()) {
+                                    Text(
+                                        "· waiting for output…",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(top = 2.dp),
                                     )
                                 }
