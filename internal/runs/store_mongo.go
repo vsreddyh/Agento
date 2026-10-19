@@ -171,12 +171,14 @@ func (s *MongoStore) List(ctx context.Context, f Filter) ([]Run, error) {
 func (s *MongoStore) MarkInterrupted(ctx context.Context, at time.Time) (int64, error) {
 	// Expired rows are deleted outright, matching the memory backend: leaving
 	// them for the TTL thread would serve a stale `running` row for up to a
-	// minute after the restart that memory 404s on.
+	// minute after the restart that memory 404s on. A transient delete
+	// failure must not skip the flip below — log and continue, so the worst
+	// case is the old TTL window, not every in-flight row lying running.
 	if _, err := s.runs.DeleteMany(ctx, bson.M{
 		"status":    string(StatusRunning),
 		"expiresAt": bson.M{"$lte": at},
 	}); err != nil {
-		return 0, NewStoreError("delete expired runs: "+err.Error(), true)
+		s.logf("run history: ERROR could not delete expired runs at startup: %v", err)
 	}
 	// Unexpired rows flip; rows without an expiry (pre-TTL documents) flip too.
 	res, err := s.runs.UpdateMany(ctx,

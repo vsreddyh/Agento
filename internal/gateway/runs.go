@@ -704,6 +704,10 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 		want = runs.ListCap
 	}
 	var stored []runs.Run
+	// When room covers the whole page the store query is skipped entirely:
+	// every row would come from the overlay anyway. Stale stored rows then
+	// get no refresh this call, which is fine — the terminal Save still in
+	// flight lands on its own, and the next list reads it.
 	if fetch := want - room; fetch > 0 {
 		f.Limit = fetch
 		var err error
@@ -937,12 +941,12 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		// shared client-id bound so a megabyte of query string cannot become
 		// a full equality scan. Each names its own field — trimming profile
 		// for a conversation_id overflow would send the app the wrong way.
-		if len(f.Profile) > maxFilterLen {
+		if len([]rune(f.Profile)) > maxFilterLen {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "profile",
 				"profile filter must be at most 256 characters")
 			return
 		}
-		if len(f.ConversationID) > maxFilterLen {
+		if len([]rune(f.ConversationID)) > maxFilterLen {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "conversation_id",
 				"conversation_id filter must be at most 256 characters")
 			return
