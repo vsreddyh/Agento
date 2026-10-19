@@ -1515,6 +1515,10 @@ func (s *Server) executeRun(
 		return
 	}
 	promptSent = true
+	// The turn carries no further use for the request's images: release the
+	// bytes now rather than holding them for up to TurnTimeout. Bounded
+	// either way (body cap + single flight), but there is nothing to keep.
+	userTurn.Images = nil
 
 	for {
 		select {
