@@ -86,7 +86,9 @@ The reattach key is the conversation plus the full user turn — text and image
 set — while the run is in flight. On the chat ingress the conversation arrives
 as the `X-Hermes-Session-Id` header; every run route and filter calls it
 `conversation_id` — same value, trimmed, same 256 bound. Runs without a conversation id are not
-reattachable (there is nothing to key on); the app must always send one.
+reattachable (there is nothing to key on); the app must always send one — and
+untracked resends are new runs by design, never duplicates or reattaches:
+without a key there is nothing to dedupe against, idle or busy.
 A same-prompt resend that lands after the
 run settled starts a new run rather than replaying the terminal one: that is
 the right semantic (a completed turn resent is a new turn), and the 429 path

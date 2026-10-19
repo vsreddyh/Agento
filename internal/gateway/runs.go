@@ -1542,13 +1542,16 @@ func (s *Server) executeRun(
 	// TurnTimeout, and only the model is ever read.
 	model string,
 	revert func(),
+	// unlock releases the profile lock, shared with the requesting handler
+	// via sync.OnceFunc: whichever side finishes first releases, the other
+	// is a no-op. A panic anywhere after the handoff still frees the profile.
+	unlock func(),
 ) {
 	// The profile lock is the scarce resource, not the stream. Release it as
 	// soon as the turn has stopped talking to Pi, before the terminator frame
 	// reaches the client: a client that reads [DONE] and immediately sends the
 	// next turn must not be answered with a 429 for a turn it just watched
-	// finish. sync.OnceFunc keeps the deferred release from double-unlocking.
-	unlock := sync.OnceFunc(h.turnMu.Unlock)
+	// finish. unlock is the handler's shared OnceFunc (see handleChat).
 
 	// promptSent tracks whether the turn reached the agent. The panic recovery
 	// below reverts the sticky model switch only when it did not: every other

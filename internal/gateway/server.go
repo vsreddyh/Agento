@@ -686,11 +686,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		return
 	}
 	// Ownership of the lock transfers to the run executor below. Until it does,
-	// every return path has to release it.
+	// every return path has to release it. One shared OnceFunc with the
+	// executor: anything below that panics in the requesting goroutine —
+	// subscribe, snapshot, header writes — still releases exactly once, and
+	// the executor's own release is the same call, never a second unlock.
+	unlock := sync.OnceFunc(h.turnMu.Unlock)
 	runStarted := false
 	defer func() {
 		if !runStarted {
-			h.turnMu.Unlock()
+			unlock()
 		}
 	}()
 
@@ -894,7 +898,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	runStarted = true
 
 	if !req.Stream {
-		go s.executeRun(lr, h, turnCtx, cancel, events, unsubscribe, userTurn, req.Model, revertModel)
+		go s.executeRun(lr, h, turnCtx, cancel, events, unsubscribe, userTurn, req.Model, revertModel, unlock)
 		w.Header().Set("X-Agento-Run-Id", lr.id())
 		s.respondBuffered(w, r, lr)
 		return
@@ -908,7 +912,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	runEvents, runUnsubscribe := lr.subscribe()
 	defer runUnsubscribe()
 	snap := lr.snapshot()
-	go s.executeRun(lr, h, turnCtx, cancel, events, unsubscribe, userTurn, req.Model, revertModel)
+	go s.executeRun(lr, h, turnCtx, cancel, events, unsubscribe, userTurn, req.Model, revertModel, unlock)
 
 	w.Header().Set("X-Agento-Run-Id", lr.id())
 	s.streamRun(w, r, lr, runEvents, snap)
