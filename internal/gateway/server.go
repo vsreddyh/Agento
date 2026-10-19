@@ -36,8 +36,9 @@ var (
 )
 
 // maxFilterLen bounds client-supplied id strings: X-Hermes-Session-Id and the
-// runs list filters. Entry counts are bounded elsewhere, but an unbounded key
-// would let a client drive memory growth per request regardless of the count.
+// runs list filters. Entry counts are bounded per store (memoryCap eviction,
+// Mongo TTL, one live run per profile), but an unbounded key would let a
+// client drive per-request memory growth regardless of those counts.
 const maxFilterLen = 256
 
 // Config configures a Server.
