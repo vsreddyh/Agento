@@ -805,6 +805,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	}
 	req.Model = model
 
+	// Same rule for the provider, for the same reason the run record must name
+	// what is actually running: selectModel can default an empty claim, so the
+	// raw wantProvider may be blank next to a canonical model. Resolved first,
+	// claimed as fallback, bounded either way.
+	provider := bounded(agentState.Model.Provider)
+	if provider == "" {
+		provider = bounded(wantProvider)
+	}
+
 	// Always sent, even when agentState already reports this level, and that is
 	// deliberate rather than an oversight. Skipping it when
 	// agentState.ThinkingLevel == level would save one local IPC round trip per
@@ -850,7 +859,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		Profile:        h.profile,
 		ConversationID: conversationID,
 		Prompt:         userTurn.Text,
-		Provider:       wantProvider,
+		Provider:       provider,
 		Model:          req.Model,
 		Effort:         level,
 	}, h.runner.agent, completionID, imagesSigOf(userTurn.Images), time.Now())
