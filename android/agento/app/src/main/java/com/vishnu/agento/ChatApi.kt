@@ -112,6 +112,76 @@ sealed interface ChatEvent {
         val label: String = "",
         val status: String = "",
     ) : ChatEvent
+    /**
+     * The id of the server-side run backing this turn (#311). Emitted once
+     * per stream from the `X-Agento-Run-Id` response header, so the client
+     * can reattach, steer and cancel after a drop. Blank when the server
+     * predates runs.
+     */
+    data class RunId(val id: String) : ChatEvent
+    /**
+     * One resumable-run snapshot (`{"agento_run": {...}}`), the first frame
+     * of every stream. The snapshot is authoritative: a reattaching client
+     * replaces its buffer with [snapshot] output, then follows live deltas.
+     * The parser already skips `choices` deltas after a terminal snapshot
+     * (compatibility replay for older clients), so consumers never see them.
+     */
+    data class RunState(val snapshot: RunSnapshot) : ChatEvent
+    /**
+     * The profile is busy with a different turn (HTTP 429). [runId] names the
+     * in-flight run when the server reports it (`X-Agento-Run-Id`), so the
+     * client can watch or cancel instead of guessing.
+     */
+    data class RateLimited(val runId: String, val message: String) : ChatEvent
+}
+
+/**
+ * One resumable agent run, as carried by the `agento_run` snapshot frame and
+ * the `/api/runs` records (#311). Parsing is lenient: missing keys read as
+ * blank, so older and newer gateways both parse.
+ */
+data class RunSnapshot(
+    val id: String = "",
+    val profile: String = "",
+    val conversationId: String = "",
+    val status: String = "",
+    val seq: Long = 0L,
+    val model: String = "",
+    val output: String = "",
+    val reasoning: String = "",
+    val tools: List<String> = emptyList(),
+    val usage: TokenUsage? = null,
+    val error: String = "",
+) {
+    /** True for `completed|failed|cancelled|interrupted` — nothing more runs. */
+    fun isTerminal(): Boolean = status == "completed" || status == "failed" ||
+        status == "cancelled" || status == "interrupted"
+
+    companion object {
+        fun parse(o: JSONObject): RunSnapshot {
+            val tools = buildList {
+                val arr = o.optJSONArray("tools")
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        add(arr.optString(i, ""))
+                    }
+                }
+            }.filter { it.isNotBlank() }
+            return RunSnapshot(
+                id = o.optString("id", "").trim(),
+                profile = o.optString("profile", "").trim(),
+                conversationId = o.optString("conversation_id", "").trim(),
+                status = o.optString("status", "").trim(),
+                seq = o.optLong("seq", 0L),
+                model = o.optString("model", "").trim(),
+                output = o.optString("output", ""),
+                reasoning = o.optString("reasoning", ""),
+                tools = tools,
+                usage = runCatching { parseTokenUsage(o) }.getOrNull(),
+                error = o.optString("error", "").trim(),
+            )
+        }
+    }
 }
 
 /** Real token counts for one turn, parsed from the SSE `usage` object.
@@ -535,9 +605,22 @@ class ChatApi(context: Context) {
                 call.execute().use { response ->
                     if (!response.isSuccessful) {
                         val err = response.body?.string()?.take(300) ?: ""
-                        trySend(ChatEvent.Error("HTTP ${response.code}: $err"))
+                        // The run id rides every answer, including refusals: a
+                        // 429 names the in-flight run so the client can watch
+                        // or cancel it instead of guessing why it is busy.
+                        val runId = response.header("X-Agento-Run-Id").orEmpty().trim()
+                        if (runId.isNotEmpty()) trySend(ChatEvent.RunId(runId))
+                        if (response.code == 429) {
+                            trySend(ChatEvent.RateLimited(runId, "HTTP 429: $err"))
+                        } else {
+                            trySend(ChatEvent.Error("HTTP ${response.code}: $err"))
+                        }
                         return@launch
                     }
+                    // Name the run before any frame arrives: a client killed
+                    // mid-turn reattaches, steers and cancels by this id.
+                    val runId = response.header("X-Agento-Run-Id").orEmpty().trim()
+                    if (runId.isNotEmpty()) trySend(ChatEvent.RunId(runId))
                     val source = response.body?.source()
                     if (source == null) {
                         trySend(ChatEvent.Error("empty response body"))
@@ -563,6 +646,69 @@ class ChatApi(context: Context) {
                         // reported as a finished turn. The compiler is the only thing
                         // that notices, which is the point: #214 was a case that fell
                         // through to the wrong branch.
+                        is SseEnd.ErrorFrame -> {
+                            trySend(ChatEvent.Error(end.message))
+                            return@launch
+                        }
+                        is SseEnd.Terminal -> trySend(doneFor(end, full.toString(), seenUsage))
+                        is SseEnd.EndOfStream -> trySend(doneFor(end, full.toString(), seenUsage))
+                    }
+                }
+            } catch (e: Exception) {
+                trySend(ChatEvent.Error(e.message ?: e.javaClass.simpleName))
+            } finally {
+                close()
+            }
+        }
+        awaitClose {
+            job.cancel()
+            call.cancel()
+        }
+    }.buffer(Channel.UNLIMITED)
+
+    /**
+     * Attaches to a live or finished run (`GET /api/runs/{id}/events`, #311).
+     * Same SSE vocabulary as [streamChat]: one `agento_run` snapshot, then
+     * live frames, then `[DONE]` (or an error frame). Emits [ChatEvent.RunId]
+     * from the response header like [streamChat] so consumers share one path.
+     */
+    fun runEvents(path: String, runId: String): Flow<ChatEvent> = callbackFlow {
+        val base = baseUrl()
+        if (base.isEmpty()) {
+            trySend(ChatEvent.Error("Server URL not configured — see Settings"))
+            close()
+            return@callbackFlow
+        }
+        val request = Request.Builder()
+            .url("$base$path/api/runs/$runId/events")
+            .header("Authorization", "Bearer ${password()}")
+            .header("Accept", "text/event-stream")
+            .get()
+            .build()
+        val call = http.newCall(request)
+        val job = launch(Dispatchers.IO) {
+            try {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val err = response.body?.string()?.take(300) ?: ""
+                        trySend(ChatEvent.Error("HTTP ${response.code}: $err"))
+                        return@launch
+                    }
+                    val headerId = response.header("X-Agento-Run-Id").orEmpty().trim()
+                    if (headerId.isNotEmpty()) trySend(ChatEvent.RunId(headerId))
+                    val source = response.body?.source()
+                    if (source == null) {
+                        trySend(ChatEvent.Error("empty response body"))
+                        return@launch
+                    }
+                    val full = StringBuilder()
+                    val reasoned = StringBuilder()
+                    var seenUsage: TokenUsage? = null
+                    when (val end = readSseStreamLenient(
+                        source, full, reasoned,
+                        onUsage = { seenUsage = it },
+                        emit = { trySend(it) },
+                    )) {
                         is SseEnd.ErrorFrame -> {
                             trySend(ChatEvent.Error(end.message))
                             return@launch
@@ -686,6 +832,9 @@ internal fun readSseStream(
     onUsage: (TokenUsage) -> Unit,
     emit: (ChatEvent) -> Unit,
 ): SseEnd {
+    // A terminal `agento_run` snapshot ends content: later `choices` deltas
+    // are the compatibility replay, skipped below.
+    var terminalSeen = false
     while (!source.exhausted()) {
         val line = source.readUtf8Line() ?: break
         if (line.startsWith(":") || line.startsWith("event:")) continue
@@ -698,6 +847,39 @@ internal fun readSseStream(
         // frames without counts leave the last-seen intact.
         runCatching { parseTokenUsage(JSONObject(data)) }
             .getOrNull()?.let(onUsage)
+        // Resumable-run snapshot (`{"agento_run": {...}}`, #311): the first
+        // frame of every stream. Emitted, not dropped — older clients ignore
+        // unknown frames, but this client reattaches from it. The snapshot
+        // output seeds the accumulators when they are still empty (i.e. this
+        // is the stream's first snapshot): everything the run produced before
+        // the subscribe is inside it, and the server only relays newer
+        // frames, so seeding cannot duplicate. A second snapshot (e.g. the
+        // explicit cancelled status frame) carries status, not content.
+        val snapshot = runCatching {
+            val o = JSONObject(data)
+            val run = o.optJSONObject("agento_run") ?: return@runCatching null
+            RunSnapshot.parse(run)
+        }.getOrNull()
+        if (snapshot != null) {
+            if (full.isEmpty() && snapshot.output.isNotEmpty()) {
+                full.append(snapshot.output)
+            }
+            if (reasoned.isEmpty() && snapshot.reasoning.isNotEmpty()) {
+                val slice = snapshot.reasoning.take(REASONING_CAP - reasoned.length)
+                reasoned.append(slice)
+            }
+            // A terminal snapshot ends content: later `choices` deltas are
+            // the compatibility replay for older clients, not new text.
+            // Skipped here — centrally, for every consumer — so neither the
+            // emitted events nor the accumulated Done text double-count them.
+            if (snapshot.isTerminal()) terminalSeen = true
+            // The snapshot's own usage counts like any frame's: totals ride
+            // the snapshot when there is nothing later to carry them, and
+            // later frames overwrite (last wins) as usual.
+            snapshot.usage?.let(onUsage)
+            emit(ChatEvent.RunState(snapshot))
+            continue
+        }
         // Tool-progress frames carry {"tool","status",...} and no
         // choices array — surface them instead of dropping them.
         val progress = runCatching {
@@ -744,6 +926,7 @@ internal fun readSseStream(
                     .takeUnless { it.isNullOrEmpty() }
                 ?: ""
         }.getOrDefault("")
+        if (terminalSeen) continue
         if (delta.isNotEmpty()) {
             full.append(delta)
             emit(ChatEvent.Delta(delta))
@@ -760,6 +943,7 @@ internal fun readSseStream(
                     .takeUnless { it.isNullOrEmpty() }
                 ?: ""
         }.getOrDefault("")
+        if (terminalSeen) continue
         if (reasoning.isNotEmpty() && reasoned.length < REASONING_CAP) {
             // The event carries the truncated slice, so every
             // consumer stays under the shared cap.
