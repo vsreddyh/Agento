@@ -181,14 +181,16 @@ as a cancel, which is what the user asked for.
   past the cap the snapshot carries the head while live deltas flow in full.
 - The list route shows previews (2 KB output, 1 KB reasoning), not full turns;
   the detail route keeps everything. The `prompt` preview is the same 4 KB in
-  both shapes; only output/reasoning shrink to previews. A truncated value ends
-  with the `… (truncated)` marker in every terminal shape — snapshot, list
+  both shapes; only output/reasoning shrink to previews. Previews carry the
+  `… (truncated)` marker once the run settles, like every terminal shape;
+  in-flight previews stay unmarked heads with more deltas still coming. A truncated value ends
+  with the marker in every terminal shape — snapshot, list
   preview, detail record, replay delta, buffered body — but never mid-flight:
   while the turn runs, the head is incomplete by construction and more deltas
   follow, so a marker there would land mid-text. Over-cap answers are
   head-truncated everywhere, marker included: honest, and the same bytes the
   record keeps.
-  after 7 days; the in-memory fallback (Mongo unreachable) instead caps at
+  Records expire after 7 days; the in-memory fallback (Mongo unreachable) instead caps at
   1000 runs with oldest-first eviction — a degraded path, not an archive.
 - Persistence never blocks the turn: the executor offers each second's snapshot
   to a background loop without waiting, and the terminal write drains after it.

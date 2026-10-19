@@ -1410,9 +1410,17 @@ func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liv
 // and reasoning are previews: a full list at ListCap with 256 KiB turns would
 // be tens of megabytes in one response, and the list shows what a turn was
 // about, not a second copy of it. The detail route keeps the whole text.
+// Terminal previews carry the truncation marker like every terminal shape;
+// in-flight previews stay unmarked — more deltas are still coming, and a
+// marker there would land mid-text.
 func runListWire(r runs.Run) map[string]any {
-	r.Output = runs.CapText(r.Output, runs.ListPreviewOutput)
-	r.Reasoning = runs.CapText(r.Reasoning, runs.ListPreviewReasoning)
+	if r.Status.Terminal() {
+		r.Output = runs.CapText(r.Output, runs.ListPreviewOutput)
+		r.Reasoning = runs.CapText(r.Reasoning, runs.ListPreviewReasoning)
+	} else {
+		r.Output = truncateBytes(r.Output, runs.ListPreviewOutput)
+		r.Reasoning = truncateBytes(r.Reasoning, runs.ListPreviewReasoning)
+	}
 	return runWire(r)
 }
 

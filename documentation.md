@@ -227,8 +227,9 @@ the record — one detail read can serve up to 256 KiB, so never poll it per
 second for progress. One turn executes per
 profile; a different prompt while busy returns `429` with `X-Agento-Run-Id`, and
 resending the same prompt on the same conversation reattaches instead. The list
-shows previews (2 KB output, 1 KB reasoning — a truncated preview ends with
-`… (truncated)` marks a capped head in every terminal shape, never mid-flight); `limit` defaults to 100,
+shows previews (2 KB output, 1 KB reasoning — marked once the run settles,
+unmarked heads while it is still running);
+`limit` defaults to 100,
 is capped at 100, and `limit=0` — or an absent or empty `limit` — means the
 default, not an empty list. Only a present non-numeric or negative value 400s. The
 detail route keeps the full text. State is
