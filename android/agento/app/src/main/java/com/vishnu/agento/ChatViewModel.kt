@@ -794,11 +794,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (preview.isEmpty()) return false
         val marker = "… (truncated)"
         val text = full.trim()
-        return if (preview.endsWith(marker)) {
-            text.startsWith(preview.dropLast(marker.length))
-        } else {
-            text == preview.trim()
-        }
+        if (!preview.endsWith(marker)) return text == preview.trim()
+        // A literal trailing marker in a short prompt must not read as a
+        // truncation prefix: the full text has to actually exceed the core.
+        val core = preview.dropLast(marker.length)
+        return text.length > core.length && text.startsWith(core)
     }
 
     /** Regenerates the last reply (#122, v1 replace semantics): drops the
