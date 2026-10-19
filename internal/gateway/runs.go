@@ -971,6 +971,16 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 				"could not steer the run: "+bounded(err.Error()))
 			return
 		}
+		// The run can settle between the Call and this read: Pi accepted the
+		// instruction but the turn is over, so it steered nothing. Report the
+		// race instead of a false success — the client resends as a new turn,
+		// and a duplicated instruction in the worst case is benign.
+		if !lr.isRunning() {
+			s.cfg.Logf("runs: steer landed as run %s settled", lr.id())
+			apiError(w, http.StatusConflict, "invalid_request_error", "",
+				"this run is no longer in flight; it cannot be steered")
+			return
+		}
 		writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "status": "queued"})
 		return
 	case "cancel":
