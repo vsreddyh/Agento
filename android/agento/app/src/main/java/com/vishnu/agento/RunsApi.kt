@@ -45,17 +45,6 @@ sealed interface SteerOutcome {
     data class Conflict(val message: String) : SteerOutcome
 }
 
-    /**
-     * Aborts the run, keeping partial output. Success only acknowledges —
-     * the run's own status (via streams/records) is the source of truth.
-     */
-    suspend fun cancel(path: String, id: String): Result<Unit> =
-        withContext(Dispatchers.IO) {
-            call("POST", "$path/api/runs/${encode(id)}/cancel").mapCatching {
-                if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
-            }
-        }
-
 /**
  * Client over the gateway's native Runs API (same bearer auth as chat,
  * served through the proxy's /p/ route like the Jobs API — always call with
@@ -189,6 +178,17 @@ class RunsApi(context: Context) {
                         else -> throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
                     }
                 }
+        }
+
+    /**
+     * Aborts the run, keeping partial output. Success only acknowledges —
+     * the run's own status (via streams/records) is the source of truth.
+     */
+    suspend fun cancel(path: String, id: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            call("POST", "$path/api/runs/${encode(id)}/cancel").mapCatching {
+                if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
+            }
         }
 
 }
