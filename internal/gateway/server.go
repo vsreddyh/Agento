@@ -630,10 +630,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// whitespace (a paste, a re-render), and that must not turn the client's
 	// own turn into a 429. promptFull stays exact for the record; only the
 	// comparison forgives the edges.
+	//
+	// Hashed once up front: both the pre-lock check here and the post-lock
+	// duplicate check below need the image signature, and hashing multi-MB
+	// images twice on the contended path is waste for identical input.
+	imgSig := imagesSigOf(userTurn.Images)
 	if lr, ok := s.runs.activeForConversation(h.profile, conversationID); ok {
 		prompt, images := lr.reattachKey()
 		if strings.TrimSpace(prompt) == strings.TrimSpace(userTurn.Text) &&
-			images == imagesSigOf(userTurn.Images) {
+			images == imgSig {
 			w.Header().Set("X-Agento-Run-Id", lr.id())
 			if !req.Stream {
 				s.respondBuffered(w, r, lr)
@@ -662,7 +667,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 			// else is still a refusal with the run named.
 			prompt, images := lr.reattachKey()
 			if strings.TrimSpace(prompt) == strings.TrimSpace(userTurn.Text) &&
-				images == imagesSigOf(userTurn.Images) {
+				images == imgSig {
 				if !req.Stream {
 					s.respondBuffered(w, r, lr)
 					return
@@ -889,7 +894,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	runStarted = true
 
 	if !req.Stream {
-		go s.executeRun(lr, h, turnCtx, cancel, events, unsubscribe, userTurn, req, revertModel)
+		go s.executeRun(lr, h, turnCtx, cancel, events, unsubscribe, userTurn, req.Model, revertModel)
 		w.Header().Set("X-Agento-Run-Id", lr.id())
 		s.respondBuffered(w, r, lr)
 		return
@@ -903,7 +908,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	runEvents, runUnsubscribe := lr.subscribe()
 	defer runUnsubscribe()
 	snap := lr.snapshot()
-	go s.executeRun(lr, h, turnCtx, cancel, events, unsubscribe, userTurn, req, revertModel)
+	go s.executeRun(lr, h, turnCtx, cancel, events, unsubscribe, userTurn, req.Model, revertModel)
 
 	w.Header().Set("X-Agento-Run-Id", lr.id())
 	s.streamRun(w, r, lr, runEvents, snap)

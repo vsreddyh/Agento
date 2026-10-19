@@ -128,7 +128,10 @@ completion — only the snapshot status tells them apart — while a buffered
 (non-streaming) old client CAN tell them apart via the 409 `run_status`.
 Same cancelled run, distinguishable buffered, indistinguishable streaming:
 the app codes the streaming path against the snapshot status, never the
-terminator. And a run named by a
+terminator. One off-by-one to know: the cancel status frame's inner `seq`
+lags the stored seq by one (stamped at publish, terminator after) — harmless,
+because reattach re-snapshots rather than continuing the cursor. And a run
+named by a
 429 may already be terminal when the client reattaches; the snapshot status is
 authoritative, live frames are not promised.
 

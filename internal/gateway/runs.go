@@ -44,7 +44,7 @@ const runPersistInterval = time.Second
 // maxRunIDLen bounds the {id} path segment. Run ids are 24-hex ObjectIDs, so
 // anything longer matches nothing; the bound keeps a garbage segment out of
 // the store query.
-const maxRunIDLen = 128
+const maxRunIDLen = 64
 
 // runFrame is the snapshot frame. It is the only new wire shape this feature
 // adds; everything after it is the existing chat SSE vocabulary.
@@ -1518,7 +1518,10 @@ func (s *Server) executeRun(
 	events <-chan pi.Record,
 	unsubscribe func(),
 	userTurn *turn,
-	req chatRequest,
+	// model is passed as a string, not the whole chatRequest: the turn would
+	// otherwise pin the full message history (and image payloads) for up to
+	// TurnTimeout, and only the model is ever read.
+	model string,
 	revert func(),
 ) {
 	// The profile lock is the scarce resource, not the stream. Release it as
@@ -1592,7 +1595,7 @@ func (s *Server) executeRun(
 						lr.publish(errorFrame{Error: msg}, false)
 						return
 					}
-					if s.stepRun(lr, req, rec, unlock) {
+					if s.stepRun(lr, model, rec, unlock) {
 						return
 					}
 				default:
@@ -1619,7 +1622,7 @@ func (s *Server) executeRun(
 				lr.publish(errorFrame{Error: msg}, false)
 				return
 			}
-			if s.stepRun(lr, req, rec, unlock) {
+			if s.stepRun(lr, model, rec, unlock) {
 				return
 			}
 		}
@@ -1629,7 +1632,7 @@ func (s *Server) executeRun(
 // stepRun folds one agent record into the run and reports whether the turn
 // ended. Shared by the event loop and the timeout drain, so a settle queued
 // beside the deadline is completed, not failed.
-func (s *Server) stepRun(lr *liveRun, req chatRequest, rec pi.Record, unlock func()) bool {
+func (s *Server) stepRun(lr *liveRun, model string, rec pi.Record, unlock func()) bool {
 	// Usage is cumulative and reported on message_update today, but it is
 	// decoded for EVERY record rather than inside one case: Pi also nests it
 	// under other events (compaction_end carries result.usage), and a record
@@ -1658,7 +1661,7 @@ func (s *Server) stepRun(lr *liveRun, req chatRequest, rec pi.Record, unlock fun
 		if !ok || !isDelta || (text == "" && reasoning == "") {
 			return false
 		}
-		lr.publishDelta(text, reasoning, newChunk(lr.completionID, req.Model, text, reasoning))
+		lr.publishDelta(text, reasoning, newChunk(lr.completionID, model, text, reasoning))
 		return false
 
 	default:
