@@ -703,6 +703,12 @@ internal fun TaskManagerScreen(
 
     fun doReopen(t: ServerTask) {
         selected = null
+        // One request per row (#308), the same guard doComplete has: a double
+        // tap would fire two reopens, and with `tasks = prev` in the failure
+        // path the second one's revert can land on top of the first one's
+        // success. The row is already disabled while busy; this covers the
+        // sheet and any other caller.
+        if (t.id in busyIds) return
         val prev = tasks
         tasks = if (filter == ServerTaskFilter.Done) {
             prev.filterNot { it.id == t.id }
@@ -731,6 +737,11 @@ internal fun TaskManagerScreen(
         deleting = null
         editing = null
         selected = null
+        // One request per row (#308), the same guard doComplete has: a double
+        // tap would fire two deletes, and the second one's failure path reverts
+        // the whole list over the first one's success. The UI state above is
+        // still cleared first, so a repeat confirm cannot leave a dialog open.
+        if (t.id in busyIds) return
         val prev = tasks
         tasks = prev.filterNot { it.id == t.id }
         markBusy(t.id)
@@ -1317,9 +1328,11 @@ private fun RefreshBar(refreshing: Boolean) {
         label = "refreshBarHeight",
     )
     Box(modifier = Modifier.fillMaxWidth().height(height)) {
-        // Composed only while refreshing so the indeterminate animation is not
-        // running invisibly the rest of the time.
-        if (refreshing) {
+        // Composed until the height is back to nothing rather than tied to
+        // `refreshing`: tying it to the flag popped the bar out of existence
+        // the moment the refresh finished, while the height it was sitting in
+        // was still animating away.
+        if (height > 0.dp) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
     }
