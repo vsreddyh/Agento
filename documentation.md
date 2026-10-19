@@ -223,7 +223,8 @@ The events stream starts with one `{"agento_run":{...}}` snapshot (full output,
 reasoning, tools, usage, status) and then live frames — that stream is the
 progress path. The detail route keeps the full text but is a point read, not a
 watch: poll the list for status, watch `/events` for progress, read detail for
-the record. One turn executes per
+the record — one detail read can serve up to 256 KiB, so never poll it per
+second for progress. One turn executes per
 profile; a different prompt while busy returns `429` with `X-Agento-Run-Id`, and
 resending the same prompt on the same conversation reattaches instead. The list
 shows previews (2 KB output, 1 KB reasoning — a truncated preview ends with

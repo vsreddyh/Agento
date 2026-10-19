@@ -459,6 +459,16 @@ func (lr *liveRun) setUsage(u piUsage) {
 	lr.seq++
 }
 
+// peekNextSeq returns the seq the next publish will assign. Only the
+// executor publishes, so the peeked value is exact — no other goroutine can
+// slip a publish in between. Used to stamp a snapshot with its own delivery
+// seq (see finishCancelled).
+func (lr *liveRun) peekNextSeq() int64 {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.seq + 1
+}
+
 // closeSubs ends every attached stream. Safe to call more than once: the
 // deferred path always calls it after a terminal path may already have.
 func (lr *liveRun) closeSubs() {
@@ -1509,9 +1519,12 @@ func (s *Server) finishCancelled(lr *liveRun, unlock func()) {
 	unlock()
 	// The status frame carries the real snapshot with the status overridden,
 	// not a hand-built stub: a client tracking agento_run.seq as a cursor
-	// must not see a regression to 0 on cancel.
+	// must not see a regression to 0 on cancel. The inner seq is stamped with
+	// the delivery seq peeked up front, so cursor and stream agree — the
+	// executor is the sole publisher, so publish assigns exactly that seq.
 	snap := snapshotOf(lr.snapshot())
 	snap.Status = string(runs.StatusCancelled)
+	snap.Seq = lr.peekNextSeq()
 	lr.publish(runFrame{Run: snap}, false)
 	lr.publish(nil, true)
 }
