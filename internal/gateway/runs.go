@@ -220,6 +220,15 @@ func (lr *liveRun) conversation() string {
 	defer lr.mu.Unlock()
 	return lr.run.ConversationID
 }
+
+// matchesFilter reports whether the run can match f, without copying it.
+// Used to reserve overlay room and to pre-filter appends before a full
+// snapshot; the final f.Matches on merged rows stays authoritative.
+func (lr *liveRun) matchesFilter(f runs.Filter) bool {
+	return (f.Profile == "" || lr.profile() == f.Profile) &&
+		(f.ConversationID == "" || lr.conversation() == f.ConversationID) &&
+		(f.Status == "" || lr.status() == f.Status)
+}
 func (lr *liveRun) prompt() string {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
@@ -678,8 +687,20 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 	// past ListCap the window still wins (a hundred newer runs during one
 	// turn), and then detail/events serve what the list cannot.
 	m.mu.Lock()
-	room := len(m.live)
+	lives := make([]*liveRun, 0, len(m.live))
+	for _, lr := range m.live {
+		lives = append(lives, lr)
+	}
 	m.mu.Unlock()
+	// Reserve room only for live runs the filter can match: every reserved
+	// row displaces a stored one, and runs for other profiles/statuses would
+	// shrink the page for rows the overlay would never add.
+	room := 0
+	for _, lr := range lives {
+		if lr.matchesFilter(f) {
+			room++
+		}
+	}
 	want := f.Limit
 	if want <= 0 || want > runs.ListCap {
 		want = runs.ListCap
@@ -698,12 +719,6 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 	// list taken mid-turn must show the live state, not the last write. A live
 	// snapshot replaces its stored row, or joins the list when the Create has
 	// not landed yet.
-	m.mu.Lock()
-	lives := make([]*liveRun, 0, len(m.live))
-	for _, lr := range m.live {
-		lives = append(lives, lr)
-	}
-	m.mu.Unlock()
 	byID := make(map[string]int, len(stored)+len(lives))
 	for i, r := range stored {
 		byID[r.ID] = i
@@ -719,9 +734,7 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 		// stored row and the live state exclude, the row stays excluded
 		// without paying for the copy.
 		i, inStore := byID[lr.id()]
-		liveMatch := (f.Profile == "" || lr.profile() == f.Profile) &&
-			(f.ConversationID == "" || lr.conversation() == f.ConversationID) &&
-			(f.Status == "" || lr.status() == f.Status)
+		liveMatch := lr.matchesFilter(f)
 		if inStore {
 			if liveMatch || f.Matches(stored[i]) {
 				stored[i] = lr.snapshot()
@@ -1285,12 +1298,16 @@ func (s *Server) streamRun(
 // through /api/runs.
 //
 // Holding the connection this long is safe for the same reason the old
-// buffered handler was: the timeout chain is ordered outermost-first — nginx
-// 990s idle, TurnTimeout 960s, the 900s+30s delegation ceiling — so the layer
-// that fires is the innermost one with an answer, never a bare proxy 504.
+// buffered handler was: the timeout chain is ordered outermost-first —
+// whatever nginx's read timeout, PI_TURN_TIMEOUT and the delegation ceiling
+// are configured to (deployed: 990s idle, 960s, 900s+30s; see
+// docker/docker-compose.yml PI_TURN_TIMEOUT and docker/proxy/nginx.conf
+// proxy_read_timeout), the layer that fires is the innermost one with an
+// answer, never a bare proxy 504.
 // Worst case is TurnTimeout plus the post-settle bound (5s persist drain, 10s
-// terminal retry ≈ 15s): still inside nginx, but only just — widening either
-// post-settle budget without widening the proxy inverts the chain.
+// terminal retry ≈ 15s): still inside nginx as deployed, but only just —
+// widening either post-settle budget or PI_TURN_TIMEOUT without widening the
+// proxy inverts the chain.
 func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liveRun) {
 	select {
 	case <-lr.done:
