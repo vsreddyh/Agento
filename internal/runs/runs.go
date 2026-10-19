@@ -223,7 +223,8 @@ type Store interface {
 }
 
 // Filter selects runs for List. Zero values mean "no constraint"; Limit is
-// clamped to ListCap.
+// clamped to ListCap, and a Limit of 0 means the default (ListCap), not "no
+// rows" — callers that want an empty list do not ask for one.
 type Filter struct {
 	Profile        string
 	ConversationID string

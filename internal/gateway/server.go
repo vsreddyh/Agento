@@ -612,8 +612,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// validated under the profile lock below, and a switch takes effect on the
 	// next turn. The snapshot carries the model actually running, so a client
 	// that switched mid-turn can see which one answered.
+	//
+	// Compared trimmed: a resend after an app kill can gain or lose trailing
+	// whitespace (a paste, a re-render), and that must not turn the client's
+	// own turn into a 429. promptFull stays exact for the record; only the
+	// comparison forgives the edges.
 	if lr, ok := s.runs.activeForConversation(h.profile, conversationID); ok &&
-		lr.prompt() == userTurn.Text && lr.imagesSig == imagesSigOf(userTurn.Images) {
+		strings.TrimSpace(lr.prompt()) == strings.TrimSpace(userTurn.Text) &&
+		lr.reattachImages() == imagesSigOf(userTurn.Images) {
 		w.Header().Set("X-Agento-Run-Id", lr.id())
 		if !req.Stream {
 			s.respondBuffered(w, r, lr)

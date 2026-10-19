@@ -90,6 +90,12 @@ and still sees ordinary chat chunks. A run that settled before the client
 subscribed replays its final output as one ordinary delta chunk so that client
 gets an answer rather than an empty stream.
 
+Wire shapes for the app parser: the snapshot frame omits empty `output` /
+`reasoning` (`omitempty` — absent means "nothing yet"), while the list/detail
+records always emit their keys (`"output":""`, `"error":""`, `seq`,
+timestamps). `tools` is always an array in both. Parse leniently: tolerate a
+missing key wherever the other shape sends an empty value.
+
 ### Stop is a server-side cancel
 
 Cancel marks the run, sends Pi's `abort` (via `Send`, because the abort reply

@@ -59,10 +59,15 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 }
 
 // Create inserts a run. The caller supplies the id so the HTTP response can
-// carry it before the write lands. A duplicate key means the terminal Save
-// already wrote the record (the Create runs in the background); that
-// converges to the newer state, so it is ignored rather than reported.
+// carry it before the write lands. An empty id is refused like in Save:
+// silently inserting a "" _id document would fork a record no route can
+// address. A duplicate key means the terminal Save already wrote the record
+// (the Create runs in the background); that converges to the newer state, so
+// it is ignored rather than reported.
 func (s *MongoStore) Create(ctx context.Context, r Run) error {
+	if r.ID == "" {
+		return NewStoreError("run create needs an id", false)
+	}
 	r = r.Capped()
 	_, err := s.runs.InsertOne(ctx, r)
 	if err != nil {

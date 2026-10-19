@@ -189,10 +189,22 @@ func (lr *liveRun) profile() string {
 	return lr.run.Profile
 }
 func (lr *liveRun) prompt() string {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
 	if lr.promptFull != "" {
 		return lr.promptFull
 	}
 	return lr.run.Prompt
+}
+
+// images returns the turn's image signature under the lock, with prompt().
+// Both are immutable after begin, but a bare field read next to locked
+// mutations of the same struct is exactly the shape that reads as a data
+// race — and one locked pair keeps them consistent with each other.
+func (lr *liveRun) reattachImages() string {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.imagesSig
 }
 
 func (lr *liveRun) snapshot() runs.Run {
@@ -326,7 +338,16 @@ func (lr *liveRun) publishDelta(text, reasoning string, frame chunk) int64 {
 	}
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
-	lr.out.WriteString(text)
+	// Output is capped live like reasoning, partial-fill rather than dropped
+	// at the boundary — but note what the cap means for a reattaching client:
+	// past MaxOutput the snapshot carries the head while live deltas keep
+	// flowing in full, so the middle is live-only. That matches the stored
+	// record, which caps at the same bound: anything past it was never going
+	// to be kept. Without this a runaway tool loop holds megabytes in the
+	// builder for the whole turn and serves them from GET /api/runs/{id}.
+	if remaining := runs.MaxOutput - lr.out.Len(); remaining > 0 {
+		lr.out.WriteString(truncateBytes(text, remaining))
+	}
 	// The live copy is capped like the stored one, but partially rather than
 	// by dropping the whole chunk at the boundary: a long reasoning trace
 	// still shows its head in the snapshot instead of stopping mid-turn.
