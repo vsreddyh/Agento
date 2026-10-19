@@ -136,6 +136,10 @@ type liveRun struct {
 	agent  Agent
 	out    strings.Builder
 	reason strings.Builder
+	// outTruncated/reasonTruncated remember that the builders hit their caps,
+	// so snapshots carry the same truncation marker as the stored record.
+	outTruncated    bool
+	reasonTruncated bool
 
 	// completionID is the id every chat chunk carries; fixed at start.
 	completionID string
@@ -287,6 +291,16 @@ func (lr *liveRun) snapshotLocked() runs.Run {
 	r := lr.run.Clone()
 	r.Output = lr.out.String()
 	r.Reasoning = lr.reason.String()
+	// Mark exactly like the stored cap does: a snapshot at the bound without
+	// the marker reads as a complete answer, and the app must not have to
+	// guess per source. persistState flows through here too, and Capped
+	// leaves an already-marked value alone.
+	if lr.outTruncated {
+		r.Output += runs.TruncatedMarker
+	}
+	if lr.reasonTruncated {
+		r.Reasoning += runs.TruncatedMarker
+	}
 	r.Seq = lr.seq
 	return r
 }
@@ -417,13 +431,23 @@ func (lr *liveRun) publishDelta(text, reasoning string, frame chunk) int64 {
 	// to be kept. Without this a runaway tool loop holds megabytes in the
 	// builder for the whole turn and serves them from GET /api/runs/{id}.
 	if remaining := runs.MaxOutput - lr.out.Len(); remaining > 0 {
+		if len(text) > remaining {
+			lr.outTruncated = true
+		}
 		lr.out.WriteString(truncateBytes(text, remaining))
+	} else if len(text) > 0 {
+		lr.outTruncated = true
 	}
 	// The live copy is capped like the stored one, but partially rather than
 	// by dropping the whole chunk at the boundary: a long reasoning trace
 	// still shows its head in the snapshot instead of stopping mid-turn.
 	if remaining := runs.MaxReasoning - lr.reason.Len(); remaining > 0 {
+		if len(reasoning) > remaining {
+			lr.reasonTruncated = true
+		}
 		lr.reason.WriteString(truncateBytes(reasoning, remaining))
+	} else if len(reasoning) > 0 {
+		lr.reasonTruncated = true
 	}
 	lr.seq++
 	ev := runEvent{Seq: lr.seq, Data: data}

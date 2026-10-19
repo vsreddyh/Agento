@@ -211,7 +211,12 @@ func CapText(s string, limit int) string {
 	return s[:cut] + truncMarker
 }
 
-const truncMarker = "… (truncated)"
+// TruncatedMarker ends a capped value so a reader can tell it is not the
+// whole output. Shared by the store cap and the live snapshot: both shapes
+// mark the same way so the app never has to guess per source.
+const TruncatedMarker = "… (truncated)"
+
+const truncMarker = TruncatedMarker
 
 // Capped returns a copy with the size-bounded fields trimmed for persistence.
 func (r Run) Capped() Run {

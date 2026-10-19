@@ -760,3 +760,79 @@ func TestRunSequenceIsMonotonic(t *testing.T) {
 		t.Fatalf("tools = %v, want [bash]", r.Tools)
 	}
 }
+
+// A snapshot past the live cap carries the same truncation marker as the
+// stored record, so progress rendering never mistakes a capped head for a
+// complete answer. Observed through a mid-turn reattach: the initial stream
+// snapshot always predates the output.
+func TestLiveSnapshotMarksTruncation(t *testing.T) {
+	agent := newFakeAgent()
+	srv := newTestServer(t, agent, Config{})
+
+	agent.mu.Lock()
+	agent.noSettle = true
+	agent.events = []pi.Record{textDelta(t, strings.Repeat("y", runs.MaxOutput+100))}
+	agent.mu.Unlock()
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(validBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("X-Hermes-Session-Id", "conv-trunc")
+	postDone := make(chan struct{})
+	go func() {
+		defer close(postDone)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	// The delta lands; with no settle the run stays live holding its output.
+	waitFor(t, func() bool {
+		srv.runs.mu.Lock()
+		defer srv.runs.mu.Unlock()
+		for _, lr := range srv.runs.live {
+			lr.mu.Lock()
+			n := lr.out.Len()
+			lr.mu.Unlock()
+			if n >= runs.MaxOutput {
+				return true
+			}
+		}
+		return false
+	}, "the output to reach the live cap")
+
+	var id string
+	for _, r := range listRuns(t, srv, "?conversation_id=conv-trunc") {
+		id = r.ID
+	}
+	eventsReq, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/runs/"+id+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsReq.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(eventsReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	first := readSSELine(t, bufio.NewReader(resp.Body))
+	var snapFrame struct {
+		Run runSnapshot `json:"agento_run"`
+	}
+	if err := json.Unmarshal([]byte(first), &snapFrame); err != nil {
+		t.Fatalf("first frame is not a run snapshot: %v (%q)", err, first)
+	}
+	if !strings.HasSuffix(snapFrame.Run.Output, runs.TruncatedMarker) {
+		t.Fatalf("live snapshot past the cap has no marker (%d bytes)", len(snapFrame.Run.Output))
+	}
+	cancel()
+	<-postDone
+}
