@@ -115,6 +115,20 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
 - Rules: any PR that changes the built APK (touches `android/**` or `.github/workflows/android-apk.yml` behavior) bumps `VERSION` EXACTLY ONCE at the highest applicable level and resets lower segments to 0. Pure docs/notes-text tweaks don't bump. Non-app PRs (`profiles/`, `docker/`, `scripts/`, `mcps/`, `tools/`, docs) NEVER touch `VERSION` — unless they force an app MAJOR per above.
 - CI split: `main` builds/uploads/releases the release APK only; branches/PRs build/upload the debug APK only. A `Verify version consistency` step fails the job if the built APK filename doesn't match the resolved version, so drift can never publish a mislabeled Release.
 
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (`vsreddyh/Agento`, via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical triage roles, mapped onto the existing `P0`–`P3` / `area:*` / `size:*` vocabulary; `needs-decision` doubles as `needs-info`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. See `docs/agents/domain.md`.
+
 ## Gotchas
 
 - `init` copies `.env.example` → `.env` (single root file) when none exists, then
