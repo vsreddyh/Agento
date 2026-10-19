@@ -501,6 +501,12 @@ func (lr *liveRun) cancelled() bool {
 }
 
 // runManager owns the live runs and the store they are persisted to.
+//
+// Lock order: m.mu and lr.mu are never held together. Code that needs both
+// takes m.mu, releases it, then takes lr.mu (see activeForProfile, finish).
+// Holding both at once would work today and deadlock the day someone reverses
+// the order — do not "fix" the separate acquisitions into one critical
+// section.
 type runManager struct {
 	store runs.Store
 	logf  func(format string, args ...any)
@@ -1081,6 +1087,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 // store when it has finished.
 func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request, id string) {
 	if lr, ok := s.runs.byID(id); ok {
+		// Every entry to a run names it, like both chat paths do: the client
+		// has the ID from the URL today, but the invariant lets the app rely
+		// on the header instead of the URL it built.
+		w.Header().Set("X-Agento-Run-Id", id)
 		s.streamLiveRun(w, r, lr)
 		return
 	}
@@ -1096,6 +1106,7 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request, id stri
 		runsError(w, err)
 		return
 	}
+	w.Header().Set("X-Agento-Run-Id", id)
 	sse := newSSEWriter(w)
 	sse.headers()
 	w.WriteHeader(http.StatusOK)

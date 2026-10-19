@@ -88,7 +88,10 @@ reattachable (there is nothing to key on); the app must always send one.
 A same-prompt resend that lands after the
 run settled starts a new run rather than replaying the terminal one: that is
 the right semantic (a completed turn resent is a new turn), and the 429 path
-only names in-flight runs. Same text with different images is a different turn
+only names in-flight runs. Two identical POSTs racing when idle can still 429
+the loser when the winner has not begun yet — a retry then reattaches, so the
+app retries a 429 that names its own prompt once before showing it. Same text
+with different images is a different turn
 (429, not a reattach).
 Model, provider and reasoning effort are turn setup, not part of the key: a
 model switch mid-turn reattaches to the running model's run rather than

@@ -642,6 +642,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		// bare refusal with no run to look at.
 		if lr, ok := s.runs.activeForConversation(h.profile, conversationID); ok {
 			w.Header().Set("X-Agento-Run-Id", lr.id())
+			// Start race, second half: two identical POSTs landing when idle
+			// both missed the pre-lock check, and the winner has begun since.
+			// An exact duplicate reattaches here instead of 429ing — a retry
+			// a millisecond later would, so the loser should too. Anything
+			// else is still a refusal with the run named.
+			prompt, images := lr.reattachKey()
+			if strings.TrimSpace(prompt) == strings.TrimSpace(userTurn.Text) &&
+				images == imagesSigOf(userTurn.Images) {
+				if !req.Stream {
+					s.respondBuffered(w, r, lr)
+					return
+				}
+				s.streamLiveRun(w, r, lr)
+				return
+			}
 		} else if lr, ok := s.runs.activeForProfile(h.profile); ok {
 			w.Header().Set("X-Agento-Run-Id", lr.id())
 		}
