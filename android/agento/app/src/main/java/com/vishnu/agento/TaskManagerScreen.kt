@@ -632,6 +632,12 @@ internal fun TaskManagerScreen(
                 onRowExited(t.id)
             }
         } else {
+            // All/Done: writing the completed stamp is what moves the row to
+            // the Completed section, and it does so on the spot — the row jumps
+            // bucket with only its colour animated. Deliberate here, unlike the
+            // Open path above: these filters already list completed tasks, so
+            // the row has not left the screen and there is no shrink to keep it
+            // in place for.
             tasks = prev.map { if (it.id == t.id) it.copy(completedAt = "__pending__") else it }
         }
         markBusy(t.id)
@@ -721,12 +727,15 @@ internal fun TaskManagerScreen(
 
     fun doReopen(t: ServerTask) {
         selected = null
-        // One request per row (#308), the same guard doComplete has: a double
-        // tap would fire two reopens, and with `tasks = prev` in the failure
-        // path the second one's revert can land on top of the first one's
-        // success. The row is already disabled while busy; this covers the
-        // sheet and any other caller.
-        if (t.id in busyIds) return
+        // One request per row (#308), plus [exitingHere] — deliberately NOT the
+        // raw `exiting`: its entries are keyed by the filter an exit is under,
+        // so for the fallback window the id of an ordinary completed row on the
+        // filter showing now can still be in it, and guarding on that would
+        // swallow a legitimate reopen. Scoped, this is a no-op for a reopen
+        // target today (a leaving row still has an open model, so the toggle
+        // routes it to doComplete) and becomes live if reopening ever animates
+        // out on Done (#310).
+        if (t.id in exitingHere || t.id in busyIds) return
         val prev = tasks
         tasks = if (filter == ServerTaskFilter.Done) {
             prev.filterNot { it.id == t.id }
@@ -755,11 +764,13 @@ internal fun TaskManagerScreen(
         deleting = null
         editing = null
         selected = null
-        // One request per row (#308), the same guard doComplete has: a double
-        // tap would fire two deletes, and the second one's failure path reverts
-        // the whole list over the first one's success. The UI state above is
-        // still cleared first, so a repeat confirm cannot leave a dialog open.
-        if (t.id in busyIds) return
+        // One request per row (#308), plus [exitingHere] — deliberately NOT the
+        // raw `exiting`: its entries are keyed by the filter an exit is under,
+        // so for the fallback window the id of an ordinary completed row on the
+        // filter showing now can still be in it, and guarding on that would
+        // swallow a legitimate delete. The UI state above is still cleared
+        // first, so a repeat confirm cannot leave a dialog open.
+        if (t.id in exitingHere || t.id in busyIds) return
         val prev = tasks
         tasks = prev.filterNot { it.id == t.id }
         markBusy(t.id)
@@ -1279,7 +1290,10 @@ internal fun TaskManagerScreen(
             title = { Text("Delete task?") },
             text = { Text("“${target.name}” will be permanently deleted.") },
             confirmButton = {
-                TextButton(onClick = { doDelete(target) }, enabled = target.id !in busyIds) { Text("Delete") }
+                TextButton(
+                    onClick = { doDelete(target) },
+                    enabled = target.id !in busyIds && target.id !in exitingHere,
+                ) { Text("Delete") }
             },
             dismissButton = {
                 TextButton(onClick = { deleting = null }) { Text("Cancel") }
