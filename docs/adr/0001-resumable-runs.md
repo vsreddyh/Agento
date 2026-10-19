@@ -90,7 +90,10 @@ run settled starts a new run rather than replaying the terminal one: that is
 the right semantic (a completed turn resent is a new turn), and the 429 path
 only names in-flight runs. Two identical POSTs racing when idle can still 429
 the loser when the winner has not begun yet — a retry then reattaches, so the
-app retries a 429 that names its own prompt once before showing it. Same text
+app retries a 429 that names its own prompt once before showing it. A 429 names
+a run to watch, not a cue to retry POST on a timer: back off and follow the
+named run's `/events` instead — `Retry-After: 5` is a hint, not a poll
+interval. Same text
 with different images is a different turn
 (429, not a reattach).
 Model, provider and reasoning effort are turn setup, not part of the key: a

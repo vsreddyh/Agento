@@ -671,6 +671,24 @@ func (m *runManager) get(ctx context.Context, id string) (runs.Run, error) {
 }
 
 func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error) {
+	// Over-fetch for the overlay below: the store window applies before the
+	// merge, so a live run whose stored row falls outside it would be
+	// re-appended and sliced out again. Fetching room for every live run
+	// keeps them visible; past ListCap the window still wins (a hundred newer
+	// runs during one turn), and then detail/events serve what the list
+	// cannot — documented in the ADR.
+	m.mu.Lock()
+	room := len(m.live)
+	m.mu.Unlock()
+	want := f.Limit
+	if want <= 0 || want > runs.ListCap {
+		want = runs.ListCap
+	}
+	fetch := want + room
+	if fetch > runs.ListCap {
+		fetch = runs.ListCap
+	}
+	f.Limit = fetch
 	stored, err := m.store.List(ctx, f)
 	if err != nil {
 		return nil, err
@@ -737,10 +755,7 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 		}
 	}
 	stored = kept
-	limit := f.Limit
-	if limit <= 0 || limit > runs.ListCap {
-		limit = runs.ListCap
-	}
+	limit := want
 	if len(stored) > limit {
 		stored = stored[:limit]
 	}
@@ -902,10 +917,16 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		}
 		// The filters go straight into the Mongo query: bound them to the same
 		// shared client-id bound so a megabyte of query string cannot become
-		// a full equality scan.
-		if len(f.Profile) > maxFilterLen || len(f.ConversationID) > maxFilterLen {
+		// a full equality scan. Each names its own field — trimming profile
+		// for a conversation_id overflow would send the app the wrong way.
+		if len(f.Profile) > maxFilterLen {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "profile",
-				"filter values must be at most 256 characters")
+				"profile filter must be at most 256 characters")
+			return
+		}
+		if len(f.ConversationID) > maxFilterLen {
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "conversation_id",
+				"conversation_id filter must be at most 256 characters")
 			return
 		}
 		if raw := strings.TrimSpace(r.URL.Query().Get("status")); raw != "" {
