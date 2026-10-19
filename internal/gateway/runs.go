@@ -853,10 +853,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 			ConversationID: strings.TrimSpace(r.URL.Query().Get("conversation_id")),
 		}
 		// The filters go straight into the Mongo query: bound them to the same
-		// 256 as the chat header (maxConversationIDLen names the header, but
-		// the value fits both filters) so a megabyte of query string cannot
-		// become a full equality scan.
-		if len(f.Profile) > maxConversationIDLen || len(f.ConversationID) > maxConversationIDLen {
+		// shared client-id bound so a megabyte of query string cannot become
+		// a full equality scan.
+		if len(f.Profile) > maxFilterLen || len(f.ConversationID) > maxFilterLen {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "profile",
 				"filter values must be at most 256 characters")
 			return
@@ -907,7 +906,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 	}
 	// Run ids are 24-hex ObjectIDs; a longer segment matches nothing. Refuse
 	// it before the store round trip rather than querying Mongo for megabytes
-	// of path.
+	// of path. Intentionally 404, not 400 like the overlong list filters: an
+	// {id} names a thing that does not exist (no oracle — the response is the
+	// same as an unknown well-formed id), while a filter is a malformed
+	// request.
 	if len(id) > maxRunIDLen {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown run")
@@ -1039,7 +1041,18 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 				"could not cancel the run: "+bounded(err.Error()))
 			return
 		}
-		writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "status": "cancelling"})
+		// Mirror of the steer re-check: abort accepted just as the turn
+		// settled aborts nothing (a no-op on idle, unlike a steer which
+		// would inject into the next turn). Answer the terminal status so
+		// the client does not poll a finished run as "cancelling".
+		if snap := lr.snapshot(); snap.Status.Terminal() {
+			s.cfg.Logf("runs: cancel landed as run %s settled (%s)", lr.id(), snap.Status)
+			writeJSONResponse(w, http.StatusOK, map[string]any{
+				"ok": true, "status": string(snap.Status),
+			})
+		} else {
+			writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "status": "cancelling"})
+		}
 		return
 	case "":
 		if !requireMethod(w, r, http.MethodGet, "/api/runs/{id}") {

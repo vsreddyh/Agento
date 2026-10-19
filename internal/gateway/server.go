@@ -35,10 +35,10 @@ var (
 		"rather than an empty message")
 )
 
-// maxConversationIDLen bounds X-Hermes-Session-Id. The store's entry COUNT is
-// LRU-capped, but an unbounded key would let a client drive memory growth per
-// request regardless of the cap.
-const maxConversationIDLen = 256
+// maxFilterLen bounds client-supplied id strings: X-Hermes-Session-Id and the
+// runs list filters. The store's entry COUNT is LRU-capped, but an unbounded
+// key would let a client drive memory growth per request regardless of the cap.
+const maxFilterLen = 256
 
 // Config configures a Server.
 type Config struct {
@@ -597,7 +597,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// instead of 400 whenever the profile was busy. None of this touches the
 	// agent, so none of it needs the lock.
 	conversationID := strings.TrimSpace(r.Header.Get("X-Hermes-Session-Id"))
-	if len(conversationID) > maxConversationIDLen {
+	if len(conversationID) > maxFilterLen {
 		apiError(w, http.StatusBadRequest, "invalid_request_error", "X-Hermes-Session-Id",
 			"X-Hermes-Session-Id must be at most 256 characters")
 		return
