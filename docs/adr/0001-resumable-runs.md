@@ -109,6 +109,12 @@ completion — only the snapshot status tells them apart. And a run named by a
 429 may already be terminal when the client reattaches; the snapshot status is
 authoritative, live frames are not promised.
 
+Buffered (non-streaming) clients tell terminal states apart by `param` + HTTP
+status, not message text: `cancelled` and `interrupted` are both 409 with
+`param: "run_status"` — "the run was cancelled" vs "the gateway restarted
+while this run was in flight; the partial output is preserved". Both strings
+are stable contract; failures are 502 `upstream_error`.
+
 ### Stop is a server-side cancel
 
 Cancel marks the run, sends Pi's `abort` (via `Send`, because the abort reply

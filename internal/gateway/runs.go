@@ -876,7 +876,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 				"message is required")
 			return
 		}
-		if len(msg) > runs.MaxSteer {
+		if len([]rune(msg)) > runs.MaxSteer {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "message",
 				"message is too long (at most "+strconv.Itoa(runs.MaxSteer)+" characters)")
 			return
@@ -1123,14 +1123,18 @@ func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liv
 		apiError(w, http.StatusBadGateway, "upstream_error", "", snap.Error)
 		return
 	case runs.StatusCancelled:
-		apiError(w, http.StatusConflict, "invalid_request_error", "",
+		// Param run_status (not a message match) tells "user stopped it"
+		// apart from "gateway restarted" below. The app branches on it; the
+		// two message strings are documented in docs/adr/0001-resumable-runs.md
+		// and must stay stable.
+		apiError(w, http.StatusConflict, "invalid_request_error", "run_status",
 			"the run was cancelled")
 		return
 	case runs.StatusInterrupted:
 		// A restart is not an upstream failure: the agent did nothing wrong,
 		// and the client should not retry as if Pi had failed. 409 names the
 		// cause so the app reports it instead of retrying it.
-		apiError(w, http.StatusConflict, "invalid_request_error", "",
+		apiError(w, http.StatusConflict, "invalid_request_error", "run_status",
 			"the gateway restarted while this run was in flight; the partial output is preserved")
 		return
 	default:
