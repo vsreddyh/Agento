@@ -607,10 +607,10 @@ internal fun TaskManagerScreen(
             //
             // Safety net for a row that is not on screen at all (a search
             // hides it, so there is no slot to report the animation): drop it
-            // after the animation's own length anyway. A second report is
-            // harmless — onRowExited ignores an id it has already handled.
+            // after ROW_EXIT_FALLBACK_MS anyway. A second report is harmless —
+            // onRowExited ignores an id it has already handled.
             scope.launch {
-                delay(ROW_ANIM_MS + 100L)
+                delay(ROW_EXIT_FALLBACK_MS)
                 onRowExited(t.id)
             }
         } else {
@@ -1304,10 +1304,23 @@ internal fun TaskManagerScreen(
 
 /**
  * How long a task row takes to arrive in or leave the list (#308). Short
- * enough to feel immediate, long enough that the eye can follow it — and it
- * is also the delay the not-on-screen safety net in `doComplete` waits out.
+ * enough to feel immediate, long enough that the eye can follow it.
  */
 private const val ROW_ANIM_MS = 220
+
+/**
+ * How long the safety net in `doComplete` waits before dropping a leaving row
+ * that no slot reported (#308) — a row hidden by a search, so nothing is
+ * animating and nothing will call back.
+ *
+ * Comfortably longer than [ROW_ANIM_MS] rather than just past it: the row's
+ * own animation reports first whenever the row is on screen, and under a
+ * janked frame that report can be arbitrarily late, so a tight window would
+ * have the timer cut the shrink short instead of standing behind it. The cost
+ * of the longer wait is only that an invisible row lingers in `tasks` a little
+ * longer.
+ */
+private const val ROW_EXIT_FALLBACK_MS = 500L
 
 /**
  * The slim bar that stands in for the full-list spinner while a background
