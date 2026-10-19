@@ -1021,7 +1021,8 @@ internal fun ChatScreen(
                                 .semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
-                    if (state.streaming && state.activeTools.isNotEmpty()) {                        val shown = state.activeTools.take(3).joinToString(", ") +
+                    if (state.streaming && state.activeTools.isNotEmpty()) {
+                        val shown = state.activeTools.take(3).joinToString(", ") +
                             if (state.activeTools.size > 3) {
                                 " +${state.activeTools.size - 3} more"
                             } else ""

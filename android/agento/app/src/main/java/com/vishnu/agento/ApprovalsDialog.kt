@@ -77,6 +77,9 @@ internal fun ApprovalsDialog(
                     )
                 } else {
                     LazyColumn(
+                        // Bounded: an unbounded list inside a dialog can
+                        // overflow or refuse to scroll on small screens.
+                        modifier = Modifier.heightIn(max = 420.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         if (approvals.isEmpty()) {

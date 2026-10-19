@@ -70,6 +70,7 @@ internal fun RunsDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     else -> LazyColumn(
+                        modifier = Modifier.heightIn(max = 420.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(runs, key = { it.id }) { run ->
