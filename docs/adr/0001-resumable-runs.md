@@ -83,7 +83,11 @@ event log and no replay: a client that reattaches reconstructs its display from
 the snapshot and continues from the live stream.
 
 The reattach key is the conversation plus the full user turn — text and image
-set. Same text with different images is a different turn (429, not a reattach).
+set — while the run is in flight. A same-prompt resend that lands after the
+run settled starts a new run rather than replaying the terminal one: that is
+the right semantic (a completed turn resent is a new turn), and the 429 path
+only names in-flight runs. Same text with different images is a different turn
+(429, not a reattach).
 Model, provider and reasoning effort are turn setup, not part of the key: a
 model switch mid-turn reattaches to the running model's run rather than
 starting a new one, and the snapshot carries the model actually running so the
@@ -136,7 +140,9 @@ socket is exactly the case this feature exists to make non-destructive.
   buffers fill partially rather than dropping whole chunks at the boundary;
   past the cap the snapshot carries the head while live deltas flow in full.
 - The list route shows previews (2 KB output, 1 KB reasoning), not full turns;
-  the detail route keeps everything. The Mongo collection expires via TTL
+  the detail route keeps everything. A truncated preview ends with the
+  `… (truncated)` marker — the app keeps it as a progress hint, never as part
+  of the answer. The Mongo collection expires via TTL
   after 7 days; the in-memory fallback (Mongo unreachable) instead caps at
   1000 runs with oldest-first eviction — a degraded path, not an archive.
 - Persistence never blocks the turn: the executor offers each second's snapshot

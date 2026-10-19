@@ -351,6 +351,9 @@ func (lr *liveRun) publish(frame any, done bool) int64 {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 	lr.seq++
+	// Progress moved now: a client polling the list sees frames flowing, so
+	// updated_at grows with them rather than freezing at begin time.
+	lr.run.UpdatedAt = time.Now().UnixMilli()
 	ev := runEvent{Seq: lr.seq, Data: data, Done: done}
 	for ch := range lr.subs {
 		select {
@@ -376,6 +379,9 @@ func (lr *liveRun) publishDelta(text, reasoning string, frame chunk) int64 {
 	}
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
+	// Progress moved now: a client polling the list sees output growing, so
+	// updated_at must grow with it rather than freezing at begin time.
+	lr.run.UpdatedAt = time.Now().UnixMilli()
 	// Output is capped live like reasoning, partial-fill rather than dropped
 	// at the boundary — but note what the cap means for a reattaching client:
 	// past MaxOutput the snapshot carries the head while live deltas keep
@@ -414,6 +420,7 @@ func (lr *liveRun) publishTool(name string, frame toolFrame) int64 {
 	}
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
+	lr.run.UpdatedAt = time.Now().UnixMilli()
 	if len(lr.run.Tools) < runs.MaxTools && !containsString(lr.run.Tools, name) {
 		lr.run.Tools = append(lr.run.Tools, name)
 	}
@@ -440,6 +447,7 @@ func (lr *liveRun) setUsage(u piUsage) {
 		Cached:     u.CacheRead,
 		CacheWrite: u.CacheWrite,
 	}
+	lr.run.UpdatedAt = time.Now().UnixMilli()
 	// Usage arrives without a frame of its own, but it still has to reach the
 	// store: persistState keys off seq, so an accounting-only tick would
 	// otherwise never persist until finish. Bumping seq without publishing is

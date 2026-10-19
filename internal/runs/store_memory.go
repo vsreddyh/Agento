@@ -57,7 +57,11 @@ func (m *MemoryStore) Create(_ context.Context, r Run) error {
 		oldest, oldestAt := "", int64(0)
 		first := true
 		for id, o := range m.byID {
-			if first || o.CreatedAt < oldestAt {
+			// ID breaks CreatedAt ties the same way List sorts (both
+			// descending), so eviction drops the smallest ID among equals —
+			// the row List would rank last.
+			if first || o.CreatedAt < oldestAt ||
+				(o.CreatedAt == oldestAt && id < oldest) {
 				oldest, oldestAt, first = id, o.CreatedAt, false
 			}
 		}
