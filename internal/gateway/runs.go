@@ -916,7 +916,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 				"this run is no longer in flight; it cannot be steered")
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		// Detached like the turn context itself: a client that steers and
+		// drops must not cancel the steer RPC — the instruction belongs to
+		// the run, not the connection.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := lr.steer(ctx, msg); err != nil {
 			if !lr.isRunning() {
@@ -961,7 +964,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 			})
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		// Detached like the turn context itself: a client that cancels and
+		// drops would otherwise abort the abort — requestCancel resets its
+		// flag when the Send fails, and the turn would run on.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := lr.requestCancel(ctx); err != nil {
 			// The turn can settle between the isRunning check above and the
@@ -1167,6 +1173,9 @@ func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liv
 			runs.InterruptedError)
 		return
 	default:
+		// Defensive: finish runs only after settle, so snap is always
+		// terminal once done closes. If this ever fires, the run ended
+		// without settling — a bug, reported as upstream failure.
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"the run ended without finishing")
 		return

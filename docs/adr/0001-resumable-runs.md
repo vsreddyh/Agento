@@ -103,7 +103,8 @@ gets an answer rather than an empty stream.
 Wire shapes for the app parser: the snapshot frame omits empty `output` /
 `reasoning` (`omitempty` — absent means "nothing yet"), while the list/detail
 records always emit their keys (`"output":""`, `"error":""`, `seq`,
-timestamps). `tools` is always an array in both. The snapshot carries `id`,
+timestamps — including `"finished_at":0`, which means "not finished").
+`tools` is always an array in both. The snapshot carries `id`,
 `profile`, `conversation_id`, `status` and `seq` on every frame (no second
 round trip to learn ownership); the prompt preview lives only in the record.
 Parse leniently: tolerate a missing key wherever the other shape sends an
