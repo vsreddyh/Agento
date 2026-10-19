@@ -141,6 +141,13 @@ status, not message text: `cancelled` and `interrupted` are both 409 with
 while this run was in flight; the partial output is preserved". Both strings
 are stable contract; failures are 502 `upstream_error`.
 
+The two transports observe different completion times by construction:
+streaming `[DONE]` goes out at settle (and frees the profile lock), while a
+buffered response waits for the terminal store write (~15s worst case). A
+slow buffered 200 beside an already-`[DONE]` events stream is not a stuck
+turn — and the next turn may already be executing, since the lock freed at
+settle.
+
 Error frames end the stream with EOF and no `[DONE]`, the same contract as
 the chat surface's `writeStreamError`: the app treats a closed stream without
 a terminator as failure, on both the live and the reattached path — with one

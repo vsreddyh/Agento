@@ -762,7 +762,11 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 		// they are taken only when either side can match: fresh data for an
 		// included row, or a refresh that drops a stale one. When both the
 		// stored row and the live state exclude, the row stays excluded
-		// without paying for the copy.
+		// without paying for the copy. Residual: a settle landing between the
+		// cheap match and the snapshot can miss one poll (filter completed,
+		// match read running, stored still running) — accepted, converges at
+		// the terminal Save / next poll; closing it would mean snapshotting
+		// every live run on every poll.
 		lr := h.lr
 		i, inStore := byID[h.id]
 		liveMatch := lr.matchesFilter(f)
@@ -1027,6 +1031,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 	}
 
 	id, action, _ := strings.Cut(path, "/")
+	// Tolerate one trailing slash on the verbs, like the collection route
+	// does: /{id}/steer/ is the same verb, not a 404.
+	action = strings.TrimSuffix(action, "/")
 	if id == "" {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown path "+bounded(r.URL.Path))
