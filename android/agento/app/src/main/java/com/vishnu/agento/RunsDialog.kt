@@ -17,6 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+private val WS = Regex("\\s+")
+
 /**
  * The thread's server-side turns (#311): status plus last output per run,
  * in-flight vs finished at a glance, with cancel for the running ones.
@@ -89,7 +91,7 @@ internal fun RunsDialog(
                                     run.error
                                 } else {
                                     run.output
-                                }.trim().replace(Regex("\\s+"), " ").take(160)
+                                }.trim().replace(WS, " ").take(160)
                                 if (body.isNotEmpty()) {
                                     Text(
                                         body,

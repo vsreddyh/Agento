@@ -631,10 +631,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val conversationId = threadId
         _state.value = _state.value.copy(runsLoading = true)
         viewModelScope.launch(Dispatchers.IO) {
-            val rows = runsApi.list(path, conversationId = conversationId, limit = 50)
-                .getOrNull().orEmpty()
+            val result = runsApi.list(path, conversationId = conversationId, limit = 50)
             withContext(Dispatchers.Main) {
-                _state.value = _state.value.copy(runs = rows, runsLoading = false)
+                // A failed load keeps the old rows (never blanked into a
+                // lying "no runs yet") and says so: outage, not emptiness.
+                result.onFailure {
+                    _state.value = _state.value.copy(
+                        runsLoading = false,
+                        error = "Couldn't load runs (${it.message?.take(120) ?: "unknown"}).",
+                    )
+                }.onSuccess { rows ->
+                    _state.value = _state.value.copy(runs = rows, runsLoading = false)
+                }
             }
         }
     }
@@ -651,8 +659,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val result = runsApi.cancel(path, id)
             withContext(Dispatchers.Main) {
-                if (result.isFailure) {
-                    _state.value = _state.value.copy(error = "Cancel failed — try again.")
+                result.onFailure {
+                    _state.value = _state.value.copy(
+                        error = "Cancel failed (${it.message?.take(120) ?: "unknown"}) — try again.",
+                    )
                 }
                 if (_state.value.showRuns) refreshRuns()
             }
@@ -682,6 +692,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val run = runs.firstOrNull {
                 it.isRunning() && it.conversationId == threadId && promptMatches(last.content, it.prompt)
             } ?: return@launch
+            // Bounded: re-clearing only loses the once-guard for threads long
+            // dead, whose resend finds no live run and no-ops.
+            if (resumedThreads.size >= 200) resumedThreads.clear()
             resumedThreads.add(threadId)
             withContext(Dispatchers.Main) {
                 if (threadId != this@ChatViewModel.threadId || _state.value.streaming || !_state.value.ready) {
@@ -928,6 +941,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                                 (if (event.runId.isNotBlank()) " (${event.runId.take(8)}…)" else "") +
                                 ". Wait or stop it from Runs.",
                             activeTools = emptyList(), activeToolLabel = "",
+                            // The RunId event ahead of this one already set
+                            // activeRunId to the blocking run: clear it, or a
+                            // later stop() would cancel a turn this tab never
+                            // started. Only busyRunId keeps it (sheet cancel).
+                            activeRunId = "",
                             busyRunId = event.runId,
                             pending = text.ifBlank { _state.value.pending },
                             queued = if (followUp.isNotBlank() && _state.value.queued.isBlank()) followUp
@@ -1129,7 +1147,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         _state.value = _state.value.copy(
                             messages = kept, streaming = false, error = event.message,
                             activeTools = emptyList(), activeToolLabel = "",
-                            activeRunId = "", busyRunId = "",
+                            // Keep a possibly-live id for the sheet: the API
+                            // forwards X-Agento-Run-Id ahead of errors, and a
+                            // 500 after the run started leaves it executing.
+                            // Dead ids are harmless — cancelling one 409s.
+                            busyRunId = _state.value.activeRunId.ifBlank { _state.value.busyRunId },
+                            activeRunId = "",
                         )
                         // A queued send never auto-fires after a failure (no failure
                         // cascades): hand it back to the composer instead.
