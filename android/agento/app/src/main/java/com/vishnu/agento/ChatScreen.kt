@@ -1047,7 +1047,15 @@ internal fun ChatScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End,
                         ) {
-                            TextButton(onClick = onApprovals) {
+                            // The gate-stalled-stream signal a screen-reader
+                            // user most needs: same live region as the tool
+                            // banners above.
+                            TextButton(
+                                onClick = onApprovals,
+                                modifier = Modifier.semantics {
+                                    liveRegion = LiveRegionMode.Polite
+                                },
+                            ) {
                                 Text("Approval needed (${state.pendingApprovalCount})")
                             }
                         }

@@ -776,8 +776,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val pending = approvalsApi.listApprovals(path, status = "pending", limit = 50)
             val audit = approvalsApi.listAudit(path, limit = 50)
             withContext(Dispatchers.Main) {
-                // Either half failing reports inside the sheet; halves that
-                // loaded still replace their rows.
+                // Per-half: a half that loaded replaces its rows; a half
+                // that failed reports without wiping the good half.
                 if (pending.isFailure && audit.isFailure) {
                     _state.value = _state.value.copy(
                         approvalsLoading = false,
@@ -786,8 +786,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     return@withContext
                 }
                 _state.value = _state.value.copy(
-                    approvals = pending.getOrNull().orEmpty(),
-                    auditRows = audit.getOrNull().orEmpty(),
+                    approvals = pending.getOrNull() ?: _state.value.approvals,
+                    auditRows = audit.getOrNull() ?: _state.value.auditRows,
                     approvalsLoading = false,
                     approvalsError = "",
                     pendingApprovalCount = pending.getOrNull()?.size
@@ -805,12 +805,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val result = approvalsApi.decide(path, id, approve)
             withContext(Dispatchers.Main) {
-                result.onFailure {
+                // A 409 means someone else decided first: just reload — the
+                // row leaves pending on refresh, which says it better than a
+                // message asking for a retry that would 409 again.
+                if (result.isFailure &&
+                    "409" !in result.exceptionOrNull()?.message.orEmpty()
+                ) {
+                    val failedMsg = result.exceptionOrNull()?.message.orEmpty()
                     _state.value = _state.value.copy(
-                        approvalsError = "Decision failed (${it.message?.take(120) ?: "unknown"}) — try again.",
+                        approvalsError = "Decision failed (${failedMsg.take(120).ifBlank { "unknown" }}) — try again.",
                     )
+                } else if (_state.value.showApprovals) {
+                    refreshApprovals()
                 }
-                if (_state.value.showApprovals) refreshApprovals()
                 refreshApprovalCount()
             }
         }

@@ -27,8 +27,10 @@ data class GateApproval(
 ) {
     fun isPending(): Boolean = status == "pending"
 
-    /** One-line argument preview for the approval card. */
-    fun argsSummary(): String = args.entries
+    /** One-line argument preview for the approval card. Keys sorted so the
+     * card reads the same run to run (`JSONObject.keys()` order is not
+     * deterministic). */
+    fun argsSummary(): String = args.toSortedMap().entries
         .joinToString(", ") { (k, v) -> "$k=$v" }
         .replace(Regex("\\s+"), " ")
         .take(200)
@@ -178,7 +180,7 @@ class ApprovalsApi(context: Context) {
         path: String,
         server: String? = null,
         tool: String? = null,
-        limit: Int = 100,
+        limit: Int = 50,
     ): Result<List<AuditRow>> = withContext(Dispatchers.IO) {
         var url = "$path/api/audit?limit=$limit"
         if (!server.isNullOrBlank()) url += "&server=${encode(server.trim())}"

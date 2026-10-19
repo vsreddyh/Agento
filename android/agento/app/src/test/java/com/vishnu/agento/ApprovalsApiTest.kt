@@ -52,4 +52,15 @@ class ApprovalsApiTest {
         assertEquals(9L, row.at)
         assertNull(parseAuditRow(JSONObject("""{"tool":"x"}""")))
     }
+
+    @Test
+    fun `argsSummary sorts keys and caps at 200`() {
+        val a = GateApproval(
+            id = "x",
+            args = mapOf("z" to "1", "a" to "2", "m" to "x".repeat(300)),
+        )
+        val summary = a.argsSummary()
+        assertTrue(summary.startsWith("a=2, m="))
+        assertTrue(summary.length <= 200)
+    }
 }
