@@ -64,7 +64,7 @@ set of verbs:
 
 | route | purpose |
 |---|---|
-| `GET /api/runs` | list, filterable by `profile`, `conversation_id`, `status`, `limit` |
+| `GET /api/runs` | list, filterable by `profile`, `conversation_id`, `status`, `limit` (default 100, capped at 100; absent, empty or `0` means default) |
 | `GET /api/runs/{id}` | one run's record |
 | `GET /api/runs/{id}/events` | SSE: snapshot, then live frames |
 | `POST /api/runs/{id}/steer` | queue an instruction into the turn |
