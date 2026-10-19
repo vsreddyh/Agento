@@ -36,8 +36,8 @@ var (
 )
 
 // maxFilterLen bounds client-supplied id strings: X-Hermes-Session-Id and the
-// runs list filters. The store's entry COUNT is LRU-capped, but an unbounded
-// key would let a client drive memory growth per request regardless of the cap.
+// runs list filters. The store's entry COUNT is capped, but an unbounded key
+// would let a client drive memory growth per request regardless of the cap.
 const maxFilterLen = 256
 
 // Config configures a Server.

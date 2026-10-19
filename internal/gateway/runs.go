@@ -801,11 +801,17 @@ func (m *runManager) offerPersist(lr *liveRun) {
 // write is strictly the newest.
 func (m *runManager) persistLoop(lr *liveRun) {
 	defer close(lr.persistDone)
+	// Consecutive store failures keep one counter so degraded mode (every
+	// tick dropped, converging only at finish) trips the same ERROR grep as
+	// a terminal failure instead of passing as routine info.
+	drops := 0
 	for snap := range lr.persistCh {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := m.store.Save(ctx, snap); err != nil {
-			m.logf("runs: persist %s: %v", snap.ID, err)
+			drops++
+			m.logf("runs: ERROR persist %s failed %d in a row: %v", snap.ID, drops, err)
 		} else {
+			drops = 0
 			lr.markSaved(snap.Seq)
 		}
 		cancel()
@@ -960,6 +966,8 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 			}
 			f.Limit = n
 		}
+		// An empty or absent limit means the default (ListCap); only a
+		// present non-numeric or negative value is malformed.
 		listCtx, listCancel := storeCtx(r)
 		list, err := s.runs.list(listCtx, f)
 		listCancel()
