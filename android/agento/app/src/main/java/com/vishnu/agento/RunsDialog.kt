@@ -99,10 +99,11 @@ internal fun RunsDialog(
                                             MaterialTheme.colorScheme.onSurfaceVariant
                                         },
                                     )
-                                    // Cancel only for known-live runs: an unknown
-                                    // (blank-status) row would 404, and only
-                                    // `running` is ever stored live.
-                                    if (run.isRunning()) {
+                                    // Cancel for live runs: `running` today,
+                                    // anything non-terminal tomorrow. Blank
+                                    // statuses (parse failures) get no button
+                                    // — cancelling those 404s.
+                                    if (!run.isTerminal() && run.status.isNotBlank()) {
                                         TextButton(onClick = { onCancel(run.id) }) {
                                             Text("Cancel")
                                         }

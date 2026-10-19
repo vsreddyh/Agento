@@ -144,9 +144,18 @@ class RunsApi(context: Context) {
             return out
         }
         val arr = root.optJSONArray("runs") ?: return out
+        var dropped = 0
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
-            parseRun(o)?.let { out.add(it) }
+            val run = parseRun(o)
+            if (run == null) {
+                dropped++
+                continue
+            }
+            out.add(run)
+        }
+        if (dropped > 0) {
+            runCatching { Log.w("RunsApi", "dropped $dropped id-less run row(s)") }
         }
         return out
     }

@@ -721,6 +721,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * same conversation + same prompt). Fires once per thread, only for an
      * unanswered user tail — anything else (assistant tail, failure, stop)
      * stays for the user to drive.
+     *
+     * Safe beside openThread autosend: autosend sets streaming synchronously
+     * before any resume lookup can return, and the Main guard below returns
+     * on streaming — so the same tail can never fire as two turns even if
+     * both paths trigger.
      */
     private fun maybeResume(threadId: String, messages: List<ChatMessage>) {
         val last = messages.lastOrNull() ?: return
