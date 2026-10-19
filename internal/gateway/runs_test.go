@@ -761,10 +761,10 @@ func TestRunSequenceIsMonotonic(t *testing.T) {
 	}
 }
 
-// A snapshot past the live cap carries the same truncation marker as the
-// stored record, so progress rendering never mistakes a capped head for a
-// complete answer. Observed through a mid-turn reattach: the initial stream
-// snapshot always predates the output.
+// An over-cap turn marks its snapshots exactly once it settles: mid-flight
+// the head is incomplete by construction (more deltas follow, so a marker
+// would land mid-text), while terminal shapes — stored record, replay,
+// buffered body — all carry the marker. Both halves pinned here.
 func TestLiveSnapshotMarksTruncation(t *testing.T) {
 	agent := newFakeAgent()
 	srv := newTestServer(t, agent, Config{})
@@ -830,9 +830,51 @@ func TestLiveSnapshotMarksTruncation(t *testing.T) {
 	if err := json.Unmarshal([]byte(first), &snapFrame); err != nil {
 		t.Fatalf("first frame is not a run snapshot: %v (%q)", err, first)
 	}
-	if !strings.HasSuffix(snapFrame.Run.Output, runs.TruncatedMarker) {
-		t.Fatalf("live snapshot past the cap has no marker (%d bytes)", len(snapFrame.Run.Output))
+	// Mid-flight: head present, no marker — more deltas are still coming.
+	if strings.HasSuffix(snapFrame.Run.Output, runs.TruncatedMarker) {
+		t.Fatal("in-flight snapshot must not carry the terminal marker")
+	}
+	if len(snapFrame.Run.Output) != runs.MaxOutput {
+		t.Fatalf("in-flight head is %d bytes, want the %d cap", len(snapFrame.Run.Output), runs.MaxOutput)
 	}
 	cancel()
 	<-postDone
+}
+
+// A settled over-cap turn carries the marker in its terminal shapes, so no
+// shape reads a capped head as a complete answer.
+func TestTerminalShapesMarkTruncation(t *testing.T) {
+	agent := newFakeAgent()
+	big := strings.Repeat("z", runs.MaxOutput+100)
+	agent.events = []pi.Record{textDelta(t, big), {Type: pi.TypeAgentSettled}}
+	srv := newTestServer(t, agent, Config{})
+
+	rec := post(t, srv, "/v1/chat/completions", "test-token", validBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat: got %d", rec.Code)
+	}
+	list := listRuns(t, srv, "")
+	if len(list) != 1 {
+		t.Fatalf("runs = %+v, want one", list)
+	}
+	full := getRun(t, srv, list[0].ID)
+	if !strings.HasSuffix(full.Output, runs.TruncatedMarker) {
+		t.Fatalf("detail past the cap has no marker (%d bytes)", len(full.Output))
+	}
+	events := get(t, srv, "/api/runs/"+list[0].ID+"/events", "test-token")
+	payloads, done := sseFrames(t, events.Body.String())
+	if !done {
+		t.Fatalf("finished events did not terminate: %s", events.Body)
+	}
+	for _, p := range payloads {
+		var frame runFrame
+		if err := json.Unmarshal([]byte(p), &frame); err != nil || frame.Run.ID == "" {
+			continue
+		}
+		if !strings.HasSuffix(frame.Run.Output, runs.TruncatedMarker) {
+			t.Fatalf("terminal snapshot past the cap has no marker (%d bytes)", len(frame.Run.Output))
+		}
+		return
+	}
+	t.Fatal("no snapshot frame in the stream")
 }
