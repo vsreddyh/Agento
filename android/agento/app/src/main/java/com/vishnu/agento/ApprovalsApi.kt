@@ -203,7 +203,12 @@ class ApprovalsApi(context: Context) {
         }
         var dropped = 0
         for (i in 0 until arr.length()) {
-            val row = parseApproval(arr.optJSONObject(i) ?: continue) ?: run { dropped++; continue }
+            val obj = arr.optJSONObject(i) ?: continue
+            val row = parseApproval(obj)
+            if (row == null) {
+                dropped++
+                continue
+            }
             out.add(row)
         }
         if (dropped > 0) {

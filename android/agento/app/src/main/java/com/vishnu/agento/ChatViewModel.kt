@@ -809,7 +809,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
-    private fun loadApprovalSheet(path: String): Pair<List<GateApproval>, List<AuditRow>> {
+    private suspend fun loadApprovalSheet(path: String): Pair<List<GateApproval>, List<AuditRow>> {
         val pending = approvalsApi.listApprovals(path, status = "pending", limit = 50)
             .getOrNull().orEmpty()
         val audit = approvalsApi.listAudit(path, limit = 50).getOrNull().orEmpty()
