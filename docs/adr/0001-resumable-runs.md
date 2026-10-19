@@ -83,7 +83,9 @@ event log and no replay: a client that reattaches reconstructs its display from
 the snapshot and continues from the live stream.
 
 The reattach key is the conversation plus the full user turn — text and image
-set — while the run is in flight. Runs without a conversation id are not
+set — while the run is in flight. On the chat ingress the conversation arrives
+as the `X-Hermes-Session-Id` header; every run route and filter calls it
+`conversation_id` — same value, trimmed, same 256 bound. Runs without a conversation id are not
 reattachable (there is nothing to key on); the app must always send one.
 A same-prompt resend that lands after the
 run settled starts a new run rather than replaying the terminal one: that is

@@ -313,12 +313,13 @@ func (lr *liveRun) requestCancel(ctx context.Context) error {
 	// which is after the run loop has already observed agent_settled. Waiting
 	// here would just duplicate that wait.
 	if err := lr.agent.Send(ctx, "abort", nil); err != nil {
-		// The abort never reached Pi, so the turn will run to completion. Do
-		// not leave the flag set: it would relabel a completed turn cancelled.
+		// The abort never reached Pi, so the turn will run to completion.
+		// Reset unconditionally: gating on !finished leaves the flag on a
+		// terminal run when the Send failure races a settle, and stepRun's
+		// cancelled branch would then route a concurrent turn-error into an
+		// extra status frame on an already-terminated stream.
 		lr.mu.Lock()
-		if !lr.finished {
-			lr.cancelRequested = false
-		}
+		lr.cancelRequested = false
 		lr.mu.Unlock()
 		return err
 	}
@@ -1082,6 +1083,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 				"this run is no longer in flight; it cannot be steered")
 			return
 		}
+		// One bounded line so a "the agent ignored my steer" report has
+		// something server-side to correlate: the run, not the text.
+		s.cfg.Logf("runs: steer queued for run %s", lr.id())
 		writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "status": "queued"})
 		return
 	case "cancel":

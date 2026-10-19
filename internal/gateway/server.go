@@ -41,6 +41,13 @@ var (
 // client drive per-request memory growth regardless of those counts.
 const maxFilterLen = 256
 
+// setupCallTimeout bounds one pre-prompt agent call (session resolution,
+// level inventory, level set). They run on the turn context by default, which
+// is the whole TurnTimeout — a wedged Pi on any of them would burn the entire
+// turn budget before the prompt is ever sent. Local IPC answers in
+// milliseconds; 30s is fail-fast without troubling a slow-but-working agent.
+const setupCallTimeout = 30 * time.Second
+
 // Config configures a Server.
 type Config struct {
 	// Password is the bearer token the app authenticates with. An empty value
@@ -744,7 +751,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		}
 	}
 
-	agentState, err := h.runner.resolveSession(turnCtx, conversationID)
+	setupCtx, setupCancel := context.WithTimeout(turnCtx, setupCallTimeout)
+	defer setupCancel()
+	agentState, err := h.runner.resolveSession(setupCtx, conversationID)
 	if err != nil {
 		revertModel()
 		s.cfg.Logf("gateway: resolving session: %v", err)
@@ -761,7 +770,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// applied model's levels, so a bad-effort request is refused after the
 	// switch — and the refusal path reverts to the pre-switch model, or one
 	// bad request would silently repoint every following turn.
-	levels, err := h.runner.thinkingLevels(turnCtx)
+	levelsCtx, levelsCancel := context.WithTimeout(turnCtx, setupCallTimeout)
+	defer levelsCancel()
+	levels, err := h.runner.thinkingLevels(levelsCtx)
 	if err != nil {
 		// Tail, not verbatim: a wedged agent can emit megabytes of stderr and this
 		// runs on every failed turn, so one bad agent would grow the log without
@@ -842,7 +853,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// does not touch. Paying microseconds to keep one setting unconditional is the
 	// trade, and the round trip added after a session switch was made for the same
 	// reason: prefer a provably-correct state over a saved local call.
-	if _, err := h.runner.agent.Call(turnCtx, "set_thinking_level",
+	applyCtx, applyCancel := context.WithTimeout(turnCtx, setupCallTimeout)
+	defer applyCancel()
+	if _, err := h.runner.agent.Call(applyCtx, "set_thinking_level",
 		map[string]any{"level": level}); err != nil {
 		revertModel()
 		s.cfg.Logf("gateway: set_thinking_level(%s): %v", level, err)
