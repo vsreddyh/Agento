@@ -929,6 +929,14 @@ func containsString(list []string, want string) bool {
 	return false
 }
 
+// unmark strips the truncation marker for answer-serving paths (buffered
+// completions, compatibility replay deltas). Records keep the marker per the
+// ADR contract — progress hint, never answer text — so the serving layer
+// removes it where the value IS the answer.
+func unmark(s string) string {
+	return strings.TrimSuffix(s, runs.TruncatedMarker)
+}
+
 // truncateBytes bounds s to at most limit bytes without cutting a UTF-8 rune
 // in half. Unlike runs.CapText it adds no marker: it trims a live buffer that
 // is still growing, not a stored value a reader might mistake for complete.
@@ -1244,9 +1252,12 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request, id stri
 // A new client must ignore `choices` deltas once the snapshot says the run is
 // terminal — the snapshot is the complete answer, the replay is a courtesy.
 func (s *Server) replayTerminal(sse *sseWriter, run runs.Run) {
+	// Served as an answer, not a record: strip the truncation marker (see
+	// unmark). An old client renders this delta as the reply, and the marker
+	// is a progress hint, never answer text.
 	if run.Output != "" || run.Reasoning != "" {
 		_ = sse.write(newChunk(completionIDFor(run.ConversationID), run.Model,
-			run.Output, run.Reasoning))
+			unmark(run.Output), unmark(run.Reasoning)))
 	}
 	// Usage rides along for every terminal state that has any, not just
 	// completions: a failed or cancelled turn still spent tokens, and an old
@@ -1389,8 +1400,8 @@ func (s *Server) respondBuffered(w http.ResponseWriter, r *http.Request, lr *liv
 		Model:   snap.Model,
 		Choices: []completionChoice{{
 			Message: delta{
-				Content:          snap.Output,
-				ReasoningContent: snap.Reasoning,
+				Content:          unmark(snap.Output),
+				ReasoningContent: unmark(snap.Reasoning),
 			},
 			Finish: "stop",
 		}},
