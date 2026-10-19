@@ -178,7 +178,8 @@ as a cancel, which is what the user asked for.
   buffers fill partially rather than dropping whole chunks at the boundary;
   past the cap the snapshot carries the head while live deltas flow in full.
 - The list route shows previews (2 KB output, 1 KB reasoning), not full turns;
-  the detail route keeps everything. A truncated preview ends with the
+  the detail route keeps everything. The `prompt` preview is the same 4 KB in
+  both shapes; only output/reasoning shrink to previews. A truncated preview ends with the
   `… (truncated)` marker — the app keeps it as a progress hint, never as part
   of the answer. The Mongo collection expires via TTL
   after 7 days; the in-memory fallback (Mongo unreachable) instead caps at

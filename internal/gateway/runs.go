@@ -201,28 +201,13 @@ func (lr *liveRun) id() string {
 	return lr.run.ID
 }
 
-// profile reports the owning profile without copying the run: the 429 path
-// calls it for every live run, and a full snapshot would copy megabytes of
-// output to compare one string.
-func (lr *liveRun) profile() string {
+// profileRunning reports the owning profile and whether the run is in
+// flight, in one lock — same torn-view reasoning as matchesFilter: a settle
+// between two reads would miss the run and send a bare 429.
+func (lr *liveRun) profileRunning() (string, bool) {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
-	return lr.run.Profile
-}
-
-// status reports the lifecycle state without copying the run, for cheap
-// pre-filtering before a full snapshot (see list overlay).
-func (lr *liveRun) status() runs.Status {
-	lr.mu.Lock()
-	defer lr.mu.Unlock()
-	return lr.run.Status
-}
-
-// conversation reports the conversation id without copying the run.
-func (lr *liveRun) conversation() string {
-	lr.mu.Lock()
-	defer lr.mu.Unlock()
-	return lr.run.ConversationID
+	return lr.run.Profile, !lr.finished && lr.run.Status == runs.StatusRunning
 }
 
 // matchesFilter reports whether the run can match f, without copying it.
@@ -669,12 +654,10 @@ func (m *runManager) activeForProfile(profile string) (*liveRun, bool) {
 	}
 	m.mu.Unlock()
 	for _, lr := range lives {
-		if lr.profile() != profile {
+		if p, running := lr.profileRunning(); p != profile || !running {
 			continue
 		}
-		if lr.isRunning() {
-			return lr, true
-		}
+		return lr, true
 	}
 	return nil, false
 }
@@ -696,17 +679,23 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 	// past ListCap the window still wins (a hundred newer runs during one
 	// turn), and then detail/events serve what the list cannot.
 	m.mu.Lock()
-	lives := make([]*liveRun, 0, len(m.live))
-	for _, lr := range m.live {
-		lives = append(lives, lr)
+	type liveHandle struct {
+		// id is captured with the pointer: ids are immutable after begin, so
+		// the overlay probes byID without taking lr.mu once per run per poll.
+		id string
+		lr *liveRun
+	}
+	lives := make([]liveHandle, 0, len(m.live))
+	for id, lr := range m.live {
+		lives = append(lives, liveHandle{id: id, lr: lr})
 	}
 	m.mu.Unlock()
 	// Reserve room only for live runs the filter can match: every reserved
 	// row displaces a stored one, and runs for other profiles/statuses would
 	// shrink the page for rows the overlay would never add.
 	room := 0
-	for _, lr := range lives {
-		if lr.matchesFilter(f) {
+	for _, h := range lives {
+		if h.lr.matchesFilter(f) {
 			room++
 		}
 	}
@@ -732,7 +721,7 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 	for i, r := range stored {
 		byID[r.ID] = i
 	}
-	for _, lr := range lives {
+	for _, h := range lives {
 		// Refresh stored rows unconditionally, even when the live snapshot no
 		// longer matches the filter: a stored row can be staler than the live
 		// run (a Create that landed while the terminal Save is still in
@@ -742,7 +731,8 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 		// included row, or a refresh that drops a stale one. When both the
 		// stored row and the live state exclude, the row stays excluded
 		// without paying for the copy.
-		i, inStore := byID[lr.id()]
+		lr := h.lr
+		i, inStore := byID[h.id]
 		liveMatch := lr.matchesFilter(f)
 		if inStore {
 			if liveMatch || f.Matches(stored[i]) {
