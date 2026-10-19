@@ -535,7 +535,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             messages = patched, streaming = false,
             activeTools = emptyList(), activeToolLabel = "",
             queued = "",
-            activeRunId = "", busyRunId = "",
+            activeRunId = "",
+            // A no-op stop (idle tab after a 429) keeps the parked busy run:
+            // clearing it would wipe the sheet highlight for no reason.
+            busyRunId = if (wasStreaming) "" else _state.value.busyRunId,
             pending = if (queued.isNotBlank() && _state.value.pending.isBlank()) queued
                 else _state.value.pending,
         )

@@ -78,12 +78,17 @@ internal fun RunsDialog(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
+                                    // Live label follows the Cancel gate: anything
+                                    // non-terminal is live (running today,
+                                    // more states tomorrow), blank means
+                                    // unparseable.
+                                    val live = !run.isTerminal() && run.status.isNotBlank()
                                     Text(
-                                        if (run.isRunning()) "● Running"
+                                        if (live) "● Running"
                                         else if (run.status.isBlank()) "· unknown"
                                         else run.status,
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = if (run.isRunning()) {
+                                        color = if (live) {
                                             MaterialTheme.colorScheme.primary
                                         } else {
                                             MaterialTheme.colorScheme.onSurfaceVariant
@@ -129,7 +134,7 @@ internal fun RunsDialog(
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.padding(top = 2.dp),
                                     )
-                                } else if (run.isRunning()) {
+                                } else if (live) {
                                     Text(
                                         "· waiting for output…",
                                         style = MaterialTheme.typography.bodySmall,

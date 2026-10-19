@@ -36,6 +36,13 @@ data class AgentRun(
         status == "cancelled" || status == "interrupted"
 
     fun isRunning(): Boolean = status == "running"
+
+    /**
+     * Liveness decisions (cancel gating, resume matching, live labels) must
+     * use `!isTerminal()`, not this: a future live state (`cancelling`,
+     * `queued`) would otherwise lose its affordances. This stays as the
+     * display helper for today's running label.
+     */
 }
 
 /** Outcome of `POST /api/runs/{id}/steer`. */
