@@ -107,8 +107,15 @@ class ApprovalsApi(context: Context) {
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
 
+        /** Query/path encoding (`+` is a space in form encoding, not in a
+         * path — `%20` keeps ids exact). */
         internal fun encode(v: String): String =
             URLEncoder.encode(v, Charsets.UTF_8.name()).replace("+", "%20")
+
+        /** `"HTTP 409: …"` → `"409"`, else null. Sheet errors name the code,
+         * never the body (verbs on ids, not pasted server text). */
+        internal fun httpCode(message: String?): String? =
+            Regex("^HTTP (\\d+)").find(message.orEmpty())?.groupValues?.getOrNull(1)
     }
 
     private fun base(): String {

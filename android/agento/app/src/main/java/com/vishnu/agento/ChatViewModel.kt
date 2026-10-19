@@ -769,12 +769,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(showApprovals = false)
     }
 
-    /** Reloads pending approvals and the recent audit trail. Single-flight:
-     * a newer open or manual refresh cancels the older load. */
+    /** Single-flight approvals load: a newer open or manual refresh cancels
+     * the older one, so stale rows can never land. */
     private var approvalsJob: Job? = null
 
-    /** Reloads pending approvals and the recent audit trail. Single-flight:
-     * a newer open or manual refresh cancels the older load. Failures keep
+    /** Reloads pending approvals and the recent audit trail. Failures keep
      * the old rows and report inside the sheet (never the chat banner). A
      * [notice] survives a successful load (e.g. "already decided"). */
     fun refreshApprovals(notice: String? = null) {
@@ -786,15 +785,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val audit = approvalsApi.listAudit(path, limit = 50)
             withContext(Dispatchers.Main) {
                 // Per-half: a half that loaded replaces its rows; any half
-                // that failed reports without wiping the good half.
-                val failedMsg = pending.exceptionOrNull()?.message
-                    ?: audit.exceptionOrNull()?.message
+                // that failed reports without wiping the good half. Errors
+                // name the HTTP code, never the body.
+                val failedCode = ApprovalsApi.httpCode(pending.exceptionOrNull()?.message)
+                    ?: ApprovalsApi.httpCode(audit.exceptionOrNull()?.message)
                 _state.value = _state.value.copy(
                     approvals = pending.getOrNull() ?: _state.value.approvals,
                     auditRows = audit.getOrNull() ?: _state.value.auditRows,
                     approvalsLoading = false,
-                    approvalsError = if (failedMsg != null) {
-                        "Couldn't load approvals (${failedMsg.take(120).ifBlank { "unknown" }})."
+                    approvalsError = if (pending.isFailure || audit.isFailure) {
+                        "Couldn't load approvals" +
+                            (failedCode?.let { " (HTTP $it)" } ?: "") + "."
                     } else {
                         notice.orEmpty()
                     },
@@ -819,13 +820,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 deciding.remove(id)
                 // A 409 means someone else decided first: reload (the row
                 // leaves pending) with a transient note, never a retry
-                // prompt — retrying a decided id 409s again.
-                if (result.isFailure &&
-                    "409" !in result.exceptionOrNull()?.message.orEmpty()
-                ) {
-                    val failedMsg = result.exceptionOrNull()?.message.orEmpty()
+                // prompt — retrying a decided id 409s again. Errors name
+                // the HTTP code, never the body.
+                val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
+                if (result.isFailure && code != "409") {
                     _state.value = _state.value.copy(
-                        approvalsError = "Decision failed (${failedMsg.take(120).ifBlank { "unknown" }}) — try again.",
+                        approvalsError = "Decision failed" +
+                            (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
                     )
                 } else if (_state.value.showApprovals) {
                     refreshApprovals(
@@ -841,12 +842,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private fun refreshApprovalCount() {
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
-            approvalsApi.listApprovals(path, status = "pending", limit = 100)
-                .onSuccess { rows ->
-                    withContext(Dispatchers.Main) {
-                        _state.value = _state.value.copy(pendingApprovalCount = rows.size)
-                    }
-                }
+            pollApprovalCount(path)
         }
     }
 

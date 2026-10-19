@@ -63,4 +63,14 @@ class ApprovalsApiTest {
         assertTrue(summary.startsWith("a=2, m="))
         assertTrue(summary.length <= 200)
     }
+
+    @Test
+    fun `encode keeps ids exact and httpCode names the code`() {
+        assertEquals("a%20b", ApprovalsApi.encode("a b"))
+        assertEquals("abc", ApprovalsApi.encode("abc"))
+        assertEquals("409", ApprovalsApi.httpCode("HTTP 409: conflict"))
+        assertEquals("500", ApprovalsApi.httpCode("HTTP 500: boom"))
+        assertEquals(null, ApprovalsApi.httpCode("weird"))
+        assertEquals(null, ApprovalsApi.httpCode(null))
+    }
 }

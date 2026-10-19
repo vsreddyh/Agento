@@ -960,7 +960,12 @@ internal fun ChatScreen(
                     BadgedBox(
                         badge = {
                             if (state.pendingApprovalCount > 0) {
-                                Badge { Text("${state.pendingApprovalCount}") }
+                                Badge {
+                                    Text(
+                                        if (state.pendingApprovalCount > 99) "99+"
+                                        else "${state.pendingApprovalCount}",
+                                    )
+                                }
                             }
                         },
                     ) {
