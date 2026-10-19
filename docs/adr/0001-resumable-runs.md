@@ -106,8 +106,11 @@ records always emit `id`, `profile`, `status`, `output`, `error`, `seq`,
 `created_at`, `updated_at`, `finished_at` (`0` means "not finished") and
 `tools`, and emit `conversation_id`, `prompt`, `provider`, `model`, `effort`,
 `reasoning`, `usage` only when set. The snapshot carries `id`,
-`profile`, `conversation_id`, `status` and `seq` on every frame (no second
-round trip to learn ownership); the prompt preview lives only in the record.
+`profile`, `conversation_id`, `status` and `seq` on every frame when set (an
+untracked run has no conversation to name, matching the non-reattachable rule
+below) — no second round trip to learn ownership; the prompt preview lives
+only in the record. A running snapshot omits `finished_at` (unset until the
+run settles); the record always emits it with `0` meaning "not finished".
 Parse leniently: tolerate a missing key wherever the other shape sends an
 empty value.
 

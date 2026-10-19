@@ -41,6 +41,11 @@ import (
 // progress, and far cheaper than persisting every delta.
 const runPersistInterval = time.Second
 
+// maxRunIDLen bounds the {id} path segment. Run ids are 24-hex ObjectIDs, so
+// anything longer matches nothing; the bound keeps a garbage segment out of
+// the store query.
+const maxRunIDLen = 128
+
 // runFrame is the snapshot frame. It is the only new wire shape this feature
 // adds; everything after it is the existing chat SSE vocabulary.
 type runFrame struct {
@@ -892,6 +897,14 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 	if id == "" {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown path "+bounded(r.URL.Path))
+		return
+	}
+	// Run ids are 24-hex ObjectIDs; a longer segment matches nothing. Refuse
+	// it before the store round trip rather than querying Mongo for megabytes
+	// of path.
+	if len(id) > maxRunIDLen {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown run")
 		return
 	}
 
