@@ -48,8 +48,8 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	entry := bson.M{
 		"op":      op,
 		"task_id": taskID,
-		"source":  truncateRunes(source, 40),
-		"detail":  truncateRunes(detail, 300),
+		"source":  TruncateBytes(source, 40),
+		"detail":  TruncateBytes(detail, 300),
 		"at":      primitive.NewDateTimeFromTime(time.Now().UTC()),
 	}
 	// The audit write must NOT inherit the caller's cancellation.

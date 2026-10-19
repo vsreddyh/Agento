@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"agento/internal/tasks"
 )
@@ -53,7 +54,7 @@ func TestDefaultDecodeStillRejectsAnEmptyBody(t *testing.T) {
 // adds to the create path without adding it here fails here rather than in review.
 func TestFingerprintCoversEveryConsumedField(t *testing.T) {
 	base := map[string]any{
-		"name": "task", "description": "d",
+		"name": "task", "speak_name": "", "description": "d",
 		"due_date": "2026-10-05", "due_time": "08:00",
 		"estimated_minutes": 5, "parallelable": false,
 		"repeat_every": 0, "repeat_unit": "",
@@ -67,7 +68,7 @@ func TestFingerprintCoversEveryConsumedField(t *testing.T) {
 	// A different value per key. repeat_custom/repeat_every/repeat_unit have typed
 	// expectations, so use values of the right shape rather than one string for all.
 	differ := map[string]any{
-		"name": "other", "description": "other",
+		"name": "other", "speak_name": "do the thing", "description": "other",
 		"due_date": "2026-10-06", "due_time": "09:00",
 		"estimated_minutes": 30, "parallelable": true,
 		"repeat_every": 2, "repeat_unit": "weeks",
@@ -349,7 +350,7 @@ func TestTrimListMatchesWhatTheStoreActuallyTrims(t *testing.T) {
 	doc, _, err := store.CreateWithKey(ctx, "trim probe", "d",
 		padded["due_date"].(string), padded["due_time"].(string),
 		intPtr(5), tasks.Repeat{Custom: true, Text: "   3rd Friday   "},
-		boolPtr(false), "", "test", "")
+		boolPtr(false), "", "", "test", "")
 	if err != nil {
 		t.Skipf("create unavailable: %v", err)
 	}
@@ -453,5 +454,49 @@ func TestNoOpUpdateFieldsAreRecognisedAsNoOp(t *testing.T) {
 	if got := tasks.ChangedFieldNames(mixed); got != "name" {
 		t.Errorf("ChangedFieldNames(%v) = %q, want \"name\" — the guard is "+
 			"concurrency plumbing and must not mask a real edit", mixed, got)
+	}
+}
+
+// A body differing only past the 120-byte voice-phrase cap stores identically,
+// so it must digest identically — otherwise the retry 422s as a "different body".
+func TestFingerprintTruncatesSpeakNameLikeTheStore(t *testing.T) {
+	base := map[string]any{
+		"name": "task", "description": "d",
+		"due_date": "2026-10-05", "due_time": "08:00",
+		"estimated_minutes": 5, "parallelable": false,
+	}
+	over := map[string]any{}
+	for k, v := range base {
+		over[k] = v
+	}
+	over["speak_name"] = strings.Repeat("x", 200)
+	capped := map[string]any{}
+	for k, v := range base {
+		capped[k] = v
+	}
+	capped["speak_name"] = strings.Repeat("x", 120)
+	if taskFingerprint(over) != taskFingerprint(capped) {
+		t.Error("speak_name past the cap digests differently, but the store truncates " +
+			"it — a legitimate retry would 422 instead of replaying")
+	}
+	// Multibyte parity: the cap is bytes at a rune boundary, so a phrase of
+	// 200 "é" (400 bytes) must digest the same as its stored form — and the
+	// stored form must decode cleanly (no half-rune at the cut).
+	multi := map[string]any{}
+	for k, v := range base {
+		multi[k] = v
+	}
+	multi["speak_name"] = strings.Repeat("é", 200)
+	cappedMulti := map[string]any{}
+	for k, v := range base {
+		cappedMulti[k] = v
+	}
+	cappedMulti["speak_name"] = tasks.TruncateBytes(strings.Repeat("é", 200), 120)
+	if taskFingerprint(multi) != taskFingerprint(cappedMulti) {
+		t.Error("multibyte speak_name past the cap digests differently from its " +
+			"truncated form — a legitimate retry would 422 instead of replaying")
+	}
+	if got := cappedMulti["speak_name"].(string); !utf8.ValidString(got) {
+		t.Errorf("truncated speak_name is not valid UTF-8: %q", got)
 	}
 }

@@ -776,7 +776,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 TaskReminders.rearmOverdue(appCtx, taskId)
             }
         }
-        val name = task?.name.orEmpty().ifEmpty { "Task due" }
+        val name = task?.name.orEmpty().ifEmpty { FALLBACK_TASK_NAME }
         val today = LocalDate.now(IST)
         val dueLine = if (task != null) {
             friendlyDue(task.dueDate, task.dueTime, today)
@@ -794,17 +794,20 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             task?.startParts()?.let { (d, t) -> friendlyDue(d, t, today) }
                 ?.takeIf { it.isNotEmpty() }
         }
+        val dueAt = task?.let { dueMillisOrNull(it.dueDate, it.dueTime) }
+        // One clock for both consumers: the lock-screen line (#287) and the
+        // spoken line (#306) share this elapsed, so visual and voice can never
+        // disagree at a minute boundary.
+        val elapsed = if (kind == ReminderKind.Overdue && dueAt != null) {
+            (System.currentTimeMillis() - dueAt).coerceAtLeast(0L)
+        } else {
+            null
+        }
         val message = run {
             // #287: the overdue line names how long past due, computed from
             // the parsed due instant — never from rendered text. Null when
             // the fetch failed or the due time is unparseable, and the
             // message then degrades to the bare fact.
-            val dueAt = task?.let { dueMillisOrNull(it.dueDate, it.dueTime) }
-            val elapsed = if (kind == ReminderKind.Overdue && dueAt != null) {
-                (System.currentTimeMillis() - dueAt).coerceAtLeast(0L)
-            } else {
-                null
-            }
             reminderMessage(kind, dueLine, startLine, elapsed)
         }
         // Locals: task is nullable and conditions below don't smart-cast.
@@ -917,5 +920,13 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             postedTag(taskId, kind), ALARM_NOTIF_ID,
             notif.build(),
         )
+        // Spoken alert (#306): queued behind any speech already playing,
+        // skipped entirely on DND/silent (visual notification only).
+        // speak_name is the voice phrase, falling back to the list name.
+        // Shares `elapsed` with the lock-screen line above, by construction.
+        runCatching {
+            val speakTask = task ?: ServerTask(id = taskId, name = name)
+            ReminderTts.speak(appCtx, kind, speakTask, elapsed)
+        }.onFailure { Log.w("TaskReminders", "reminder speech failed", it) }
     }
 }

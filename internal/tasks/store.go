@@ -210,7 +210,11 @@ func isSkipped(doc map[string]any) bool {
 // every selected-days task as a one-shot, with no repeat shown and nothing
 // warning — precisely the 4.6.0 silent case. The version makes the two sides
 // disagree out loud instead.
-const TaskContractVersion = 2
+//
+// 3 — the `speak_name` voice phrase (#306). Optional (blank falls back to
+// `name`), but a NEW key on the wire all the same: an old app neither sends
+// nor reads it, and an old server answers without it.
+const TaskContractVersion = 3
 
 func toDoc(doc bson.M) map[string]any {
 	out := map[string]any{}
@@ -315,6 +319,12 @@ func toDoc(doc bson.M) map[string]any {
 	if _, ok := out["parallelable"]; !ok {
 		out["parallelable"] = false
 	}
+	// The voice phrase backfills as blank, not absent: pre-#306 docs predate the
+	// key, and blank already means "fall back to `name`" — so an old row and a
+	// row whose phrase was cleared speak identically, with no reader special case.
+	if _, ok := out["speak_name"]; !ok {
+		out["speak_name"] = ""
+	}
 	// `rolled_from` is stripped: it is INTERNAL linkage between a task and the
 	// occurrence it produced, and it lands on exactly the successor docs a user has no
 	// reason to be reading. Exposing it invites a client to reconstruct rollover chains
@@ -338,8 +348,8 @@ func toDoc(doc bson.M) map[string]any {
 //
 // A non-empty key makes the insert idempotent (#176): a repeat of the same key
 // returns the ORIGINAL task instead of creating a second one.
-func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool) (map[string]any, error) {
-	doc, _, err := s.CreateWithKey(ctx, name, description, dueDate, dueTime, estimatedMinutes, rep, parallelable, "", "", "")
+func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool, speakName string) (map[string]any, error) {
+	doc, _, err := s.CreateWithKey(ctx, name, description, dueDate, dueTime, estimatedMinutes, rep, parallelable, speakName, "", "", "")
 	return doc, err
 }
 
@@ -384,7 +394,7 @@ const (
 //
 // `replayed` is returned true only for that second-and-subsequent case, so a
 // caller can answer "already saved" rather than implying it created something.
-func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool, idemKey, source, fingerprint string) (map[string]any, bool, error) {
+func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, dueTime string, estimatedMinutes *int, rep Repeat, parallelable *bool, speakName, idemKey, source, fingerprint string) (map[string]any, bool, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, false, fail("name is required")
@@ -426,7 +436,12 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{
 		"name": name, "description": description,
-		"due_date": dueDate, "due_time": dueTime,
+		// Capped, not rejected: a pasted paragraph still creates the task, and
+		// the list name (which is uncapped) stays the full record. Truncated
+		// rather than rejected for the same reason as `source` above — a long
+		// voice phrase degrades a spoken line, never an identity.
+		"speak_name": TruncateBytes(strings.TrimSpace(speakName), 120),
+		"due_date":   dueDate, "due_time": dueTime,
 		"estimated_minutes": *estimatedMinutes,
 		"parallelable":      *parallelable,
 		"revision":          0,
@@ -451,7 +466,7 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 		// Same insert as the key, so a task can never carry one without the other.
 		// An empty fingerprint disables the check rather than failing the write: a
 		// caller that has no body to digest (the MCP path) still gets idempotency.
-		if fingerprint = truncateRunes(fingerprint, 64); fingerprint != "" {
+		if fingerprint = TruncateBytes(fingerprint, 64); fingerprint != "" {
 			doc[idempotencyFingerprintField] = fingerprint
 		}
 	}
@@ -461,7 +476,7 @@ func (s *Store) CreateWithKey(ctx context.Context, name, description, dueDate, d
 		// audit log: two long labels colliding degrades a log line and nothing else.
 		// `idempotency_key` is an identity that decides whether a request is a replay,
 		// so two keys colliding there silently returns the wrong task.
-		source = truncateRunes(source, 40)
+		source = TruncateBytes(source, 40)
 		doc[sourceField] = source
 	}
 	out, err := s.insert(ctx, doc)
@@ -689,7 +704,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	// Wrong types fail loudly instead of becoming mystery no-ops
 	// (strField above treats them as absent). JSON null still counts
 	// as absent, matching the HTTP layer's convention.
-	for _, k := range []string{"description", "due_date", "due_time", "repeat_rule"} {
+	for _, k := range []string{"description", "due_date", "due_time", "repeat_rule", "speak_name"} {
 		if v, ok := fields[k]; ok && v != nil {
 			if _, ok := v.(string); !ok {
 				return nil, fail("%s must be a string", k)
@@ -708,6 +723,13 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 			return nil, fail("description is required")
 		}
 		set["description"] = strings.TrimSpace(str)
+	}
+	// Optional voice phrase for TTS reminders (#306): blank means fall back
+	// to `name`. Clearing back to blank is allowed, so no non-empty check.
+	// Capped like the create path: a pasted paragraph degrades a spoken line,
+	// never a stored row.
+	if str, ok := strField("speak_name"); ok {
+		set["speak_name"] = TruncateBytes(strings.TrimSpace(str), 120)
 	}
 	// Due fields flow through only when the caller sent them, so a
 	// no-change update stays a no-op and the len(set)==0 path can fire.
@@ -998,7 +1020,7 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 				"completedAt": primitive.NewDateTimeFromTime(now),
 				"expiresAt":   primitive.NewDateTimeFromTime(now.AddDate(0, 0, RetentionDays)),
 				"skippedAt":   primitive.NewDateTimeFromTime(now),
-				"skipReason":  truncateRunes(strings.TrimSpace(reason), 300),
+				"skipReason":  TruncateBytes(strings.TrimSpace(reason), 300),
 			},
 			"$inc": bson.M{"revision": 1},
 		})
@@ -1048,7 +1070,7 @@ func resolvedStateErr(doc bson.M, id string) *StoreError {
 	return fail("task '%s' is already completed", id)
 }
 
-// truncateRunes caps a string at max BYTES without splitting a UTF-8 rune, so a
+// TruncateBytes caps a string at max BYTES without splitting a UTF-8 rune, so a
 // stored value never ends in the middle of a character.
 //
 // There were three hand-rolled versions of this (truncSkipReason, truncateField
@@ -1057,12 +1079,19 @@ func resolvedStateErr(doc bson.M, id string) *StoreError {
 // non-ASCII source label or a key with a multi-byte character could be stored as
 // invalid UTF-8, which BSON accepts and every reader then has to defend against.
 // Same rule, one place, applied to every capped field.
-func truncateRunes(s string, max int) string {
+func TruncateBytes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
 	if len(s) <= max {
 		return s
 	}
 	cut := max
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
+	// The `cut < len(s)` guard is defence in depth (the early return above is
+	// the only thing keeping `s[cut]` in range today), mirroring the Kotlin
+	// side's bound check — if either early return is refactored, the loop must
+	// still terminate instead of panicking.
+	for cut > 0 && cut < len(s) && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
 	return s[:cut]

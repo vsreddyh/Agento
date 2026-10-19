@@ -100,6 +100,7 @@ func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 // clobbering a field it did not mean to touch.
 type createTaskInput struct {
 	Name             string `json:"name"`
+	SpeakName        string `json:"speak_name,omitempty"`
 	Description      string `json:"description"`
 	DueDate          string `json:"due_date"`
 	DueTime          string `json:"due_time"`
@@ -132,6 +133,7 @@ type updateTaskInput struct {
 	// Every field below is optional: nil means untouched. Name is a plain string
 	// because it can never be cleared, so "" is how "untouched" is spelled.
 	Name             string    `json:"name,omitempty"`
+	SpeakName        *string   `json:"speak_name,omitempty"`
 	Description      *string   `json:"description,omitempty"`
 	DueDate          *string   `json:"due_date,omitempty"`
 	DueTime          *string   `json:"due_time,omitempty"`
@@ -195,7 +197,7 @@ func createTask(ctx context.Context, store *tasks.Store, in createTaskInput) (ma
 	// nothing to compare a retry against.
 	doc, _, err := store.CreateWithKey(ctx, in.Name, in.Description, in.DueDate,
 		in.DueTime, in.EstimatedMinutes, rep.Normalize(), in.Parallelable,
-		"", mcpSource, "")
+		in.SpeakName, "", mcpSource, "")
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +223,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "task-manager", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_task",
-		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). The repeat is ONE of three mutually exclusive shapes — never combine them: structured interval (repeat_every 1-28 with repeat_unit days|weeks|months|years), structured selected days (repeat_days = an array of weekdays from mon,tue,wed,thu,fri,sat,sun, always WEEKLY, and due_date MUST be one of them), or a custom condition (repeat_custom true with repeat_rule = the user's words verbatim). All of them empty/0/[] = one-shot. Prefer the structured shapes: the server rolls those over itself; only a custom condition is yours to advance."},
+		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). Optional: speak_name, a verb phrase for voice reminders (e.g. name 'Power Bill' → speak_name 'pay the power bill'); blank falls back to name. The repeat is ONE of three mutually exclusive shapes — never combine them: structured interval (repeat_every 1-28 with repeat_unit days|weeks|months|years), structured selected days (repeat_days = an array of weekdays from mon,tue,wed,thu,fri,sat,sun, always WEEKLY, and due_date MUST be one of them), or a custom condition (repeat_custom true with repeat_rule = the user's words verbatim). All of them empty/0/[] = one-shot. Prefer the structured shapes: the server rolls those over itself; only a custom condition is yours to advance."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := createTask(ctx, store, in)
 			if err != nil {
@@ -251,7 +253,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_task",
-		Description: "Edit name/description/due_date/due_time/estimated_minutes/repeat/parallelable. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected). The repeat accepts the same five keys (repeat_every/repeat_unit/repeat_days/repeat_custom/repeat_rule) and is validated as a whole; OMIT ALL FIVE repeat keys to leave the recurrence alone; sending repeat_rule \"\" with no structured key clears the whole rule (one-shot). Switching shapes means sending the new one and zeroing the old (e.g. moving to repeat_days: send repeat_every 0, repeat_unit \"\"). Repeat_days is an array of weekdays (mon..sun), always weekly, and due_date must be one of them. expected_revision: pass the revision the task showed when read; a mismatch means someone else wrote first and the edit is rejected, so re-read and retry. Works on open or done tasks."},
+		Description: "Edit name/speak_name/description/due_date/due_time/estimated_minutes/repeat/parallelable. Omit a key to leave it alone; send speak_name \"\" to clear it back to the name fallback. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected). The repeat accepts the same five keys (repeat_every/repeat_unit/repeat_days/repeat_custom/repeat_rule) and is validated as a whole; OMIT ALL FIVE repeat keys to leave the recurrence alone; sending repeat_rule \"\" with no structured key clears the whole rule (one-shot). Switching shapes means sending the new one and zeroing the old (e.g. moving to repeat_days: send repeat_every 0, repeat_unit \"\"). Repeat_days is an array of weekdays (mon..sun), always weekly, and due_date must be one of them. expected_revision: pass the revision the task showed when read; a mismatch means someone else wrote first and the edit is rejected, so re-read and retry. Works on open or done tasks."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			fields := map[string]any{}
 			// Plain strings can't tell "" from absent, so only name (which
@@ -259,6 +261,9 @@ func main() {
 			// non-nil (even "") = set/clear.
 			if in.Name != "" {
 				fields["name"] = in.Name
+			}
+			if in.SpeakName != nil {
+				fields["speak_name"] = *in.SpeakName
 			}
 			if in.Description != nil {
 				fields["description"] = *in.Description

@@ -124,3 +124,6 @@ __pycache__/
 /miser-money
 /cookbook
 /health-check
+
+# browser runtime state (page dumps, console logs)
+.playwright-mcp/

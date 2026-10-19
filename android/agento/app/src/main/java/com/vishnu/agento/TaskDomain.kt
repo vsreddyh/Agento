@@ -191,6 +191,8 @@ internal fun List<ServerTask>.sortedByMode(mode: ServerTaskSort): List<ServerTas
 internal data class ServerTaskDraft(
     val id: String = "",
     val name: String = "",
+    /** Optional voice phrase for TTS reminders (#306); blank falls back to [name]. */
+    val speakName: String = "",
     val description: String = "",
     val dueDate: String = "",
     val dueTime: String = "",
@@ -210,6 +212,7 @@ internal data class ServerTaskDraft(
 internal fun ServerTask.toDraft() = ServerTaskDraft(
     id = id,
     name = name,
+    speakName = speakName,
     description = description,
     dueDate = dueDate,
     dueTime = dueTime,
@@ -329,8 +332,33 @@ internal fun ServerTaskDraft.repeatOrNull(): RepeatDraft? {
  * 2 — the `repeat_days` selection (#304). A new field, and an old app reading
  * a selected-days task as a one-shot is the same silent wrong data this number
  * exists to make loud.
+ *
+ * 3 — the `speak_name` voice phrase (#306). Optional, blank falls back to
+ * `name` — but still a NEW key on the wire: an old app neither sends nor
+ * reads it, and an old server answers without it.
  */
-internal const val TASK_CONTRACT_VERSION = 2
+internal const val TASK_CONTRACT_VERSION = 3
+
+/**
+ * Voice-phrase cap (#306), mirroring the server's `TruncateBytes(120)` in
+ * `internal/tasks/store.go`. Bytes, not chars, without splitting a UTF-8
+ * sequence — so what the app sends is byte-identical to what the server
+ * stores, and the contract assert never fires on a phrase that merely
+ * survived the cap.
+ */
+internal const val SPEAK_NAME_MAX_BYTES = 120
+
+internal fun truncateUtf8Bytes(s: String, max: Int): String {
+    if (max <= 0) return ""
+    val bytes = s.toByteArray(Charsets.UTF_8)
+    if (bytes.size <= max) return s
+    var cut = max
+    // Step back over UTF-8 continuation bytes to the rune boundary. The
+    // `cut < bytes.size` guard is defence in depth: the early return above is
+    // the only thing keeping `bytes[cut]` in range today.
+    while (cut > 0 && cut < bytes.size && bytes[cut].toInt() and 0xC0 == 0x80) cut--
+    return String(bytes, 0, cut, Charsets.UTF_8)
+}
 
 /** Prefs key for the highest task contract this install has spoken (#185). */
 internal const val CONTRACT_VERSION_SEEN_KEY = "contract_version_seen"
@@ -347,6 +375,7 @@ internal const val CONTRACT_VERSION_SEEN_KEY = "contract_version_seen"
  */
 internal val TASK_CREATE_KEYS = listOf(
     "name",
+    "speak_name",
     "description",
     "due_date",
     "due_time",
@@ -427,6 +456,7 @@ internal fun maxContractVersion(tasks: List<ServerTask>): Int =
  */
 internal data class TaskContractSent(
     val name: String? = null,
+    val speakName: String? = null,
     val description: String? = null,
     val dueDate: String? = null,
     val dueTime: String? = null,
@@ -495,6 +525,7 @@ internal fun contractMismatches(
     // which is what a reader needs to find it in the response.
     if (got.contractVersion != TASK_CONTRACT_VERSION) out += "contract_version"
     if (sent.name != null && sent.name.trim() != got.name.trim()) out += "name"
+    if (sent.speakName != null && sent.speakName.trim() != got.speakName.trim()) out += "speak_name"
     if (sent.description != null &&
         sent.description.trim() != got.description.trim()
     ) out += "description"

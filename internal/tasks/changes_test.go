@@ -20,7 +20,7 @@ func TestChangeMarkerAdvancesOnEveryWrite(t *testing.T) {
 	if rev, at, err := s.ChangeRevision(ctx); err != nil || rev != 0 || !at.IsZero() {
 		t.Fatalf("fresh marker: rev=%d at=%v err=%v", rev, at, err)
 	}
-	first, err := s.Create(ctx, "Marker probe", "probe for #178", "2026-10-12", "09:00", intP(10), Repeat{}, boolP(false))
+	first, err := s.Create(ctx, "Marker probe", "probe for #178", "2026-10-12", "09:00", intP(10), Repeat{}, boolP(false), "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestChangeMarkerCountsRolloverSuccessor(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	doc, err := s.Create(ctx, "Weekly standup", "repeats every week", "2026-10-12", "09:00",
-		intP(30), structuredRep(1, "weeks"), boolP(false))
+		intP(30), structuredRep(1, "weeks"), boolP(false), "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestChangeMarkerCountsRolloverSuccessor(t *testing.T) {
 func TestChangeMarkerIgnoresNoOpWrites(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	doc, err := s.Create(ctx, "No-op probe", "probe for #178 no-ops", "2026-10-12", "09:00", intP(10), Repeat{}, boolP(false))
+	doc, err := s.Create(ctx, "No-op probe", "probe for #178 no-ops", "2026-10-12", "09:00", intP(10), Repeat{}, boolP(false), "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
