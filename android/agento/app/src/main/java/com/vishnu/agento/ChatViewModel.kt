@@ -69,6 +69,10 @@ data class ChatUiState(
     val showRuns: Boolean = false,
     val runs: List<AgentRun> = emptyList(),
     val runsLoading: Boolean = false,
+    /** Sheet-scoped error: rendered inside the runs sheet, never in the
+     * chat error banner (whose Retry resends a turn — a runs-list outage
+     * must not offer that). */
+    val runsError: String = "",
 )
 
 /** Device-observed usage for one conversation thread, summed from
@@ -266,6 +270,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeToolLabel = "",
             serverTokens = null,
             queued = "",
+            // Run ids belong to the old thread's turn: a switch must not
+            // highlight (or stop, via a stale read) another thread's run.
+            activeRunId = "", busyRunId = "",
         )
         refreshServerTotals()
         maybeResume(id, ChatThreads.toUi(target.messages))
@@ -323,6 +330,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 activeToolLabel = "",
                 serverTokens = null,
                 queued = "",
+                activeRunId = "", busyRunId = "",
             )
             refreshServerTotals()
             maybeResume(id, ChatThreads.toUi(target.messages))
@@ -364,6 +372,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
             queued = "",
+            activeRunId = "", busyRunId = "",
         )
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
@@ -651,14 +660,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val result = runsApi.list(path, conversationId = conversationId, limit = 50)
             withContext(Dispatchers.Main) {
                 // A failed load keeps the old rows (never blanked into a
-                // lying "no runs yet") and says so: outage, not emptiness.
+                // lying "no runs yet") and reports inside the sheet: the
+                // chat error banner's Retry would resend a turn, which a
+                // list outage must never offer.
                 result.onFailure {
                     _state.value = _state.value.copy(
                         runsLoading = false,
-                        error = "Couldn't load runs (${it.message?.take(120) ?: "unknown"}).",
+                        runsError = "Couldn't load runs (${it.message?.take(120) ?: "unknown"}).",
                     )
                 }.onSuccess { rows ->
-                    _state.value = _state.value.copy(runs = rows, runsLoading = false)
+                    _state.value = _state.value.copy(
+                        runs = rows, runsLoading = false, runsError = "",
+                    )
                 }
             }
         }
@@ -676,12 +689,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val result = runsApi.cancel(path, id)
             withContext(Dispatchers.Main) {
+                // Failed cancel reports inside the sheet and skips the
+                // reload, so the refresh error cannot overwrite it.
                 result.onFailure {
                     _state.value = _state.value.copy(
-                        error = "Cancel failed (${it.message?.take(120) ?: "unknown"}) — try again.",
+                        runsError = "Cancel failed (${it.message?.take(120) ?: "unknown"}) — try again.",
                     )
+                }.onSuccess {
+                    if (_state.value.showRuns) refreshRuns()
                 }
-                if (_state.value.showRuns) refreshRuns()
             }
         }
     }
@@ -700,7 +716,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (threadId in resumedThreads) return
         viewModelScope.launch(Dispatchers.IO) {
             val path = api.pathFor(tab)
-            val runs = runsApi.list(path, conversationId = threadId, status = "running", limit = 5)
+            // Query unfiltered by status: a future `cancelling`/`queued`
+            // state would be missed by a `status=running` query, and the
+            // client-side !isTerminal check below is the real gate. The
+            // wider window is bounded (20 rows of one conversation).
+            val runs = runsApi.list(path, conversationId = threadId, limit = 20)
                 .getOrNull().orEmpty()
             // Belt and braces on the status: the query already filters, but a
             // stale row must never trigger a resend on its own. Anything not
@@ -956,11 +976,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             msgs
                         }
                         val text = history.lastOrNull { it.role == "user" }?.content.orEmpty()
-                        // Follow-up typed before the refusal arrived is parked
-                        // in the queue slot, not dropped: the failed prompt
-                        // takes the composer, the follow-up fires after the
-                        // next clean Done like any queued send.
+                        // Follow-up typed before the refusal arrived joins the
+                        // queue behind any parked text instead of dropping:
+                        // the failed prompt takes the composer, everything
+                        // typed fires in order after the next clean Done.
                         val followUp = _state.value.pending
+                        val queued = listOf(_state.value.queued, followUp)
+                            .filter { it.isNotBlank() }
+                            .joinToString("\n")
                         streamJob = null
                         _state.value = _state.value.copy(
                             messages = unposted, streaming = false,
@@ -975,8 +998,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             activeRunId = "",
                             busyRunId = event.runId,
                             pending = text.ifBlank { _state.value.pending },
-                            queued = if (followUp.isNotBlank() && _state.value.queued.isBlank()) followUp
-                            else _state.value.queued,
+                            queued = queued,
                         )
                     }
                     is ChatEvent.ToolProgress -> {

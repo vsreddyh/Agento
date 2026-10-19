@@ -29,6 +29,9 @@ private val WS = Regex("\\s+")
 internal fun RunsDialog(
     runs: List<AgentRun>,
     loading: Boolean,
+    /** Sheet-scoped failure (load/cancel): shown here, never as a chat
+     * error with a resend Retry. */
+    runsError: String = "",
     /** Id of the run blocking this tab (429/error stash): highlighted so the
      * user can spot the row to watch or cancel. */
     highlightId: String = "",
@@ -46,6 +49,14 @@ internal fun RunsDialog(
                     horizontalArrangement = Arrangement.End,
                 ) {
                     TextButton(onClick = onRefresh) { Text("Refresh") }
+                }
+                if (runsError.isNotBlank()) {
+                    Text(
+                        runsError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    )
                 }
                 when {
                     loading && runs.isEmpty() -> Text(

@@ -818,7 +818,10 @@ internal fun readSseStream(
             continue
         }
         // Tool-progress frames carry {"tool","status",...} and no
-        // choices array — surface them instead of dropping them.
+        // choices array — surface them instead of dropping them. Skipped
+        // after a terminal snapshot like deltas: the turn is over, and the
+        // central-skip contract covers all content frames, not just text.
+        if (terminalSeen) continue
         val progress = runCatching {
             val o = JSONObject(data)
             if (o.optJSONArray("choices") != null) return@runCatching null

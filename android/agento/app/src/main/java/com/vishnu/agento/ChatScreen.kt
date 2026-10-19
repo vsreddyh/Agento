@@ -1542,6 +1542,7 @@ internal fun ChatScreen(
             RunsDialog(
                 runs = state.runs,
                 loading = state.runsLoading,
+                runsError = state.runsError,
                 highlightId = state.activeRunId.ifBlank { state.busyRunId },
                 onRefresh = onRefreshRuns,
                 onCancel = onCancelRun,
