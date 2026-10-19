@@ -5,6 +5,13 @@ name: opencode-review
 # Trigger is pull_request only: no /oc comment commands, no issue triage,
 # no schedules. Review-only: contents:read so it cannot push code; it posts
 # findings as PR comments.
+#
+# The reviewer reads back scratch files it stages in /tmp. Paths outside the
+# checkout are gated on the external_directory permission, which defaults to
+# "ask" - and nothing can answer a prompt in CI, so the job sat until its
+# timeout. The repo-root opencode.json grants /tmp/* (the CLI's matcher turns
+# "*" into ".*", so that covers nested temp dirs too); do not delete it as
+# dead config (see #319).
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
