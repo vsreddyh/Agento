@@ -829,13 +829,6 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun loadApprovalSheet(path: String): Pair<List<GateApproval>, List<AuditRow>> {
-        val pending = approvalsApi.listApprovals(path, status = "pending", limit = 50)
-            .getOrNull().orEmpty()
-        val audit = approvalsApi.listAudit(path, limit = 50).getOrNull().orEmpty()
-        return pending to audit
-    }
-
     /** Watch cadence while streaming: immediate poll, then every 5s. A gate
      * held at turn start otherwise reads as thinking for a full interval. */
     private fun startApprovalWatch(path: String) {
