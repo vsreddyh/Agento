@@ -155,7 +155,10 @@ internal fun TaskManagerScreen(
     // through [exitingHere], which is empty unless the filter is the one the
     // exit was started under.
     var exiting by remember { mutableStateOf(mapOf<String, ServerTaskFilter>()) }
-    // The exits that belong to the filter showing now (#308).
+    // The exits that belong to the filter showing now (#308). A remembered
+    // derivation for the render and the sheet; the loader reads `exiting`
+    // directly instead, because it has to see the set as it stands when the
+    // response lands rather than when the request went out.
     val exitingHere = remember(exiting, filter) {
         exiting.filterValues { it == filter }.keys
     }
@@ -281,8 +284,15 @@ internal fun TaskManagerScreen(
         // key) must not leave a spinner or a progress bar behind.
         val background = silentRefresh
         silentRefresh = false
-        loading = !background
-        refreshing = background
+        // A background run assumes there are rows on screen for it to protect,
+        // which is only true once a load has landed: a silent run before that
+        // has nothing to keep, so it takes the spinner (#308). Keyed on
+        // hasLoaded rather than on the list being empty, because a silent
+        // refresh of a legitimately empty list — completing the last open task
+        // of a repeat — should settle to the empty state, not blink through a
+        // spinner to get back to it.
+        loading = !background || !hasLoaded
+        refreshing = background && hasLoaded
         if (!background) error = ""
         // fold's lambdas are not suspend, so the cursor read below runs after
         // the fold, not inside onSuccess.
@@ -291,10 +301,18 @@ internal fun TaskManagerScreen(
                 // Rows still playing their leave animation are carried over
                 // the fresh page (#308): the server stops listing a task the
                 // moment it is completed, so without this the row would be
-                // pulled out mid-animation and the list would blink. Only the
-                // exits belonging to the filter being fetched — an exit
-                // started on Open must not follow the row into All/Done.
-                tasks = mergeRefresh(page.tasks, tasks, exitingHere)
+                // pulled out mid-animation and the list would blink.
+                //
+                // Read from `exiting` HERE rather than from the composition's
+                // `exitingHere`: what matters is the set as it stands when the
+                // response LANDS. An exit that starts while the fetch is in
+                // flight — the user completes a row, and the page that was
+                // already on its way back does not list it — would otherwise be
+                // dropped by this merge, which is the exact blink the carry is
+                // there to prevent. Scoped to the filter this run was launched
+                // for, since that is the view these rows are going into.
+                val leaving = exiting.filterValues { it == filter }.keys
+                tasks = mergeRefresh(page.tasks, tasks, leaving)
                 listTruncated = page.truncated
                 error = ""
                 // Which filter these rows are the answer for (#308): recorded
@@ -586,7 +604,7 @@ internal fun TaskManagerScreen(
         // `tasks = prev` — leaving the completed row stuck in the Open list.
         // The row is disabled while busy/exiting, and this covers every other
         // caller (the detail sheet, a deep link) as well.
-        if (t.id in exiting || t.id in busyIds) return
+        if (exiting.containsKey(t.id) || t.id in busyIds) return
         // The sheet is already dismissed by the caller. On the Open filter the
         // row is NOT removed here (#308): it is marked as leaving and plays its
         // exit animation, then onRowExited drops it. The request runs in the
@@ -1478,14 +1496,17 @@ internal fun ServerTaskRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onToggle, enabled = actionsEnabled) {
-            // Branches on `done`, not `task.isOpen()`: a row that is leaving
-            // (#308) still carries an open model, and keying the icon off the
-            // model would show it as completed in the text but with an empty
-            // circle next to it.
+            // Two different questions, two different answers. The ICON follows
+            // what is DRAWN (`done`), so a row that is leaving (#308) shows the
+            // filled check its dimmed, struck-through text already implies
+            // rather than an empty circle. The LABEL names the action this
+            // button is, which is still "complete" while that leave animation
+            // runs: the row is being completed, not reopened, and TalkBack
+            // reads the label, not the glyph.
             if (done) {
                 Icon(
                     Icons.Filled.CheckCircle,
-                    contentDescription = "Reopen task",
+                    contentDescription = if (task.isOpen()) "Complete task" else "Reopen task",
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(26.dp),
                 )
