@@ -23,6 +23,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -140,6 +141,11 @@ internal fun TaskManagerScreen(
     // fetch that lands meanwhile carries it over rather than yanking it out
     // from under the animation (see mergeRefresh).
     var exitingIds by remember { mutableStateOf(setOf<String>()) }
+    // Whether the list has been drawn at least once (#308). The enter
+    // animation is for rows that arrive LATER — a repeat's next occurrence, a
+    // task created elsewhere — so the first population is drawn in place
+    // instead of cascading the whole list in.
+    var rowsDrawnOnce by remember { mutableStateOf(false) }
     // True once the loader below has completed at least once (success or
     // failure). The resume check below must not refetch on the very first
     // resume: the initial load is already in flight, and re-bumping the tick
@@ -305,6 +311,14 @@ internal fun TaskManagerScreen(
         loading = false
         refreshing = false
         hasLoaded = true
+    }
+
+    // Flipped only AFTER the rows have actually been on screen once (#308), so
+    // the first population is not treated as an arrival: an effect runs after
+    // composition, which is exactly what makes this a "next composition" flag
+    // rather than one the first paint already sees set.
+    LaunchedEffect(tasks, loading, error) {
+        if (!loading && error.isEmpty() && tasks.isNotEmpty()) rowsDrawnOnce = true
     }
 
     // Coming back to a screen the agent may have written to while we were away
@@ -506,6 +520,13 @@ internal fun TaskManagerScreen(
     }
 
     fun doComplete(t: ServerTask) {
+        // Already on its way out, or still in flight (#308): the exit
+        // animation owns the removal, and a second request here would finish
+        // first on failure and cancel the first one's animation with
+        // `tasks = prev` — leaving the completed row stuck in the Open list.
+        // The row is disabled while busy/exiting, and this covers every other
+        // caller (the detail sheet, a deep link) as well.
+        if (t.id in exitingIds || t.id in busyIds) return
         // The sheet is already dismissed by the caller. On the Open filter the
         // row is NOT removed here (#308): it is marked as leaving and plays its
         // exit animation, then onRowExited drops it. The request runs in the
@@ -710,6 +731,10 @@ internal fun TaskManagerScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            // Background refresh (#308): a thin bar instead of the full-list
+            // spinner, above the content so it never displaces the rows the
+            // user is reading while the fresh list arrives.
+            RefreshBar(refreshing = refreshing)
             Column(
                 modifier = Modifier.contentWidth(wc)
                     .verticalScroll(rememberScrollState())
@@ -773,13 +798,6 @@ internal fun TaskManagerScreen(
                         }
                     }
                 }
-                // A background refresh (#308) gets a thin bar instead of the
-                // full-list spinner: the rows on screen stay exactly where
-                // they are while the fresh list arrives, which is the point of
-                // the silent path. The bar sits in a fixed-height slot (only
-                // its alpha animates), so starting or finishing a refresh
-                // cannot shift the list under the user's finger.
-                RefreshBar(refreshing = refreshing)
                 // Derived once per composition: search narrows, sort orders.
                 // `today` is a remember key below so buckets recompute
                 // past midnight while the app stays open.
@@ -921,6 +939,9 @@ internal fun TaskManagerScreen(
                                     TaskRowSlot(
                                         taskId = t.id,
                                         exiting = t.id in exitingIds,
+                                        // Later arrivals animate in; the first
+                                        // population of the screen does not.
+                                        animateEnter = rowsDrawnOnce,
                                         onExited = ::onRowExited,
                                     ) {
                                         Column {
@@ -935,8 +956,11 @@ internal fun TaskManagerScreen(
                                                 today = day,
                                                 // Per-row (#288): only the row
                                                 // with an in-flight request is
-                                                // disabled.
-                                                actionsEnabled = t.id !in busyIds,
+                                                // disabled — plus a row that is
+                                                // leaving (#308), which must not
+                                                // accept a second tap.
+                                                actionsEnabled = t.id !in busyIds &&
+                                                    t.id !in exitingIds,
                                                 // Leaving (#308): it reads as
                                                 // completed while it goes, but
                                                 // only in what is drawn — the
@@ -1205,21 +1229,26 @@ private const val ROW_ANIM_MS = 220
 
 /**
  * The slim bar that stands in for the full-list spinner while a background
- * refresh is in flight (#308). It lives in a fixed-height slot so showing or
- * hiding it cannot move the rows below it; only its own alpha animates.
+ * refresh is in flight (#308).
  *
- * Its own composable rather than an inline `Box`: inside `Box`'s scope the
- * `ColumnScope` overload of `AnimatedVisibility` is not callable, and this
- * keeps the plain one unambiguous.
+ * It is a sibling of the scrolling list rather than an item inside it, so it
+ * costs no item spacing, and its height animates from nothing so an idle
+ * screen is exactly as tall as it was before the bar existed.
  */
 @Composable
 private fun RefreshBar(refreshing: Boolean) {
-    Box(modifier = Modifier.fillMaxWidth().height(4.dp)) {
-        AnimatedVisibility(
-            visible = refreshing,
-            enter = fadeIn(tween(ROW_ANIM_MS)),
-            exit = fadeOut(tween(ROW_ANIM_MS)),
-        ) {
+    // The height animates 0 -> 4 and back rather than reserving a permanent
+    // slot: an idle screen should carry no gap for a bar that is not there,
+    // and starting a refresh eases the list down instead of jumping it.
+    val height by animateDpAsState(
+        targetValue = if (refreshing) 4.dp else 0.dp,
+        animationSpec = tween(ROW_ANIM_MS),
+        label = "refreshBarHeight",
+    )
+    Box(modifier = Modifier.fillMaxWidth().height(height)) {
+        // Composed only while refreshing so the indeterminate animation is not
+        // running invisibly the rest of the time.
+        if (refreshing) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
     }
@@ -1234,18 +1263,23 @@ private fun RefreshBar(refreshing: Boolean) {
  * [exiting] flips true the row shrinks and fades, and only after that does
  * [onExited] run — so the caller drops the row at the moment it has actually
  * finished leaving, instead of yanking it out on the tap.
+ *
+ * [animateEnter] is read once, when the row first composes: it is false for
+ * the screen's first population, so opening the list does not cascade every
+ * row in, and true afterwards, so a row that arrives later animates in.
  */
 @Composable
 private fun TaskRowSlot(
     taskId: String,
     exiting: Boolean,
+    animateEnter: Boolean,
     onExited: (String) -> Unit,
     content: @Composable () -> Unit,
 ) {
-    // Starts hidden and is switched visible on the first pass, so a row
-    // entering the list animates in. Rows that were already composed keep the
-    // state they are in and are not re-animated (that is what the key buys).
-    val visibleState = remember { MutableTransitionState(false) }
+    // Hidden at first only when this row is meant to animate in; otherwise it
+    // starts visible and is simply drawn. Rows already composed keep whatever
+    // state they are in (that is what the key buys).
+    val visibleState = remember { MutableTransitionState(!animateEnter) }
     visibleState.targetState = !exiting
     AnimatedVisibility(
         visibleState = visibleState,
@@ -1273,6 +1307,12 @@ private fun TaskRowSlot(
  * [exiting] are therefore carried over the fresh page, and dropped for real
  * when their animation reports it has finished.
  *
+ * A carried row is put back at the index it had, not appended: it is still on
+ * screen mid-animation, and moving it to the end would visibly jump it — and,
+ * where the sort keys tie, reorder its neighbours — for the ~220ms it has
+ * left. The index is clamped, because the fresh page can be shorter than the
+ * one the row came from.
+ *
  * [exiting] is passed by the caller as it is AT THE MOMENT the response
  * arrives, never as it was before the request went out: a row whose animation
  * finished while the fetch was in flight must not be resurrected by it.
@@ -1284,7 +1324,18 @@ internal fun mergeRefresh(
 ): List<ServerTask> {
     if (exiting.isEmpty()) return fresh
     val freshIds = fresh.mapTo(HashSet()) { it.id }
-    return fresh + previous.filter { it.id in exiting && it.id !in freshIds }
+    val carried = previous.filter { it.id in exiting && it.id !in freshIds }
+    if (carried.isEmpty()) return fresh
+    // Indices ascend (we walk `previous` in order), so inserting each carried
+    // row at its own clamped index keeps them in their original relative
+    // order.
+    val merged = fresh.toMutableList()
+    previous.forEachIndexed { index, row ->
+        if (row.id in exiting && row.id !in freshIds) {
+            merged.add(index.coerceAtMost(merged.size), row)
+        }
+    }
+    return merged
 }
 
 /** Flat task row: checkbox toggles complete/reopen, tap opens the
@@ -1329,18 +1380,22 @@ internal fun ServerTaskRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onToggle, enabled = actionsEnabled) {
-            if (task.isOpen()) {
-                Icon(
-                    Icons.Filled.RadioButtonUnchecked,
-                    contentDescription = "Complete task",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(26.dp),
-                )
-            } else {
+            // Branches on `done`, not `task.isOpen()`: a row that is leaving
+            // (#308) still carries an open model, and keying the icon off the
+            // model would show it as completed in the text but with an empty
+            // circle next to it.
+            if (done) {
                 Icon(
                     Icons.Filled.CheckCircle,
                     contentDescription = "Reopen task",
                     tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(26.dp),
+                )
+            } else {
+                Icon(
+                    Icons.Filled.RadioButtonUnchecked,
+                    contentDescription = "Complete task",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(26.dp),
                 )
             }

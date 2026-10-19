@@ -58,7 +58,29 @@ class TaskManagerUxTest {
             previous = listOf(ServerTask(id = "a"), ServerTask(id = "b")),
             exiting = setOf("a"),
         )
-        assertEquals(listOf("b", "a"), merged.map { it.id })
+        assertEquals(listOf("a", "b"), merged.map { it.id })
+    }
+
+    @Test
+    fun `a carried row keeps its place, not the end of the list`() {
+        // `b` is the one leaving, mid-list: it must not jump to the bottom for
+        // the ~220ms it has left (nor reorder neighbours whose sort keys tie).
+        val merged = mergeRefresh(
+            fresh = listOf(ServerTask(id = "a"), ServerTask(id = "c")),
+            previous = listOf(ServerTask(id = "a"), ServerTask(id = "b"), ServerTask(id = "c")),
+            exiting = setOf("b"),
+        )
+        assertEquals(listOf("a", "b", "c"), merged.map { it.id })
+    }
+
+    @Test
+    fun `several carried rows stay in their original order`() {
+        val merged = mergeRefresh(
+            fresh = listOf(ServerTask(id = "c")),
+            previous = listOf(ServerTask(id = "a"), ServerTask(id = "b"), ServerTask(id = "c")),
+            exiting = setOf("a", "b"),
+        )
+        assertEquals(listOf("a", "b", "c"), merged.map { it.id })
     }
 
     @Test
