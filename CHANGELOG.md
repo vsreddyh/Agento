@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.5.1]
+- **Task Manager: completing a task animates, instead of reloading the
+  list** (#308). Ticking a task off no longer blanks the list to a spinner:
+  the row ticks, dims and slides out where it was, and the fresh data is
+  pulled in the background underneath the rows you are already reading. The
+  same silent refresh now covers returning to a stale screen, the toolbar
+  refresh, and a conflict reload — a thin bar above the list reports the work
+  instead of the full-list spinner. When a repeat rolls over, the next
+  occurrence grows in after the completed row has left, rather than the whole
+  list being rebuilt around it. Edits, creates and deletes already patched in
+  place; completion was the last path that still flashed the list.
+
 ## [5.5.0]
 - **Task reminders speak: per-kind voice + Speak-as field** (#306). Each of
   the 4 reminder kinds now speaks its own line — "In 5 minutes you need to

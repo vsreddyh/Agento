@@ -45,4 +45,51 @@ class TaskManagerUxTest {
         assertFalse(isConflict(RuntimeException("Server URL not configured")))
         assertFalse(isConflict(RuntimeException()))
     }
+
+    // ── Background refresh (#308) ────────────────────────────────────────────
+
+    @Test
+    fun `a row mid-exit survives the refresh that lands during its animation`() {
+        // The server drops a completed task the moment it is done, so the
+        // fresh page no longer lists `a` — but its leave animation is still
+        // running and it has to stay on screen for it.
+        val merged = mergeRefresh(
+            fresh = listOf(ServerTask(id = "b")),
+            previous = listOf(ServerTask(id = "a"), ServerTask(id = "b")),
+            exiting = setOf("a"),
+        )
+        assertEquals(listOf("b", "a"), merged.map { it.id })
+    }
+
+    @Test
+    fun `a row whose exit already finished is not resurrected`() {
+        // exiting set here as it is when the response lands, after the row
+        // was dropped: an empty set means nothing is carried over.
+        val merged = mergeRefresh(
+            fresh = listOf(ServerTask(id = "b")),
+            previous = listOf(ServerTask(id = "a"), ServerTask(id = "b")),
+            exiting = emptySet(),
+        )
+        assertEquals(listOf("b"), merged.map { it.id })
+    }
+
+    @Test
+    fun `a refresh does not duplicate a row the server still lists`() {
+        val merged = mergeRefresh(
+            fresh = listOf(ServerTask(id = "a")),
+            previous = listOf(ServerTask(id = "a")),
+            exiting = setOf("a"),
+        )
+        assertEquals(listOf("a"), merged.map { it.id })
+    }
+
+    @Test
+    fun `a plain refresh is just the fresh page`() {
+        val merged = mergeRefresh(
+            fresh = listOf(ServerTask(id = "x")),
+            previous = listOf(ServerTask(id = "y")),
+            exiting = emptySet(),
+        )
+        assertEquals(listOf("x"), merged.map { it.id })
+    }
 }
