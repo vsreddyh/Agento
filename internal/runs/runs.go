@@ -175,7 +175,10 @@ func NewID() string { return primitive.NewObjectID().Hex() }
 // is not cut and marked twice. Length-aware, so text that merely ends with the
 // marker but still exceeds the limit is cut once and marked once.
 func CapText(s string, limit int) string {
-	if limit <= 0 || len(s) <= limit {
+	if limit <= 0 {
+		return ""
+	}
+	if len(s) <= limit {
 		return s
 	}
 	if strings.HasSuffix(s, truncMarker) {

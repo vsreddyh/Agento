@@ -179,6 +179,15 @@ func imagesSigOf(images []piImage) string {
 }
 
 func (lr *liveRun) id() string { return lr.run.ID }
+
+// profile reports the owning profile without copying the run: the 429 path
+// calls it for every live run, and a full snapshot would copy megabytes of
+// output to compare one string.
+func (lr *liveRun) profile() string {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.run.Profile
+}
 func (lr *liveRun) prompt() string {
 	if lr.promptFull != "" {
 		return lr.promptFull
@@ -340,7 +349,7 @@ func (lr *liveRun) publishDelta(text, reasoning string, frame chunk) int64 {
 func (lr *liveRun) publishTool(name string, frame toolFrame) int64 {
 	data, err := jsonPayload(frame)
 	if err != nil {
-		return 0
+		return lr.seq
 	}
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
@@ -531,8 +540,10 @@ func (m *runManager) activeForProfile(profile string) (*liveRun, bool) {
 	}
 	m.mu.Unlock()
 	for _, lr := range lives {
-		snap := lr.snapshot()
-		if snap.Profile == profile && !snap.Status.Terminal() {
+		if lr.profile() != profile {
+			continue
+		}
+		if lr.isRunning() {
 			return lr, true
 		}
 	}
@@ -570,21 +581,20 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 	}
 	for _, lr := range lives {
 		snap := lr.snapshot()
-		if f.Profile != "" && snap.Profile != f.Profile {
-			continue
-		}
-		if f.ConversationID != "" && snap.ConversationID != f.ConversationID {
-			continue
-		}
-		if f.Status != "" && snap.Status != f.Status {
-			continue
-		}
 		if i, ok := byID[snap.ID]; ok {
+			// Refresh unconditionally, even when the snapshot no longer
+			// matches the filter: a stored row can be staler than the live
+			// run (a Create that landed while the terminal Save is still in
+			// flight), and skipping the refresh here serves the stale row.
+			// The final filter below decides what matches.
 			stored[i] = snap
-		} else {
-			byID[snap.ID] = len(stored)
-			stored = append(stored, snap)
+			continue
 		}
+		if !f.Matches(snap) {
+			continue
+		}
+		byID[snap.ID] = len(stored)
+		stored = append(stored, snap)
 	}
 	sort.Slice(stored, func(i, j int) bool {
 		if stored[i].CreatedAt == stored[j].CreatedAt {
@@ -687,6 +697,17 @@ func jsonPayload(v any) (string, error) {
 	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
+// storeCtx bounds a store read so a wedged database stalls the route for
+// seconds, not until the client goes away. Callers map a timeout to 502.
+func storeCtx(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.Context(), 5*time.Second)
+}
+
+// storeTimeout reports whether err is the bound above firing.
+func storeTimeout(ctx context.Context, err error) bool {
+	return err != nil && ctx.Err() == context.DeadlineExceeded
+}
+
 func containsString(list []string, want string) bool {
 	for _, s := range list {
 		if s == want {
@@ -699,8 +720,12 @@ func containsString(list []string, want string) bool {
 // truncateBytes bounds s to at most limit bytes without cutting a UTF-8 rune
 // in half. Unlike runs.CapText it adds no marker: it trims a live buffer that
 // is still growing, not a stored value a reader might mistake for complete.
+// A non-positive limit means nothing fits, so it yields "".
 func truncateBytes(s string, limit int) string {
-	if limit <= 0 || len(s) <= limit {
+	if limit <= 0 {
+		return ""
+	}
+	if len(s) <= limit {
 		return s
 	}
 	cut := limit
@@ -743,8 +768,15 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 			}
 			f.Limit = n
 		}
-		list, err := s.runs.list(r.Context(), f)
+		listCtx, listCancel := storeCtx(r)
+		list, err := s.runs.list(listCtx, f)
+		listCancel()
 		if err != nil {
+			if storeTimeout(listCtx, err) {
+				apiError(w, http.StatusBadGateway, "upstream_error", "",
+					"the run store did not answer in time")
+				return
+			}
 			runsError(w, err)
 			return
 		}
@@ -795,11 +827,11 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		if !ok {
 			// Bounded: a slow store must not stall the verb until the client
 			// goes away. A timeout here is an upstream failure, not a 400.
-			getCtx, getCancel := context.WithTimeout(r.Context(), 5*time.Second)
+			getCtx, getCancel := storeCtx(r)
 			_, err := s.runs.store.Get(getCtx, id)
 			getCancel()
 			if err != nil {
-				if getCtx.Err() == context.DeadlineExceeded {
+				if storeTimeout(getCtx, err) {
 					apiError(w, http.StatusBadGateway, "upstream_error", "",
 						"the run store did not answer in time")
 					return
@@ -833,11 +865,11 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		if !ok {
 			// Same bound as steer: distinguish finished from unknown without
 			// letting a slow store stall the verb.
-			getCtx, getCancel := context.WithTimeout(r.Context(), 5*time.Second)
+			getCtx, getCancel := storeCtx(r)
 			run, err := s.runs.store.Get(getCtx, id)
 			getCancel()
 			if err != nil {
-				if getCtx.Err() == context.DeadlineExceeded {
+				if storeTimeout(getCtx, err) {
 					apiError(w, http.StatusBadGateway, "upstream_error", "",
 						"the run store did not answer in time")
 					return
@@ -869,8 +901,15 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		if !requireMethod(w, r, http.MethodGet, "/api/runs/{id}") {
 			return
 		}
-		run, err := s.runs.get(r.Context(), id)
+		getCtx, getCancel := storeCtx(r)
+		run, err := s.runs.get(getCtx, id)
+		getCancel()
 		if err != nil {
+			if storeTimeout(getCtx, err) {
+				apiError(w, http.StatusBadGateway, "upstream_error", "",
+					"the run store did not answer in time")
+				return
+			}
 			runsError(w, err)
 			return
 		}
@@ -888,8 +927,15 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request, id stri
 		s.streamLiveRun(w, r, lr)
 		return
 	}
-	run, err := s.runs.store.Get(r.Context(), id)
+	evCtx, evCancel := storeCtx(r)
+	run, err := s.runs.store.Get(evCtx, id)
+	evCancel()
 	if err != nil {
+		if storeTimeout(evCtx, err) {
+			apiError(w, http.StatusBadGateway, "upstream_error", "",
+				"the run store did not answer in time")
+			return
+		}
 		runsError(w, err)
 		return
 	}
@@ -1066,7 +1112,11 @@ func runListWire(r runs.Run) map[string]any {
 }
 
 // runWire is the run detail shape. It reuses the chat stream's usage
-// spelling so the app parses both with one helper.
+// spelling so the app parses both with one helper. Scalar empties are emitted
+// rather than omitted ("" output/error, 0 seq/timestamps), while the snapshot
+// frame omits empty output/reasoning via omitempty: the list/detail shapes are
+// stored records with stable keys, the snapshot is a live frame where absent
+// means "nothing yet". A parser must tolerate both.
 func runWire(r runs.Run) map[string]any {
 	out := map[string]any{
 		"id":          r.ID,
@@ -1262,9 +1312,11 @@ func (s *Server) executeRun(
 func (s *Server) finishCancelled(lr *liveRun, unlock func()) {
 	lr.settle(runs.StatusCancelled, "", time.Now())
 	unlock()
-	lr.publish(runFrame{Run: runSnapshot{
-		ID:     lr.id(),
-		Status: string(runs.StatusCancelled),
-	}}, false)
+	// The status frame carries the real snapshot with the status overridden,
+	// not a hand-built stub: a client tracking agento_run.seq as a cursor
+	// must not see a regression to 0 on cancel.
+	snap := snapshotOf(lr.snapshot())
+	snap.Status = string(runs.StatusCancelled)
+	lr.publish(runFrame{Run: snap}, false)
 	lr.publish(nil, true)
 }

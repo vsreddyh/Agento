@@ -607,7 +607,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// recovered by the app resending the same last user turn; if a run for this
 	// conversation is still in flight with that prompt, the turn already exists
 	// and starting another would either duplicate work or be refused. Same
-	// conversation + same prompt is a reattach, not a new turn.
+	// conversation + same prompt (text and images) is a reattach, not a new
+	// turn. Deliberately not keyed on model/provider/effort: those are
+	// validated under the profile lock below, and a switch takes effect on the
+	// next turn. The snapshot carries the model actually running, so a client
+	// that switched mid-turn can see which one answered.
 	if lr, ok := s.runs.activeForConversation(h.profile, conversationID); ok &&
 		lr.prompt() == userTurn.Text && lr.imagesSig == imagesSigOf(userTurn.Images) {
 		w.Header().Set("X-Agento-Run-Id", lr.id())
