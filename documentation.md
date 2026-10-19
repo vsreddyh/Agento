@@ -222,7 +222,10 @@ curl -X POST http://<host>:8080/p/chat/api/runs/<run-id>/cancel \
 The events stream starts with one `{"agento_run":{...}}` snapshot (full output,
 reasoning, tools, usage, status) and then live frames. One turn executes per
 profile; a different prompt while busy returns `429` with `X-Agento-Run-Id`, and
-resending the same prompt on the same conversation reattaches instead. State is
+resending the same prompt on the same conversation reattaches instead. The list
+shows previews (2 KB output, 1 KB reasoning; `limit` defaults to 100, and
+`limit=0` means the default, not an empty list); the detail route keeps the
+full text. State is
 in the `agent_runs` Mongo collection with a 7-day TTL; a gateway restart cannot
 resume execution and marks stale runs `interrupted`. See
 `docs/adr/0001-resumable-runs.md`.

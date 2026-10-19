@@ -28,12 +28,14 @@ func NewMemoryStore() *MemoryStore {
 
 // Create stores a copy of r. Insert-only: a Create that lands after a later
 // Save (the Create runs in the background while the turn executes) must not
-// rewind the record to its initial running state.
+// rewind the record to its initial running state. An empty id is refused,
+// matching Save and the Mongo backend: the caller (begin) always sets one,
+// and inventing one here would fork the record's identity per backend.
 func (m *MemoryStore) Create(_ context.Context, r Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if r.ID == "" {
-		r.ID = NewID()
+		return NewStoreError("run create needs an id", false)
 	}
 	if _, exists := m.byID[r.ID]; exists {
 		return nil

@@ -46,11 +46,17 @@ const (
 	// ListPreviewReasoning is the same preview bound for reasoning traces.
 	ListPreviewReasoning = 1000
 
-	// MaxOutput bounds the output persisted per run. The phone renders a
-	// turn, not a log; a runaway tool loop that produced megabytes must not
-	// become a megabyte Mongo document written once a second. The live
-	// output buffer is uncapped for the duration of the run (reasoning is
-	// capped live too, filled partially rather than dropped at the boundary).
+	// MaxSteer bounds one steer message. Same value as MaxPrompt today — a
+	// steer is one instruction, not a conversation — but a separate name so
+	// tuning the prompt preview never silently moves the steer limit.
+	MaxSteer = MaxPrompt
+
+	// MaxOutput bounds the output kept per run — persisted and live. The phone
+	// renders a turn, not a log; a runaway tool loop that produced megabytes
+	// must not become a megabyte Mongo document written once a second, held
+	// in the builder for the whole turn, or served from GET /api/runs/{id}.
+	// Past the cap the live snapshot carries the head while live deltas keep
+	// flowing in full; the stored record keeps the same head.
 	MaxOutput = 256 << 10
 
 	// MaxReasoning bounds the stored reasoning trace. The app already caps

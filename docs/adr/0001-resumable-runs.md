@@ -84,6 +84,10 @@ the snapshot and continues from the live stream.
 
 The reattach key is the conversation plus the full user turn — text and image
 set. Same text with different images is a different turn (429, not a reattach).
+Model, provider and reasoning effort are turn setup, not part of the key: a
+model switch mid-turn reattaches to the running model's run rather than
+starting a new one, and the snapshot carries the model actually running so the
+client can see which one answered.
 
 An older client ignores the snapshot frame (unknown keys are skipped by the app)
 and still sees ordinary chat chunks. A run that settled before the client
@@ -112,10 +116,10 @@ socket is exactly the case this feature exists to make non-destructive.
   informative rather than a bare refusal.
 - `/api/runs` in the app must use the profile path (`/p/chat/api/runs`);
   unprefixed `/api/*` through the proxy belongs to health-api.
-- Run output is capped on persistence (256 KiB output, 64 KiB reasoning, 4 KB
-  prompt preview, 32 tool names, 100 runs per list). The live output buffer is
-  uncapped for the duration of the run; live reasoning follows the same 64 KiB
-  cap, filled partially rather than dropped at the boundary.
+- Run output is capped (256 KiB output, 64 KiB reasoning, 4 KB prompt
+  preview, 32 tool names, 100 runs per list), live and stored alike. Live
+  buffers fill partially rather than dropping whole chunks at the boundary;
+  past the cap the snapshot carries the head while live deltas flow in full.
 - The list route shows previews (2 KB output, 1 KB reasoning), not full turns;
   the detail route keeps everything.
 - Persistence never blocks the turn: the executor offers each second's snapshot

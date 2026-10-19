@@ -213,17 +213,33 @@ func (lr *liveRun) snapshot() runs.Run {
 	return lr.snapshotLocked()
 }
 
-// persistState returns the current state and whether anything changed since the
-// last write. A run parked in a long tool call would otherwise rewrite an
-// unchanging document once a second.
-func (lr *liveRun) persistState() (runs.Run, bool) {
+// persistState returns the current state, its sequence, and whether anything
+// changed since the last acknowledged write. A run parked in a long tool call
+// would otherwise rewrite an unchanging document once a second.
+//
+// Split from the acknowledgement on purpose: the caller marks a sequence saved
+// only after the store write (or a successful queue offer) for that exact
+// sequence. Marking before offering would let a dropped offer retire a
+// snapshot that never reached the store, and the next tick would report
+// "unchanged" and never retry it.
+func (lr *liveRun) persistState() (runs.Run, int64, bool) {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 	if lr.seq == lr.savedSeq {
-		return runs.Run{}, false
+		return runs.Run{}, 0, false
 	}
-	lr.savedSeq = lr.seq
-	return lr.snapshotLocked(), true
+	return lr.snapshotLocked(), lr.seq, true
+}
+
+// markSaved records that seq reached the store (or the persist queue). Only
+// advances: a stale acknowledgement arriving after a newer snapshot can not
+// rewind the watermark.
+func (lr *liveRun) markSaved(seq int64) {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	if seq > lr.savedSeq {
+		lr.savedSeq = seq
+	}
 }
 
 func (lr *liveRun) snapshotLocked() runs.Run {
@@ -310,6 +326,11 @@ func (lr *liveRun) subscribe() (<-chan runEvent, func()) {
 func (lr *liveRun) publish(frame any, done bool) int64 {
 	data, err := jsonPayload(frame)
 	if err != nil {
+		// Read under the lock like every other seq access: the field is
+		// written under lock on every publish, and a bare read here is the
+		// exact shape -race flags.
+		lr.mu.Lock()
+		defer lr.mu.Unlock()
 		return lr.seq
 	}
 	lr.mu.Lock()
@@ -334,6 +355,8 @@ func (lr *liveRun) publish(frame any, done bool) int64 {
 func (lr *liveRun) publishDelta(text, reasoning string, frame chunk) int64 {
 	data, err := jsonPayload(frame)
 	if err != nil {
+		lr.mu.Lock()
+		defer lr.mu.Unlock()
 		return lr.seq
 	}
 	lr.mu.Lock()
@@ -370,6 +393,8 @@ func (lr *liveRun) publishDelta(text, reasoning string, frame chunk) int64 {
 func (lr *liveRun) publishTool(name string, frame toolFrame) int64 {
 	data, err := jsonPayload(frame)
 	if err != nil {
+		lr.mu.Lock()
+		defer lr.mu.Unlock()
 		return lr.seq
 	}
 	lr.mu.Lock()
@@ -649,13 +674,17 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 // is dropped and the next one retries, so the live stream never stalls on the
 // database.
 func (m *runManager) offerPersist(lr *liveRun) {
-	snap, changed := lr.persistState()
+	snap, seq, changed := lr.persistState()
 	if !changed {
 		return
 	}
 	select {
 	case lr.persistCh <- snap:
+		lr.markSaved(seq)
 	default:
+		// The store is slower than the turn; the tick is dropped and the
+		// next one retries with the then-current state, so the live stream
+		// never stalls on the database.
 	}
 }
 
@@ -839,9 +868,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 				"message is required")
 			return
 		}
-		if len(msg) > runs.MaxPrompt {
+		if len(msg) > runs.MaxSteer {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "message",
-				"message is too long (at most "+strconv.Itoa(runs.MaxPrompt)+" characters)")
+				"message is too long (at most "+strconv.Itoa(runs.MaxSteer)+" characters)")
 			return
 		}
 		lr, ok := s.runs.byID(id)
