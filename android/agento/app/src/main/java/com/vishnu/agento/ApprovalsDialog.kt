@@ -17,6 +17,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** Millis instant as "just now / Nm ago / Nh ago / Nd ago", "" when unknown. */
+private fun relativeAgo(at: Long): String {
+    if (at <= 0) return ""
+    val s = (System.currentTimeMillis() - at) / 1000
+    return when {
+        s < 60 -> "just now"
+        s < 3600 -> "${s / 60}m ago"
+        s < 86400 -> "${s / 3600}h ago"
+        else -> "${s / 86400}d ago"
+    }
+}
+
 /**
  * Held tool calls and the audit trail (#313).
  *
@@ -129,8 +141,10 @@ internal fun ApprovalsDialog(
                             }
                             items(auditRows.take(20), key = { it.id }) { row ->
                                 Column(modifier = Modifier.fillMaxWidth()) {
+                                    val whenText = relativeAgo(row.at)
                                     Text(
-                                        "${row.tool} · ${row.disposition.ifBlank { "?" }}",
+                                        "${row.server} · ${row.tool} · ${row.disposition.ifBlank { "?" }}" +
+                                            (if (whenText.isNotEmpty()) " · $whenText" else ""),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )

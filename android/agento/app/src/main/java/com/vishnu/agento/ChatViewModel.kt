@@ -761,18 +761,37 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(showApprovals = false)
     }
 
-    /** Reloads pending approvals and the recent audit trail. */
+    /** Reloads pending approvals and the recent audit trail. Single-flight:
+     * a newer open or manual refresh cancels the older load. */
+    private var approvalsJob: Job? = null
+
+    /** Reloads pending approvals and the recent audit trail. Single-flight:
+     * a newer open or manual refresh cancels the older load. Failures keep
+     * the old rows and report inside the sheet (never the chat banner). */
     fun refreshApprovals() {
         val path = _state.value.path
-        _state.value = _state.value.copy(approvalsLoading = true, approvalsError = "")
-        viewModelScope.launch(Dispatchers.IO) {
-            val pending = loadApprovalSheet(path)
+        _state.value = _state.value.copy(approvalsLoading = true)
+        approvalsJob?.cancel()
+        approvalsJob = viewModelScope.launch(Dispatchers.IO) {
+            val pending = approvalsApi.listApprovals(path, status = "pending", limit = 50)
+            val audit = approvalsApi.listAudit(path, limit = 50)
             withContext(Dispatchers.Main) {
+                // Either half failing reports inside the sheet; halves that
+                // loaded still replace their rows.
+                if (pending.isFailure && audit.isFailure) {
+                    _state.value = _state.value.copy(
+                        approvalsLoading = false,
+                        approvalsError = "Couldn't load approvals (${pending.exceptionOrNull()?.message?.take(120) ?: "unknown"}).",
+                    )
+                    return@withContext
+                }
                 _state.value = _state.value.copy(
-                    approvals = pending.first,
-                    auditRows = pending.second,
+                    approvals = pending.getOrNull().orEmpty(),
+                    auditRows = audit.getOrNull().orEmpty(),
                     approvalsLoading = false,
-                    pendingApprovalCount = pending.first.size,
+                    approvalsError = "",
+                    pendingApprovalCount = pending.getOrNull()?.size
+                        ?: _state.value.pendingApprovalCount,
                 )
             }
         }
@@ -801,11 +820,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private fun refreshApprovalCount() {
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
-            val n = approvalsApi.listApprovals(path, status = "pending", limit = 5)
-                .getOrNull()?.size ?: 0
-            withContext(Dispatchers.Main) {
-                _state.value = _state.value.copy(pendingApprovalCount = n)
-            }
+            approvalsApi.listApprovals(path, status = "pending", limit = 100)
+                .onSuccess { rows ->
+                    withContext(Dispatchers.Main) {
+                        _state.value = _state.value.copy(pendingApprovalCount = rows.size)
+                    }
+                }
         }
     }
 
@@ -816,17 +836,26 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         return pending to audit
     }
 
+    /** Watch cadence while streaming: immediate poll, then every 5s. A gate
+     * held at turn start otherwise reads as thinking for a full interval. */
     private fun startApprovalWatch(path: String) {
         approvalWatch?.cancel()
         approvalWatch = viewModelScope.launch(Dispatchers.IO) {
+            pollApprovalCount(path)
             while (true) {
-                delay(20_000)
-                val n = approvalsApi.listApprovals(path, status = "pending", limit = 5)
-                    .getOrNull()?.size ?: 0
-                withContext(Dispatchers.Main) {
-                    _state.value = _state.value.copy(pendingApprovalCount = n)
-                }
+                delay(5_000)
+                pollApprovalCount(path)
             }
+        }
+    }
+
+    private suspend fun pollApprovalCount(path: String) {
+        // Failures keep the old count: a network blip must not zero the
+        // badge into "no pending".
+        val n = approvalsApi.listApprovals(path, status = "pending", limit = 100)
+            .getOrNull()?.size ?: return
+        withContext(Dispatchers.Main) {
+            _state.value = _state.value.copy(pendingApprovalCount = n)
         }
     }
 
