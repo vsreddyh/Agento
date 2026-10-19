@@ -31,18 +31,10 @@ data class AgentRun(
     val updatedAt: Long = 0L,
     val finishedAt: Long = 0L,
 ) {
-    /** True for `completed|failed|cancelled|interrupted` — nothing more runs. */
+    /** True for `completed|failed|cancelled|interrupted` — nothing more runs.
+     * Liveness decisions everywhere use this, never a status equality. */
     fun isTerminal(): Boolean = status == "completed" || status == "failed" ||
         status == "cancelled" || status == "interrupted"
-
-    fun isRunning(): Boolean = status == "running"
-
-    /**
-     * Liveness decisions (cancel gating, resume matching, live labels) must
-     * use `!isTerminal()`, not this: a future live state (`cancelling`,
-     * `queued`) would otherwise lose its affordances. This stays as the
-     * display helper for today's running label.
-     */
 }
 
 /** Outcome of `POST /api/runs/{id}/steer`. */
@@ -150,7 +142,11 @@ class RunsApi(context: Context) {
             runCatching { Log.w("RunsApi", "unparseable runs body: ${body.take(120)}") }
             return out
         }
-        val arr = root.optJSONArray("runs") ?: return out
+        val arr = root.optJSONArray("runs")
+        if (arr == null) {
+            runCatching { Log.w("RunsApi", "runs body has no runs array: ${body.take(120)}") }
+            return out
+        }
         var dropped = 0
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue

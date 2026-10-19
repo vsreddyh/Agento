@@ -1017,13 +1017,18 @@ internal fun ChatScreen(
                     // a queued send returns to the composer on failure/stop.
                     // Steer (#311) sends the text into the running turn
                     // instead of behind it — shown independently of the
-                    // queue, since steering matters most mid-turn.
+                    // queue, since steering matters most mid-turn. Needs a
+                    // known run id: on older servers (or before headers
+                    // arrive) there is nothing to steer into, so only Queue
+                    // shows and send() takes the normal path.
                     if (state.streaming && state.pending.isNotBlank()) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End,
                         ) {
-                            TextButton(onClick = onSteer) { Text("Steer") }
+                            if (state.activeRunId.isNotBlank()) {
+                                TextButton(onClick = onSteer) { Text("Steer") }
+                            }
                             if (state.queued.isBlank()) {
                                 TextButton(onClick = onSend) { Text("Queue send") }
                             }

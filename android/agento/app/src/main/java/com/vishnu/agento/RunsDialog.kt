@@ -116,9 +116,11 @@ internal fun RunsDialog(
                                         }
                                     }
                                 }
-                                // A live run with nothing yet is still starting,
-                                // not broken: say so instead of a bare header.
-                                val body = if (run.status == "failed" && run.error.isNotBlank()) {
+                                // Settled rows lead with the error when there is
+                                // one (failed verdict, cancel/interrupt notes);
+                                // live rows show output. Blank errors fall
+                                // through to output either way.
+                                val body = if (!live && run.error.isNotBlank()) {
                                     run.error
                                 } else {
                                     run.output
@@ -127,7 +129,7 @@ internal fun RunsDialog(
                                     Text(
                                         body,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = if (run.status == "failed" && run.error.isNotBlank()) {
+                                        color = if (!live && run.error.isNotBlank()) {
                                             MaterialTheme.colorScheme.error
                                         } else {
                                             MaterialTheme.colorScheme.onSurfaceVariant

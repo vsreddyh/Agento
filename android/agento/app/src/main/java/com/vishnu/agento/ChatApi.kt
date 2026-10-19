@@ -779,11 +779,16 @@ internal fun readSseStream(
         val data = line.removePrefix("data:").trim()
         if (data.isEmpty()) continue
         if (data == "[DONE]") return SseEnd.Terminal
-        // Server-reported token counts (final chunk). Parsed
-        // off every JSON frame so placement never matters;
-        // frames without counts leave the last-seen intact.
-        runCatching { parseTokenUsage(JSONObject(data)) }
-            .getOrNull()?.let(onUsage)
+        // Server-reported token counts. Parsed off frames that are not
+        // replay content: after a terminal snapshot, a `choices` frame's
+        // piggybacked counts are the same totals the snapshot already
+        // reported (or older), so only usage-only frames (the usage chunk
+        // has no `choices`) still report. Keeps the central-skip contract:
+        // terminal ends content, usage included.
+        val usageObj = runCatching { JSONObject(data) }.getOrNull()
+        if (usageObj != null && (!terminalSeen || usageObj.optJSONArray("choices") == null)) {
+            runCatching { parseTokenUsage(usageObj) }.getOrNull()?.let(onUsage)
+        }
         // Resumable-run snapshot (`{"agento_run": {...}}`, #311): the first
         // frame of every stream. Emitted, not dropped — older clients ignore
         // unknown frames, but this client reattaches from it. The snapshot
