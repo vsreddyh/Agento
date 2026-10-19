@@ -154,6 +154,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * the user has already moved past. */
     private var recoveryJob: Job? = null
 
+    /** One runs-sheet load at a time (same shape as serverTotalsJob): a
+     * newer open or a thread change cancels the older one, so stale rows
+     * can never land on another thread. */
+    private var runsJob: Job? = null
+
     /** Drops a pending recovery, if any. Called on every active-thread
      * change (switch/new/delete/fork), send, and stop — recovery belongs
      * to one tail of one thread, and anything that moves past it ends it
@@ -260,6 +265,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val target = threads.firstOrNull { it.id == id } ?: return
         threadId = id
         cancelRecovery()
+        runsJob?.cancel()
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
@@ -273,7 +279,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // Run ids belong to the old thread's turn: a switch must not
             // highlight (or stop, via a stale read) another thread's run.
             activeRunId = "", busyRunId = "",
-            showRuns = false,
+            showRuns = false, runsLoading = false,
         )
         refreshServerTotals()
         maybeResume(id, ChatThreads.toUi(target.messages))
@@ -321,6 +327,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (_state.value.streaming) return false
             threadId = id
             cancelRecovery()
+            runsJob?.cancel()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(target.messages),
                 threads = summaries(),
@@ -332,7 +339,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 serverTokens = null,
                 queued = "",
                 activeRunId = "", busyRunId = "",
-                showRuns = false,
+                showRuns = false, runsLoading = false,
             )
             refreshServerTotals()
             maybeResume(id, ChatThreads.toUi(target.messages))
@@ -368,6 +375,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
         threadId = fresh.id
         cancelRecovery()
+        runsJob?.cancel()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
@@ -375,7 +383,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             serverTokens = null,
             queued = "",
             activeRunId = "", busyRunId = "",
-            showRuns = false,
+            showRuns = false, runsLoading = false,
         )
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
@@ -406,12 +414,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (threads.none { it.id == next.id }) threads = listOf(next) + threads
             threadId = next.id
             cancelRecovery()
+            runsJob?.cancel()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
                 serverTokens = null, queued = "",
                 activeRunId = "", busyRunId = "",
-                showRuns = false,
+                showRuns = false, runsLoading = false,
             )
         }
         _state.value = _state.value.copy(threads = summaries())
@@ -651,7 +660,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Opens the runs sheet for the active thread and loads its runs (#311). */
     fun openRuns() {
         if (!_state.value.ready || threadId.isBlank()) return
-        _state.value = _state.value.copy(showRuns = true, runsError = "")
+        // Drop the previous thread's rows up front: the first paint is the
+        // spinner, never stale rows under a new thread id.
+        _state.value = _state.value.copy(showRuns = true, runsError = "", runs = emptyList())
         refreshRuns()
     }
 
@@ -668,7 +679,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = _state.value.path
         val conversationId = threadId
         _state.value = _state.value.copy(runsLoading = true, runsError = "")
-        viewModelScope.launch(Dispatchers.IO) {
+        runsJob?.cancel()
+        runsJob = viewModelScope.launch(Dispatchers.IO) {
             val result = runsApi.list(path, conversationId = conversationId, limit = 50)
             withContext(Dispatchers.Main) {
                 // Stale load (thread switched mid-flight): never write
