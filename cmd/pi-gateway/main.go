@@ -240,6 +240,7 @@ func run() error {
 		runStore = runs.NewMemoryStore()
 	} else {
 		runStore = store
+		store.Logf = logger.Printf
 		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
 		if err := store.EnsureIndexes(indexCtx); err != nil {
 			logger.Printf("run history: index setup failed (records will not auto-expire): %v", err)

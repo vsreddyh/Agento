@@ -15,6 +15,15 @@ import (
 // MongoStore is the MongoDB backend for runs.
 type MongoStore struct {
 	runs *mongoDrv.Collection
+	// Logf receives operational notes. Nil discards them; main sets it so a
+	// skipped corrupt row is visible instead of silent.
+	Logf func(string, ...any)
+}
+
+func (s *MongoStore) logf(format string, args ...any) {
+	if s.Logf != nil {
+		s.Logf(format, args...)
+	}
 }
 
 // New connects to uri/dbName.
@@ -133,12 +142,20 @@ func (s *MongoStore) List(ctx context.Context, f Filter) ([]Run, error) {
 	}
 	defer cur.Close(ctx)
 	out := make([]Run, 0)
+	// A corrupt or schema-drifted row is logged and skipped, never fatal to
+	// the whole list — but never silent either, or the list would quietly
+	// omit a run the detail route errors on.
+	skipped := 0
 	for cur.Next(ctx) {
 		var r Run
 		if err := cur.Decode(&r); err != nil {
+			skipped++
 			continue
 		}
 		out = append(out, r.Clone())
+	}
+	if skipped > 0 {
+		s.logf("run history: skipped %d undecodable row(s) in agent_runs", skipped)
 	}
 	if err := cur.Err(); err != nil {
 		return nil, NewStoreError("run list failed: "+err.Error(), true)

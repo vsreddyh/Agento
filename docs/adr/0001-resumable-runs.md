@@ -126,6 +126,10 @@ status, not message text: `cancelled` and `interrupted` are both 409 with
 while this run was in flight; the partial output is preserved". Both strings
 are stable contract; failures are 502 `upstream_error`.
 
+Error frames end the stream with EOF and no `[DONE]`, the same contract as
+the chat surface's `writeStreamError`: the app treats a closed stream without
+a terminator as failure, on both the live and the reattached path.
+
 ### Stop is a server-side cancel
 
 Cancel marks the run, sends Pi's `abort` (via `Send`, because the abort reply

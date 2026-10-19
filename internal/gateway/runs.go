@@ -525,6 +525,9 @@ func newRunManager(store runs.Store, logf func(string, ...any)) *runManager {
 }
 
 func conversationKey(profile, conversationID string) string {
+	// NUL cannot appear in either half in practice (HTTP header values never
+	// carry it), so it cannot collide with content. Do not reuse this for
+	// arbitrary strings without the same guarantee.
 	return profile + "\x00" + conversationID
 }
 
@@ -778,6 +781,8 @@ func (m *runManager) finish(lr *liveRun, now time.Time) {
 	lr.mu.Lock()
 	done := lr.done
 	lr.mu.Unlock()
+	// Single caller by construction (the executeRun defer): a second closer
+	// would panic, so any future caller must take over — not add one.
 	close(done)
 }
 
@@ -847,9 +852,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 			Profile:        strings.TrimSpace(r.URL.Query().Get("profile")),
 			ConversationID: strings.TrimSpace(r.URL.Query().Get("conversation_id")),
 		}
-		// The filters go straight into the Mongo query: bound them like the
-		// chat header so a megabyte of query string cannot become a full
-		// equality scan.
+		// The filters go straight into the Mongo query: bound them to the same
+		// 256 as the chat header (maxConversationIDLen names the header, but
+		// the value fits both filters) so a megabyte of query string cannot
+		// become a full equality scan.
 		if len(f.Profile) > maxConversationIDLen || len(f.ConversationID) > maxConversationIDLen {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "profile",
 				"filter values must be at most 256 characters")
