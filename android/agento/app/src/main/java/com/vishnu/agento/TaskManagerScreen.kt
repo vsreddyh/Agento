@@ -141,11 +141,14 @@ internal fun TaskManagerScreen(
     // fetch that lands meanwhile carries it over rather than yanking it out
     // from under the animation (see mergeRefresh).
     var exitingIds by remember { mutableStateOf(setOf<String>()) }
-    // Whether the list has been drawn at least once (#308). The enter
-    // animation is for rows that arrive LATER — a repeat's next occurrence, a
-    // task created elsewhere — so the first population is drawn in place
-    // instead of cascading the whole list in.
-    var rowsDrawnOnce by remember { mutableStateOf(false) }
+    // The task ids the list held the last time it was DRAWN (#308), or null
+    // before the first draw. A row animates in only when its id was not among
+    // them: that makes the first population, a filter switch, a re-sort and a
+    // search all draw in place, while a row that genuinely arrives — a
+    // repeat's next occurrence, a task created here or by the agent — still
+    // animates in. Null (not the empty set) is what marks "never drawn", so
+    // the very first task created into an empty list animates too.
+    var knownTaskIds by remember { mutableStateOf<Set<String>?>(null) }
     // True once the loader below has completed at least once (success or
     // failure). The resume check below must not refetch on the very first
     // resume: the initial load is already in flight, and re-bumping the tick
@@ -313,12 +316,13 @@ internal fun TaskManagerScreen(
         hasLoaded = true
     }
 
-    // Flipped only AFTER the rows have actually been on screen once (#308), so
-    // the first population is not treated as an arrival: an effect runs after
-    // composition, which is exactly what makes this a "next composition" flag
-    // rather than one the first paint already sees set.
+    // Recorded only AFTER the rows have actually been on screen once (#308),
+    // so the paint that first shows them is not treated as an arrival: an
+    // effect runs after composition, which is exactly what makes this the
+    // "what was on screen last time" set rather than one the first paint
+    // already sees.
     LaunchedEffect(tasks, loading, error) {
-        if (!loading && error.isEmpty() && tasks.isNotEmpty()) rowsDrawnOnce = true
+        if (!loading && error.isEmpty()) knownTaskIds = tasks.mapTo(HashSet()) { it.id }
     }
 
     // Coming back to a screen the agent may have written to while we were away
@@ -939,9 +943,10 @@ internal fun TaskManagerScreen(
                                     TaskRowSlot(
                                         taskId = t.id,
                                         exiting = t.id in exitingIds,
-                                        // Later arrivals animate in; the first
-                                        // population of the screen does not.
-                                        animateEnter = rowsDrawnOnce,
+                                        // A row whose id the list was already
+                                        // showing is drawn in place; only a
+                                        // genuinely new one animates in.
+                                        animateEnter = knownTaskIds?.contains(t.id) == false,
                                         onExited = ::onRowExited,
                                     ) {
                                         Column {
@@ -1201,7 +1206,7 @@ internal fun TaskManagerScreen(
             task = open,
             overdue = open.isOverdue(sheetDay.toString(), sheetNow),
             today = sheetDay,
-            actionsEnabled = open.id !in busyIds,
+            actionsEnabled = open.id !in busyIds && open.id !in exitingIds,
             onDismiss = { selected = null },
             onEdit = {
                 selected = null
@@ -1264,9 +1269,10 @@ private fun RefreshBar(refreshing: Boolean) {
  * [onExited] run — so the caller drops the row at the moment it has actually
  * finished leaving, instead of yanking it out on the tap.
  *
- * [animateEnter] is read once, when the row first composes: it is false for
- * the screen's first population, so opening the list does not cascade every
- * row in, and true afterwards, so a row that arrives later animates in.
+ * [animateEnter] is read once, when the row first composes: the caller sets it
+ * only for a row whose id the list was not already showing, so the first
+ * population, a filter switch and a re-sort draw in place and only a row that
+ * genuinely arrived animates in.
  */
 @Composable
 private fun TaskRowSlot(
@@ -1290,11 +1296,13 @@ private fun TaskRowSlot(
     ) {
         content()
     }
-    // Both false means the leave animation has run to its end. Reported from
-    // an effect rather than during composition, so the removal is a state
-    // write and not a composition side effect.
-    if (!visibleState.currentState && !visibleState.targetState) {
-        LaunchedEffect(taskId) { onExited(taskId) }
+    // Reported from an effect rather than during composition, so the removal
+    // is a state write and not a composition side effect. Keyed on the
+    // transition state rather than wrapped in an `if`: an effect inside a
+    // conditional branch has no stable identity (Compose lint flags it), and
+    // the body's own check is just as cheap.
+    LaunchedEffect(taskId, visibleState.currentState, visibleState.targetState) {
+        if (!visibleState.currentState && !visibleState.targetState) onExited(taskId)
     }
 }
 
@@ -1324,17 +1332,15 @@ internal fun mergeRefresh(
 ): List<ServerTask> {
     if (exiting.isEmpty()) return fresh
     val freshIds = fresh.mapTo(HashSet()) { it.id }
-    val carried = previous.filter { it.id in exiting && it.id !in freshIds }
+    // One pass for the predicate, carrying each row's index with it.
+    val carried = previous.withIndex()
+        .filter { (_, row) -> row.id in exiting && row.id !in freshIds }
     if (carried.isEmpty()) return fresh
     // Indices ascend (we walk `previous` in order), so inserting each carried
     // row at its own clamped index keeps them in their original relative
     // order.
     val merged = fresh.toMutableList()
-    previous.forEachIndexed { index, row ->
-        if (row.id in exiting && row.id !in freshIds) {
-            merged.add(index.coerceAtMost(merged.size), row)
-        }
-    }
+    carried.forEach { (index, row) -> merged.add(index.coerceAtMost(merged.size), row) }
     return merged
 }
 

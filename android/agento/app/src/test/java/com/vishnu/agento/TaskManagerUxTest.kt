@@ -84,6 +84,18 @@ class TaskManagerUxTest {
     }
 
     @Test
+    fun `a carried index past the end of the fresh page is clamped`() {
+        // `c` sat at index 2 but the fresh page is only one row long — it goes
+        // at the end rather than out of range.
+        val merged = mergeRefresh(
+            fresh = listOf(ServerTask(id = "a")),
+            previous = listOf(ServerTask(id = "a"), ServerTask(id = "b"), ServerTask(id = "c")),
+            exiting = setOf("c"),
+        )
+        assertEquals(listOf("a", "c"), merged.map { it.id })
+    }
+
+    @Test
     fun `a row whose exit already finished is not resurrected`() {
         // exiting set here as it is when the response lands, after the row
         // was dropped: an empty set means nothing is carried over.
