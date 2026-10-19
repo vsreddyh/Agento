@@ -201,6 +201,21 @@ func (lr *liveRun) profile() string {
 	defer lr.mu.Unlock()
 	return lr.run.Profile
 }
+
+// status reports the lifecycle state without copying the run, for cheap
+// pre-filtering before a full snapshot (see list overlay).
+func (lr *liveRun) status() runs.Status {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.run.Status
+}
+
+// conversation reports the conversation id without copying the run.
+func (lr *liveRun) conversation() string {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.run.ConversationID
+}
 func (lr *liveRun) prompt() string {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
@@ -672,6 +687,19 @@ func (m *runManager) list(ctx context.Context, f runs.Filter) ([]runs.Run, error
 		byID[r.ID] = i
 	}
 	for _, lr := range lives {
+		// Cheap pre-filter before the full snapshot: a snapshot copies up
+		// to 256 KiB of output, and a 1/sec list poller must not pay that
+		// for runs the filter excludes. The final Matches below stays
+		// authoritative — state can settle between this check and it.
+		if f.Profile != "" && lr.profile() != f.Profile {
+			continue
+		}
+		if f.ConversationID != "" && lr.conversation() != f.ConversationID {
+			continue
+		}
+		if f.Status != "" && lr.status() != f.Status {
+			continue
+		}
 		snap := lr.snapshot()
 		if i, ok := byID[snap.ID]; ok {
 			// Refresh unconditionally, even when the snapshot no longer
@@ -1434,6 +1462,30 @@ func (s *Server) executeRun(
 	for {
 		select {
 		case <-ctx.Done():
+			// Settled-first: select picks randomly when the deadline and a
+			// queued agent_settled are both ready, which would mark a
+			// completed turn failed. Drain whatever the agent already queued
+			// — without blocking — before declaring the timeout, so only a
+			// settle that arrives after the drain loses the race (a residual
+			// millisecond window, loud as a timeout, not silent).
+		drain:
+			for {
+				select {
+				case rec, open := <-events:
+					if !open {
+						const msg = "the agent stopped before finishing this turn"
+						lr.settle(runs.StatusFailed, msg, time.Now())
+						unlock()
+						lr.publish(errorFrame{Error: msg}, false)
+						return
+					}
+					if s.stepRun(lr, req, rec, unlock) {
+						return
+					}
+				default:
+					break drain
+				}
+			}
 			if lr.cancelled() {
 				s.finishCancelled(lr, unlock)
 			} else {
@@ -1454,63 +1506,90 @@ func (s *Server) executeRun(
 				lr.publish(errorFrame{Error: msg}, false)
 				return
 			}
-			if u, ok := decodeUsage(rec); ok {
-				lr.setUsage(u)
-			}
-			if msg, failed := decodeTurnError(rec); failed {
-				if lr.cancelled() {
-					s.finishCancelled(lr, unlock)
-				} else {
-					lr.settle(runs.StatusFailed, msg, time.Now())
-					unlock()
-					lr.publish(errorFrame{Error: msg}, false)
-				}
-				return
-			}
-
-			switch rec.Type {
-			case "message_update":
-				text, reasoning, isDelta, ok := decodeMessageUpdate(rec)
-				if !ok || !isDelta || (text == "" && reasoning == "") {
-					continue
-				}
-				lr.publishDelta(text, reasoning, newChunk(lr.completionID, req.Model, text, reasoning))
-
-			default:
-				name, named := decodeToolEvent(rec)
-				if !named {
-					break
-				}
-				status := toolStatus(rec.Type)
-				if !isToolEvent(rec.Type) {
-					status = "running"
-				}
-				lr.publishTool(name, toolFrame{Tool: name, Status: status})
-
-			case pi.TypeAgentSettled:
-				if lr.cancelled() {
-					s.finishCancelled(lr, unlock)
-					return
-				}
-				lr.settle(runs.StatusCompleted, "", time.Now())
-				unlock()
-				if snap := lr.snapshot(); snap.Usage.NonZero() {
-					// The usage chunk carries the run's model, not the
-					// request's: both come from the same resolved selection
-					// today, but the snapshot is the authority a reattached
-					// client already read — one run must not name two models.
-					lr.publish(chunk{
-						ID:      lr.completionID,
-						Object:  "chat.completion.chunk",
-						Created: nowUnix(),
-						Model:   snap.Model,
-						Usage:   usageWire(snap.Usage),
-					}, false)
-				}
-				lr.publish(nil, true)
+			if s.stepRun(lr, req, rec, unlock) {
 				return
 			}
 		}
+	}
+}
+
+// stepRun folds one agent record into the run and reports whether the turn
+// ended. Shared by the event loop and the timeout drain, so a settle queued
+// beside the deadline is completed, not failed.
+func (s *Server) stepRun(lr *liveRun, req chatRequest, rec pi.Record, unlock func()) bool {
+	// Usage is cumulative and reported on message_update today, but it is
+	// decoded for EVERY record rather than inside one case: Pi also nests it
+	// under other events (compaction_end carries result.usage), and a record
+	// whose final counts were never read would silently report zero tokens
+	// for a completed turn.
+	if u, ok := decodeUsage(rec); ok {
+		lr.setUsage(u)
+	}
+	// A turn Pi could not complete is reported as an error, not as an empty
+	// success: an errored turn emits no content, so without this the stream
+	// would end cleanly and the client would see a finished run with no text.
+	if msg, failed := decodeTurnError(rec); failed {
+		if lr.cancelled() {
+			s.finishCancelled(lr, unlock)
+		} else {
+			lr.settle(runs.StatusFailed, msg, time.Now())
+			unlock()
+			lr.publish(errorFrame{Error: msg}, false)
+		}
+		return true
+	}
+
+	switch rec.Type {
+	case "message_update":
+		text, reasoning, isDelta, ok := decodeMessageUpdate(rec)
+		if !ok || !isDelta || (text == "" && reasoning == "") {
+			return false
+		}
+		lr.publishDelta(text, reasoning, newChunk(lr.completionID, req.Model, text, reasoning))
+		return false
+
+	default:
+		// Tool progress. A known lifecycle event always renders; an
+		// unfamiliar one renders only if it names a tool, so a future Pi
+		// event about a tool does not vanish mid-execution while an unrelated
+		// event is not mislabelled as one.
+		name, named := decodeToolEvent(rec)
+		if !named {
+			return false
+		}
+		status := toolStatus(rec.Type)
+		if !isToolEvent(rec.Type) {
+			// Unfamiliar type that still names a tool: running, not a start
+			// or end we did not observe.
+			status = "running"
+		}
+		lr.publishTool(name, toolFrame{Tool: name, Status: status})
+		return false
+
+	case pi.TypeAgentSettled:
+		// The end signal for the turn. Usage goes on its own frame so the
+		// app's last-seen-wins parsing picks it up before [DONE].
+		if lr.cancelled() {
+			s.finishCancelled(lr, unlock)
+			return true
+		}
+		lr.settle(runs.StatusCompleted, "", time.Now())
+		unlock()
+		if snap := lr.snapshot(); snap.Usage.NonZero() {
+			// The usage chunk carries the run's model, not the
+			// request's: both come from the same resolved selection
+			// today, but the snapshot is the authority a reattached
+			// client already read — one run must not name two models.
+			lr.publish(chunk{
+				ID:      lr.completionID,
+				Object:  "chat.completion.chunk",
+				Created: nowUnix(),
+				Model:   snap.Model,
+				Usage:   usageWire(snap.Usage),
+			}, false)
+		}
+		lr.publish(nil, true)
+		return true
 	}
 }
 
