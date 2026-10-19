@@ -665,69 +665,6 @@ class ChatApi(context: Context) {
             call.cancel()
         }
     }.buffer(Channel.UNLIMITED)
-
-    /**
-     * Attaches to a live or finished run (`GET /api/runs/{id}/events`, #311).
-     * Same SSE vocabulary as [streamChat]: one `agento_run` snapshot, then
-     * live frames, then `[DONE]` (or an error frame). Emits [ChatEvent.RunId]
-     * from the response header like [streamChat] so consumers share one path.
-     */
-    fun runEvents(path: String, runId: String): Flow<ChatEvent> = callbackFlow {
-        val base = baseUrl()
-        if (base.isEmpty()) {
-            trySend(ChatEvent.Error("Server URL not configured — see Settings"))
-            close()
-            return@callbackFlow
-        }
-        val request = Request.Builder()
-            .url("$base$path/api/runs/$runId/events")
-            .header("Authorization", "Bearer ${password()}")
-            .header("Accept", "text/event-stream")
-            .get()
-            .build()
-        val call = http.newCall(request)
-        val job = launch(Dispatchers.IO) {
-            try {
-                call.execute().use { response ->
-                    if (!response.isSuccessful) {
-                        val err = response.body?.string()?.take(300) ?: ""
-                        trySend(ChatEvent.Error("HTTP ${response.code}: $err"))
-                        return@launch
-                    }
-                    val headerId = response.header("X-Agento-Run-Id").orEmpty().trim()
-                    if (headerId.isNotEmpty()) trySend(ChatEvent.RunId(headerId))
-                    val source = response.body?.source()
-                    if (source == null) {
-                        trySend(ChatEvent.Error("empty response body"))
-                        return@launch
-                    }
-                    val full = StringBuilder()
-                    val reasoned = StringBuilder()
-                    var seenUsage: TokenUsage? = null
-                    when (val end = readSseStreamLenient(
-                        source, full, reasoned,
-                        onUsage = { seenUsage = it },
-                        emit = { trySend(it) },
-                    )) {
-                        is SseEnd.ErrorFrame -> {
-                            trySend(ChatEvent.Error(end.message))
-                            return@launch
-                        }
-                        is SseEnd.Terminal -> trySend(doneFor(end, full.toString(), seenUsage))
-                        is SseEnd.EndOfStream -> trySend(doneFor(end, full.toString(), seenUsage))
-                    }
-                }
-            } catch (e: Exception) {
-                trySend(ChatEvent.Error(e.message ?: e.javaClass.simpleName))
-            } finally {
-                close()
-            }
-        }
-        awaitClose {
-            job.cancel()
-            call.cancel()
-        }
-    }.buffer(Channel.UNLIMITED)
 }
 
 /**

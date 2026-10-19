@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.app.Application
+import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
@@ -479,16 +480,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // A pending recovery belongs to the turn just stopped: it must not
         // resurrect text behind whatever the user does next.
         cancelRecovery()
-        // Stop the server-side run too, not just the local socket (#311):
-        // closing the stream no longer cancels the work, so a stop that
-        // stayed local would leave the agent running invisibly. Fire and
-        // forget — the cancelled stream ending (or its absence, when the
-        // run already settled) is the confirmation.
-        val runToCancel = _state.value.activeRunId.ifBlank { _state.value.busyRunId }
+        // Stop the server-side run this tab started, not just the local
+        // socket (#311): closing the stream no longer cancels the work, so a
+        // stop that stayed local would leave the agent running invisibly.
+        // Only the active run: a 429-parked busy run belongs to another turn
+        // and is cancelled from the Runs sheet, never as a side effect here.
+        // Fire and forget — the cancelled stream ending (or its absence, when
+        // the run already settled) is the confirmation; failures are logged,
+        // never silent, so a cleared id always means "asked to stop".
+        val runToCancel = _state.value.activeRunId
         val cancelPath = _state.value.path
         if (runToCancel.isNotBlank()) {
             viewModelScope.launch(Dispatchers.IO) {
                 runCatching { runsApi.cancel(cancelPath, runToCancel) }
+                    .onFailure { runCatching { Log.w("ChatRuns", "cancel $runToCancel failed", it) } }
             }
         }
         // Mark the in-flight reply as stopped (#122): the partial text
@@ -590,7 +595,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val runId = _state.value.activeRunId
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
-            val outcome = runsApi.steer(path, runId, text).getOrNull()
+            val result = runsApi.steer(path, runId, text)
+            val outcome = result.getOrNull()
             withContext(Dispatchers.Main) {
                 // Stale steer (a stop landed meanwhile): never touch state —
                 // the composer text belongs to whatever the user does next.
@@ -600,7 +606,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         _state.value = _state.value.copy(pending = "")
                     is SteerOutcome.Conflict -> send()
                     null -> _state.value = _state.value.copy(
-                        error = "Steer failed — the text stays in the composer.",
+                        error = "Steer failed" +
+                            (result.exceptionOrNull()?.message?.take(120)?.let { ": $it" } ?: "") +
+                            " — the text stays in the composer.",
                     )
                 }
             }
@@ -609,7 +617,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Opens the runs sheet for the active thread and loads its runs (#311). */
     fun openRuns() {
-        _state.value = _state.value.copy(showRuns = true, runsLoading = true)
+        _state.value = _state.value.copy(showRuns = true)
         refreshRuns()
     }
 
@@ -634,14 +642,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /**
      * Cancels a run from the sheet, then reloads. When it is the active
      * turn, its stream ends through the normal cancelled path (explicit
-     * status frame + Done), so no local patching happens here.
+     * status frame + Done), so no local patching happens here. A failed
+     * cancel surfaces instead of silently refreshing.
      */
     fun cancelRun(id: String) {
         if (id.isBlank()) return
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { runsApi.cancel(path, id) }
+            val result = runsApi.cancel(path, id)
             withContext(Dispatchers.Main) {
+                if (result.isFailure) {
+                    _state.value = _state.value.copy(error = "Cancel failed — try again.")
+                }
                 if (_state.value.showRuns) refreshRuns()
             }
         }
@@ -659,14 +671,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val last = messages.lastOrNull() ?: return
         if (last.role != "user" || last.content.isBlank()) return
         if (threadId in resumedThreads) return
-        resumedThreads.add(threadId)
         viewModelScope.launch(Dispatchers.IO) {
             val path = api.pathFor(tab)
             val runs = runsApi.list(path, conversationId = threadId, status = "running", limit = 5)
                 .getOrNull().orEmpty()
+            // Belt and braces on the status: the query already filters, but a
+            // stale row must never trigger a resend on its own. Marked only
+            // on a match, so a failed lookup or a not-yet-listed run retries
+            // on the next thread open instead of never.
             val run = runs.firstOrNull {
-                it.conversationId == threadId && promptMatches(last.content, it.prompt)
+                it.isRunning() && it.conversationId == threadId && promptMatches(last.content, it.prompt)
             } ?: return@launch
+            resumedThreads.add(threadId)
             withContext(Dispatchers.Main) {
                 if (threadId != this@ChatViewModel.threadId || _state.value.streaming || !_state.value.ready) {
                     return@withContext
@@ -843,7 +859,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     }
                     is ChatEvent.RunState -> {
                         val snap = event.snapshot
-                        lastRunStatus = snap.status.ifBlank { null }
+                        // A blank status carries no information (lenient parse
+                        // of an odd frame): keep the prior one rather than
+                        // clearing a known cancelled/running.
+                        if (snap.status.isNotBlank()) lastRunStatus = snap.status
                         if (snap.tools.isNotEmpty()) {
                             for (t in snap.tools) {
                                 val name = t.trim()
@@ -853,10 +872,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             }
                             _state.value = _state.value.copy(activeTools = liveTools.toList())
                         }
+                        // Prefer the snapshot's model whenever it names one: a
+                        // mid-turn switch means the running model, not the
+                        // requested one, is serving this stream.
+                        val servingModel = snap.model.trim().ifBlank { model }
                         if (snap.model.isNotBlank()) {
                             patchPlaceholder(
                                 content = null, reasoning = null,
-                                model = snap.model.trim(),
+                                model = servingModel,
                             )
                         }
                         // Seed the accumulators from the authoritative snapshot
@@ -869,14 +892,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             acc.append(snap.output)
                             patchPlaceholder(
                                 content = acc.toString(), reasoning = null,
-                                model = model,
+                                model = servingModel,
                             )
                         }
                         if (snap.reasoning.isNotEmpty() && racc.isEmpty()) {
                             racc.append(snap.reasoning.take(REASONING_CAP - racc.length))
                             patchPlaceholder(
                                 content = null, reasoning = racc.toString(),
-                                model = model,
+                                model = servingModel,
                             )
                         }
                     }
@@ -893,6 +916,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             msgs
                         }
                         val text = history.lastOrNull { it.role == "user" }?.content.orEmpty()
+                        // Follow-up typed before the refusal arrived is parked
+                        // in the queue slot, not dropped: the failed prompt
+                        // takes the composer, the follow-up fires after the
+                        // next clean Done like any queued send.
+                        val followUp = _state.value.pending
                         streamJob = null
                         _state.value = _state.value.copy(
                             messages = unposted, streaming = false,
@@ -901,8 +929,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                                 ". Wait or stop it from Runs.",
                             activeTools = emptyList(), activeToolLabel = "",
                             busyRunId = event.runId,
-                            pending = if (_state.value.pending.isBlank()) text
-                            else _state.value.pending,
+                            pending = text.ifBlank { _state.value.pending },
+                            queued = if (followUp.isNotBlank() && _state.value.queued.isBlank()) followUp
+                            else _state.value.queued,
                         )
                     }
                     is ChatEvent.ToolProgress -> {
@@ -967,7 +996,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // is a real (if useless) answer, and dropping it would hide that
                         // the server responded at all.
                         val nothingArrived = final.isBlank() && racc.toString().isBlank()
-                        val finished = if (event.interrupted && nothingArrived) {
+                        val finished = if ((event.interrupted || cancelled) && nothingArrived) {
                             _state.value.messages.dropLast(1)
                         } else msgsDropLastPlusAssistant(
                             final, finishedAt, liveTools.toList(), event.usage,
@@ -1013,7 +1042,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // no message at finished.size - 1 to attach tools to
                         // (it points at the previous user row), and the ts
                         // lookup would miss anyway.
-                        if (!(event.interrupted && nothingArrived)) {
+                        if (!((event.interrupted || cancelled) && nothingArrived)) {
                             backfillUsage(path, stableSessionId, finishedAt, final, doneMessages.size - 1)
                         }
                         refreshServerTotals(path, stableSessionId)

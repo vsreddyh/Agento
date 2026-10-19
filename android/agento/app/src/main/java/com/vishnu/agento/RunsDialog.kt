@@ -72,28 +72,33 @@ internal fun RunsDialog(
                                         },
                                         modifier = Modifier.weight(1f),
                                     )
+                                    Text(
+                                        run.id.take(8),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
                                     if (run.isRunning()) {
                                         TextButton(onClick = { onCancel(run.id) }) {
                                             Text("Cancel")
                                         }
                                     }
                                 }
-                                val preview = run.output.trim()
-                                    .replace(Regex("\\s+"), " ").take(160)
-                                if (preview.isNotEmpty()) {
+                                // Failed turns lead with the error even when output exists:
+                                // the output is a fragment, the error is the verdict.
+                                val body = if (run.status == "failed" && run.error.isNotBlank()) {
+                                    run.error
+                                } else {
+                                    run.output
+                                }.trim().replace(Regex("\\s+"), " ").take(160)
+                                if (body.isNotEmpty()) {
                                     Text(
-                                        preview,
+                                        body,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 3,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(top = 2.dp),
-                                    )
-                                } else if (run.error.isNotBlank()) {
-                                    Text(
-                                        run.error.take(160),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error,
+                                        color = if (run.status == "failed" && run.error.isNotBlank()) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
                                         maxLines = 3,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.padding(top = 2.dp),

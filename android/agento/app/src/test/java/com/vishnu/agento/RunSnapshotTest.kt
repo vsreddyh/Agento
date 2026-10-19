@@ -44,8 +44,9 @@ class RunSnapshotTest {
             .put("completion_tokens", completion)
             .put("total_tokens", total)
 
-    private fun delta(content: String) =
-        """{"choices":[{"delta":{"content":"$content"}}]}"""
+    private fun delta(content: String) = JSONObject()
+        .put("choices", JSONArray().put(JSONObject().put("delta", JSONObject().put("content", content))))
+        .toString()
 
     private fun frame(payload: String) = "data: $payload"
 
@@ -127,6 +128,8 @@ class RunSnapshotTest {
                 frame(delta(" live")),
                 // Explicit cancelled status frame: status only, no content.
                 frame(snapshot(status = "cancelled")),
+                // A delta after the terminal frame stays skipped.
+                frame(delta(" late")),
                 "data: [DONE]",
             ),
         )

@@ -8,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 /** One resumable agent run from the gateway Runs API (`/api/runs`, #311). */
@@ -71,6 +72,11 @@ class RunsApi(context: Context) {
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
+
+        /** Query/path encoding matching ProjectsApi/TasksApi (`+` is a space
+         * in form encoding, not in a path — `%20` keeps ids exact). */
+        internal fun encode(v: String): String =
+            URLEncoder.encode(v, Charsets.UTF_8.name()).replace("+", "%20")
     }
 
     private fun base(): String {
@@ -102,7 +108,7 @@ class RunsApi(context: Context) {
                 "GET" -> builder.get()
                 "POST" -> builder.post(
                     (body?.toString() ?: "{}").toRequestBody(JSON))
-                else -> builder.get()
+                else -> throw IllegalArgumentException("unknown method $method")
             }
             http.newCall(builder.build()).execute().use { response ->
                 CallResult(response.code, response.body?.string() ?: "")
@@ -156,14 +162,19 @@ class RunsApi(context: Context) {
         limit: Int = 50,
     ): Result<List<AgentRun>> = withContext(Dispatchers.IO) {
         var url = "$path/api/runs?limit=$limit"
-        if (!conversationId.isNullOrBlank()) url += "&conversation_id=${conversationId.trim()}"
-        if (!status.isNullOrBlank()) url += "&status=${status.trim()}"
-        call("GET", url).map { parseList(it.body) }
+        if (!conversationId.isNullOrBlank()) url += "&conversation_id=${encode(conversationId.trim())}"
+        if (!status.isNullOrBlank()) url += "&status=${encode(status.trim())}"
+        // Any non-200 is an error, not an empty list: a 401/500 rendering as
+        // "no runs yet" would hide an outage behind a plausible empty state.
+        call("GET", url).mapCatching {
+            if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
+            parseList(it.body)
+        }
     }
 
     /** One run's record. */
     suspend fun get(path: String, id: String): Result<AgentRun> = withContext(Dispatchers.IO) {
-        call("GET", "$path/api/runs/$id").mapCatching {
+        call("GET", "$path/api/runs/${encode(id)}").mapCatching {
             if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
             parseRun(JSONObject(it.body))
                 ?: throw RuntimeException("unparseable run record")
@@ -176,7 +187,7 @@ class RunsApi(context: Context) {
      */
     suspend fun steer(path: String, id: String, message: String): Result<SteerOutcome> =
         withContext(Dispatchers.IO) {
-            call("POST", "$path/api/runs/$id/steer", JSONObject().put("message", message))
+            call("POST", "$path/api/runs/${encode(id)}/steer", JSONObject().put("message", message))
                 .mapCatching {
                     when (it.code) {
                         200 -> SteerOutcome.Queued
@@ -192,7 +203,7 @@ class RunsApi(context: Context) {
      */
     suspend fun cancel(path: String, id: String): Result<CancelOutcome> =
         withContext(Dispatchers.IO) {
-            call("POST", "$path/api/runs/$id/cancel").mapCatching {
+            call("POST", "$path/api/runs/${encode(id)}/cancel").mapCatching {
                 if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
                 val status = runCatching { JSONObject(it.body).optString("status", "") }
                     .getOrDefault("").trim()
