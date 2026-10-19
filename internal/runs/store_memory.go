@@ -160,21 +160,28 @@ func expired(now time.Time, r Run) bool {
 }
 
 // MarkInterrupted flips every running record, reporting how many changed.
+// Expired rows are deleted, not flipped: the Mongo TTL would have removed
+// them, and marking them interrupted would extend a dead row a full week.
 func (m *MemoryStore) MarkInterrupted(_ context.Context, at time.Time) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var n int64
 	now := at.UnixMilli()
 	for id, r := range m.byID {
-		if r.Status == StatusRunning {
-			r.Status = StatusInterrupted
-			r.Error = InterruptedError
-			r.UpdatedAt = now
-			r.FinishedAt = now
-			r.ExpiresAt = at.Add(DefaultTTL)
-			m.byID[id] = r
-			n++
+		if r.Status != StatusRunning {
+			continue
 		}
+		if expired(at, r) {
+			delete(m.byID, id)
+			continue
+		}
+		r.Status = StatusInterrupted
+		r.Error = InterruptedError
+		r.UpdatedAt = now
+		r.FinishedAt = now
+		r.ExpiresAt = at.Add(DefaultTTL)
+		m.byID[id] = r
+		n++
 	}
 	return n, nil
 }

@@ -46,9 +46,12 @@ const (
 	// ListPreviewReasoning is the same preview bound for reasoning traces.
 	ListPreviewReasoning = 1000
 
-	// MaxSteer bounds one steer message. Same value as MaxPrompt today — a
-	// steer is one instruction, not a conversation — but a separate name so
-	// tuning the prompt preview never silently moves the steer limit.
+	// MaxSteer bounds one steer message in runes. Same number as MaxPrompt
+	// today — a steer is one instruction, not a conversation — but a separate
+	// name so tuning the prompt preview never silently moves the steer limit.
+	// Note the units differ on purpose: the prompt preview counts bytes
+	// (CapText), the steer check counts runes to match its "characters"
+	// wording. Same number, different ruler for non-ASCII input.
 	MaxSteer = MaxPrompt
 
 	// MaxOutput bounds the output kept per run — persisted and live. The phone

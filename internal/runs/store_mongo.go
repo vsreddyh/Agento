@@ -169,8 +169,16 @@ func (s *MongoStore) List(ctx context.Context, f Filter) ([]Run, error) {
 // output produced before the restart stays readable, and the status stops
 // claiming work is in flight when only a row remains.
 func (s *MongoStore) MarkInterrupted(ctx context.Context, at time.Time) (int64, error) {
+	// Expired rows are left for the TTL: flipping them would extend a dead
+	// row a full week. Rows without an expiry (pre-TTL documents) still flip.
 	res, err := s.runs.UpdateMany(ctx,
-		bson.M{"status": string(StatusRunning)},
+		bson.M{
+			"status": string(StatusRunning),
+			"$or": []bson.M{
+				{"expiresAt": bson.M{"$gt": at}},
+				{"expiresAt": bson.M{"$exists": false}},
+			},
+		},
 		bson.M{"$set": bson.M{
 			"status":     string(StatusInterrupted),
 			"error":      InterruptedError,
