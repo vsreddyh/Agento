@@ -74,15 +74,17 @@ internal fun RunsDialog(
                     ) {
                         items(runs, key = { it.id }) { run ->
                             Column(modifier = Modifier.fillMaxWidth()) {
+                                // Live label follows the Cancel gate: anything
+                                // non-terminal is live (running today,
+                                // more states tomorrow), blank means
+                                // unparseable. Hoisted to the row scope: the
+                                // header, the button and the hint below all
+                                // read it.
+                                val live = !run.isTerminal() && run.status.isNotBlank()
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    // Live label follows the Cancel gate: anything
-                                    // non-terminal is live (running today,
-                                    // more states tomorrow), blank means
-                                    // unparseable.
-                                    val live = !run.isTerminal() && run.status.isNotBlank()
                                     Text(
                                         if (live) "● Running"
                                         else if (run.status.isBlank()) "· unknown"
