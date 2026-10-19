@@ -1044,8 +1044,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 	// of path. Intentionally 404, not 400 like the overlong list filters: an
 	// {id} names a thing that does not exist (no oracle — the response is the
 	// same as an unknown well-formed id), while a filter is a malformed
-	// request.
-	if len(id) > maxRunIDLen {
+	// request. NUL is refused with it: it matches nothing either, and the
+	// conversation map key joins on it.
+	if len(id) > maxRunIDLen || strings.ContainsRune(id, 0) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown run")
 		return
@@ -1216,6 +1217,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 			runsError(w, err)
 			return
 		}
+		// Every entry to a run names it, like events and chat do: detail is
+		// where the app correlates a 429-named run.
+		w.Header().Set("X-Agento-Run-Id", id)
 		writeJSONResponse(w, http.StatusOK, runWire(run))
 		return
 	}

@@ -232,7 +232,7 @@ unmarked heads while it is still running);
 `limit` defaults to 100,
 is capped at 100, and `limit=0` — or an absent or empty `limit` — means the
 default, not an empty list. Only a present non-numeric or negative value 400s. The
-detail route keeps the full text. State is
+detail route keeps the full stored text (capped). State is
 in the `agent_runs` Mongo collection with a 7-day TTL; a gateway restart cannot
 resume execution and marks stale runs `interrupted`. See
 `docs/adr/0001-resumable-runs.md`.

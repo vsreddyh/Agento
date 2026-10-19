@@ -886,7 +886,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 		Provider:       provider,
 		Model:          req.Model,
 		Effort:         level,
-	}, h.runner.agent, completionID, imagesSigOf(userTurn.Images), time.Now())
+	}, h.runner.agent, completionID, imgSig, time.Now())
 
 	// The executor owns the lock, the subscription and the turn context from
 	// here. The request becomes a subscriber, so a disconnect no longer ends
