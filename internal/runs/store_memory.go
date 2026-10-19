@@ -15,11 +15,20 @@ import (
 // to answer /api/runs and still has to keep a turn alive after the request
 // that started it, because that property does not depend on persistence. Two
 // code paths would make the Mongo-less one the untested one.
+//
+// Bounded, like the Mongo TTL is: past memoryCap the oldest runs are evicted.
+// The fallback is a degraded path, not an archive — without a bound a
+// Mongo-less gateway would grow until restart.
 type MemoryStore struct {
 	mu   sync.Mutex
 	byID map[string]Run
 	now  func() time.Time
 }
+
+// memoryCap bounds the fallback store. Ten list-caps of full-size runs is
+// order 25 MB worst case: enough history to be useful, small enough to be
+// harmless on the gateway host.
+const memoryCap = 10 * ListCap
 
 // NewMemoryStore builds an empty store.
 func NewMemoryStore() *MemoryStore {
@@ -42,6 +51,21 @@ func (m *MemoryStore) Create(_ context.Context, r Run) error {
 	}
 	r = r.Capped()
 	m.byID[r.ID] = r
+	// Evict oldest past the cap. Linear scan on insert past cap only — the
+	// fallback holds at most memoryCap+1 rows, so this is not a hot loop.
+	for len(m.byID) > memoryCap {
+		oldest, oldestAt := "", int64(0)
+		first := true
+		for id, o := range m.byID {
+			if first || o.CreatedAt < oldestAt {
+				oldest, oldestAt, first = id, o.CreatedAt, false
+			}
+		}
+		if oldest == "" {
+			break
+		}
+		delete(m.byID, oldest)
+	}
 	return nil
 }
 

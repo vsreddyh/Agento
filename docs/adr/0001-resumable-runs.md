@@ -136,7 +136,9 @@ socket is exactly the case this feature exists to make non-destructive.
   buffers fill partially rather than dropping whole chunks at the boundary;
   past the cap the snapshot carries the head while live deltas flow in full.
 - The list route shows previews (2 KB output, 1 KB reasoning), not full turns;
-  the detail route keeps everything.
+  the detail route keeps everything. The Mongo collection expires via TTL
+  after 7 days; the in-memory fallback (Mongo unreachable) instead caps at
+  1000 runs with oldest-first eviction — a degraded path, not an archive.
 - Persistence never blocks the turn: the executor offers each second's snapshot
   to a background loop without waiting, and the terminal write drains after it.
   The 429 names the profile's in-flight run even across conversations.

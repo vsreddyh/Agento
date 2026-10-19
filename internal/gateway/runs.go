@@ -205,14 +205,21 @@ func (lr *liveRun) prompt() string {
 	return lr.run.Prompt
 }
 
-// images returns the turn's image signature under the lock, with prompt().
-// Both are immutable after begin, but a bare field read next to locked
-// mutations of the same struct is exactly the shape that reads as a data
-// race — and one locked pair keeps them consistent with each other.
-func (lr *liveRun) reattachImages() string {
+// reattachKey returns the prompt text and image signature for the reattach
+// comparison in one locked read. Both fields are immutable after begin, so
+// separate reads would be harmless — one accessor keeps the pair consistent
+// and the locking obvious.
+func (lr *liveRun) reattachKey() (prompt, images string) {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
-	return lr.imagesSig
+	return lr.promptLocked(), lr.imagesSig
+}
+
+func (lr *liveRun) promptLocked() string {
+	if lr.promptFull != "" {
+		return lr.promptFull
+	}
+	return lr.run.Prompt
 }
 
 func (lr *liveRun) snapshot() runs.Run {
@@ -949,6 +956,15 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string)
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		if err := lr.requestCancel(ctx); err != nil {
+			// The turn can settle between the isRunning check above and the
+			// abort: that is a race-free cancel of a finished run, not a
+			// failure — answer its terminal status like the settled path.
+			if snap := lr.snapshot(); snap.Status.Terminal() {
+				writeJSONResponse(w, http.StatusOK, map[string]any{
+					"ok": true, "status": string(snap.Status),
+				})
+				return
+			}
 			apiError(w, http.StatusBadGateway, "upstream_error", "",
 				"could not cancel the run: "+bounded(err.Error()))
 			return
@@ -1260,11 +1276,21 @@ func (s *Server) executeRun(
 	// finish. sync.OnceFunc keeps the deferred release from double-unlocking.
 	unlock := sync.OnceFunc(h.turnMu.Unlock)
 
+	// promptSent tracks whether the turn reached the agent. The panic recovery
+	// below reverts the sticky model switch only when it did not: every other
+	// pre-prompt failure path reverts because the turn never executed, but a
+	// turn that ran (even partially) under the new model keeps it — reverting
+	// that would unswitch a session the agent already moved.
+	promptSent := false
+
 	defer func() {
 		// A panic in the turn loop must not leave the profile locked forever:
 		// that would make every later turn 429 until the process restarts.
 		if rec := recover(); rec != nil {
 			s.cfg.Logf("runs: panic in run %s: %v", lr.id(), rec)
+			if !promptSent {
+				revert()
+			}
 			lr.settle(runs.StatusFailed,
 				"the gateway failed while running this turn", time.Now())
 			unlock()
@@ -1287,6 +1313,7 @@ func (s *Server) executeRun(
 		lr.publish(errorFrame{Error: msg}, false)
 		return
 	}
+	promptSent = true
 
 	for {
 		select {

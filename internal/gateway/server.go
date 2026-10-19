@@ -617,16 +617,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, h *agentHand
 	// whitespace (a paste, a re-render), and that must not turn the client's
 	// own turn into a 429. promptFull stays exact for the record; only the
 	// comparison forgives the edges.
-	if lr, ok := s.runs.activeForConversation(h.profile, conversationID); ok &&
-		strings.TrimSpace(lr.prompt()) == strings.TrimSpace(userTurn.Text) &&
-		lr.reattachImages() == imagesSigOf(userTurn.Images) {
-		w.Header().Set("X-Agento-Run-Id", lr.id())
-		if !req.Stream {
-			s.respondBuffered(w, r, lr)
+	if lr, ok := s.runs.activeForConversation(h.profile, conversationID); ok {
+		prompt, images := lr.reattachKey()
+		if strings.TrimSpace(prompt) == strings.TrimSpace(userTurn.Text) &&
+			images == imagesSigOf(userTurn.Images) {
+			w.Header().Set("X-Agento-Run-Id", lr.id())
+			if !req.Stream {
+				s.respondBuffered(w, r, lr)
+				return
+			}
+			s.streamLiveRun(w, r, lr)
 			return
 		}
-		s.streamLiveRun(w, r, lr)
-		return
 	}
 
 	// The profile lock is held only for the agent interaction: session resolution,

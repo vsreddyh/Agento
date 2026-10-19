@@ -225,8 +225,7 @@ profile; a different prompt while busy returns `429` with `X-Agento-Run-Id`, and
 resending the same prompt on the same conversation reattaches instead. The list
 shows previews (2 KB output, 1 KB reasoning; `limit` defaults to 100 and is
 capped at 100, and `limit=0` means the default, not an empty list); the detail
-route keeps the
-full text. State is
+route keeps the full text. State is
 in the `agent_runs` Mongo collection with a 7-day TTL; a gateway restart cannot
 resume execution and marks stale runs `interrupted`. See
 `docs/adr/0001-resumable-runs.md`.

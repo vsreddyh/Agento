@@ -159,3 +159,34 @@ func TestCappedBoundsStoredFields(t *testing.T) {
 		t.Errorf("tools = %d, want %d", len(r.Tools), MaxTools)
 	}
 }
+
+func TestMemoryStoreEvictsOldestPastCap(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	// List itself caps at ListCap, so eviction is observed through Get: the
+	// first rows must be gone while a recent one survives.
+	ids := make([]string, 0, memoryCap+5)
+	base := time.Now()
+	for i := 0; i < memoryCap+5; i++ {
+		id := NewID()
+		ids = append(ids, id)
+		r := Run{
+			ID:        id,
+			Profile:   "chat",
+			Status:    StatusCompleted,
+			CreatedAt: base.Add(time.Duration(i) * time.Millisecond).UnixMilli(),
+			ExpiresAt: base.Add(DefaultTTL),
+		}
+		if err := m.Create(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range ids[:5] {
+		if _, err := m.Get(ctx, id); !NotFound(err) {
+			t.Fatalf("Get(%s) = %v, want NotFound after eviction", id, err)
+		}
+	}
+	if _, err := m.Get(ctx, ids[len(ids)-1]); err != nil {
+		t.Fatalf("newest run was evicted: %v", err)
+	}
+}
