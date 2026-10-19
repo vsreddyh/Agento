@@ -1494,13 +1494,17 @@ func (s *Server) executeRun(
 				}
 				lr.settle(runs.StatusCompleted, "", time.Now())
 				unlock()
-				if u := lr.snapshot().Usage; u.NonZero() {
+				if snap := lr.snapshot(); snap.Usage.NonZero() {
+					// The usage chunk carries the run's model, not the
+					// request's: both come from the same resolved selection
+					// today, but the snapshot is the authority a reattached
+					// client already read — one run must not name two models.
 					lr.publish(chunk{
 						ID:      lr.completionID,
 						Object:  "chat.completion.chunk",
 						Created: nowUnix(),
-						Model:   req.Model,
-						Usage:   usageWire(u),
+						Model:   snap.Model,
+						Usage:   usageWire(snap.Usage),
 					}, false)
 				}
 				lr.publish(nil, true)

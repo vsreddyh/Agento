@@ -126,6 +126,7 @@ func (m *MemoryStore) List(_ context.Context, f Filter) ([]Run, error) {
 	now := m.now()
 	for id, r := range m.byID {
 		// Expired rows are dropped lazily here, like in Get — no sweeper.
+		// Delete during range is safe in Go; no two-pass sweep needed.
 		if expired(now, r) {
 			delete(m.byID, id)
 			continue
