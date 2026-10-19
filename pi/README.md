@@ -229,6 +229,11 @@ state in Mongo with a 7-day TTL, and a gateway restart marks stale rows
 `interrupted` rather than resuming them. They are a sibling of `/api/jobs`, not a
 reuse of it — see `docs/adr/0001-resumable-runs.md`.
 
+Through the proxy, always use the profile path (`/p/chat/api/runs`, served by
+pi-gateway): unprefixed `/api/*` belongs to health-api and a bare
+`/api/runs` there 404s. The table below shows the gateway paths; prefix with
+`/p/chat` behind the proxy.
+
 All three inventory routes were capability loss until this PR: `ChatApi.fetchCatalog`
 and both `ServerApi` calls request them, and nginx routes them to the gateway
 upstream (`docker/proxy/nginx.conf` sends `/p/*` and both `/api/model/options`

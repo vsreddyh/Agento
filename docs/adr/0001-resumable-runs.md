@@ -130,6 +130,14 @@ Error frames end the stream with EOF and no `[DONE]`, the same contract as
 the chat surface's `writeStreamError`: the app treats a closed stream without
 a terminator as failure, on both the live and the reattached path.
 
+Verb responses carry action states, not run states: `POST .../steer` answers
+`{"ok":true,"status":"queued"}` and an accepted `POST .../cancel` answers
+`{"ok":true,"status":"cancelling"}` — neither is a `runs.Status`, and the app
+must not decode them as one. A cancel against an already-settled run answers
+the run's real terminal status instead. Poll `GET /api/runs/{id}` or watch
+the events stream for run states; read the verb responses only as
+acknowledgements.
+
 ### Stop is a server-side cancel
 
 Cancel marks the run, sends Pi's `abort` (via `Send`, because the abort reply
