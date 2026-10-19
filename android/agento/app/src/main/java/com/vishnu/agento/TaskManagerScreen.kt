@@ -19,6 +19,16 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -104,8 +114,14 @@ internal fun TaskManagerScreen(
     // Persisted by enum name (enums have no default Saveable saver);
     // rotation used to reset these while the search query survived.
     var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
-    val filter = runCatching { ServerTaskFilter.valueOf(filterName) }
-        .getOrDefault(ServerTaskFilter.Open)
+    // Derived through a function rather than only as the local below: a
+    // coroutine armed in one composition (the safety-net timer in doComplete)
+    // runs after later ones, and has to see the filter that is showing when it
+    // fires — not the snapshot that was current when it was armed.
+    fun filterNow(): ServerTaskFilter =
+        runCatching { ServerTaskFilter.valueOf(filterName) }
+            .getOrDefault(ServerTaskFilter.Open)
+    val filter = filterNow()
     var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
     val sort = runCatching { ServerTaskSort.valueOf(sortName) }
         .getOrDefault(ServerTaskSort.Start)
@@ -116,6 +132,52 @@ internal fun TaskManagerScreen(
     var error by remember { mutableStateOf("") }
     // Bumped after every load/mutation so the loader below reruns.
     var refreshTick by remember { mutableIntStateOf(0) }
+    // Set immediately before a `refreshTick++` (#308) to make that one run a
+    // BACKGROUND refresh: the fresh rows are swapped in with no full-list
+    // spinner, so completing a task — or returning to a stale screen — never
+    // blanks the list the user is reading. Consumed and cleared by the
+    // loader, so it can only ever describe the run it was set for; the next
+    // bump defaults back to a visible reload.
+    var silentRefresh by remember { mutableStateOf(false) }
+    // True while a background refresh is in flight; drives the thin bar that
+    // stands in for the spinner on those runs.
+    var refreshing by remember { mutableStateOf(false) }
+    // Rows playing their leave animation (#308), each mapped to the filter it
+    // is leaving UNDER. A completed row stays in `tasks` until its animation
+    // reports it has finished leaving, and a fetch that lands meanwhile
+    // carries it over rather than yanking it out from under the animation
+    // (see mergeRefresh).
+    //
+    // The filter is part of the entry because an exit belongs to the view it
+    // started in. All and Done legitimately list completed tasks, so a row
+    // completed on Open and carried into them must NOT play an exit there —
+    // it would blink out of a list that is supposed to show it. Reads go
+    // through [exitingHere], which is empty unless the filter is the one the
+    // exit was started under.
+    var exiting by remember { mutableStateOf(mapOf<String, ServerTaskFilter>()) }
+    // The exits that belong to the filter showing now (#308). A remembered
+    // derivation for the render and the sheet; the loader reads `exiting`
+    // directly instead, because it has to see the set as it stands when the
+    // response lands rather than when the request went out.
+    val exitingHere = remember(exiting, filter) {
+        exiting.filterValues { it == filter }.keys
+    }
+    // The task ids the list held per filter the last time that filter was
+    // DRAWN (#308), absent until it has been drawn once. A row animates in
+    // only when its id was not among them, so the first paint of a filter, a
+    // re-sort and a search draw in place while a row that genuinely arrives —
+    // a repeat's next occurrence, a task created here or by the agent — still
+    // animates in. Keyed by filter because "was this row already on screen" is
+    // a question about the list that was showing: a global set would cascade
+    // the whole page on the first visit to Done or All. Absent (not the empty
+    // set) marks "never drawn", so the first task created into an empty list
+    // animates too.
+    var knownIdsByFilter by remember { mutableStateOf(mapOf<String, Set<String>>()) }
+    // Which filter the rows in `tasks` actually came from (#308), set by the
+    // loader on success. The effect below files `tasks` under THIS name rather
+    // than the filter showing at the time it runs, so a filter change can never
+    // record one filter's ids under another's name.
+    var rowsFilterName by remember { mutableStateOf(filterName) }
     // True once the loader below has completed at least once (success or
     // failure). The resume check below must not refetch on the very first
     // resume: the initial load is already in flight, and re-bumping the tick
@@ -137,6 +199,9 @@ internal fun TaskManagerScreen(
             // stale row. toast() does not suspend (unlike the old
             // showSnackbar, which held this collector for ~10s), so no
             // generation dance is needed around it.
+            // Backgrounded (#308): the list is swapped under the toast
+            // rather than blanked to a spinner.
+            silentRefresh = true
             refreshTick++
             toasts.toast(
                 ContractWarnings.message(mismatch.fields, mismatch.taskName),
@@ -208,14 +273,52 @@ internal fun TaskManagerScreen(
     var scheduledOnce by remember { mutableStateOf(false) }
 
     LaunchedEffect(filter, refreshTick) {
-        loading = true
-        error = ""
+        // Which kind of run this is (#308): a bump with [silentRefresh] set
+        // swaps the fresh rows in WITHOUT the full-list spinner, so a
+        // completion, a resume or a conflict reload never blanks the list the
+        // user is reading. The flag is consumed here and cleared, so it can
+        // only describe the run it was set for.
+        //
+        // Both flags are written at the top of every run rather than only at
+        // the end: a run cancelled by a newer one (they share the tick as a
+        // key) must not leave a spinner or a progress bar behind.
+        val background = silentRefresh
+        silentRefresh = false
+        // A background run assumes there are rows on screen for it to protect,
+        // which is only true once a load has landed: a silent run before that
+        // has nothing to keep, so it takes the spinner (#308). Keyed on
+        // hasLoaded rather than on the list being empty, because a silent
+        // refresh of a legitimately empty list — completing the last open task
+        // of a repeat — should settle to the empty state, not blink through a
+        // spinner to get back to it.
+        loading = !background || !hasLoaded
+        refreshing = background && hasLoaded
+        if (!background) error = ""
         // fold's lambdas are not suspend, so the cursor read below runs after
         // the fold, not inside onSuccess.
         val loaded = api.list(filter.state).fold(
             onSuccess = { page ->
-                tasks = page.tasks
+                // Rows still playing their leave animation are carried over
+                // the fresh page (#308): the server stops listing a task the
+                // moment it is completed, so without this the row would be
+                // pulled out mid-animation and the list would blink.
+                //
+                // Read from `exiting` HERE rather than from the composition's
+                // `exitingHere`: what matters is the set as it stands when the
+                // response LANDS. An exit that starts while the fetch is in
+                // flight — the user completes a row, and the page that was
+                // already on its way back does not list it — would otherwise be
+                // dropped by this merge, which is the exact blink the carry is
+                // there to prevent. Scoped to the filter this run was launched
+                // for, since that is the view these rows are going into.
+                val leaving = exiting.filterValues { it == filter }.keys
+                tasks = mergeRefresh(page.tasks, tasks, leaving)
                 listTruncated = page.truncated
+                error = ""
+                // Which filter these rows are the answer for (#308): recorded
+                // with the rows themselves, so the enter-animation effect never
+                // files one filter's ids under another's name.
+                rowsFilterName = filter.name
                 // List-level last fetch, persisted (#288): set on success
                 // only, so a failed fetch leaves the old stamp untouched.
                 lastSyncedAt = System.currentTimeMillis()
@@ -226,12 +329,25 @@ internal fun TaskManagerScreen(
                 }
                 true
             },
-            // The flag describes the rows on screen, so it resets with
-            // them: a failed fetch leaves yesterday's rows up, and they
-            // must not keep advertising yesterday's truncation.
             onFailure = { e ->
-                error = serverDetail(e.message ?: e.javaClass.simpleName)
-                listTruncated = false
+                if (background) {
+                    // A silent refresh that fails keeps the rows on screen
+                    // (#308) and says so out loud: replacing a list the user
+                    // is reading with an error card because a refetch missed
+                    // would be the worse surprise, and the toast is the "what
+                    // you are looking at may be older" signal the spinner
+                    // used to give.
+                    toasts.toast(
+                        serverDetail(e.message ?: e.javaClass.simpleName),
+                        ToastKind.Error,
+                    )
+                } else {
+                    error = serverDetail(e.message ?: e.javaClass.simpleName)
+                    // The flag describes the rows on screen, so it resets with
+                    // them: a failed fetch leaves yesterday's rows up, and they
+                    // must not keep advertising yesterday's truncation.
+                    listTruncated = false
+                }
                 false
             },
         )
@@ -246,7 +362,20 @@ internal fun TaskManagerScreen(
             }
         }
         loading = false
+        refreshing = false
         hasLoaded = true
+    }
+
+    // Recorded only AFTER the rows have actually been on screen once (#308),
+    // so the paint that first shows them is not treated as an arrival: an
+    // effect runs after composition, which is exactly what makes this the
+    // "what this filter was showing last time" set rather than one the paint
+    // that first shows it already sees.
+    LaunchedEffect(tasks, rowsFilterName, loading, error) {
+        if (!loading && error.isEmpty()) {
+            knownIdsByFilter = knownIdsByFilter +
+                (rowsFilterName to tasks.map { it.id }.toSet())
+        }
     }
 
     // Coming back to a screen the agent may have written to while we were away
@@ -278,7 +407,13 @@ internal fun TaskManagerScreen(
         if (hasLoaded) {
             val job = scope.launch {
                 val marker = api.changes(lastSeenChangeRevision(context)).getOrNull()
-                if (marker == null || marker.changed) refreshTick++
+                if (marker == null || marker.changed) {
+                    // Backgrounded (#308): a screen the user just returned to
+                    // refreshes underneath them instead of flashing a spinner
+                    // over rows that are mostly the same.
+                    silentRefresh = true
+                    refreshTick++
+                }
             }
             onPauseOrDispose { job.cancel() }
         } else {
@@ -330,6 +465,46 @@ internal fun TaskManagerScreen(
     fun pokeWidget() {
         TaskWidget.refresh(context)
         TaskReminders.refresh(context)
+    }
+
+    /**
+     * A completed row has finished leaving the list (#308): drop it for real.
+     *
+     * Called twice by design — once by the row's own animation, and once by
+     * the timer [doComplete] arms for rows that are not on screen to report
+     * it (a search hides them, so no slot exists). The guard makes the second
+     * call a no-op, and stops a row the user has since got back (a completed
+     * request that failed and was reverted) from being removed here.
+     *
+     * The list is only touched while the filter the exit was started under is
+     * still the one showing: that is the filter a completed row has to leave.
+     * If the user switched filters while it was on its way out, the other
+     * filter's own fetch decides what belongs on screen (a completed row
+     * belongs on All/Done), so removing it here would fight that. Either way
+     * the id is dropped from [exiting], so the transition is not left open.
+     */
+    fun onRowExited(id: String) {
+        val under = exiting[id] ?: return
+        exiting = exiting - id
+        if (filterNow() == under) {
+            tasks = tasks.filterNot { it.id == id }
+        }
+    }
+
+    /**
+     * Marks [id] as already on screen for the filter these rows belong to
+     * (#308).
+     *
+     * An optimistic placeholder is swapped for the server's row when the
+     * request lands, which changes the row's key — without this the row would
+     * replay its entrance on the swap even though it never left, and the
+     * collapse-and-grow would bounce everything below it. Best-effort: the
+     * effect that records the drawn ids would catch up on the next paint
+     * anyway, this only covers the paint the swap itself lands on.
+     */
+    fun noteRowShown(id: String) {
+        val known = knownIdsByFilter[rowsFilterName].orEmpty()
+        knownIdsByFilter = knownIdsByFilter + (rowsFilterName to (known + id))
     }
 
     fun onBell() {
@@ -405,6 +580,10 @@ internal fun TaskManagerScreen(
             ).fold(
                 onSuccess = { copy ->
                     editing = null
+                    // Only when the placeholder is still there to be replaced:
+                    // if a filter change already dropped it, the server row is
+                    // a genuine arrival and must animate in (#308).
+                    if (tasks.any { it.id == tempId }) noteRowShown(copy.id)
                     tasks = tasks.map { if (it.id == tempId) copy else it }
                     pokeWidget()
                     toasts.toast("Copied \u201c${copy.name}\u201d.", ToastKind.Success)
@@ -419,14 +598,47 @@ internal fun TaskManagerScreen(
     }
 
     fun doComplete(t: ServerTask) {
-        // The sheet is already dismissed by the caller; the row leaves the
-        // open list instantly and the request runs in the background.
+        // Already on its way out, or still in flight (#308): the exit
+        // animation owns the removal, and a second request here would finish
+        // first on failure and cancel the first one's animation with
+        // `tasks = prev` — leaving the completed row stuck in the Open list.
+        // The row is disabled while busy/exiting, and this covers every other
+        // caller (the detail sheet, a deep link) as well.
+        if (exiting.containsKey(t.id) || t.id in busyIds) return
+        // The sheet is already dismissed by the caller. On the Open filter the
+        // row is NOT removed here (#308): it is marked as leaving and plays its
+        // exit animation, then onRowExited drops it. The request runs in the
+        // background meanwhile.
         selected = null
         val prev = tasks
-        tasks = if (filter == ServerTaskFilter.Open) {
-            prev.filterNot { it.id == t.id }
+        if (filter == ServerTaskFilter.Open) {
+            // The filter is recorded with the id: if the user switches filters
+            // before the animation ends, the new list is authoritative about
+            // this row (All and Done list completed tasks) and the exit must
+            // not play there.
+            exiting = exiting + (t.id to filter)
+            // The row is left in `tasks` exactly as it is until it has
+            // finished leaving: marking it completed would move it to the
+            // Completed bucket (dueBucket keys off `isOpen`) and teleport it
+            // out of its section mid-animation. The row renders as done from
+            // the exiting set instead.
+            //
+            // Safety net for a row that is not on screen at all (a search
+            // hides it, so there is no slot to report the animation): drop it
+            // after ROW_EXIT_FALLBACK_MS anyway. A second report is harmless —
+            // onRowExited ignores an id it has already handled.
+            scope.launch {
+                delay(ROW_EXIT_FALLBACK_MS)
+                onRowExited(t.id)
+            }
         } else {
-            prev.map { if (it.id == t.id) it.copy(completedAt = "__pending__") else it }
+            // All/Done: writing the completed stamp is what moves the row to
+            // the Completed section, and it does so on the spot — the row jumps
+            // bucket with only its colour animated. Deliberate here, unlike the
+            // Open path above: these filters already list completed tasks, so
+            // the row has not left the screen and there is no shrink to keep it
+            // in place for.
+            tasks = prev.map { if (it.id == t.id) it.copy(completedAt = "__pending__") else it }
         }
         markBusy(t.id)
         scope.launch {
@@ -434,10 +646,14 @@ internal fun TaskManagerScreen(
                 onSuccess = { done ->
                     // A structured cadence rolled itself over server-side:
                     // the next occurrence is a NEW row this response does
-                    // not carry, so only then fall back to a full reload.
-                    // Every other completion patches the row in place.
+                    // not carry, so only then fall back to a refetch — a
+                    // silent one, so the list under the leaving row stays put
+                    // (#308). The row mid-exit is carried over that swap by
+                    // the loader, so its animation finishes rather than being
+                    // cut short. Every other completion patches in place.
                     val next = done?.nextDueDate.orEmpty()
                     if (next.isNotEmpty()) {
+                        silentRefresh = true
                         refreshTick++
                         // The widget and the alarm set still need the push:
                         // the loader never pokes, and the new occurrence's
@@ -495,6 +711,12 @@ internal fun TaskManagerScreen(
                     }
                 },
                 onFailure = { e ->
+                    // Cancel the leave animation: clearing the id puts the row
+                    // back on screen, where it fades in where it was (#308).
+                    // Restoring `prev` also covers the case where the
+                    // animation had already finished and onRowExited had
+                    // dropped the row.
+                    exiting = exiting - t.id
                     tasks = prev
                     fail(e)
                 },
@@ -505,6 +727,15 @@ internal fun TaskManagerScreen(
 
     fun doReopen(t: ServerTask) {
         selected = null
+        // One request per row (#308), plus [exitingHere] — deliberately NOT the
+        // raw `exiting`: its entries are keyed by the filter an exit is under,
+        // so for the fallback window the id of an ordinary completed row on the
+        // filter showing now can still be in it, and guarding on that would
+        // swallow a legitimate reopen. Scoped, this is a no-op for a reopen
+        // target today (a leaving row still has an open model, so the toggle
+        // routes it to doComplete) and becomes live if reopening ever animates
+        // out on Done (#310).
+        if (t.id in exitingHere || t.id in busyIds) return
         val prev = tasks
         tasks = if (filter == ServerTaskFilter.Done) {
             prev.filterNot { it.id == t.id }
@@ -533,6 +764,13 @@ internal fun TaskManagerScreen(
         deleting = null
         editing = null
         selected = null
+        // One request per row (#308), plus [exitingHere] — deliberately NOT the
+        // raw `exiting`: its entries are keyed by the filter an exit is under,
+        // so for the fallback window the id of an ordinary completed row on the
+        // filter showing now can still be in it, and guarding on that would
+        // swallow a legitimate delete. The UI state above is still cleared
+        // first, so a repeat confirm cannot leave a dialog open.
+        if (t.id in exitingHere || t.id in busyIds) return
         val prev = tasks
         tasks = prev.filterNot { it.id == t.id }
         markBusy(t.id)
@@ -580,7 +818,13 @@ internal fun TaskManagerScreen(
                         IconButton(onClick = { editing = ServerTaskDraft() }) {
                             Icon(Icons.Filled.Add, contentDescription = "New task")
                         }
-                        IconButton(onClick = { refreshTick++ }) {
+                        IconButton(onClick = {
+                            // Backgrounded (#308): an explicit refresh should
+                            // not blank the list either — the thin bar above
+                            // the rows reports that it is working.
+                            silentRefresh = true
+                            refreshTick++
+                        }) {
                             Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                         }
                     },
@@ -591,6 +835,10 @@ internal fun TaskManagerScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            // Background refresh (#308): a thin bar instead of the full-list
+            // spinner, above the content so it never displaces the rows the
+            // user is reading while the fresh list arrives.
+            RefreshBar(refreshing = refreshing)
             Column(
                 modifier = Modifier.contentWidth(wc)
                     .verticalScroll(rememberScrollState())
@@ -784,27 +1032,67 @@ internal fun TaskManagerScreen(
                                 )
                             }
                             rows.forEachIndexed { i, t ->
-                                ServerTaskRow(
-                                    task = t,
-                                    // Same instant the groups were built
-                                    // from, so a row can never be coloured
-                                    // overdue inside a group that says
-                                    // otherwise.
-                                    overdue = t.isOverdue(today, clockKey),
-                                    today = day,
-                                    // Per-row (#288): only the row with an
-                                    // in-flight request is disabled.
-                                    actionsEnabled = t.id !in busyIds,
-                                    onOpen = { selected = t },
-                                    onToggle = {
-                                        if (t.isOpen()) doComplete(t) else doReopen(t)
-                                        selected = null
-                                    },
-                                )
-                                if (i < rows.lastIndex) {
-                                    HorizontalDivider(
-                                        modifier = Modifier.padding(start = 56.dp),
-                                    )
+                                // Keyed by task id (#308): these rows are
+                                // rebuilt on every sort, filter and bucket
+                                // change, and the animation state has to
+                                // belong to the task rather than to the slot
+                                // it currently sits in — otherwise a re-sort
+                                // would replay an entrance for a row that
+                                // never left.
+                                key(t.id) {
+                                    TaskRowSlot(
+                                        taskId = t.id,
+                                        exiting = t.id in exitingHere,
+                                        // A row whose id this filter was
+                                        // already showing is drawn in place;
+                                        // only a genuinely new one animates.
+                                        animateEnter = knownIdsByFilter[rowsFilterName]
+                                            ?.contains(t.id) == false,
+                                        onExited = ::onRowExited,
+                                    ) {
+                                        Column {
+                                            ServerTaskRow(
+                                                task = t,
+                                                // Same instant the groups were
+                                                // built from, so a row can
+                                                // never be coloured overdue
+                                                // inside a group that says
+                                                // otherwise.
+                                                overdue = t.isOverdue(today, clockKey),
+                                                today = day,
+                                                // Per-row (#288): only the row
+                                                // with an in-flight request is
+                                                // disabled — plus a row that is
+                                                // leaving (#308), which must not
+                                                // accept a second tap.
+                                                actionsEnabled = t.id !in busyIds &&
+                                                    t.id !in exitingHere,
+                                                // Leaving (#308): it reads as
+                                                // completed while it goes, but
+                                                // only in what is drawn — the
+                                                // row keeps its own data so the
+                                                // bucket it was in does not
+                                                // change underneath it.
+                                                completed = t.id in exitingHere,
+                                                // A leaving row is not a
+                                                // target: opening it would
+                                                // race the request that is
+                                                // taking it away.
+                                                onOpen = {
+                                                    if (t.id !in exitingHere) selected = t
+                                                },
+                                                onToggle = {
+                                                    if (t.isOpen()) doComplete(t) else doReopen(t)
+                                                    selected = null
+                                                },
+                                            )
+                                            if (i < rows.lastIndex) {
+                                                HorizontalDivider(
+                                                    modifier = Modifier.padding(start = 56.dp),
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -848,10 +1136,10 @@ internal fun TaskManagerScreen(
                     val rep = next.repeatOrNull()
                     val tempId = "__pending__${System.nanoTime()}"
                     val prev = tasks
+                    // Open task on the Done filter: nothing visible to patch
+                    // (see doDuplicate); the reload on the next resume
+                    // converges.
                     tasks = if (filter == ServerTaskFilter.Done) {
-                        // Open task on the Done filter: nothing visible to
-                        // patch (see doDuplicate); the reload on the next
-                        // resume converges.
                         prev
                     } else {
                         listOf(
@@ -890,6 +1178,11 @@ internal fun TaskManagerScreen(
                             parallelable = next.parallelable,
                         ).fold(
                             onSuccess = { created ->
+                                // Only when the placeholder is still there to
+                                // be replaced: if a filter change already
+                                // dropped it, the server row is a genuine
+                                // arrival and must animate in (#308).
+                                if (tasks.any { it.id == tempId }) noteRowShown(created.id)
                                 tasks = tasks.map { if (it.id == tempId) created else it }
                                 pokeWidget()
                             },
@@ -953,7 +1246,13 @@ internal fun TaskManagerScreen(
                             expectedRevision = next.revision,
                         ).fold(
                             onSuccess = { saved ->
-                                if (prevRow == null) refreshTick++ else {
+                                if (prevRow == null) {
+                                    // The row was not in the fetched page at
+                                    // all: backgrounded (#308) so pulling the
+                                    // list in does not blank what is on screen.
+                                    silentRefresh = true
+                                    refreshTick++
+                                } else {
                                     tasks = tasks.map { if (it.id == next.id) saved else it }
                                 }
                                 pokeWidget()
@@ -963,7 +1262,10 @@ internal fun TaskManagerScreen(
                                 if (isConflict(e)) {
                                     // Someone else wrote first: reload and
                                     // say so, rather than silently holding
-                                    // the reverted row.
+                                    // the reverted row. Backgrounded (#308):
+                                    // the toast is the message, and a spinner
+                                    // over the list would fight it.
+                                    silentRefresh = true
                                     refreshTick++
                                     toasts.toast(
                                         "That task changed elsewhere — reloaded. Reapply your edit.",
@@ -988,7 +1290,10 @@ internal fun TaskManagerScreen(
             title = { Text("Delete task?") },
             text = { Text("“${target.name}” will be permanently deleted.") },
             confirmButton = {
-                TextButton(onClick = { doDelete(target) }, enabled = target.id !in busyIds) { Text("Delete") }
+                TextButton(
+                    onClick = { doDelete(target) },
+                    enabled = target.id !in busyIds && target.id !in exitingHere,
+                ) { Text("Delete") }
             },
             dismissButton = {
                 TextButton(onClick = { deleting = null }) { Text("Cancel") }
@@ -1010,7 +1315,7 @@ internal fun TaskManagerScreen(
             task = open,
             overdue = open.isOverdue(sheetDay.toString(), sheetNow),
             today = sheetDay,
-            actionsEnabled = open.id !in busyIds,
+            actionsEnabled = open.id !in busyIds && open.id !in exitingHere,
             onDismiss = { selected = null },
             onEdit = {
                 selected = null
@@ -1029,6 +1334,140 @@ internal fun TaskManagerScreen(
     }
 }
 
+/**
+ * How long a task row takes to arrive in or leave the list (#308). Short
+ * enough to feel immediate, long enough that the eye can follow it.
+ */
+private const val ROW_ANIM_MS = 220
+
+/**
+ * How long the safety net in `doComplete` waits before dropping a leaving row
+ * that no slot reported (#308) — a row hidden by a search, so nothing is
+ * animating and nothing will call back.
+ *
+ * Comfortably longer than [ROW_ANIM_MS] rather than just past it: the row's
+ * own animation reports first whenever the row is on screen, and under a
+ * janked frame that report can be arbitrarily late, so a tight window would
+ * have the timer cut the shrink short instead of standing behind it. The cost
+ * of the longer wait is only that an invisible row lingers in `tasks` a little
+ * longer.
+ */
+private const val ROW_EXIT_FALLBACK_MS = 500L
+
+/**
+ * The slim bar that stands in for the full-list spinner while a background
+ * refresh is in flight (#308).
+ *
+ * It is a sibling of the scrolling list rather than an item inside it, so it
+ * costs no item spacing, and its height animates from nothing so an idle
+ * screen is exactly as tall as it was before the bar existed.
+ */
+@Composable
+private fun RefreshBar(refreshing: Boolean) {
+    // The height animates 0 -> 4 and back rather than reserving a permanent
+    // slot: an idle screen should carry no gap for a bar that is not there,
+    // and starting a refresh eases the list down instead of jumping it.
+    val height by animateDpAsState(
+        targetValue = if (refreshing) 4.dp else 0.dp,
+        animationSpec = tween(ROW_ANIM_MS),
+        label = "refreshBarHeight",
+    )
+    Box(modifier = Modifier.fillMaxWidth().height(height)) {
+        // Composed until the height is back to nothing rather than tied to
+        // `refreshing`: tying it to the flag popped the bar out of existence
+        // the moment the refresh finished, while the height it was sitting in
+        // was still animating away.
+        if (height > 0.dp) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+/**
+ * One task row wrapped in its enter/leave animation (#308).
+ *
+ * Composed under `key(task.id)`, so the transition belongs to the task: a
+ * re-sort or re-filter that merely moves a row does not replay anything, and
+ * a row added by a repeat rolling over grows in where it lands. When
+ * [exiting] flips true the row shrinks and fades, and only after that does
+ * [onExited] run — so the caller drops the row at the moment it has actually
+ * finished leaving, instead of yanking it out on the tap.
+ *
+ * [animateEnter] is read once, when the row first composes: the caller sets it
+ * only for a row whose id the list was not already showing, so the first
+ * population, a filter switch and a re-sort draw in place and only a row that
+ * genuinely arrived animates in.
+ */
+@Composable
+private fun TaskRowSlot(
+    taskId: String,
+    exiting: Boolean,
+    animateEnter: Boolean,
+    onExited: (String) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    // Hidden at first only when this row is meant to animate in; otherwise it
+    // starts visible and is simply drawn. Rows already composed keep whatever
+    // state they are in (that is what the key buys).
+    val visibleState = remember { MutableTransitionState(!animateEnter) }
+    visibleState.targetState = !exiting
+    AnimatedVisibility(
+        visibleState = visibleState,
+        enter = fadeIn(tween(ROW_ANIM_MS)) +
+            expandVertically(tween(ROW_ANIM_MS, easing = FastOutSlowInEasing)),
+        exit = fadeOut(tween(ROW_ANIM_MS / 2)) +
+            shrinkVertically(tween(ROW_ANIM_MS, easing = FastOutSlowInEasing)),
+    ) {
+        content()
+    }
+    // Reported from an effect rather than during composition, so the removal
+    // is a state write and not a composition side effect. Keyed on the
+    // transition state rather than wrapped in an `if`: an effect inside a
+    // conditional branch has no stable identity (Compose lint flags it), and
+    // the body's own check is just as cheap.
+    LaunchedEffect(taskId, visibleState.currentState, visibleState.targetState) {
+        if (!visibleState.currentState && !visibleState.targetState) onExited(taskId)
+    }
+}
+
+/**
+ * The row list to show after a fetch lands (#308).
+ *
+ * The server stops listing a task the moment it is completed, so a refresh
+ * that arrives while that row is still playing its leave animation would pull
+ * the row out from under the animation and the list would blink. Rows marked
+ * [exiting] are therefore carried over the fresh page, and dropped for real
+ * when their animation reports it has finished.
+ *
+ * A carried row is put back at the index it had, not appended: it is still on
+ * screen mid-animation, and moving it to the end would visibly jump it — and,
+ * where the sort keys tie, reorder its neighbours — for the ~220ms it has
+ * left. The index is clamped, because the fresh page can be shorter than the
+ * one the row came from.
+ *
+ * [exiting] is passed by the caller as it is AT THE MOMENT the response
+ * arrives, never as it was before the request went out: a row whose animation
+ * finished while the fetch was in flight must not be resurrected by it.
+ */
+internal fun mergeRefresh(
+    fresh: List<ServerTask>,
+    previous: List<ServerTask>,
+    exiting: Set<String>,
+): List<ServerTask> {
+    if (exiting.isEmpty()) return fresh
+    val freshIds = fresh.mapTo(HashSet()) { it.id }
+    // One pass for the predicate, carrying each row's index with it.
+    val carried = previous.withIndex()
+        .filter { (_, row) -> row.id in exiting && row.id !in freshIds }
+    if (carried.isEmpty()) return fresh
+    // Indices ascend (we walk `previous` in order), so inserting each carried
+    // row at its own clamped index keeps them in their original relative
+    // order.
+    val merged = fresh.toMutableList()
+    carried.forEach { (index, row) -> merged.add(index.coerceAtMost(merged.size), row) }
+    return merged
+}
+
 /** Flat task row: checkbox toggles complete/reopen, tap opens the
  * detail sheet. Name + one friendly due line; description, estimate,
  * repeat, and timestamps live on the detail page. Overdue open tasks
@@ -1041,10 +1480,29 @@ internal fun ServerTaskRow(
     overdue: Boolean,
     today: java.time.LocalDate,
     actionsEnabled: Boolean,
+    /**
+     * Draw the row as completed without the model saying so (#308): a row
+     * playing its leave animation reads as done while it goes, but its data
+     * is left alone so the bucket it sits in does not change under it.
+     */
+    completed: Boolean = false,
     onOpen: () -> Unit,
     onToggle: () -> Unit,
 ) {
-    val done = !task.isOpen()
+    val done = !task.isOpen() || completed
+    // On the Done/All filters a completion leaves the row where it is and
+    // only flips its state, so the flip itself is animated here; the Open
+    // filter animates the whole row out instead (TaskRowSlot). Colour is what
+    // animates — a strikethrough has no animatable form.
+    val nameColor by animateColorAsState(
+        targetValue = if (done) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        animationSpec = tween(ROW_ANIM_MS),
+        label = "taskRowName",
+    )
     Row(
         modifier = Modifier.fillMaxWidth()
             .clickable(onClick = onOpen)
@@ -1052,18 +1510,25 @@ internal fun ServerTaskRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onToggle, enabled = actionsEnabled) {
-            if (task.isOpen()) {
+            // Two different questions, two different answers. The ICON follows
+            // what is DRAWN (`done`), so a row that is leaving (#308) shows the
+            // filled check its dimmed, struck-through text already implies
+            // rather than an empty circle. The LABEL names the action this
+            // button is, which is still "complete" while that leave animation
+            // runs: the row is being completed, not reopened, and TalkBack
+            // reads the label, not the glyph.
+            if (done) {
                 Icon(
-                    Icons.Filled.RadioButtonUnchecked,
-                    contentDescription = "Complete task",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    Icons.Filled.CheckCircle,
+                    contentDescription = if (task.isOpen()) "Complete task" else "Reopen task",
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(26.dp),
                 )
             } else {
                 Icon(
-                    Icons.Filled.CheckCircle,
-                    contentDescription = "Reopen task",
-                    tint = MaterialTheme.colorScheme.primary,
+                    Icons.Filled.RadioButtonUnchecked,
+                    contentDescription = "Complete task",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(26.dp),
                 )
             }
@@ -1075,11 +1540,7 @@ internal fun ServerTaskRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 textDecoration = if (done) TextDecoration.LineThrough else null,
-                color = if (done) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
+                color = nameColor,
             )
             val dueLine = task.startToDueLine(today)
             val dueBits = buildList {
