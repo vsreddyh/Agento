@@ -976,8 +976,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // placeholder (this prompt was never sent) and remember
                         // the blocking run for the runs sheet. The failed
                         // prompt stays in history for Retry; newer typing
-                        // joins the queue. No auto-retry: a timer would turn
-                        // a busy profile into a self-DDoS.
+                        // stays in the composer untouched. No auto-retry: a
+                        // timer would turn a busy profile into a self-DDoS.
                         val msgs = _state.value.messages
                         val unposted = if (msgs.lastOrNull()?.role == "assistant") {
                             msgs.dropLast(1)
