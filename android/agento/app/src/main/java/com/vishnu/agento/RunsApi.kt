@@ -172,15 +172,6 @@ class RunsApi(context: Context) {
         }
     }
 
-    /** One run's record. */
-    suspend fun get(path: String, id: String): Result<AgentRun> = withContext(Dispatchers.IO) {
-        call("GET", "$path/api/runs/${encode(id)}").mapCatching {
-            if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
-            parseRun(JSONObject(it.body))
-                ?: throw RuntimeException("unparseable run record")
-        }
-    }
-
     /**
      * Queues an instruction into the running turn. Returns [SteerOutcome.Conflict]
      * when the run settled first (HTTP 409) — steer the next turn instead.

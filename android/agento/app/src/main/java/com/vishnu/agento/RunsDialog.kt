@@ -29,6 +29,9 @@ private val WS = Regex("\\s+")
 internal fun RunsDialog(
     runs: List<AgentRun>,
     loading: Boolean,
+    /** Id of the run blocking this tab (429/error stash): highlighted so the
+     * user can spot the row to watch or cancel. */
+    highlightId: String = "",
     onRefresh: () -> Unit,
     onCancel: (String) -> Unit,
     onClose: () -> Unit,
@@ -65,7 +68,9 @@ internal fun RunsDialog(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        if (run.isRunning()) "● Running" else run.status.ifBlank { "· done" },
+                                        if (run.isRunning()) "● Running"
+                                        else if (run.status.isBlank()) "· unknown"
+                                        else run.status,
                                         style = MaterialTheme.typography.labelMedium,
                                         color = if (run.isRunning()) {
                                             MaterialTheme.colorScheme.primary
@@ -77,7 +82,11 @@ internal fun RunsDialog(
                                     Text(
                                         run.id.take(8),
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = if (run.id == highlightId && highlightId.isNotBlank()) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
                                     )
                                     if (run.isRunning()) {
                                         TextButton(onClick = { onCancel(run.id) }) {

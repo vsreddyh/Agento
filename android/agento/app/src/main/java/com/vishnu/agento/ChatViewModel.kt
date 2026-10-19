@@ -604,7 +604,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 when (outcome) {
                     is SteerOutcome.Queued ->
                         _state.value = _state.value.copy(pending = "")
-                    is SteerOutcome.Conflict -> send()
+                    // Settled race: the text becomes the next turn. When the
+                    // queue was already occupied send() parks nothing, so say
+                    // so instead of leaving the composer full with no signal.
+                    is SteerOutcome.Conflict -> {
+                        val queuedWasOccupied = _state.value.queued.isNotBlank()
+                        send()
+                        if (queuedWasOccupied && _state.value.streaming) {
+                            _state.value = _state.value.copy(
+                                error = "Turn ended — queued behind the pending send.",
+                            )
+                        }
+                    }
                     null -> _state.value = _state.value.copy(
                         error = "Steer failed" +
                             (result.exceptionOrNull()?.message?.take(120)?.let { ": $it" } ?: "") +
@@ -617,6 +628,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Opens the runs sheet for the active thread and loads its runs (#311). */
     fun openRuns() {
+        if (!_state.value.ready || threadId.isBlank()) return
         _state.value = _state.value.copy(showRuns = true)
         refreshRuns()
     }
@@ -860,6 +872,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         sendGen++
         val gen = sendGen
         lastRunStatus = null
+        // Model actually serving this turn: the request model until a
+        // snapshot names the running one (mid-turn switch). Every render
+        // below reads this, never the request model, so the meta line
+        // cannot flicker back on the next token.
+        var servingModel = model
         streamJob = viewModelScope.launch {
             api.streamChat(path, provider, model, history, stableSessionId, effort).collect { event ->
                 // Stale turn (cancelled after this event buffered): never
@@ -888,8 +905,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // Prefer the snapshot's model whenever it names one: a
                         // mid-turn switch means the running model, not the
                         // requested one, is serving this stream.
-                        val servingModel = snap.model.trim().ifBlank { model }
                         if (snap.model.isNotBlank()) {
+                            servingModel = snap.model.trim()
                             patchPlaceholder(
                                 content = null, reasoning = null,
                                 model = servingModel,
@@ -977,7 +994,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         _state.value = _state.value.copy(
                             messages = msgs.dropLast(1) + ChatMessage(
                                 "assistant", acc.toString(), placeholderTs,
-                                reasoning = kept, model = model,
+                                reasoning = kept, model = servingModel,
                             ),
                         )
                     }
@@ -1001,7 +1018,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // but the reply is user-stopped, not finished. It must
                         // read like stop(), not like a reply — parked queue,
                         // no recovery (the turn is over, output complete), no
-                        // notification, USER attribution (not DROP).
+                        // notification, USER attribution (not DROP). Keyed on
+                        // "cancelled" only: failed/interrupted runs end via
+                        // error frames (the Error path), never clean Done.
                         val cancelled = lastRunStatus == "cancelled"
                         // A dropped turn that produced NOTHING leaves an empty assistant
                         // bubble carrying only the "Connection lost" label. The `Error` and
@@ -1018,7 +1037,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             _state.value.messages.dropLast(1)
                         } else msgsDropLastPlusAssistant(
                             final, finishedAt, liveTools.toList(), event.usage,
-                            racc.toString(), model,
+                            racc.toString(), servingModel,
                             // #214: the stream ended without `[DONE]`, so this
                             // reply is a fragment of a turn that is still
                             // executing server-side. The text is kept — it is

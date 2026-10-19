@@ -935,9 +935,12 @@ internal fun ChatScreen(
                         Icon(Icons.Filled.History, contentDescription = "Conversations")
                     }
                     // Runs (#311): the thread's server-side turns, in-flight
-                    // and finished. Always enabled — cancelling a running turn
-                    // is the point, and it works mid-stream.
-                    IconButton(onClick = onRuns) {
+                    // and finished. Gated on a loaded thread: a blank thread
+                    // would list every conversation's runs unscoped.
+                    IconButton(
+                        onClick = onRuns,
+                        enabled = state.ready && state.threadId.isNotBlank(),
+                    ) {
                         Icon(Icons.Filled.List, contentDescription = "Runs")
                     }
                     // Auto-read: speak each finished reply aloud.
@@ -1536,6 +1539,7 @@ internal fun ChatScreen(
             RunsDialog(
                 runs = state.runs,
                 loading = state.runsLoading,
+                highlightId = state.activeRunId.ifBlank { state.busyRunId },
                 onRefresh = onRefreshRuns,
                 onCancel = onCancelRun,
                 onClose = onCloseRuns,
