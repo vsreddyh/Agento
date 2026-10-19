@@ -68,12 +68,16 @@ type runSnapshot struct {
 	// Tools is always present, even when empty, matching runWire: the app
 	// parses the snapshot and the list/detail shapes with one helper, and an
 	// omitted-vs-empty difference would make that helper branch for nothing.
-	Tools      []string `json:"tools"`
-	Usage      *usage   `json:"usage,omitempty"`
-	Error      string   `json:"error,omitempty"`
-	CreatedAt  int64    `json:"created_at,omitempty"`
-	UpdatedAt  int64    `json:"updated_at,omitempty"`
-	FinishedAt int64    `json:"finished_at,omitempty"`
+	Tools []string `json:"tools"`
+	Usage *usage   `json:"usage,omitempty"`
+	Error string   `json:"error,omitempty"`
+	// CreatedAt/UpdatedAt carry no omitempty, unlike the other optional keys:
+	// begin sets both before any snapshot exists, so they are always present
+	// and the parser gets one rule. FinishedAt keeps omitempty — unset until
+	// the run settles.
+	CreatedAt  int64 `json:"created_at"`
+	UpdatedAt  int64 `json:"updated_at"`
+	FinishedAt int64 `json:"finished_at,omitempty"`
 }
 
 // usageWire converts the stored token counts into the chat stream's spelling,
@@ -222,12 +226,17 @@ func (lr *liveRun) conversation() string {
 }
 
 // matchesFilter reports whether the run can match f, without copying it.
-// Used to reserve overlay room and to pre-filter appends before a full
-// snapshot; the final f.Matches on merged rows stays authoritative.
+// One lock for the whole triple: three separate accessors could straddle a
+// settle and present a torn view (profile pre-settle, status post-settle),
+// miscounting the overlay room reservation. Used to reserve overlay room and
+// to pre-filter appends before a full snapshot; the final f.Matches on merged
+// rows stays authoritative.
 func (lr *liveRun) matchesFilter(f runs.Filter) bool {
-	return (f.Profile == "" || lr.profile() == f.Profile) &&
-		(f.ConversationID == "" || lr.conversation() == f.ConversationID) &&
-		(f.Status == "" || lr.status() == f.Status)
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return (f.Profile == "" || lr.run.Profile == f.Profile) &&
+		(f.ConversationID == "" || lr.run.ConversationID == f.ConversationID) &&
+		(f.Status == "" || lr.run.Status == f.Status)
 }
 func (lr *liveRun) prompt() string {
 	lr.mu.Lock()
