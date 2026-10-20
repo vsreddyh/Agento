@@ -556,6 +556,11 @@ fun decodeThumbnail(base64: String): Bitmap? {
     // propagate (produceState restart on recompose), never collapse into
     // the null placeholder path like a corrupt payload does.
     return try {
+        // Gated like the stage path (#339): thumbnails decode whatever is
+        // in storage, so a hand-edited multi-MB payload would otherwise
+        // decode unbounded per visible row — over-cap reads null straight
+        // to the placeholder instead.
+        if (base64.length > MAX_IMAGE_BASE64_CHARS) return null
         // DEFAULT on decode is deliberate asymmetry with the NO_WRAP encode
         // above: encode must not emit newlines (data URIs are single-line),
         // while decode stays lenient toward payloads written by older builds.

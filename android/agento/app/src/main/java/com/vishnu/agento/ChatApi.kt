@@ -630,13 +630,18 @@ class ChatApi(context: Context) {
             // would misname the number on a long text-only thread — and a
             // photo-less trip must not say "remove a photo". The actionable
             // second half is conditional on what the turn carries (counted
-            // wired, like the wire filter itself).
+            // wired, like the wire filter itself). Unknown length (-1)
+            // phrases separately: formatBytes(-1) would print "-1 B".
             val hasPhotos = lastUserIdx >= 0 &&
                 messages[lastUserIdx].attachments.wiredPhotoCount() > 0
             trySend(
                 ChatEvent.Error(
-                    "Couldn't send: this conversation is about ${formatBytes(rawBytes)} " +
-                        "(limit about ${formatBytes(MAX_CHAT_WIRE_BYTES.toLong())}). " +
+                    (if (rawBytes < 0) {
+                        "Couldn't send: this conversation couldn't be measured. "
+                    } else {
+                        "Couldn't send: this conversation is about ${formatBytes(rawBytes)} " +
+                            "(limit about ${formatBytes(MAX_CHAT_WIRE_BYTES.toLong())}). "
+                    }) +
                         if (hasPhotos) {
                             "Remove a photo or start a new conversation."
                         } else {

@@ -275,8 +275,24 @@ class ChatAttachmentsTest {
     }
 
     @Test
-    fun legacyThreadJsonDecodesWithoutAttachments() {
-        // Backward-compat pins (#339): JSON written before attachments (no
+    fun wiredPhotosWithIndexPreservesStagedSlots() {
+        // The strip renders wired but removes by staged slot: the mapping
+        // must carry the STAGED index, or remove deletes the wrong photo.
+        val mapped = listOf(
+            ChatAttachment(base64 = ""),
+            attachment("AAA="),
+            ChatAttachment(base64 = ""),
+            attachment("BBB="),
+        ).wiredPhotosWithIndex()
+        assertEquals(2, mapped.size)
+        assertEquals(1, mapped[0].index)
+        assertEquals("AAA=", mapped[0].value.base64)
+        assertEquals(3, mapped[1].index)
+        assertEquals("BBB=", mapped[1].value.base64)
+    }
+
+    @Test
+    fun legacyThreadJsonDecodesWithoutAttachments() {        // Backward-compat pins (#339): JSON written before attachments (no
         // field at all) and attachment objects written before ids (no id
         // field) must decode to text-only with empty ids — never fail the
         // whole thread.

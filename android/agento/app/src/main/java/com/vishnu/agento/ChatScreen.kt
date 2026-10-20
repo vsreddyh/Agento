@@ -548,15 +548,18 @@ internal fun ChatTab(
         // no permission prompt fires on camera-less devices, and the same
         // guard holds AT the launch so a future direct call refuses
         // identically instead of reintroducing permission-before-refusal.
-        // Cheap (one PackageManager call), silent on the pass path.
-        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+        // Cheap (one PackageManager call), silent on the pass path. Read
+        // off the application context like every other resolve in this
+        // handler — the tap must not touch the Activity at all.
+        val appTapContext = context.applicationContext
+        if (!appTapContext.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
             vm.notify("No camera on this device — use Choose photos instead.", ToastKind.Info)
             return
         }
         // Application context for the dir (#339): the tap handler must not
         // resolve cacheDir on the Activity — same leak class as the sweep
         // and batch fixes (a File crosses forward, never the Activity).
-        val dir = File(context.applicationContext.cacheDir, "camera")
+        val dir = File(appTapContext.cacheDir, "camera")
         // Checked, not assumed (#339): full storage fails mkdirs, and a
         // bare TakePicture failure (ok=false) would leave the user with
         // no hint why no camera appeared. State notice, not a composition
@@ -585,7 +588,7 @@ internal fun ChatTab(
             // build.gradle.kts) — the FileProvider authority in the
             // manifest is ${applicationId}, same value. If a flavor or a
             // .debug suffix ever lands, this call is the one that breaks.
-            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            FileProvider.getUriForFile(appTapContext, "${appTapContext.packageName}.fileprovider", file)
         }.getOrNull() ?: run {
             vm.notify("Couldn't start the camera.")
             return
@@ -638,11 +641,15 @@ internal fun ChatTab(
         // Hardware gate first (#339): on a camera-less device (kept
         // installable by uses-feature required=false) a permission prompt
         // before the refusal is a pointless dialog — refuse directly.
-        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+        // Application context for both resolves (#339): the tap handler
+        // never touches the Activity (the permission launcher and the
+        // denial dialog own the Activity-bound work).
+        val appReqContext = context.applicationContext
+        if (!appReqContext.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
             vm.notify("No camera on this device — use Choose photos instead.", ToastKind.Info)
             return
         }
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+        if (ContextCompat.checkSelfPermission(appReqContext, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
         ) {
             launchCamera()
