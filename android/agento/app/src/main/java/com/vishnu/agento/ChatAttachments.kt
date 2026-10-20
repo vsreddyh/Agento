@@ -9,6 +9,7 @@ import android.net.Uri
 import android.util.Base64
 import android.util.Log
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
@@ -199,6 +200,11 @@ private class NamedAttachError(message: String) : IllegalArgumentException(messa
  * is logcat-only — the toast contract is named errors, never system text.
  */
 private fun namedReadError(e: Throwable): Throwable {
+    // Cancellation is not a read failure (#339): leaving the tab mid-batch
+    // cancels the decode, and remapping that into the generic error would
+    // toast "couldn't read" for a user-initiated abort — while also
+    // breaking structured concurrency by swallowing the cancel.
+    if (e is CancellationException) throw e
     runCatching { Log.w("ChatAttachments", "photo read failed", e) }
     return if (e is NamedAttachError || e is IllegalStateException) e
     else NamedAttachError(
@@ -424,7 +430,10 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
  * bad payload degrades to a missing thumbnail, never a crash.
  */
 fun decodeThumbnail(base64: String): Bitmap? {
-    return runCatching {
+    // Explicit try/catch, not runCatching (#339): cancellation must
+    // propagate (produceState restart on recompose), never collapse into
+    // the null placeholder path like a corrupt payload does.
+    return try {
         // DEFAULT on decode is deliberate asymmetry with the NO_WRAP encode
         // above: encode must not emit newlines (data URIs are single-line),
         // while decode stays lenient toward payloads written by older builds.
@@ -440,5 +449,9 @@ fun decodeThumbnail(base64: String): Bitmap? {
             bytes, 0, bytes.size,
             BitmapFactory.Options().apply { inSampleSize = sample },
         )
-    }.getOrNull()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
 }
