@@ -322,6 +322,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun hasAttachmentRoom(): Boolean =
         _state.value.pendingAttachments.wiredPhotoCount() < MAX_IMAGES_PER_TURN
 
+    /** Whether [id] is still the active thread (#339): batches snapshot
+     * this at tap/launch time and drop (with notice) if a thread switch
+     * landed mid-decode — staging thread-A photos into thread B's
+     * composer would mis-send them. */
+    fun isThreadCurrent(id: String): Boolean = id == threadId
+
+    /** Live thread id for batch homing (#339, see [isThreadCurrent]). */
+    fun threadIdNow(): String = threadId
+
     /** Live staged-photo count for tap-time cap math (#339): ChatTab reads
      * the ViewModel, not its last-recomposed snapshot, so a
      * remove-then-rapid-repick sees the freed slot. Counted wired. */
@@ -674,8 +683,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // Photo threads are findable by "photo" (#318): their
                         // images are payloads with no searchable text. One
                         // marker spelling shared with export + wire (#339),
-                        // counted wired so blanks never claim a photo.
-                        contentWithMarker(it.content, it.attachments.wiredPhotoCount())
+                        // counted wired so blanks never claim a photo — and
+                        // user-only like the wire rule (#339): a hypothetical
+                        // assistant attachment must not make the thread
+                        // findable while title and wire stay silent on it.
+                        val photoCount =
+                            if (it.role == "user") it.attachments.wiredPhotoCount() else 0
+                        contentWithMarker(it.content, photoCount)
                             .lowercase(java.util.Locale.ROOT).contains(q)
                     }
                 )
@@ -775,8 +789,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // long-standing trimmed shape so exports don't gain blank
             // lines. Render-trimmed like the bubble (#339): trailing
             // newlines would export a blank line per turn that the bubble
-            // doesn't show. Counted wired (#339).
-            val wiredCount = m.attachments.wiredPhotoCount()
+            // doesn't show. Counted wired and user-only like the wire rule
+            // (#339): a hypothetical assistant attachment must not export
+            // a marker the wire would never send.
+            val wiredCount = if (m.role == "user") m.attachments.wiredPhotoCount() else 0
             val marker = if (wiredCount > 0) {
                 contentWithMarkerVerbatim(m.content.trimEnd(), wiredCount)
             } else {

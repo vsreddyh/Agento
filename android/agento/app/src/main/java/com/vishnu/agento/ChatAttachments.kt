@@ -11,6 +11,7 @@ import android.util.Log
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlinx.serialization.Serializable
@@ -205,7 +206,11 @@ fun downscaledSize(w: Int, h: Int): Pair<Int, Int> {
  */
 sealed interface WireContent {
     data class Text(val text: String) : WireContent
-    data class Multipart(val parts: JSONArray) : WireContent
+    /** Multipart photo turn. Plain class, not data (#339): JSONArray has
+     * identity equals/hashCode, so data-class equality would mislead (two
+     * identical multiparts never assertEquals) — and the mutable array
+     * must not pretend to be a value. Callers get parts; nobody copies. */
+    class Multipart(val parts: JSONArray) : WireContent
 }
 /**
  * Wire content for one message: [WireContent.Text] normally, the
@@ -313,6 +318,13 @@ fun formatBytes(bytes: Long): String {
  */
 internal class NamedAttachError(message: String) : IllegalArgumentException(message)
 
+/** Size-cap failures, typed apart from every other IllegalStateException
+ * (#339): providers and framework code throw ISE too ("Permission
+ * Denial…"), so passing through all ISE would surface system text in the
+ * toast — breaking the "never system text, logcat-only" contract. Only
+ * this + NamedAttachError pass through; the rest remap to generic. */
+internal class OversizeAttachError(message: String) : IllegalStateException(message)
+
 /**
  * Maps a read failure onto the named error family (#339). Our own throws
  * pass through; system throwables (SecurityException on a revoked picker
@@ -327,7 +339,7 @@ private fun namedReadError(e: Throwable): Throwable {
     // breaking structured concurrency by swallowing the cancel.
     if (e is CancellationException) throw e
     runCatching { Log.w("ChatAttachments", "photo read failed", e) }
-    return if (e is NamedAttachError || e is IllegalStateException) e
+    return if (e is NamedAttachError || e is OversizeAttachError) e
     else NamedAttachError(
         "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
     )
@@ -368,6 +380,11 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 // truncation that decodes into a bogus "not a photo" error.
                 var zeroStreak = 0
                 while (true) {
+                    // Cooperative cancel on the progressing path too (#339):
+                    // yield() only ran on zero-reads, so a slow cloud-URI
+                    // streaming megabytes (every read > 0) held an IO thread
+                    // past tab-leave until the whole read finished.
+                    ensureActive()
                     val n = stream.read(buf)
                     // < 0 only: 0 is a legal (if rare) return, especially
                     // from content-provider streams — breaking on it would
@@ -395,7 +412,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     // the cap (#339): total is bytes-read-so-far, so quoting
                     // it would present a partial count as the file's size.
                     if (total > MAX_SOURCE_BYTES) {
-                        throw IllegalStateException(
+                        throw OversizeAttachError(
                             "That file is too large to attach " +
                                 "(over about ${formatBytes(MAX_SOURCE_BYTES.toLong())}).",
                         )
@@ -564,7 +581,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             } finally {
                 bitmap.recycle()
             }
-            val final = encoded ?: throw IllegalStateException(
+            val final = encoded ?: throw OversizeAttachError(
                 // Empty means the loop threw before measuring (OOM in the
                 // encode): report unprocessable, never "0 B" or a sentinel.
                 // Sizes exact via base64Bytes (#339): padding-adjusted, so

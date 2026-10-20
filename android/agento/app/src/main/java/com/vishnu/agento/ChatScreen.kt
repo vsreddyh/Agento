@@ -278,6 +278,13 @@ internal fun ChatTab(
     // Closed on thread switch below: it belongs to the old thread's
     // Take-photo tap, not the new composer.
     var showCameraSettings by rememberSaveable { mutableStateOf(false) }
+    // Owning thread of the outstanding capture (#339): the callback runs
+    // post-switch, so processUris must be told which thread the photo was
+    // taken for — defaulting to current-at-callback would home it wrong.
+    // Saveable like the path: rotation must not lose the owner (the result
+    // redelivers to the recreated activity). A stale owner after death can
+    // only mismatch, and mismatch drops with notice — never mis-stages.
+    var cameraThread by rememberSaveable { mutableStateOf<String?>(null) }
     // Thread-scoped transient UI, same as the editor/menu state inside
     // ChatScreen (#339). Split across parent/child by render site (the
     // dialog renders here, the editor/menu render there) — both fire on
@@ -363,8 +370,17 @@ internal fun ChatTab(
     // are not ours, so gallery batches pass none) — passed explicitly so
     // a concurrent gallery batch can never delete a capture still decoding.
     // [onBatchDone] fires on Main after the batch (camera uses it to drop
-    // its in-flight flag).
-    fun processUris(uris: List<Uri>, cleanup: File? = null, onBatchDone: () -> Unit = {}) {        // Done fires on early returns too (#339): the camera sets its
+    // its in-flight flag). [homeThread] is the thread the batch belongs
+    // to — gallery captures it at tap time, camera at launch time (passed
+    // explicitly, since the callback runs post-switch) — and a mismatch
+    // at any Main hop drops the batch with notice instead of staging
+    // thread-A photos into thread B (see isThreadCurrent).
+    fun processUris(
+        uris: List<Uri>,
+        cleanup: File? = null,
+        onBatchDone: () -> Unit = {},
+        homeThread: String = vm.threadIdNow(),
+    ) {        // Done fires on early returns too (#339): the camera sets its
         // in-flight flag before calling, so a cap refusal without the
         // callback would stick the flag and leak the capture forever.
         // The capture itself is deleted here too — the finally below only
@@ -437,13 +453,27 @@ internal fun ChatTab(
                 // the loop exactly when full, so failures simply yield to
                 // the next Uri.
                 for (u in unique) {
-                    // Re-check room per pick (#339): two rapid batches both
-                    // snapshot free slots at tap time, so without this both
-                    // decode fully and the loser drops AFTER the expensive
-                    // part. addPendingAttachments stays as backstop. Noisy
-                    // only when tap-time stayed quiet: if the tap already
+                    // Home + room re-check per pick (#339): two rapid
+                    // batches both snapshot free slots at tap time, so
+                    // without this both decode fully and the loser drops
+                    // AFTER the expensive part — and a thread switch
+                    // mid-batch would stage into the wrong composer.
+                    // addPendingAttachments stays as backstop. Noisy only
+                    // when tap-time stayed quiet: if the tap already
                     // toasted the cap, repeating it per pick nags.
-                    val room = withContext(Dispatchers.Main) { vm.hasAttachmentRoom() }
+                    val gate = withContext(Dispatchers.Main) {
+                        vm.hasAttachmentRoom() to vm.isThreadCurrent(homeThread)
+                    }
+                    val room = gate.first
+                    if (!gate.second) {
+                        withContext(Dispatchers.Main) {
+                            vm.notify(
+                                "Thread switched — photos dropped, pick again.",
+                                ToastKind.Info,
+                            )
+                        }
+                        break
+                    }
                     if (!room) {
                         if (!overCap) {
                             withContext(Dispatchers.Main) {
@@ -531,7 +561,7 @@ internal fun ChatTab(
         // silence would be the worst outcome — so it voices.
         if (ok && u != null) {
             cameraBusy = true
-            processUris(listOf(u), f) {
+            processUris(listOf(u), f, {
                 cameraBusy = false
                 // Conditional clear (#339): a rapid re-tap overwrites the
                 // path with the second capture while the first still
@@ -540,7 +570,8 @@ internal fun ChatTab(
                 // sweep delete the file being read. Only the owning batch
                 // retires the path.
                 if (f != null && cameraPath == f.absolutePath) cameraPath = null
-            }
+            }, cameraThread ?: vm.threadIdNow())
+            cameraThread = null
         } else {
             runCatching { f?.takeIf { it.exists() }?.delete() }
             cameraPath = null
@@ -615,6 +646,9 @@ internal fun ChatTab(
         }
         cameraUri = uri
         cameraPath = file.absolutePath
+        // Owner recorded with the launch (#339): the callback homes the
+        // batch to this thread even across a switch.
+        cameraThread = state.threadId
         // Armed before launch, cleared in the callback (#339): the gate at
         // the top of this function makes overlapping intents impossible.
         // Guarded: if launch() itself throws (no camera activity to
@@ -1705,11 +1739,15 @@ internal fun ChatScreen(
                     // Photos need a confirming tap (#339): live transcripts
                     // auto-send by design, but background speech firing a
                     // staged-photo turn with no confirmation is a
-                    // wrong-image send. Text parks for the tap instead.
+                    // wrong-image send. Text parks for the tap instead —
+                    // but the loop must still re-arm: the recognizer cycle
+                    // is over either way, and without a fresh liveListen()
+                    // the session would sit in the overlay hearing nothing.
                     if (!staged) {
                         onSend()
                     } else {
                         onLiveStagedPhotos()
+                        liveListen()
                     }
                 }
             }

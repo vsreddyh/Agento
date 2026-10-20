@@ -33,6 +33,7 @@ explicitly; keep the fail-closed part-type contract.**
   | Photos per turn | 2 | picker takes free slots only; excess dropped with a toast |
   | Long side | 1568 px | downscaled at pick time, never refused |
   | Per-photo base64 | ~1.5 M chars (~1.1 MB raw) | named toast (actual size + cap + "pick a different photo") |
+  | Original file read | ~32 MB (`MAX_SOURCE_BYTES`) | named error ("over about 32.0 MB") — bounds the pre-shrink read against mislabeled giants |
   | Turn wire size | ~3.5 M bytes preflight | named send error, phrased for the turn ("remove a photo…" with photos, "shorten the thread…" without) |
 
   Two capped photos plus framing stay under the preflight with headroom
