@@ -329,31 +329,18 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 		s.mu.Unlock()
 		<-ch
 		s.mu.Lock()
+		defer s.mu.Unlock()
 		if s.started {
-			defer s.mu.Unlock()
 			return s.browser, nil
 		}
-		// The first launch failed: retry once under this caller's lock
-		// acquisition instead of wasting the approved turn on a failure
-		// the next tool call would recover from anyway. launchErr carries
-		// the cause if the retry fails too.
-		s.starting = true
-		s.ready = make(chan struct{})
-		dir := s.dir
-		s.mu.Unlock()
-		bctx2, btabCancel2, balloc2, bcancel2, bln2, berr2 := launchBrowser(dir, chrome)
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		close(s.ready)
-		s.starting = false
-		if berr2 != nil {
-			if s.launchErr != nil {
-				return nil, s.launchErr
-			}
-			return nil, berr2
+		// No retry here: N waiters relaunching on one failure is a
+		// thundering herd on exactly the broken-binary path, and the next
+		// tool call recovers anyway. launchErr carries the real cause
+		// (kept fresh — publish clears it on every success).
+		if s.launchErr != nil {
+			return nil, s.launchErr
 		}
-		s.publish(bctx2, btabCancel2, balloc2, bcancel2, bln2)
-		return s.browser, nil
+		return nil, fmt.Errorf("concurrent browser launch failed")
 	}
 	s.starting = true
 	s.ready = make(chan struct{})
@@ -580,7 +567,7 @@ func main() {
 			}
 			text, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx,
-					chromedp.Evaluate[string](`(() => { const t = document.body ? document.body.innerText : ""; return t.length > 100000 ? t.slice(0, 100000) : t; })()`))
+					chromedp.Evaluate[string](`(() => { const t = document.body ? document.body.innerText : ""; if ([...t].length <= 100000) return t; return Array.from(t).slice(0, 100000).join(""); })()`))
 			})
 			if err != nil {
 				return fail(fmt.Errorf("read failed: %v", err))
@@ -664,7 +651,7 @@ func main() {
 			}
 			text, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx,
-					chromedp.Evaluate[string](`(() => { const t = document.body ? document.body.innerText : ""; return t.length > 100000 ? t.slice(0, 100000) : t; })()`))
+					chromedp.Evaluate[string](`(() => { const t = document.body ? document.body.innerText : ""; if ([...t].length <= 100000) return t; return Array.from(t).slice(0, 100000).join(""); })()`))
 			})
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
