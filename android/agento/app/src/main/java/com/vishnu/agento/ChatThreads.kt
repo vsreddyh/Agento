@@ -123,7 +123,12 @@ object ChatThreads {
             // Grapheme-safe cut via the shared walker (#339): the last
             // boundary within budget, so ZWJ sequences, flag pairs, and
             // surrogate pairs never split mid-cluster in the switcher row.
-            val breaks = titleBreaks.get() ?: java.text.BreakIterator.getCharacterInstance()
+            // withInitial never returns null, so no fallback branch: the
+            // retained last-setText per pooled thread is one title (≤~250
+            // chars), released with the thread — documented, not fixed,
+            // because the alternative (per-call instance) reintroduces the
+            // churn the hoist removed.
+            val breaks = titleBreaks.get()
             breaks.setText(oneLine)
             var end = 0
             var n = breaks.first()

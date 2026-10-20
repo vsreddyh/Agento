@@ -135,13 +135,13 @@ fun attachmentMarker(n: Int): String =
     if (n == 1) "[1 photo attached]" else "[$n photos attached]"
 
 /**
- * Text plus its photo marker, one spelling (#339): the wire history,
- * search haystack, and Markdown export all render photo turns this way,
- * so the next edit cannot fix two and miss one. Empty text yields the
- * bare marker; zero photos yields the text untouched. The trim is
- * display-intended: these three surfaces are reads, while the live
- * last-turn wire part sends content raw (leading indentation of pasted
- * code must survive there).
+ * Text plus its photo marker for trim-tolerant surfaces (#339): search
+ * matching ignores surrounding whitespace, so this trims. (Export and
+ * wire history use contentWithMarkerVerbatim — content-preserving —
+ * because they reproduce what the agent saw.) Empty text yields the bare
+ * marker; zero photos yields the text untouched. Trim/preserve split,
+ * stated once: this trims, the verbatim twin does not — pick by whether
+ * the surface matches (trim) or reproduces (preserve).
  */
 fun contentWithMarker(content: String, n: Int): String =
     if (n <= 0) content else (content.trim() + " " + attachmentMarker(n)).trim()
@@ -152,6 +152,9 @@ fun contentWithMarker(content: String, n: Int): String =
  * (pasted-code indentation included) with only the marker appended.
  * Kept as a named helper (not an inline) so the two spellings stay
  * visibly paired and the next edit can't silently re-split them.
+ * Trim/preserve split, stated once: export uses this too (reproducing
+ * what the agent saw); search uses the trimming twin (matching is
+ * trim-tolerant).
  */
 fun contentWithMarkerVerbatim(content: String, n: Int): String =
     if (n <= 0) {
@@ -267,13 +270,20 @@ fun messageContentJson(
  * approximate error strings and never reached (wire/display paths filter
  * to decode-valid payloads via wiredPhotos()). Framing whitespace
  * (older wrapped payloads, which decode stays lenient toward) is excluded
- * first — ALL of it, not just newlines (#339): decode skips spaces/tabs
+ * inline — ALL of it, not just newlines (#339): decode skips spaces/tabs
  * too, so measuring them would overstate the named size by the space
- * count. */
+ * count. Single counting pass, no copies: the error path already failed
+ * for size, so allocating another ~1.5 M-char filter copy just to report
+ * it would repeat the peak. */
 fun base64Bytes(base64: String): Long {
-    val stripped = base64.filterNot { it.isWhitespace() }
-    val padding = stripped.takeLastWhile { it == '=' }.length
-    return (stripped.length / 4L) * 3L - padding
+    var content = 0
+    var padding = 0
+    for (c in base64) {
+        if (c.isWhitespace()) continue
+        content++
+        padding = if (c == '=') padding + 1 else 0
+    }
+    return (content / 4L) * 3L - padding
 }
 
 /** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal, never blank.
@@ -297,8 +307,11 @@ fun formatBytes(bytes: Long): String {
  * IllegalStateException) through and remaps every system throwable to the
  * generic unreadable-photo error. Rewording a message can't silently flip
  * its bucket — only changing the type can, which the compiler sees.
+ * Internal (not private): a future wire site that misses the wiredPhotos()
+ * filter must be able to catch this specifically instead of surfacing the
+ * dev-facing precondition text through the generic toast path.
  */
-private class NamedAttachError(message: String) : IllegalArgumentException(message)
+internal class NamedAttachError(message: String) : IllegalArgumentException(message)
 
 /**
  * Maps a read failure onto the named error family (#339). Our own throws

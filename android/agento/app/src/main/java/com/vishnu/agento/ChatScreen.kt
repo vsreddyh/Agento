@@ -168,6 +168,10 @@ private fun AttachmentThumb(
     val thumbKey = if (stableId.isNotEmpty()) {
         Triple(stableId, base64.length, base64.sampleKey(128))
     } else {
+        // Legacy fallback, best-effort by construction (#339): two
+        // different pre-id photos with same length + same head/tail CAN
+        // alias here (no crash, no placeholder — just the wrong thumb).
+        // Self-aging as old threads turn over; new picks never land here.
         Triple("s$slot", base64.length, base64.sampleKey(64))
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
