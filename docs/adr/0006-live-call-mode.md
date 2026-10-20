@@ -55,7 +55,9 @@ record — still half-duplex, still no realtime transport.**
   AudioRecord — the explicit stop() is the only lifetime manager.
   A start failure never downgrades the session: contention with a
   dying recorder reads the same as a dead mic, so the next phase change
-  retries instead of sticking the loop in tap-to-talk.
+  retries instead of sticking the loop in tap-to-talk — the failed phase
+  itself stays unmonitored until that retry, so a busy mic stretches that
+  phase's deaf window past the usual ~400 ms calibration.
 
 What this still is not: full-duplex realtime. There is no duplex audio
 path, no barge-in *during* the 400 ms calibration windows, speech during

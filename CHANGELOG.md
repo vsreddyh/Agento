@@ -15,9 +15,8 @@ see GitHub Releases for older notes.
   newly-appearing tools are announced once mid-task (one cue per change,
   naming the latest), then the reply when it lands. Hang-up stays silent —
   every turn, including stopped partials, already lives in the thread.
-  Still half-duplex (no realtime
-  transport): calibration windows and ~1–2 s milestone cues can miss
-  speech; see `docs/adr/0006-live-call-mode.md`.
+  Still half-duplex (no realtime transport): calibration windows and
+  ~1–2 s milestone cues can miss speech; see `docs/adr/0006-live-call-mode.md`.
 
 ## [5.8.0]
 - **Projects: Testing and Blocked phases.** The project board grows from
