@@ -217,59 +217,61 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 ?: throw IllegalArgumentException(
                     "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
                 )
-            // EXIF orientation (#339 review): BitmapFactory ignores it, so a
-            // portrait phone photo would stage and send sideways. The
-            // framework reader needs no extra dependency (minSdk 28 > 24).
-            // Flips included: front-camera selfies commonly carry
-            // FLIP_HORIZONTAL/TRANSVERSE, which a rotation-only mapping
-            // would leave mirrored.
-            val orientation = runCatching {
-                ExifInterface(java.io.ByteArrayInputStream(bytes)).getAttributeInt(
-                    ExifInterface.TAG_ORIENTATION,
-                    ExifInterface.ORIENTATION_NORMAL,
-                )
-            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-            // Null means no transform: transposes and flips compose a mirror
-            // via negative scale, which createBitmap applies directly.
-            val matrix: Matrix? = when (orientation) {
-                ExifInterface.ORIENTATION_ROTATE_90 -> Matrix().apply { postRotate(90f) }
-                ExifInterface.ORIENTATION_ROTATE_180 -> Matrix().apply { postRotate(180f) }
-                ExifInterface.ORIENTATION_ROTATE_270 -> Matrix().apply { postRotate(270f) }
-                ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> Matrix().apply { preScale(-1f, 1f) }
-                ExifInterface.ORIENTATION_FLIP_VERTICAL -> Matrix().apply { preScale(1f, -1f) }
-                ExifInterface.ORIENTATION_TRANSPOSE -> Matrix().apply {
-                    postRotate(90f)
-                    postScale(-1f, 1f)
-                }
-                ExifInterface.ORIENTATION_TRANSVERSE -> Matrix().apply {
-                    postRotate(270f)
-                    postScale(-1f, 1f)
-                }
-                else -> null
-            }
-            if (matrix != null) {
-                val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                // Referential on purpose: equality is referential for Bitmaps,
-                // and only a new instance may recycle the old one.
-                if (rotated !== bitmap) {
-                    bitmap.recycle()
-                    bitmap = rotated
-                }
-            }
-            val (tw, th) = downscaledSize(bitmap.width, bitmap.height)
-            if (bitmap.width != tw || bitmap.height != th) {
-                val scaled = Bitmap.createScaledBitmap(bitmap, tw, th, true)
-                if (scaled !== bitmap) {
-                    bitmap.recycle()
-                    bitmap = scaled
-                }
-            }
+            // One try/finally from here down (#339): rotation, scaling and
+            // compression each allocate or throw, and any throw must recycle
+            // the live bitmap — the recycle-before-reassign lines cover the
+            // success path, the finally covers every throw between them.
+            // Declared outside: the oversize check below reads them after.
             var encoded: String? = null
             var largest = 0
-            // try/finally, not recycle-then-throw (#339): a compress OOM or
-            // the oversize throw below would otherwise propagate out of
-            // runCatching with native pixels still live until GC.
             try {
+                // EXIF orientation (#339 review): BitmapFactory ignores it, so a
+                // portrait phone photo would stage and send sideways. The
+                // framework reader needs no extra dependency (minSdk 28 > 24).
+                // Flips included: front-camera selfies commonly carry
+                // FLIP_HORIZONTAL/TRANSVERSE, which a rotation-only mapping
+                // would leave mirrored.
+                val orientation = runCatching {
+                    ExifInterface(java.io.ByteArrayInputStream(bytes)).getAttributeInt(
+                        ExifInterface.TAG_ORIENTATION,
+                        ExifInterface.ORIENTATION_NORMAL,
+                    )
+                }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+                // Null means no transform: transposes and flips compose a mirror
+                // via negative scale, which createBitmap applies directly.
+                val matrix: Matrix? = when (orientation) {
+                    ExifInterface.ORIENTATION_ROTATE_90 -> Matrix().apply { postRotate(90f) }
+                    ExifInterface.ORIENTATION_ROTATE_180 -> Matrix().apply { postRotate(180f) }
+                    ExifInterface.ORIENTATION_ROTATE_270 -> Matrix().apply { postRotate(270f) }
+                    ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> Matrix().apply { preScale(-1f, 1f) }
+                    ExifInterface.ORIENTATION_FLIP_VERTICAL -> Matrix().apply { preScale(1f, -1f) }
+                    ExifInterface.ORIENTATION_TRANSPOSE -> Matrix().apply {
+                        postRotate(90f)
+                        postScale(-1f, 1f)
+                    }
+                    ExifInterface.ORIENTATION_TRANSVERSE -> Matrix().apply {
+                        postRotate(270f)
+                        postScale(-1f, 1f)
+                    }
+                    else -> null
+                }
+                if (matrix != null) {
+                    val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                    // Referential on purpose: equality is referential for Bitmaps,
+                    // and only a new instance may recycle the old one.
+                    if (rotated !== bitmap) {
+                        bitmap.recycle()
+                        bitmap = rotated
+                    }
+                }
+                val (tw, th) = downscaledSize(bitmap.width, bitmap.height)
+                if (bitmap.width != tw || bitmap.height != th) {
+                    val scaled = Bitmap.createScaledBitmap(bitmap, tw, th, true)
+                    if (scaled !== bitmap) {
+                        bitmap.recycle()
+                        bitmap = scaled
+                    }
+                }
                 for (quality in listOf(80, 60)) {
                     val out = ByteArrayOutputStream()
                     bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)

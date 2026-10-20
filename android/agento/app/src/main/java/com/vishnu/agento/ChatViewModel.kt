@@ -568,13 +568,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Threads matching [query] in title or message text (switcher search). */
     fun searchThreads(query: String): List<ThreadSummary> {
-        val q = query.trim().lowercase()
+        // ROOT locale throughout (#339): the default locale folds `I`
+        // differently (Turkish `ı`), so searches for marker words like
+        // "photo" — and any content with an `I` — would miss by locale.
+        val q = query.trim().lowercase(java.util.Locale.ROOT)
         if (q.isEmpty()) return _state.value.threads
         return threads.filter { t ->
             t.messages.isNotEmpty() && (
                 // Same untitled fallback as summaries() so "new
                 // conversation" finds threads without a custom title.
-                t.title.ifBlank { UNTITLED }.lowercase().contains(q) ||
+                t.title.ifBlank { UNTITLED }.lowercase(java.util.Locale.ROOT).contains(q) ||
                     t.messages.any {
                         // Photo threads are findable by "photo" (#318): their
                         // images are payloads with no searchable text.
@@ -583,7 +586,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         } else {
                             ""
                         }
-                        (it.content + marker).lowercase().contains(q)
+                        (it.content + marker).lowercase(java.util.Locale.ROOT).contains(q)
                     }
                 )
         }.map {
@@ -789,6 +792,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
+    /** Toasts that staged photos sit out this resend (#339):
+     * retry/regenerate/continue resend history, never the composer's
+     * staging — said out loud like every other narrowing in this file. */
+    private fun noteParkedPhotos(verb: String) {
+        if (_state.value.pendingAttachments.isNotEmpty()) {
+            notify(
+                "$verb without the staged photos — they stay in the " +
+                    "composer for your next message.",
+            )
+        }
+    }
+
     /** Resends the current history (used after a failed request).
      *
      * A trailing fragment never goes back out (#214): retry used to resend
@@ -799,6 +814,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      */
     fun retry() {
         if (_state.value.streaming || !_state.value.ready) return
+        noteParkedPhotos("Retried")
         // messageHasContent, not content.isNotBlank (#318): an image-only
         // turn's text is blank and must still resend with its photos.
         val history = stripTrailingFragmentForResend(_state.value.messages)
@@ -1523,6 +1539,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * trailing assistant message and resends the remaining history. */
     fun regenerate() {
         if (_state.value.streaming || !_state.value.ready) return
+        noteParkedPhotos("Regenerated")
         // Same image-only rule as retry() (#318).
         val msgs = _state.value.messages.filter { messageHasContent(it) }
         if (msgs.none { it.role == "user" }) return
@@ -1543,6 +1560,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * is a fresh turn — never presented as server-side resumption). */
     fun continueTurn() {
         if (_state.value.streaming || !_state.value.ready) return
+        noteParkedPhotos("Continued")
         val msgs = _state.value.messages
         val last = msgs.lastOrNull()
         if (last?.role != "assistant" || !last.interrupted) return
@@ -1575,6 +1593,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
         // The edited turn keeps its photos (#339): resending the new text
         // without them would silently narrow the turn the user composed.
+        // Carry-only by design: the editor offers no drop-photos affordance
+        // (a second feature), and the HintLine + confirm clause say the
+        // photos resend — so the behavior is visible, not silent.
         // Staged composer photos are deliberately NOT cleared here (unlike
         // send()): send() clears because the staged photos WERE sent, while
         // this sends the edited turn's carried photos — wiping the

@@ -613,8 +613,10 @@ class ChatApi(context: Context) {
         val raw = payload.toString()
         // Sized in bytes at send time (#339): one transient encode of a
         // body already fully in memory, exact where a char count lies for
-        // non-ASCII history.
-        val rawBytes = raw.toByteArray().size
+        // non-ASCII history. Charset explicit: the platform default is
+        // UTF-8 in practice, but only the explicit arg makes the
+        // exactness the comment claims a contract.
+        val rawBytes = raw.toByteArray(Charsets.UTF_8).size
         if (wireSizeExceeded(rawBytes)) {
             trySend(
                 ChatEvent.Error(
