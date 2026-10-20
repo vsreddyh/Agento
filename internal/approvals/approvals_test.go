@@ -376,7 +376,8 @@ func TestStoresRedactOnWrite(t *testing.T) {
 	}
 	if err := store.Audit(ctx, AuditEntry{
 		ID: "e1", Server: "notes", Tool: "get_note", Disposition: DispositionAllow,
-		Args: map[string]any{"token": "sk-live-abc"},
+		Args:  map[string]any{"token": "sk-live-abc"},
+		Error: "password=hunter2 rejected",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -386,6 +387,9 @@ func TestStoresRedactOnWrite(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Args["token"] != "***" {
 		t.Fatalf("audit args = %#v, want token masked", rows)
+	}
+	if strings.Contains(rows[0].Error, "hunter2") {
+		t.Fatalf("audit error = %q, want the store to scrub it", rows[0].Error)
 	}
 	if rows[0].At == 0 || rows[0].ExpiresAt.IsZero() {
 		t.Fatalf("audit stamps = At %d / ExpiresAt %v, want both stamped by the store",

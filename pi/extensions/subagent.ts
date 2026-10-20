@@ -538,7 +538,7 @@ const spawnSubagent = defineTool({
 		"hypothesis end to end. Do not use it to split a task whose steps depend on " +
 		"each other, and do not use it to avoid work you can simply do: every call " +
 		"starts a second agent, which costs real tokens. A subagent cannot spawn " +
-		"another. Call these one at a time — each one holds a pi process and five " +
+		"another. Call these one at a time — each one holds a pi process and six " +
 		"MCP servers for as long as it runs, so several at once multiplies both.",
 	parameters: Type.Object({
 		task: Type.String({

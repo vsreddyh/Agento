@@ -266,6 +266,7 @@ func (s *MongoStore) Audit(ctx context.Context, e AuditEntry) error {
 		e.ExpiresAt = now.Add(AuditTTL)
 	}
 	e.Args = Redact(e.Args)
+	e.Error = ScrubError(e.Error)
 	if _, err := s.audit.InsertOne(ctx, e); err != nil {
 		return NewStoreError("audit write failed: "+err.Error(), true)
 	}

@@ -133,6 +133,12 @@ to the process that died, and leaving them pending would show the app a card
 whose approval could never forward. The gateway's global `MarkInterrupted`
 still runs at its own startup for the whole collection.
 
+The sweep assumes this deployment's one-profile contract (one relay per
+server). If two profiles ever shared a server name, a restarting relay would
+expire the other's live hold — an approve that forwards nowhere. Supporting
+that would need a per-relay instance token on each row and a liveness check,
+not a broader server-scoped sweep.
+
 A `relay_`-prefixed error marks a decision the relay made itself, not one a
 tool or a human made: `relay_protocol` (unparseable `tools/call`),
 `relay_notification` (gated call with no reply id), `relay_store` (store

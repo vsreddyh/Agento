@@ -186,6 +186,9 @@ func (m *MemoryStore) Audit(_ context.Context, e AuditEntry) error {
 		e.ExpiresAt = now.Add(AuditTTL)
 	}
 	e.Args = Redact(e.Args)
+	// Error is free text: scrub it here too, so a caller that forgets cannot
+	// persist an upstream secret for 90 days. ScrubError is idempotent.
+	e.Error = ScrubError(e.Error)
 	m.audit[e.ID] = e
 	// Memory is bounded like the runs fallback: oldest-first past cap.
 	// The scan is O(n) per insert once full (n = 10*ListCap). This fallback is
