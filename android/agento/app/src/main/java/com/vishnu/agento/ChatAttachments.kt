@@ -363,7 +363,9 @@ fun base64Bytes(base64: String): Long {
             tailPad = 0
         }
     }
-    return maxOf(0L, ((content + tailPad) / 4L) * 3L - minOf(tailPad, 2))
+    // Multiply first (#339): (3/4)*3 truncates to 0 while (3*3)/4 = 2 —
+    // division order is load-bearing for ragged inputs like "AB=C".
+    return maxOf(0L, ((content + tailPad) * 3L) / 4L - minOf(tailPad, 2))
 }
 
 /** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal at KB
