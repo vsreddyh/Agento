@@ -114,8 +114,16 @@ fun wireSizeExceeded(bytes: Long): Boolean = bytes < 0 || bytes > MAX_CHAT_WIRE_
  * never produced — the gateway refuses to fetch them. The type is PINNED,
  * not rendered from storage (#339): every payload is JPEG re-encoded at
  * pick time, so a hand-edited thread file cannot widen the wire type —
- * fail-closed at the client edge, like the gateway's unknown-part 400. */
-fun ChatAttachment.dataUri(): String = "data:image/jpeg;base64,$base64"
+ * fail-closed at the client edge, like the gateway's unknown-part 400.
+ * Wired-only precondition, enforced: blank payloads must be filtered via
+ * wiredPhotos() first — an empty data URI is the corrupt part the wire
+ * filter exists to prevent, so this fails fast instead of rendering one. */
+fun ChatAttachment.dataUri(): String {
+    require(base64.isNotBlank()) {
+        "ChatAttachment.dataUri requires a non-blank payload (filter wiredPhotos() first)"
+    }
+    return "data:image/jpeg;base64,$base64"
+}
 
 /** Inline marker for text-only surfaces (exports, search, titles):
  * `[1 photo attached]` / `[3 photos attached]`. */
@@ -247,7 +255,10 @@ fun messageContentJson(
 /** Exact decoded size of a base64 payload (#339): the naive 3/4 rule
  * overstates by the padding (1–2 B), so named limit errors would name a
  * wrong cap-adjacent number ("1.1 MB" is fine; "X B" off by two is not).
- * Valid base64 lengths are multiples of 4, so len/4*3 holds exactly. */
+ * Precondition: valid base64 (length % 4 == 0) — a hand-edited payload
+ * with a ragged length floors down by up to 2 B, which is acceptable for
+ * approximate error strings and never reached (wire/display paths filter
+ * to decode-valid payloads via wiredPhotos()). */
 fun base64Bytes(base64: String): Long {
     val padding = base64.takeLastWhile { it == '=' }.length
     return (base64.length / 4L) * 3L - padding
@@ -257,8 +268,12 @@ fun base64Bytes(base64: String): Long {
  * Pinned to US formatting (#339): user-visible strings must not render
  * `1,1 MB` under a comma-decimal locale. Never renders `1000 <unit>`
  * (#339): the KB branch stops below 999_500 so rounding carries into MB
- * instead of printing a cross-unit "1000 KB" in a named limit error. */
+ * instead of printing a cross-unit "1000 KB" in a named limit error.
+ * Negative input renders "unknown size" (#339): the preflight phrases
+ * unknown length separately today, but the next caller passing a raw
+ * contentLength() must not print "-1 B" in a user-visible string. */
 fun formatBytes(bytes: Long): String {
+    if (bytes < 0) return "unknown size"
     if (bytes < 1_000L) return "$bytes B"
     if (bytes < 999_500L) return "${"%.0f".format(java.util.Locale.US, bytes / 1_000.0)} KB"
     return "${"%.1f".format(java.util.Locale.US, bytes / 1_000_000.0)} MB"
@@ -379,16 +394,17 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // downscale. The old shape (first sample fitting INSIDE the
             // box) undershot ~2x on large captures (4000px → sample 4 →
             // 1000px) and then soft-UPSCALED to 1568 — worse than sampling
-            // to 2000px and downscaling. Long arithmetic throughout: Int
-            // sample*2 could overflow near 2^30 (same overflow discipline
-            // as downscaledSize below).
-            var sample = 1
-            while (bounds.outWidth / (sample.toLong() * 2) >= MAX_IMAGE_SIDE_PX ||
-                bounds.outHeight / (sample.toLong() * 2) >= MAX_IMAGE_SIDE_PX
+            // to 2000px and downscaling. Long counter like the thumbnail
+            // loop: the toInt() at the inSampleSize handoff is provably
+            // small (exits in ~6 iterations), same overflow discipline
+            // everywhere sampling runs.
+            var sample = 1LL
+            while (bounds.outWidth / (sample * 2) >= MAX_IMAGE_SIDE_PX ||
+                bounds.outHeight / (sample * 2) >= MAX_IMAGE_SIDE_PX
             ) {
                 sample *= 2
             }
-            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample.toInt() }
             val fresh = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
                 ?: throw NamedAttachError(
                     "Couldn't read that photo — it may have been moved or deleted. Pick it again.",

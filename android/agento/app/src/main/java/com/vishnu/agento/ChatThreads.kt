@@ -69,7 +69,11 @@ object ChatThreads {
 
     /** Title from the first user message carrying text, truncated; falls
      * back to the photo name when no user turn has words, to date when the
-     * thread has no user turns at all. */
+     * thread has no user turns at all. Opener-by-design (#339): the first
+     * text turn titles even when a later turn is more substantive ("ok"
+     * then an essay still titles "ok") — search/export carry markers so
+     * the thread stays findable, and longest-text heuristics guess wrong
+     * as often as they help. */
     fun titleFor(messages: List<ChatMessage>): String {
         // Single pass (#339): first text turn + largest photo count in one
         // walk — this runs per title render and per switcher-search filter
