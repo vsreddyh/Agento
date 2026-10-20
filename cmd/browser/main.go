@@ -98,8 +98,9 @@ func checkURL(raw string) (*url.URL, error) {
 	if scheme != "http" && scheme != "https" {
 		return nil, fmt.Errorf("only http and https urls are allowed, not %q", u.Scheme)
 	}
-	// Normalize in place: what the gate approved is byte-identical to what
-	// Chromium dials and what the audit log records.
+	// Normalize in place: what the gate approved matches what Chromium
+	// dials and what the audit log records, modulo URL case (the audit keeps
+	// the raw arg, Chromium gets the lowercased scheme).
 	u.Scheme = scheme
 	// Web ports only: the approval gate is per-domain, not per-port, and a
 	// https://host:22/ URL would otherwise buy a raw TCP tunnel the human
@@ -502,12 +503,12 @@ func main() {
 			// Own budgets per step, like read and evidence: a slow
 			// navigation must not starve the title read that proves where
 			// it landed.
-			if err := runStepVoid(bctx, func(ctx context.Context) error {
+			if err := runStepVoid(bctx, navTimeout, func(ctx context.Context) error {
 				return chromedp.Do(ctx, chromedp.Navigate(u.String()))
 			}); err != nil {
 				return fail(fmt.Errorf("navigation failed: %v", err))
 			}
-			title, err := runStep(bctx, func(ctx context.Context) (string, error) {
+			title, err := runStep(bctx, navTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx, chromedp.Title())
 			})
 			if err != nil {
@@ -531,7 +532,7 @@ func main() {
 			// text each get 30s instead of sharing one deadline.
 			// pageURL, not url: net/url stays usable in these closures
 			// for any next edit that needs to parse.
-			pageURL, err := runStep(bctx, func(ctx context.Context) (string, error) {
+			pageURL, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx, chromedp.Location())
 			})
 			if err == nil && (pageURL == "" || pageURL == "about:blank") {
@@ -540,13 +541,13 @@ func main() {
 			if err != nil {
 				return fail(fmt.Errorf("read failed: %v", err))
 			}
-			title, err := runStep(bctx, func(ctx context.Context) (string, error) {
+			title, err := runStep(bctx, navTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx, chromedp.Title())
 			})
 			if err != nil {
 				return fail(fmt.Errorf("read failed: %v", err))
 			}
-			text, err := runStep(bctx, func(ctx context.Context) (string, error) {
+			text, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx,
 					chromedp.Evaluate[string](`document.body ? document.body.innerText : ""`))
 			})
@@ -582,11 +583,11 @@ func main() {
 			}
 			var buf []byte
 			if in.FullPage {
-				buf, err = runStep(bctx, func(ctx context.Context) ([]byte, error) {
+				buf, err = runStep(bctx, readTimeout, func(ctx context.Context) ([]byte, error) {
 					return chromedp.Run(ctx, chromedp.FullScreenshot(90))
 				})
 			} else {
-				buf, err = runStep(bctx, func(ctx context.Context) ([]byte, error) {
+				buf, err = runStep(bctx, readTimeout, func(ctx context.Context) ([]byte, error) {
 					return chromedp.Run(ctx, chromedp.CaptureScreenshot())
 				})
 			}
@@ -618,26 +619,26 @@ func main() {
 			// slow page that spends the whole budget on the read would
 			// flake the full-page screenshot — exactly the long pages
 			// evidence exists for.
-			pageURL, err := runStep(bctx, func(ctx context.Context) (string, error) {
+			pageURL, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx, chromedp.Location())
 			})
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
 			}
-			title, err := runStep(bctx, func(ctx context.Context) (string, error) {
+			title, err := runStep(bctx, navTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx, chromedp.Title())
 			})
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
 			}
-			text, err := runStep(bctx, func(ctx context.Context) (string, error) {
+			text, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx,
 					chromedp.Evaluate[string](`document.body ? document.body.innerText : ""`))
 			})
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
 			}
-			buf, err := runStep(bctx, func(ctx context.Context) ([]byte, error) {
+			buf, err := runStep(bctx, readTimeout, func(ctx context.Context) ([]byte, error) {
 				return chromedp.Run(ctx, chromedp.FullScreenshot(90))
 			})
 			if err != nil {
@@ -694,16 +695,18 @@ func main() {
 // runStep runs one browser action under its own timeout off the session
 // context. Callers pass bctx (the unbounded session context), never an
 // already-budgeted one: nesting timeouts would silently shrink the step.
-func runStep[T any](bctx context.Context, fn func(context.Context) (T, error)) (T, error) {
-	ctx, cancel := context.WithTimeout(bctx, readTimeout)
+// The budget is a parameter so navigation keeps navTimeout while reads use
+// readTimeout, instead of one constant drifting from its comment.
+func runStep[T any](bctx context.Context, budget time.Duration, fn func(context.Context) (T, error)) (T, error) {
+	ctx, cancel := context.WithTimeout(bctx, budget)
 	defer cancel()
 	return fn(ctx)
 }
 
 // runStepVoid is runStep for error-only actions (navigations): same budget,
 // no value to thread through.
-func runStepVoid(bctx context.Context, fn func(context.Context) error) error {
-	_, err := runStep(bctx, func(ctx context.Context) (struct{}, error) {
+func runStepVoid(bctx context.Context, budget time.Duration, fn func(context.Context) error) error {
+	_, err := runStep(bctx, budget, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, fn(ctx)
 	})
 	return err

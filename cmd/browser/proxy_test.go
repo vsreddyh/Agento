@@ -59,7 +59,9 @@ func TestProxyConnectTunnels(t *testing.T) {
 }
 
 func TestProxyRefusesLoopbackByDefault(t *testing.T) {
-	proxy := &filteringProxy{check: publicIP}
+	// Permissive ports so the 403 proves the IP gate fired, not the port
+	// rule (the ephemeral test port would fail that first).
+	proxy := &filteringProxy{check: publicIP, allowPort: func(string) bool { return true }}
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer backend.Close()
 	u, _ := url.Parse(backend.URL)
