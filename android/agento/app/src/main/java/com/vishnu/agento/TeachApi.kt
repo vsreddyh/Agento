@@ -2,6 +2,7 @@ package com.vishnu.agento
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -98,7 +99,10 @@ class TeachApi(context: Context) {
         if (base.isEmpty()) {
             return Result.failure(IllegalStateException("Server URL not configured"))
         }
-        return runCatching {
+        // Cancellation is not failure: an interrupt during execute()
+        // must propagate, not become an error row. runCatching would
+        // swallow it, so the try is explicit.
+        return try {
             val builder = Request.Builder()
                 .url(base + url)
                 .header("Authorization", "Bearer ${password()}")
@@ -113,7 +117,11 @@ class TeachApi(context: Context) {
             }
             http.newCall(builder.build()).execute().use { response ->
                 CallResult(response.code, response.body?.string() ?: "")
-            }
+            }.let { Result.success(it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 

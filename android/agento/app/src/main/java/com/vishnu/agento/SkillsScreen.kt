@@ -234,9 +234,9 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     }
 
     /** Successful saves, consumed by the dialog to collapse its editor. */
-    var editSaves by remember { mutableStateOf(0) }
+    var editSaves by remember(profile) { mutableStateOf(0) }
     /** Successful schedules: the dialog clears its cron fields on each. */
-    var promoteSaves by remember { mutableStateOf(0) }
+    var promoteSaves by remember(profile) { mutableStateOf(0) }
 
     LaunchedEffect(Unit) { load() }
 
@@ -555,7 +555,13 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // The open row re-resolves by id on every recomposition: reloads land
     // new objects, and the dialog must show the fresh status/body, not the
     // tapped snapshot.
-    val open = managing?.let { m -> taught.firstOrNull { it.id == m.id } ?: m }
+    // No fallback snapshot: when the id vanishes from a reload (deleted
+    // elsewhere), the dialog closes instead of showing a dead row. A null
+    // managing already means closed everywhere else.
+    val open = managing?.let { m -> taught.firstOrNull { it.id == m.id } }
+    LaunchedEffect(open) {
+        if (managing != null && open == null) managing = null
+    }
     if (open != null) {
         TeachDialog(
             skill = open,
