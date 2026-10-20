@@ -29,6 +29,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -235,13 +236,14 @@ type sessions struct {
 	lastPrune time.Time
 }
 
-func (ss *sessions) get(profile string) *session {
+func (ss *sessions) get(profile string) (*session, error) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	// Validated here, not just at startup: the signature invites
-	// non-global callers, and a "../x" profile must never become a path.
+	// non-global callers, and collapsing bad inputs to one shared dir
+	// would mix state across callers. Fail closed instead.
 	if !safeName.MatchString(profile) {
-		profile = "invalid-profile"
+		return nil, fmt.Errorf("refusing unsafe profile %q", profile)
 	}
 	s, ok := ss.byProfile[profile]
 	if !ok {
@@ -249,6 +251,10 @@ func (ss *sessions) get(profile string) *session {
 		ss.byProfile[profile] = s
 	}
 	s.lastUse = time.Now()
+	// Touch the dir: mtime is the only clock the startup disk walk can
+	// read, so each use refreshes it. Without this a daily-used profile
+	// with a stable file set looks idle to pruneSessions after a restart.
+	_ = os.Chtimes(s.dir, time.Now(), time.Now())
 	// Eviction (live sessions, lastUse-aware) runs daily here. The
 	// filesystem walk runs ONLY at server start (main): its mtime test
 	// cannot tell a daily-used profile with a stable file set from an
@@ -258,7 +264,7 @@ func (ss *sessions) get(profile string) *session {
 		ss.lastPrune = time.Now()
 		ss.evictIdle()
 	}
-	return s
+	return s, nil
 }
 
 // evictIdle cancels sessions idle past the TTL: their context dirs go AND
@@ -363,7 +369,13 @@ func launchBrowser(dir, chrome string) (bctx context.Context, btabCancel context
 	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("proxy listen: %v", err)
 	}
-	go http.Serve(ln, &filteringProxy{check: publicIP})
+	// Serve errors log on exit: a dead listener makes Chromium fail
+	// opaquely at the next navigation, and silence would hide the cause.
+	go func() {
+		if err := http.Serve(ln, &filteringProxy{check: publicIP}); err != nil {
+			log.Printf("browser: proxy listener closed: %v", err)
+		}
+	}()
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(chrome),
 		// Headless: there is no display in the container, and a headed
@@ -425,6 +437,10 @@ type shotInput struct {
 	FullPage bool `json:"full_page,omitempty"`
 }
 
+// MaxNote bounds an evidence note in runes: a huge model note would land
+// verbatim in page.md and meta.json for symmetry with the 12k read cap.
+const MaxNote = 500
+
 type evidenceInput struct {
 	// One line on what this evidence shows, stored in meta.json and the
 	// markdown header. Quote the finding rather than generalising it.
@@ -466,7 +482,11 @@ func main() {
 			if err != nil {
 				return result(map[string]any{"ok": false, "error": err.Error()})
 			}
-			bctx, err := store.get(profile).ensure(store.chrome)
+			sess, err := store.get(profile)
+			if err != nil {
+				return fail(err)
+			}
+			bctx, err := sess.ensure(store.chrome)
 			if err != nil {
 				return fail(err)
 			}
@@ -490,7 +510,11 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "browser_read",
 		Description: "Read the current page as text: URL, title and body content up to the cap. Use it after goto, or to re-read after the page changed."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, map[string]any, error) {
-			bctx, err := store.get(profile).ensure(store.chrome)
+			sess, err := store.get(profile)
+			if err != nil {
+				return fail(err)
+			}
+			bctx, err := sess.ensure(store.chrome)
 			if err != nil {
 				return fail(err)
 			}
@@ -537,7 +561,10 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "browser_screenshot",
 		Description: "Capture the current page as PNG into the session dir. Working file, not evidence: use browser_save_evidence for the exports bundle the Storage tab shows."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in shotInput) (*mcp.CallToolResult, map[string]any, error) {
-			sess := store.get(profile)
+			sess, err := store.get(profile)
+			if err != nil {
+				return fail(err)
+			}
 			bctx, err := sess.ensure(store.chrome)
 			if err != nil {
 				return fail(err)
@@ -568,7 +595,10 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "browser_save_evidence",
 		Description: "Bundle the current page into exports: PNG screenshot + markdown + meta.json (URL, title, time, note) in a timestamped dir the Storage tab shows. Cite the returned paths and URLs in the answer."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in evidenceInput) (*mcp.CallToolResult, map[string]any, error) {
-			sess := store.get(profile)
+			sess, err := store.get(profile)
+			if err != nil {
+				return fail(err)
+			}
 			bctx, err := sess.ensure(store.chrome)
 			if err != nil {
 				return fail(err)
@@ -614,6 +644,9 @@ func main() {
 				text = string([]rune(text)[:MaxReadRunes])
 			}
 			note := strings.TrimSpace(in.Note)
+			if utf8.RuneCountInString(note) > MaxNote {
+				note = strings.TrimSpace(string([]rune(note)[:MaxNote]))
+			}
 			md := "# " + orDefault(title, url) + "\n\n"
 			if note != "" {
 				md += note + "\n\n"
@@ -665,6 +698,11 @@ func runStepVoid(bctx context.Context, fn func(context.Context) error) error {
 	return err
 }
 
+// evSeq numbers evidence dirs within the process: timestamps collide
+// under scripted loops and retries, counters do not (wrapping at a million
+// is fine — the millisecond prefix already separates eras).
+var evSeq atomic.Uint64
+
 // fnv32 abbreviates a long profile for generated dirnames: 8 hex chars,
 // enough that a shared 24-char prefix plus same-ms saves stay distinct.
 func fnv32(s string) string {
@@ -713,13 +751,15 @@ func evidenceDir() (string, error) {
 	// capped first: safeName allows 64 chars and the timestamp adds 20, so
 	// a long-but-legal profile would fail its own jail below.
 	// Hashed cap: two profiles sharing a 32-char prefix (legal) plus
-	// same-ms saves (scripted) must not collide. 24 + 1 + 8 + 1 + 19 fits
-	// the 64-char jail with room.
+	// same-ms saves (scripted) must not collide. 24 + 1 + 8 + 1 + 19 + 7
+	// fits the 64-char jail with room; the per-process counter closes the
+	// last hole a timestamp alone leaves open.
 	p := profile
 	if len(p) > 24 {
 		p = p[:24] + "-" + fnv32(p)
 	}
-	name := p + "-" + time.Now().UTC().Format("20060102-150405.000")
+	name := p + "-" + time.Now().UTC().Format("20060102-150405.000") +
+		"-" + fmt.Sprintf("%06d", evSeq.Add(1)%1000000)
 	// exports already ends in /browser (default /exports/browser): the
 	// timestamped dir hangs directly under it, never nested twice.
 	return jailPath(exports, name)
