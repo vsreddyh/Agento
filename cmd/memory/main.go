@@ -36,8 +36,16 @@ var (
 	ephemeral bool
 )
 
+// fail reports a store error with a retry hint: Upstream means "Mongo is
+// down, try again later", anything else means "fix the call". The HTTP
+// surface splits these into 502/400/404; the agent gets the same split as a
+// bool so a looping agent can tell the two apart.
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
-	return nil, map[string]any{"ok": false, "error": err.Error()}, nil
+	retryable := false
+	if se, ok := err.(*memory.StoreError); ok && se.Upstream {
+		retryable = true
+	}
+	return nil, map[string]any{"ok": false, "error": err.Error(), "retryable": retryable}, nil
 }
 
 // prepareSave validates one save_memory call into a store-ready item plus

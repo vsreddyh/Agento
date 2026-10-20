@@ -1,7 +1,10 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -75,8 +78,9 @@ func memoryCtx(r *http.Request) (context.Context, context.CancelFunc) {
 func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request, rest, profile string) {
 	path := strings.TrimPrefix(rest, "api/memory")
 	path = strings.TrimPrefix(path, "/")
-	// Tolerate one trailing slash, like the runs verbs: /api/memory/forget/
-	// is forget, not an id lookup for "forget/".
+	// Tolerate one trailing slash. Production routing already Cleaned it
+	// (splitProfile), so this only fires for direct callers and tests — kept
+	// so /api/memory/forget/ is forget, not an id lookup for "forget/".
 	path = strings.TrimSuffix(path, "/")
 
 	switch {
@@ -89,11 +93,20 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request, rest, prof
 		}
 		// Forget takes no body, but a malformed one must not wipe 200 rows:
 		// every other write validates first, and a client bug caught
-		// everywhere else should not succeed here destructively. Only a
-		// declared length is checked: chunked (-1) with no body must not
-		// 400 a legitimate forget.
-		if r.ContentLength > 0 {
-			if err := decodeJSONBody(w, r, &struct{}{}); err != nil {
+		// everywhere else should not succeed here destructively. The body
+		// itself is read rather than trusting ContentLength: chunked
+		// requests declare -1 and would skip a length check with the
+		// malformed JSON still attached. Syntax only, not shape — any valid
+		// JSON is ignored, like an empty body.
+		if body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes)); err != nil {
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+				"could not read the request body")
+			return
+		} else if len(bytes.TrimSpace(body)) > 0 {
+			var v any
+			if err := json.Unmarshal(body, &v); err != nil {
+				apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+					"could not parse the request body as JSON")
 				return
 			}
 		}
