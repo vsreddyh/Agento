@@ -485,6 +485,15 @@ private fun namedReadError(e: Throwable): Throwable {
     // fail loud, not toastable.
     if (e is CancellationException || e is Error) throw e
     runCatching { Log.w("ChatAttachments", "photo read failed", e) }
+    // Expired picker grant, diagnosed honestly (#339): GetMultipleContents
+    // grants are consumed seconds later on IO, so a SecurityException here
+    // is revocation, not a moved file — and re-picking (fresh grant) is
+    // still the fix, so the advice holds while the diagnosis stops lying.
+    if (e is SecurityException) {
+        return NamedAttachError(
+            "Photo permission expired — pick it again.",
+        )
+    }
     return if (e is NamedAttachError || e is OversizeAttachError) e
     else NamedAttachError(
         "Couldn't read that photo — it may have been moved or deleted. Pick it again.",

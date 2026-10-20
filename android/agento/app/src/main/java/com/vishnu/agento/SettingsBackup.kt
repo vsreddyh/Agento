@@ -174,7 +174,20 @@ object SettingsBackup {
         for (name in backupFiles()) {
             val f = java.io.File(context.filesDir, name)
             if (f.exists()) {
-                runCatching { files.put(name, f.readText()) }
+                // Thread files canonicalize at export too (#339): import
+                // already does, and an export that ships raw ragged payloads
+                // only self-heals a cycle later on reimport/load+persist.
+                // Unparseable-as-threads falls back to raw (export must not
+                // drop data it can't understand — same skip-policy as import).
+                runCatching {
+                    val raw = f.readText()
+                    val text = if (name.startsWith("chat_threads_")) {
+                        ChatThreads.canonicalizeFile(raw) ?: raw
+                    } else {
+                        raw
+                    }
+                    files.put(name, text)
+                }
             }
         }
         return JSONObject().put("version", VERSION).put("values", values).put("files", files)

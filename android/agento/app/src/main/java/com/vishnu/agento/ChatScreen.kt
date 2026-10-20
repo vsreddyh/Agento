@@ -167,14 +167,22 @@ private fun AttachmentThumb(
     // pixels from under a late outgoing draw ("trying to use a recycled
     // bitmap") — ~256px thumbnails are GC-cheap, and prompt freeing is
     // not worth a crash.
-    val thumbKey = if (stableId.isNotEmpty()) {
-        Triple(stableId, base64.length, base64.sampleKey(128))
-    } else {
-        // Legacy fallback, best-effort by construction (#339): two
-        // different pre-id photos with same length + same head/tail CAN
-        // alias here (no crash, no placeholder — just the wrong thumb).
-        // Self-aging as old threads turn over; new picks never land here.
-        Triple("s$legacySlot", base64.length, base64.sampleKey(64))
+    // Remembered, not rebuilt per recomposition (#339): the 256-char sample
+    // string otherwise allocates fresh on every scroll frame per visible
+    // thumb. Cache key is the cheap identity (UUID + slot + length — tens
+    // of chars compared) so the sample rebuilds only when the payload
+    // actually changed; Triple equality per frame then compares stored
+    // strings without allocating.
+    val thumbKey = remember(stableId, legacySlot, base64.length) {
+        if (stableId.isNotEmpty()) {
+            Triple(stableId, base64.length, base64.sampleKey(128))
+        } else {
+            // Legacy fallback, best-effort by construction (#339): two
+            // different pre-id photos with same length + same head/tail CAN
+            // alias here (no crash, no placeholder — just the wrong thumb).
+            // Self-aging as old threads turn over; new picks never land here.
+            Triple("s$legacySlot", base64.length, base64.sampleKey(64))
+        }
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
         // Explicit try/catch, not runCatching (#339): runCatching would
@@ -401,11 +409,20 @@ internal fun ChatTab(
     // callback, and launch-failure path all call it.
     fun deleteQuietly(f: File?) {
         if (f == null) return
+        // UNDISPATCHED + started-proof (#339): the isActive check and the
+        // launch bracket the same TOCTOU the batch path closed — a scope
+        // dying in between would otherwise leak the file until the sweep.
+        // Undispatched runs the body synchronously on this thread, so
+        // started==false after launch() proves never-ran, and the inline
+        // fallback settles it exactly like the batch's !batchStarted path.
+        var started = false
         if (scope.isActive) {
-            scope.launch(Dispatchers.IO + NonCancellable) {
+            scope.launch(Dispatchers.IO + NonCancellable, CoroutineStart.UNDISPATCHED) {
+                started = true
                 runCatching { f.takeIf { it.exists() }?.delete() }
             }
-        } else {
+        }
+        if (!started) {
             runCatching { f.takeIf { it.exists() }?.delete() }
         }
     }
@@ -648,6 +665,11 @@ internal fun ChatTab(
             // Shared dead-scope-safe cleanup (inline when the scope died).
             deleteQuietly(f)
             cameraPath = null
+            // Owner clears with the path (#339): the else branch previously
+            // left cameraThread set — harmless (next launch overwrites), but
+            // a rotation restores a stale owner with no outstanding intent
+            // that the next reader must then prove dead.
+            cameraThread = null
             // The third case above (ok + lost Uri): a capture deleted with
             // no notice would be silent data loss, so the impossible edge
             // voices while the cancel case stays silent.
