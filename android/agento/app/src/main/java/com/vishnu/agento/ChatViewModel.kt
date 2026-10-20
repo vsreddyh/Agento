@@ -83,6 +83,9 @@ data class ChatUiState(
     /** Pending approvals right now: badges the approvals entry and raises
      * the in-turn banner while streaming. */
     val pendingApprovalCount: Int = 0,
+    /** Approval ids with a decision in flight: cards disable their buttons
+     * so a double tap cannot fire two decisions. */
+    val decidingApprovals: Set<String> = emptySet(),
 )
 
 /** Device-observed usage for one conversation thread, summed from
@@ -283,6 +286,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         cancelRecovery()
         runsJob?.cancel()
         stopApprovalWatch()
+        retargetApprovals()
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
@@ -346,6 +350,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             cancelRecovery()
             runsJob?.cancel()
             stopApprovalWatch()
+            retargetApprovals()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(target.messages),
                 threads = summaries(),
@@ -395,6 +400,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         cancelRecovery()
         runsJob?.cancel()
         stopApprovalWatch()
+        retargetApprovals()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
@@ -435,6 +441,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             cancelRecovery()
             runsJob?.cancel()
             stopApprovalWatch()
+            retargetApprovals()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
@@ -781,24 +788,31 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(approvalsLoading = true)
         approvalsJob?.cancel()
         approvalsJob = viewModelScope.launch(Dispatchers.IO) {
-            val pending = approvalsApi.listApprovals(path, status = "pending", limit = 50)
+            // Same limit as pollApprovalCount: a smaller page here would
+            // shrink the badge the moment the sheet opens.
+            val pending = approvalsApi.listApprovals(path, status = "pending", limit = 100)
             val audit = approvalsApi.listAudit(path, limit = 50)
             withContext(Dispatchers.Main) {
                 // Per-half: a half that loaded replaces its rows; any half
                 // that failed reports without wiping the good half. Errors
-                // name the HTTP code, never the body.
+                // name the HTTP code, never the body. A [notice] (e.g.
+                // "already decided") must survive that failure too, so the
+                // two are joined rather than one replacing the other.
                 val failedCode = ApprovalsApi.httpCode(pending.exceptionOrNull()?.message)
                     ?: ApprovalsApi.httpCode(audit.exceptionOrNull()?.message)
+                val loadErr = if (pending.isFailure || audit.isFailure) {
+                    "Couldn't load approvals" +
+                        (failedCode?.let { " (HTTP $it)" } ?: "") + "."
+                } else {
+                    ""
+                }
                 _state.value = _state.value.copy(
                     approvals = pending.getOrNull() ?: _state.value.approvals,
                     auditRows = audit.getOrNull() ?: _state.value.auditRows,
                     approvalsLoading = false,
-                    approvalsError = if (pending.isFailure || audit.isFailure) {
-                        "Couldn't load approvals" +
-                            (failedCode?.let { " (HTTP $it)" } ?: "") + "."
-                    } else {
-                        notice.orEmpty()
-                    },
+                    approvalsError = listOf(notice.orEmpty(), loadErr)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" "),
                     pendingApprovalCount = pending.getOrNull()?.size
                         ?: _state.value.pendingApprovalCount,
                 )
@@ -812,12 +826,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private val deciding = mutableSetOf<String>()
 
     fun decideApproval(id: String, approve: Boolean) {
+        // Both the add here and the remove below run on Main (UI taps and
+        // the Main-confined completion), so a plain set is safe; moving
+        // either side off Main needs a lock.
         if (id.isBlank() || !deciding.add(id)) return
+        _state.value = _state.value.copy(decidingApprovals = deciding.toSet())
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
             val result = approvalsApi.decide(path, id, approve)
             withContext(Dispatchers.Main) {
                 deciding.remove(id)
+                _state.value = _state.value.copy(decidingApprovals = deciding.toSet())
                 // A 409 means someone else decided first: reload (the row
                 // leaves pending) with a transient note, never a retry
                 // prompt — retrying a decided id 409s again. Errors name
@@ -872,6 +891,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private fun stopApprovalWatch() {
         approvalWatch?.cancel()
         approvalWatch = null
+    }
+
+    /** A thread/profile change retires any approvals load started under the
+     * old path. Approvals are global, so reopen the sheet against the new
+     * path rather than leaving a cancelled load's spinner behind. */
+    private fun retargetApprovals() {
+        approvalsJob?.cancel()
+        approvalsJob = null
+        if (_state.value.showApprovals) refreshApprovals()
     }
 
     /**
@@ -1039,6 +1067,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         cancelRecovery()
         runsJob?.cancel()
         stopApprovalWatch()
+        retargetApprovals()
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,

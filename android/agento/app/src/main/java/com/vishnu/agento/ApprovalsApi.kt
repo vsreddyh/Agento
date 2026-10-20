@@ -25,6 +25,12 @@ data class GateApproval(
     val updatedAt: Long = 0L,
     val decidedAt: Long = 0L,
 ) {
+    companion object {
+        /** Whitespace collapse for the argument preview: hoisted so the
+         * regex is compiled once, not per card per recomposition. */
+        private val WS = Regex("\\s+")
+    }
+
     fun isPending(): Boolean = status == "pending"
 
     /** One-line argument preview for the approval card. Keys sorted so the
@@ -32,7 +38,7 @@ data class GateApproval(
      * deterministic). */
     fun argsSummary(): String = args.toSortedMap().entries
         .joinToString(", ") { (k, v) -> "$k=$v" }
-        .replace(Regex("\\s+"), " ")
+        .replace(WS, " ")
         .take(200)
 }
 

@@ -18,6 +18,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** How long an approval has waited: "just now" then "2m waiting". */
+private fun waitingLabel(createdAt: Long): String {
+    val age = relativeAgo(createdAt)
+    return if (age.isEmpty() || age == "just now") age else "${age.removeSuffix(" ago")} waiting"
+}
+
 /** Millis instant as "just now / Nm ago / Nh ago / Nd ago", "" when unknown.
  * Future instants clamp to "just now": clock skew is not a time machine. */
 private fun relativeAgo(at: Long): String {
@@ -46,6 +52,9 @@ internal fun ApprovalsDialog(
     auditRows: List<AuditRow>,
     loading: Boolean,
     error: String,
+    /** Ids with a decision in flight: their buttons disable so a double tap
+     * cannot fire two decisions. */
+    deciding: Set<String> = emptySet(),
     onApprove: (String) -> Unit,
     onDeny: (String) -> Unit,
     onRefresh: () -> Unit,
@@ -104,6 +113,16 @@ internal fun ApprovalsDialog(
                                         color = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.weight(1f),
                                     )
+                                    // Age, oldest-first triage: a gate held since
+                                    // the turn started is the one to answer.
+                                    val waiting = waitingLabel(approval.createdAt)
+                                    if (waiting.isNotEmpty()) {
+                                        Text(
+                                            waiting,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
                                 if (approval.server.isNotBlank()) {
                                     Text(
@@ -127,11 +146,18 @@ internal fun ApprovalsDialog(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.End,
                                 ) {
-                                    TextButton(onClick = { onDeny(approval.id) }) {
+                                    val busy = approval.id in deciding
+                                    TextButton(
+                                        onClick = { onDeny(approval.id) },
+                                        enabled = !busy,
+                                    ) {
                                         Text("Deny")
                                     }
-                                    TextButton(onClick = { onApprove(approval.id) }) {
-                                        Text("Approve")
+                                    TextButton(
+                                        onClick = { onApprove(approval.id) },
+                                        enabled = !busy,
+                                    ) {
+                                        Text(if (busy) "Deciding…" else "Approve")
                                     }
                                 }
                             }

@@ -1615,6 +1615,7 @@ internal fun ChatScreen(
                 auditRows = state.auditRows,
                 loading = state.approvalsLoading,
                 error = state.approvalsError,
+                deciding = state.decidingApprovals,
                 onApprove = onApprove,
                 onDeny = onDeny,
                 onRefresh = onRefreshApprovals,
