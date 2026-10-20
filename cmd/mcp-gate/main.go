@@ -348,18 +348,28 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 		}
 		if !approvals.NeedsApproval(r.server, params.Name, params.Arguments) {
 			redacted := approvals.Redact(params.Arguments)
-			if !hasReplyID(env.ID) {
-				// A call with no id gets no response to observe, so its allow
-				// row is written here. track() would no-op and the call would
-				// forward with no audit entry, which is the one hole in
-				// "every proxied call is recorded".
-				r.auditAsync(params.Name, redacted, approvals.DispositionAllow, "", "")
-			} else {
+			tracked := hasReplyID(env.ID)
+			if tracked {
 				r.track(env.ID, params.Name, redacted)
 			}
 			if err := r.writeChild(line); err != nil {
+				// The child never received the call, so no response will take
+				// the tracked entry and the forward-time row would claim a
+				// call that did not happen. Untrack and record the delivery
+				// failure, exactly as the approved-forward path does.
+				if tracked {
+					r.take(env.ID)
+				}
 				r.log.Printf("write to server failed: %v", err)
+				r.audit(params.Name, redacted, approvals.DispositionAllow,
+					"allowed but not delivered to the server: "+err.Error(), "")
 				return err
+			}
+			if !tracked {
+				// A call with no id gets no response to observe, so its allow
+				// row is written here — after the forward, so it can only
+				// describe a call the server actually received.
+				r.auditAsync(params.Name, redacted, approvals.DispositionAllow, "", "")
 			}
 			continue
 		}
@@ -419,8 +429,13 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 // nowhere else in the relay. A multi-MB arguments blob is therefore pinned for
 // up to waitFor; traffic is one turn per profile, so the bound is a single
 // frame, not a queue.
+//
+// The parsed argument map is nil'd immediately after redaction so the hold
+// pins ONE unmasked copy (the bytes it must forward), not two. Everything
+// after this point reads `redacted`.
 func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 	redacted := approvals.Redact(params.Arguments)
+	params.Arguments = nil
 	a := approvals.Approval{
 		ID:     approvals.NewID(),
 		Server: r.server,

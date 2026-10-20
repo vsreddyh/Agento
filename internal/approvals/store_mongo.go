@@ -316,7 +316,9 @@ func (s *MongoStore) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 
 // MarkServerInterrupted expires one server's pending rows at relay startup.
 // Scoped by server because six relays share the collection and a restart of
-// one must not touch another's live hold.
+// one must not touch another's live hold. Deliberately unscoped by createdAt,
+// unlike the gateway-wide MarkInterrupted: this process owns the server's
+// queue from boot, so there is no live hold of its own to protect.
 func (s *MongoStore) MarkServerInterrupted(ctx context.Context, server string, at time.Time) (int64, error) {
 	res, err := s.approvals.UpdateMany(ctx,
 		bson.M{"server": server, "status": string(StatusPending)},

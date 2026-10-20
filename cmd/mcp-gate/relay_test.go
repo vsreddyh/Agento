@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -534,5 +535,39 @@ func TestRPCErrorFallsBackToNullID(t *testing.T) {
 	}
 	if _, ok := frame["error"]; !ok {
 		t.Fatalf("frame = %q, want an error object", got)
+	}
+}
+
+// failWriter simulates the child's stdin being gone: the call never reaches
+// the server.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+// A forwarded-but-undelivered call must not stay tracked and must not be
+// recorded as a clean allow: no response is coming to complete it.
+func TestAllowDeliveryFailureUntracksAndAudits(t *testing.T) {
+	store := approvals.NewMemoryStore()
+	r := testRelay(store)
+	r.out = &bufWriter{}
+	r.childIn = failWriter{}
+
+	line, _, _ := callLine("7", "list_notes", `{}`)
+	if err := r.pumpPiToChild(strings.NewReader(string(line) + "\n")); err == nil {
+		t.Fatal("pump returned nil after a failed forward")
+	}
+	r.mu.Lock()
+	pending := len(r.pending)
+	r.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("pending entries = %d after failed delivery, want 0", pending)
+	}
+	audit, err := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionAllow ||
+		!strings.Contains(audit[0].Error, "not delivered") {
+		t.Fatalf("audit = %+v, want one allow row recording the delivery failure", audit)
 	}
 }

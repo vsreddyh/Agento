@@ -115,8 +115,9 @@ one server narrows client-side. The audit trail, by contrast, is long and
 filterable (`?server=&tool=`), because history is read by cause. A server
 filter on the pending list would only matter if the queue were ever sharded.
 The pending poll must pass `?status=pending`: without it the route returns all
-live rows, and an expired-but-not-yet-TTL-swept row is still live for the rest
-of its 15-minute window (expiry is lazy; the audit trail is the history).
+live rows, and both expired-but-not-yet-TTL-swept and already-decided rows stay
+live for the rest of their 15-minute window (expiry is lazy; the audit trail is
+the history). An unfiltered list is therefore a window, never a live queue.
 
 Expiry is evaluated at one instant per operation. Reads and lists use the
 store's own clock; a **decision** uses the caller's decision instant (`at`),
