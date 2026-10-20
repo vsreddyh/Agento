@@ -979,6 +979,17 @@ internal fun ChatScreen(
             endLive("Voice recognition unavailable on this device.")
             return
         }
+        // Permission first (#317): the kills below are destructive and the
+        // check is cheap — a revoked mic must exit before touching the turn.
+        // liveMode is armed only after this point for the same reason; the
+        // next tap retries via the permission-launcher path.
+        micArmed = interrupt.hasPermission(context)
+        if (!micArmed) {
+            // No permission, no loop: falling through would listen once,
+            // fatal, and end — flash-then-die with two toasts.
+            endLive("Live mode needs microphone access.")
+            return
+        }
         // Mid-turn entry (#317): capture before onStop() clears
         // it. A startLive-killed turn must not be spoken back: claim it like
         // a barge so the stream-end effect re-listens instead of reading
@@ -999,18 +1010,6 @@ internal fun ChatScreen(
         // the first listen here is driven explicitly below (or by the
         // stream-end effect for a killed turn), never by a stale flag.
         wasSpeaking = false
-        // Re-check, don't assume (#317): both callers gate on
-        // permission, but a revoke in the gap must start tap-to-talk, not
-        // lie armed and fail one AudioRecord alloc per phase transition.
-        // Say so out loud, like the permission-launcher denial path does.
-        micArmed = interrupt.hasPermission(context)
-        if (!micArmed) {
-            // No permission, no loop (#317): falling through would listen
-            // once, fatal, and end — flash-then-die with two toasts. Stay
-            // out and say why; the next tap retries via the launcher path.
-            endLive("Live mode needs microphone access.")
-            return
-        }
         // Fresh call state (#317): a previous session's barge claim or
         // milestone set must not leak into this one. The detector is
         // stopped and its holder reset too (#317) so the
@@ -1028,15 +1027,13 @@ internal fun ChatScreen(
         bargeCancel = killedTurn
         announcedTools = emptyList()
         announcedLabel = ""
-        // Only a live readout hands off (#317): the
-        // streaming disjunct would be dead here — onStop() already cleared
-        // it — and a killed turn's first listen belongs to the stream-end
-        // effect. speakingKey is read pre-stop on purpose: tts.stop()
-        // cleared the Flow, but this snapshot predates recomposition, so it
-        // still reports the readout playing at entry — moving the read
-        // below would silently break readout handoff.
-        val handoff = speakingKey != null
-        if (!handoff && !killedTurn) liveListen()
+        // No handoff wait (#317): any speech playing at entry was just cut
+        // above, so the first listen is driven here directly — except for a
+        // killed turn, whose stream-end effect re-listens instead of speaking
+        // the partial. The driver's reply gate stays out either way:
+        // wasSpeaking was retired above (reply) or never armed (cue), so
+        // this is the single listen for every non-killed entry.
+        if (!killedTurn) liveListen()
     }
     // One-shot mic results flow through voiceLauncher below; only live
     // cycles arrive here. Reassigned each composition so closures stay fresh.
