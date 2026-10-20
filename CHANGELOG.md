@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.9.0]
+- **Live mode is a proper call (#317).** Talking over the agent now cuts
+  the in-flight turn, not just the readout — the loop re-listens instead
+  of speaking the stopped partial. Long tool tasks are audible: each new
+  tool is spoken once mid-task ("Using log transaction"), then the reply
+  when it lands. Hang-up stays silent — every turn, including stopped
+  partials, already lives in the thread. Still half-duplex (no realtime
+  transport): calibration windows and ~1–2 s milestone cues can miss
+  speech; see `docs/adr/0006-live-call-mode.md`.
+
 ## [5.8.0]
 - **Projects: Testing and Blocked phases.** The project board grows from
   four statuses to six — Todo, Ongoing, **Testing**, **Blocked**, Paused,

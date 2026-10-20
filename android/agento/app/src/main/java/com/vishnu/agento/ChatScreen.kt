@@ -730,10 +730,11 @@ internal fun ChatScreen(
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val speakingKey by tts.speakingKey.collectAsState()
-    // Live mode (#85): chain the existing one-shot voice input + TTS
-    // readout into a continuous talk-listen-talk loop. The system
-    // recognizer handles silence cutoff per turn; LiveInterrupt only
-    // detects talk-over during readout (no transcription).
+    // Live mode (#85, call-mode #317): chain the existing one-shot voice
+    // input + TTS readout into a continuous talk-listen-talk loop. The
+    // system recognizer handles silence cutoff per turn; LiveInterrupt
+    // detects talk-over during readout (cut speech) and during streaming
+    // (cut the turn — barge-in), and tool milestones are spoken mid-task.
     // Live state is keyed by tab: whatever the when(dest) branch reuse
     // semantics are, a session can never bleed into another tab's screen.
     var liveMode by remember(tab) { mutableStateOf(false) }
@@ -751,12 +752,28 @@ internal fun ChatScreen(
             toasts.toast("Live session ended on rotation.")
         }
     }
-    // Hands-free interrupt (#85): background mic watches for speech while
-    // the readout plays; on trigger just cut TTS — the speakingKey effect
-    // below starts the recognizer. Needs RECORD_AUDIO; without it the loop
-    // still runs tap-to-talk.
+    // Hands-free interrupt (#85) with barge-in (#317): background mic
+    // watches for speech while the readout plays AND while the turn
+    // streams. On trigger cut speech and, if a turn is running, cut it
+    // too — the stream-end effect re-listens instead of speaking the
+    // stopped partial. Needs RECORD_AUDIO; without it the loop still
+    // runs tap-to-talk.
     val context = LocalContext.current
-    val interrupt = remember(tab) { LiveInterrupt({ scope.launch { tts.stop() } }) }
+    // Barge-in claim (#317): set before stopping so the stream-end effect
+    // below re-listens rather than speaking the stopped partial.
+    var bargeCancel by remember(tab) { mutableStateOf(false) }
+    // Tool milestones already spoken this turn (#317): each new tool is
+    // announced once; retired when the turn ends.
+    var announcedTools by remember(tab) { mutableStateOf(listOf<String>()) }
+    var cueN by remember(tab) { mutableIntStateOf(0) }
+    fun onBargeIn() {
+        tts.stop()
+        if (state.streaming) {
+            bargeCancel = true
+            onStop()
+        }
+    }
+    val interrupt = remember(tab) { LiveInterrupt({ scope.launch { onBargeIn() } }) }
     var micArmed by remember(tab) { mutableStateOf(interrupt.hasPermission(context)) }
     // In-app recognizer for live mode (#85): headless, so our overlay
     // (status + End button) stays visible — the system dialog would cover it.
@@ -802,6 +819,10 @@ internal fun ChatScreen(
         liveLostOnRotate = false
         livePartial = ""
         pendingLiveStart = false
+        // Retire any barge claim and milestone set with the session (#317):
+        // a stale claim must not reroute the next turn's stream end.
+        bargeCancel = false
+        announcedTools = emptyList()
         // Stop the detector now — don't rely on the liveMode=false effect
         // round-trip to get around to it.
         interrupt.stop()
@@ -867,6 +888,10 @@ internal fun ChatScreen(
         transientRetries = 0
         livePartial = ""
         micArmed = true
+        // Fresh call state (#317): a previous session's barge claim or
+        // milestone set must not leak into this one.
+        bargeCancel = false
+        announcedTools = emptyList()
         val handoff = speakingKey != null || state.streaming
         if (!handoff) liveListen()
     }
@@ -923,7 +948,14 @@ internal fun ChatScreen(
     LaunchedEffect(state.streaming) {
         if (wasStreaming && !state.streaming) {
             if (liveMode) {
-                if (state.error.isEmpty()) {
+                // A settled turn retires its milestone set either way (#317).
+                announcedTools = emptyList()
+                if (bargeCancel) {
+                    // Barge-in (#317): the user cut the turn — re-listen
+                    // instead of speaking the stopped partial.
+                    bargeCancel = false
+                    liveListen()
+                } else if (state.error.isEmpty()) {
                     silentRounds = 0
                     val last = state.messages.lastOrNull()
                     if (last != null && last.role == "assistant" && last.content.isNotBlank()) {
@@ -970,21 +1002,53 @@ internal fun ChatScreen(
     }
     // Bind recognizer callbacks (after all local funs).
     bindLiveListener()
-    // Live loop driver: when the spoken reply fully finishes, listen again.
-    // While it plays, the interrupt detector listens for talk-over.
+    // Live loop driver (#85, barge-in #317): the talk-over detector runs
+    // while the reply plays (cut speech, existing) and while the turn
+    // streams (cut the turn, new); it stays off for milestone cues and
+    // while listening. The phase key restarts detection on every
+    // transition so the floor recalibrates (quiet room vs readout bleed).
+    // When the spoken reply fully finishes, listen again — but a cue
+    // finishing mid-turn must not: the turn still owns the mic.
     var wasSpeaking by remember(tab) { mutableStateOf(false) }
-    LaunchedEffect(speakingKey, liveMode, micArmed) {
-        if (liveMode && speakingKey != null && micArmed) {
+    val cueSpeaking = speakingKey?.startsWith("live-cue-") == true
+    val detecting = liveMode && micArmed && !cueSpeaking &&
+        (speakingKey != null || state.streaming)
+    val detectPhase = when {
+        !detecting -> 0
+        speakingKey != null -> 1
+        else -> 2
+    }
+    LaunchedEffect(detectPhase, liveMode, micArmed) {
+        if (detecting) {
+            // Fresh start per phase (never a carried calibration): stop
+            // first, the same rapid-restart shape LiveInterrupt is built for.
+            interrupt.stop()
             // start() false = no mic after all: degrade visibly to
             // tap-to-talk instead of retrying silently every re-listen.
             if (!interrupt.start(this)) micArmed = false
         } else {
             interrupt.stop()
         }
-        if (wasSpeaking && speakingKey == null && liveMode) {
+        if (wasSpeaking && speakingKey == null && liveMode && !state.streaming) {
             liveListen()
         }
         wasSpeaking = speakingKey != null
+    }
+    // Tool milestones (#317): while a live turn streams, speak each new
+    // tool once so a long task is audible ("Using log transaction").
+    // Cues use live-cue-* keys: the driver above keeps the detector off
+    // for them, and their completion never starts listening.
+    LaunchedEffect(liveMode, state.streaming, state.activeTools) {
+        if (!liveMode || !state.streaming || state.activeTools.isEmpty()) return@LaunchedEffect
+        if (state.activeTools == announcedTools) return@LaunchedEffect
+        announcedTools = state.activeTools.toList()
+        val what = state.activeToolLabel.ifBlank {
+            "Using " + state.activeTools.first().substringAfterLast("__").replace('_', ' ')
+        }
+        cueN++
+        // Engine-dead stays silent here: the reply path reports it loudly
+        // at stream end instead of killing a working call over a cue.
+        tts.toggle("live-cue-$cueN", what)
     }
     // Surface send failures as a toast too (the inline card keeps details).
     LaunchedEffect(state.error) {
