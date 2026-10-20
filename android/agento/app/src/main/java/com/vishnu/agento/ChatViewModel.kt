@@ -534,15 +534,23 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
             // Rechecked, not captured: a profile switch mid-save must not
-            // write the old profile's draft, it just answers done.
+            // write the old profile's draft. An error, not a silent success:
+            // done(null) would toast "Draft saved" for nothing written.
             if (path != api.pathFor(tab)) {
-                withContext(Dispatchers.Main) { done(null, false) }
+                withContext(Dispatchers.Main) { done("Profile changed — try again.", false) }
                 return@launch
             }
             // Source links the draft to its thread: the review surface
             // shows where the procedure came from.
             val result = teachApi.createDraft(path, name.trim(), description.trim(), body, source = "thread:$id")
             withContext(Dispatchers.Main) {
+                // Rechecked after the write too: a switch during the network
+                // call lands the draft on the old profile, and success must
+                // not toast for a row the user no longer looks at.
+                if (path != api.pathFor(tab)) {
+                    done("Profile changed — try again.", false)
+                    return@withContext
+                }
                 // Always answered, even across a profile switch: the dialog
                 // spins on this callback, and a stuck "Saving…" is worse
                 // than a toast for the old profile. Local misconfiguration
