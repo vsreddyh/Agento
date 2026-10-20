@@ -25,17 +25,31 @@ class ChatTts(context: Context) {
     val speakingKey: StateFlow<String?> = _speakingKey
 
     private var engine: TextToSpeech? = null
-    private var ready = false
-    private var failed = false
-    private var pending: Pair<String, String>? = null
+    // TTS callbacks can arrive off the Main thread (utterance progress
+    // always does), so everything the callbacks share with Main is
+    // volatile-backed: readiness as a StateFlow (which also lets Compose
+    // re-fire keyed effects on init), the rest as @Volatile plain fields.
+    private val _ready = MutableStateFlow(false)
+    /** True once the engine initialized successfully. Milestone cues key on
+     * this so a late init still cues instead of losing the tool set that
+     * arrived while TTS was down. */
+    val readyFlow: StateFlow<Boolean> = _ready
+    @Volatile private var failed = false
+    // NOTE: read-clear-speak in the init callback is NOT atomic vs toggle()'s
+    // write below — a toggle() landing between the read and the clear is
+    // overwritten-then-cleared, losing one utterance. Accepted: only the reply
+    // path can hit it (pre-ready cues early-return on ttsReady), it needs the
+    // toggle to land in the init-completion instant, and the next turn
+    // re-speaks. Do not assume race-free here.
+    @Volatile private var pending: Pair<String, String>? = null
     /** Utterance ID of the last queued chunk; only its completion clears state. */
-    private var lastUtteranceId = ""
+    @Volatile private var lastUtteranceId = ""
 
     init {
         engine = TextToSpeech(appCtx) { status ->
-            ready = status == TextToSpeech.SUCCESS
-            failed = !ready
-            if (ready) {
+            _ready.value = status == TextToSpeech.SUCCESS
+            failed = !_ready.value
+            if (_ready.value) {
                 pickLanguage()
                 pending?.let { (key, text) ->
                     pending = null
@@ -92,7 +106,7 @@ class ChatTts(context: Context) {
         stop()
         val clean = cleanForSpeech(text)
         if (clean.isEmpty()) return true
-        if (!ready) {
+        if (!_ready.value) {
             // Engine still initing: queue one utterance. A failed engine
             // reports false so the caller can show a hint instead.
             if (failed) return false
@@ -139,7 +153,7 @@ class ChatTts(context: Context) {
         stop()
         runCatching { engine?.shutdown() }
         engine = null
-        ready = false
+        _ready.value = false
         failed = true
     }
 

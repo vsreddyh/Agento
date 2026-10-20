@@ -1,0 +1,83 @@
+# 0006 — Live mode as a call
+
+Status: accepted (#317, call-mode half)
+
+## Context
+
+Voice was push-to-talk dictation plus TTS readout chained into a
+talk-listen-talk loop ("live session", #85): the detector cut speech on
+talk-over, but the turn underneath kept running, long tool tasks passed in
+silence, and hanging up left only whatever the thread already held. #317
+offered two resolutions — build a scoped call mode, or position Agento as
+explicitly text-only. The text-only ADR was written, rejected, and
+reverted: the decision is a proper live mode.
+
+## Decision
+
+**Barge-in that cuts the turn, audible tool milestones, thread as the
+record — still half-duplex, still no realtime transport.**
+
+- Barge-in cuts readout AND turn. The talk-over detector (`LiveInterrupt`,
+  energy + adaptive floor + sustain gate, unchanged) now runs while the
+  reply plays and while the turn streams. A trigger mid-stream claims the
+  cancel first, stops the local stream and the server run (`stop()`), and
+  the stream-end effect re-listens instead of speaking the stopped
+  partial or ending the session. Talking over the readout keeps its old
+  meaning (cut speech, re-listen). The on-screen Stop claims the same way
+  in live mode — tapping it re-listens instead of replaying the partial;
+  outside live mode the plain stop keeps its speak-the-partial path. An
+  approval-stalled turn barges like any other: the claim stops the stream
+  and the server run (cancelling the approval watch), held calls survive
+  in the sheet, and the loop keeps talking.
+- Long tasks are audible. While a live turn streams, newly appearing tools
+  are announced once per change ("Using log transaction" — the fresh server
+  label when one arrived with the change, else the latest delta's last
+  segment de-snaked). A batch that seeds several tools at once yields one
+  cue naming the latest, and the whole batch counts as announced.
+  Rapid changes inside one ~1–2 s cue window lose the middle the same
+  way: the first cue is cut (flush), the second names the latest, and the
+  middle counts as announced unheard — flush is deliberate, so stale names
+  never backlog behind a finished task.
+  Milestones ride `live-cue-*` TTS keys: the detector stays off for cues
+  (short self-speech must not self-trigger), their completion never starts
+  listening, cues are gated on collected TTS readiness (a `StateFlow`, so
+  a late engine init re-fires the cue instead of losing the missed set —
+  a parked cue would speak late, possibly after the turn), and an
+  engine-dead cue stays silent — the reply path reports TTS failure
+  loudly at stream end instead of killing a working call over a cue.
+- Hang-up adds nothing. Every live turn already lands in the thread,
+  including user-stopped partials (marked interrupted). Ending is silent;
+  the thread is the summary.
+- Phase-keyed detection. The detector restarts on genuine phase
+  transitions (quiet room → readout bleed → back, plus streaming↔cue flaps
+  at two restarts per milestone) so the floor recalibrates instead of
+  carrying a quiet-room threshold into speech, which would cut every
+  reply. Each restart's deaf window is the existing ~400 ms calibration,
+  and redundant restarts are skipped when already running in the target
+  phase (plain holder, not state — the keys drive restarts). The detector
+  runs in the composition scope, not the restarting effect's, so an effect
+  restart can't cancel the old detector job out from under the new
+  AudioRecord — the explicit stop() is the only lifetime manager.
+  A start failure never downgrades the session: contention with a
+  dying recorder reads the same as a dead mic, so one retry follows after
+  ~2 s in-phase and the next phase change retries after that, instead of
+  sticking the loop in tap-to-talk — a failure that outlasts both still
+  leaves the rest of that phase unmonitored, stretching its deaf window
+  past the usual ~400 ms calibration.
+
+What this still is not: full-duplex realtime. There is no duplex audio
+path, no barge-in *during* the 400 ms calibration windows, speech during
+a ~1–2 s milestone cue is missed — including barge-in (the detector is off
+for cues, so talking over one cuts neither the cue nor the turn
+underneath) — and a 2-minute task still occupies the
+profile's single turn (a second prompt gets `429`). Those are the
+documented edges of an energy detector over text turns, not a voice
+transport — building one stays out of scope with no realtime model API
+on this path.
+
+## Non-goals
+
+- True duplex / realtime voice transport, avatar video, custom voice
+  design, glasses/wearable voice.
+- A posted hang-up summary (rejected in scoping: the thread already is it).
+- Detector retuning (thresholds, sustain) — unchanged from #85.
