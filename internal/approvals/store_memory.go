@@ -157,6 +157,11 @@ func (m *MemoryStore) Audit(_ context.Context, e AuditEntry) error {
 	if e.ID == "" {
 		return NewStoreError("audit needs an id", false)
 	}
+	// Same 90-day contract as Mongo: the cap below is a memory bound, not the
+	// retention policy.
+	if e.ExpiresAt.IsZero() {
+		e.ExpiresAt = time.Now().Add(AuditTTL)
+	}
 	m.audit[e.ID] = e
 	// Memory is bounded like the runs fallback: oldest-first past cap.
 	// The scan is O(n) per insert once full (n = 10*ListCap). This fallback is
@@ -187,8 +192,14 @@ func (m *MemoryStore) ListAudit(_ context.Context, f AuditFilter) ([]AuditEntry,
 	if limit <= 0 || limit > ListCap {
 		limit = ListCap
 	}
+	now := time.Now()
 	out := make([]AuditEntry, 0, len(m.audit))
 	for _, e := range m.audit {
+		// Lazy drop, like approvals: TTL is the contract, the sweep is the
+		// implementation detail Mongo's TTL monitor would otherwise hide.
+		if !e.ExpiresAt.IsZero() && !e.ExpiresAt.After(now) {
+			continue
+		}
 		if f.Server != "" && e.Server != f.Server {
 			continue
 		}
@@ -197,7 +208,14 @@ func (m *MemoryStore) ListAudit(_ context.Context, f AuditFilter) ([]AuditEntry,
 		}
 		out = append(out, e.Clone())
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].At > out[j].At })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].At != out[j].At {
+			return out[i].At > out[j].At
+		}
+		// Same-millis tie-break, matching Mongo's {at,-1,_id,-1}: otherwise two
+		// identical requests can return the rows in different orders.
+		return out[i].ID > out[j].ID
+	})
 	if len(out) > limit {
 		out = out[:limit]
 	}

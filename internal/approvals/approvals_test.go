@@ -2,8 +2,10 @@ package approvals
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestStatusTerminal(t *testing.T) {
@@ -246,5 +248,63 @@ func TestMemoryAuditCap(t *testing.T) {
 		if e.At < 903 {
 			t.Fatalf("evicted row survived: at=%d", e.At)
 		}
+	}
+}
+
+// Audit errors are free text from a server, so they need a value-shape scrub
+// as well as the key-based redaction used for arguments.
+func TestScrubErrorMasksCredentials(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"invalid token sk-live-abcdef123456", "[redacted]"},
+		{"Authorization: Bearer abcdefghijklmnop", "[redacted]"},
+		{"api_key=supersecretvalue failed", "[redacted]"},
+		{"no such note: abc", "no such note: abc"},
+	}
+	for _, c := range cases {
+		got := ScrubError(c.in)
+		if c.want == "[redacted]" {
+			if strings.Contains(got, "sk-live") || strings.Contains(got, "abcdefghijklmnop") ||
+				strings.Contains(got, "supersecretvalue") {
+				t.Fatalf("ScrubError(%q) = %q, credential survived", c.in, got)
+			}
+			if !strings.Contains(got, "[redacted]") {
+				t.Fatalf("ScrubError(%q) = %q, want a redaction marker", c.in, got)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Fatalf("ScrubError(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	long := strings.Repeat("x", MaxAuditError+50)
+	if n := utf8.RuneCountInString(ScrubError(long)); n != MaxAuditError {
+		t.Fatalf("long error scrubbed to %d runes, want %d", n, MaxAuditError)
+	}
+}
+
+// The memory audit honours the same 90-day retention contract as Mongo: a row
+// past ExpiresAt stops listing even though no TTL monitor exists here.
+func TestMemoryAuditExpiry(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Now()
+	rows := []AuditEntry{
+		{ID: "live", Server: "notes", Tool: "get_note", At: now.UnixMilli()},
+		{ID: "dead", Server: "notes", Tool: "get_note", At: now.UnixMilli() - 1000,
+			ExpiresAt: now.Add(-time.Second)},
+	}
+	for _, e := range rows {
+		if err := store.Audit(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.ListAudit(context.Background(), AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "live" {
+		t.Fatalf("audit = %+v, want only the live row", got)
+	}
+	if got[0].ExpiresAt.IsZero() {
+		t.Fatal("memory audit row kept a zero ExpiresAt; retention is unspecified")
 	}
 }

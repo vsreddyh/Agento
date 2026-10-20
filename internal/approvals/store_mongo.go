@@ -52,9 +52,21 @@ func FromEnv() (*MongoStore, error) {
 // EnsureIndexes creates the TTL indexes both collections depend on, plus the
 // audit lookup. Best-effort at the call site like the runs indexes.
 func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
-	if _, err := s.approvals.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
-		Keys:    bson.D{{Key: "expiresAt", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(0).SetName("approvals_ttl"),
+	if _, err := s.approvals.Indexes().CreateMany(ctx, []mongoDrv.IndexModel{
+		{
+			Keys:    bson.D{{Key: "expiresAt", Value: 1}},
+			Options: options.Index().SetExpireAfterSeconds(0).SetName("approvals_ttl"),
+		},
+		{
+			// ListApprovals filters status + expiresAt and sorts createdAt:
+			// without this it is a COLLSCAN on every app poll.
+			Keys: bson.D{
+				{Key: "status", Value: 1},
+				{Key: "expiresAt", Value: 1},
+				{Key: "createdAt", Value: -1},
+			},
+			Options: options.Index().SetName("approvals_status_created"),
+		},
 	}); err != nil {
 		return err
 	}
@@ -66,6 +78,15 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "at", Value: -1}},
 			Options: options.Index().SetName("audit_at"),
+		},
+		{
+			// The audit screen filters by server and/or tool and sorts by at.
+			Keys: bson.D{
+				{Key: "server", Value: 1},
+				{Key: "tool", Value: 1},
+				{Key: "at", Value: -1},
+			},
+			Options: options.Index().SetName("audit_server_tool_at"),
 		},
 	})
 	return err
@@ -234,12 +255,17 @@ func (s *MongoStore) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 	}
 	defer cur.Close(ctx)
 	out := make([]AuditEntry, 0)
+	skipped := 0
 	for cur.Next(ctx) {
 		var e AuditEntry
 		if err := cur.Decode(&e); err != nil {
+			skipped++
 			continue
 		}
 		out = append(out, e)
+	}
+	if skipped > 0 {
+		s.logf("approvals: skipped %d undecodable audit row(s)", skipped)
 	}
 	if err := cur.Err(); err != nil {
 		return nil, NewStoreError("audit list failed: "+err.Error(), true)
@@ -257,8 +283,14 @@ func (s *MongoStore) MarkInterrupted(ctx context.Context, at time.Time) (int64, 
 	}); err != nil {
 		return 0, NewStoreError("delete expired approvals: "+err.Error(), true)
 	}
+	// createdAt < at, not just status=pending: a Create landing between the
+	// delete and this update belongs to this startup, not the dead one, and
+	// expiring it would kill a live hold's row.
 	res, err := s.approvals.UpdateMany(ctx,
-		bson.M{"status": string(StatusPending)},
+		bson.M{
+			"status":    string(StatusPending),
+			"createdAt": bson.M{"$lt": at.UnixMilli()},
+		},
 		bson.M{"$set": bson.M{
 			"status":    string(StatusExpired),
 			"updatedAt": at.UnixMilli(), "decidedAt": at.UnixMilli(),

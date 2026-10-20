@@ -143,6 +143,11 @@ type callState struct {
 	name string
 	args map[string]any
 	at   time.Time
+	// disp and approvalID carry the call's provenance to the response row, so
+	// an approved call is ONE audit row that names its approval, instead of an
+	// "approved" row at forward time plus a second anonymous "allowed" row.
+	disp       approvals.Disposition
+	approvalID string
 }
 
 func (r *relay) run(
@@ -270,9 +275,19 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 		}
 		var params callParams
 		if json.Unmarshal(env.Params, &params) != nil || params.Name == "" {
-			if err := r.writeChild(line); err != nil {
-				r.log.Printf("write to server failed: %v", err)
-				return err
+			// The relay could not classify this call, so it cannot know
+			// whether it is safe. Forwarding it would be the one fail-open
+			// path around the gate: a lenient server would run a call the
+			// policy never saw. Deny it, audit why, and answer Pi when
+			// there is an id to answer.
+			r.log.Printf("denying unparseable tools/call: %s", truncateFrame(line))
+			r.audit("(malformed)", map[string]any{}, approvals.DispositionDenied,
+				"tools/call params could not be parsed; failed closed", "")
+			if hasReplyID(env.ID) {
+				if werr := r.writePi(rpcError(env.ID, -32602,
+					"tools/call params could not be parsed; failed closed")); werr != nil {
+					r.log.Printf("write to Pi failed: %v", werr)
+				}
 			}
 			continue
 		}
@@ -418,27 +433,40 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 				// Track redacted: the pending map lives until the response
 				// arrives, and raw args must not sit in it. Audit redacts
 				// again — same output, safe in-memory copy.
-				r.track(env.ID, params.Name, redacted)
+				// The response completes this story: trackWith carries the
+				// approval id and disposition so auditResponse writes ONE
+				// approved row, joined to its decision, with the tool's own
+				// error if it fails.
+				r.trackWith(env.ID, params.Name, redacted,
+					approvals.DispositionApproved, a.ID)
 				if werr := r.writeChild(line); werr != nil {
-					// Approved but undeliverable: the audit row must say so,
-					// or a reader sees "approved" while Pi never got an
-					// answer. The hold is over either way — the turn's
-					// failure is the stream's to report.
+					// No response will arrive, so remove the tracked entry or
+					// it would leak, and record the delivery failure now.
+					r.take(env.ID)
 					r.log.Printf("approval %s: write to server failed: %v", a.ID, werr)
 					r.audit(params.Name, redacted, approvals.DispositionApproved,
 						"approved but not delivered to the server: "+werr.Error(), a.ID)
 					return
 				}
-				r.audit(params.Name, redacted, approvals.DispositionApproved, "", a.ID)
 				return
 			case approvals.StatusDenied, approvals.StatusExpired:
+				// Expired is not a denial: nobody said no. A row that expired
+				// elsewhere (another relay, MarkInterrupted) must not be
+				// attributed to the user in a 90-day audit row.
+				disp, reason, reply := approvals.DispositionDenied, "denied by user",
+					"denied by user (approval "+a.ID+")"
+				if got.Status == approvals.StatusExpired {
+					disp, reason, reply = approvals.DispositionExpired,
+						"expired before a decision",
+						"approval "+a.ID+" expired before a decision; failing closed"
+				}
 				r.log.Printf("approval %s %s", a.ID, got.Status)
 				if hasReplyID(env.ID) {
-					if werr := r.writePi(rpcError(env.ID, -32000, "denied by user (approval "+a.ID+")")); werr != nil {
+					if werr := r.writePi(rpcError(env.ID, -32000, reply)); werr != nil {
 						r.log.Printf("write to Pi failed: %v", werr)
 					}
 				}
-				r.audit(params.Name, redacted, approvals.DispositionDenied, "denied by user", a.ID)
+				r.audit(params.Name, redacted, disp, reason, a.ID)
 				return
 			}
 		}
@@ -479,7 +507,10 @@ func (r *relay) pumpChildToPi(childOut io.Reader) error {
 // logged, never fatal to the traffic it describes.
 func (r *relay) auditResponse(st *callState, line []byte) {
 	var env envelope
-	disp := approvals.DispositionAllow
+	disp := st.disp
+	if disp == "" {
+		disp = approvals.DispositionAllow
+	}
 	errMsg := ""
 	if json.Unmarshal(line, &env) == nil {
 		var res struct {
@@ -491,7 +522,7 @@ func (r *relay) auditResponse(st *callState, line []byte) {
 			errMsg = res.Error.Message
 		}
 	}
-	r.audit(st.name, st.args, disp, errMsg, "")
+	r.audit(st.name, st.args, disp, errMsg, st.approvalID)
 }
 
 // audit writes one audit row, redacted and best-effort.
@@ -503,7 +534,7 @@ func (r *relay) audit(tool string, args map[string]any, disp approvals.Dispositi
 		Tool:        tool,
 		Args:        approvals.Redact(args),
 		Disposition: disp,
-		Error:       errMsg,
+		Error:       approvals.ScrubError(errMsg),
 		ApprovalID:  approvalID,
 		At:          now.UnixMilli(),
 		ExpiresAt:   now.Add(approvals.AuditTTL),
@@ -554,6 +585,11 @@ func idKey(raw json.RawMessage) string {
 }
 
 func (r *relay) track(id json.RawMessage, name string, args map[string]any) {
+	r.trackWith(id, name, args, approvals.DispositionAllow, "")
+}
+
+func (r *relay) trackWith(id json.RawMessage, name string, args map[string]any,
+	disp approvals.Disposition, approvalID string) {
 	key := idKey(id)
 	if key == "" {
 		return
@@ -571,7 +607,10 @@ func (r *relay) track(id json.RawMessage, name string, args map[string]any) {
 		evicted = r.pending[evictedKey]
 		delete(r.pending, evictedKey)
 	}
-	r.pending[key] = &callState{name: name, args: args, at: time.Now()}
+	r.pending[key] = &callState{
+		name: name, args: args, at: time.Now(),
+		disp: disp, approvalID: approvalID,
+	}
 	r.mu.Unlock()
 	// Outside the lock: the logger is I/O, and the audit can block on a store
 	// call. Losing the entry must not also lose the record of the call, so
@@ -581,8 +620,8 @@ func (r *relay) track(id json.RawMessage, name string, args map[string]any) {
 		// Synchronous, like every other audit: the 5s store bound caps the
 		// stall, and a fire-and-forget row is the one most likely to be lost
 		// to teardown — the exact hole this row exists to close.
-		r.audit(evicted.name, evicted.args, approvals.DispositionAllow,
-			"relay_evicted: response not observed (pending cap)", "")
+		r.audit(evicted.name, evicted.args, evicted.disp,
+			"relay_evicted: response not observed (pending cap)", evicted.approvalID)
 	}
 }
 
@@ -640,8 +679,14 @@ func writeFrame(w io.Writer, line []byte) error {
 	frame := make([]byte, len(line)+1)
 	copy(frame, line)
 	frame[len(line)] = '\n'
-	_, err := w.Write(frame)
-	return err
+	n, err := w.Write(frame)
+	if err != nil {
+		return err
+	}
+	if n != len(frame) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 // readLine reads one LF-terminated frame, bounded. The trailing newline is
@@ -691,10 +736,29 @@ func rpcError(id json.RawMessage, code int, message string) []byte {
 	if len(id) == 0 {
 		id = json.RawMessage("null")
 	}
-	b, _ := json.Marshal(map[string]any{
+	out := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      json.RawMessage(id),
 		"error":   map[string]any{"code": code, "message": message},
-	})
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		// Invalid id bytes: answer with a null id rather than a bare newline,
+		// which the client would read as a protocol violation.
+		b, _ = json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      nil,
+			"error":   map[string]any{"code": code, "message": message},
+		})
+	}
 	return b
+}
+
+// truncateFrame bounds a frame for a log line.
+func truncateFrame(b []byte) string {
+	const max = 200
+	if len(b) <= max {
+		return string(b)
+	}
+	return string(b[:max]) + "…"
 }

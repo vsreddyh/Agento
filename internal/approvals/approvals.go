@@ -13,8 +13,10 @@ package approvals
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -214,6 +216,33 @@ func redactValue(v any) any {
 	default:
 		return v
 	}
+}
+
+// MaxAuditError bounds one persisted tool-error message, in runes.
+const MaxAuditError = 300
+
+// secretValue matches credential-shaped text that a server may echo back in an
+// error message. Arguments are redacted by key; an error is free text, so it
+// needs a value-shape scrub: "invalid token sk-live-..." must not become a
+// 90-day audit row just because it arrived in the wrong field.
+var secretValue = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:sk|pk|ghp|gho|ghs|ghu|xox[abprs])[-_][A-Za-z0-9_-]{8,}`),
+	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`),
+	regexp.MustCompile(`(?i)\b(?:api[_-]?key|access[_-]?key|token|password|secret)\s*[:=]\s*\S+`),
+}
+
+// ScrubError masks credential-shaped text in an upstream error and bounds the
+// result. Over-redaction is the accepted direction: a mangled message is
+// cheaper than a leaked key in a row the app renders.
+func ScrubError(msg string) string {
+	msg = strings.TrimSpace(msg)
+	for _, re := range secretValue {
+		msg = re.ReplaceAllString(msg, "[redacted]")
+	}
+	if utf8.RuneCountInString(msg) > MaxAuditError {
+		msg = string([]rune(msg)[:MaxAuditError])
+	}
+	return msg
 }
 
 // isSecretKey reports whether an argument key names a credential.

@@ -105,9 +105,19 @@ func TestHoldApproveForwards(t *testing.T) {
 	if got := child.String(); !strings.Contains(got, `"delete_note"`) {
 		t.Fatalf("child never received the call: %q", got)
 	}
+	// The response completes the audit story: one approved row, joined to the
+	// decision, not a forward-time row plus an anonymous allow row.
+	st := r.take(json.RawMessage(`1`))
+	if st == nil {
+		t.Fatal("approved call was not tracked for its response")
+	}
+	r.auditResponse(st, []byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
 	audit, err := store.ListAudit(context.Background(), approvals.AuditFilter{})
-	if err != nil || len(audit) != 1 || audit[0].Disposition != approvals.DispositionApproved {
+	if err != nil || len(audit) != 1 {
 		t.Fatalf("audit = %+v, %v", audit, err)
+	}
+	if audit[0].Disposition != approvals.DispositionApproved || audit[0].ApprovalID != a.ID {
+		t.Fatalf("audit = %+v, want approved/%s", audit[0], a.ID)
 	}
 }
 
@@ -384,6 +394,65 @@ func TestHoldAbandonedAtTeardown(t *testing.T) {
 	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
 	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionExpired ||
 		!strings.Contains(audit[0].Error, "abandoned at teardown") {
+		t.Fatalf("audit = %+v", audit)
+	}
+}
+
+// A tools/call the relay cannot parse is denied, not forwarded: the gate must
+// not be bypassable by sending params it cannot classify.
+func TestMalformedToolsCallFailsClosed(t *testing.T) {
+	store := approvals.NewMemoryStore()
+	out, child := &bufWriter{}, &bufWriter{}
+	r := testRelay(store)
+	r.out = out
+	r.childIn = child
+	line := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":"nonsense"}` + "\n"
+	if err := r.pumpPiToChild(strings.NewReader(line)); err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	if child.String() != "" {
+		t.Fatalf("malformed call reached the child: %q", child.String())
+	}
+	if !strings.Contains(out.String(), "could not be parsed") {
+		t.Fatalf("Pi got no error: %q", out.String())
+	}
+	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionDenied ||
+		audit[0].Tool != "(malformed)" {
+		t.Fatalf("audit = %+v", audit)
+	}
+}
+
+// A row that expired elsewhere is reported as expired, never as a denial by
+// the user: the audit trail must not attribute an action nobody took.
+func TestPollObservedExpiryIsNotADenial(t *testing.T) {
+	store := approvals.NewMemoryStore()
+	out, child := &bufWriter{}, &bufWriter{}
+	r := testRelay(store)
+	r.out = out
+	r.childIn = child
+	r.waitFor = time.Minute
+	r.pollFor = 10 * time.Millisecond
+
+	line, env, params := callLine(`12`, "delete_note", `{"id":"abc"}`)
+	done := make(chan struct{})
+	go func() { defer close(done); r.holdCall(line, env, params) }()
+	a := waitForApproval(t, store)
+	// MarkInterrupted's shape: pending -> expired without a human decision.
+	if err := store.TimeoutApproval(context.Background(), a.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hold did not observe the expiry")
+	}
+	if child.String() != "" {
+		t.Fatalf("expired call reached the child: %q", child.String())
+	}
+	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionExpired ||
+		!strings.Contains(audit[0].Error, "expired before a decision") {
 		t.Fatalf("audit = %+v", audit)
 	}
 }
