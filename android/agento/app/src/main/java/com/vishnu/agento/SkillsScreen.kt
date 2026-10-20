@@ -431,6 +431,11 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                             try {
                                                 val (_, clipped) = teachApi.createDraft(tapPath, n, d, b, source = "skills-screen").getOrThrow()
                                                 ensureActive()
+                                                // Same guard as the catch below: a switch
+                                                // mid-save must not clear the new
+                                                // profile's composer for the old
+                                                // profile's draft.
+                                                if (tapPath != chatApi.pathFor(profile)) return@launch
                                                 // Fields always clear: keeping them invites
                                                 // a second tap duplicating the draft.
                                                 // The clip hint lives outside the
