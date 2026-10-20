@@ -321,8 +321,12 @@ internal fun ChatTab(
             onBatchDone()
             return
         }
-        val take = uris.take(slots)
-        if (take.size < uris.size) {
+        // Deduped at tap time (#339): a double-selected image otherwise
+        // runs two full decodes and spends both turn slots on identical
+        // payloads (distinct UUIDs, so not even the thumb keys alias).
+        val unique = uris.distinct()
+        val take = unique.take(slots)
+        if (take.size < unique.size) {
             vm.notify(capRefused(), ToastKind.Info)
         }
         // Hoisted ABOVE the launch (#339): the resolver is all the batch
@@ -344,7 +348,7 @@ internal fun ChatTab(
                     // toasted the cap, repeating it per pick nags.
                     val room = withContext(Dispatchers.Main) { vm.hasAttachmentRoom() }
                     if (!room) {
-                        if (take.size == uris.size) {
+                        if (take.size == unique.size) {
                             withContext(Dispatchers.Main) {
                                 vm.notify(capRefused(), ToastKind.Info)
                             }
@@ -433,13 +437,8 @@ internal fun ChatTab(
         }
     }
     fun launchCamera() {
-        // Camera-less devices stay gallery-only (#339): uses-feature keeps
-        // them installable, so the Take-photo path must refuse with a
-        // notice instead of an ActivityNotFoundException.
-        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
-            vm.notify("No camera on this device — use Choose photos instead.", ToastKind.Info)
-            return
-        }
+        // (Camera-less guard lives in requestCamera, the single entry —
+        // hardware is refused before any permission prompt.)
         val dir = File(context.cacheDir, "camera")
         // Checked, not assumed (#339): full storage fails mkdirs, and a
         // bare TakePicture failure (ok=false) would leave the user with
@@ -505,6 +504,13 @@ internal fun ChatTab(
         }
     }
     fun requestCamera() {
+        // Hardware gate first (#339): on a camera-less device (kept
+        // installable by uses-feature required=false) a permission prompt
+        // before the refusal is a pointless dialog — refuse directly.
+        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            vm.notify("No camera on this device — use Choose photos instead.", ToastKind.Info)
+            return
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
         ) {

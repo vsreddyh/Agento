@@ -169,8 +169,15 @@ fun messageContentJson(
         // Stripped earlier photo turns stay honest (#339): the server
         // prompts with the trailing turn alone, but any other reader of
         // this history should see that photos were here — not a blank.
+        // Verbatim text + appended marker (NOT the trimming helper): the
+        // helper trims for display surfaces, while history text rides
+        // exactly as typed — pasted-code indentation included.
         if (role == "user" && images.isNotEmpty() && !includeImages) {
-            return contentWithMarker(content, images.size)
+            return if (content.isBlank()) {
+                attachmentMarker(images.size)
+            } else {
+                content + " " + attachmentMarker(images.size)
+            }
         }
         // Assistant turns never stage photos: the marker rule above is
         // user-only by construction, and a bare return here keeps a
@@ -396,6 +403,19 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     }
                 }
                 val (tw, th) = downscaledSize(bitmap.width, bitmap.height)
+                // Opaque white fill (#339): JPEG has no alpha channel, so a
+                // transparent screenshot/icon would otherwise flatten onto
+                // black. Unconditional — a no-op blit for opaque photos,
+                // honest whites for transparent ones.
+                val opaque = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+                android.graphics.Canvas(opaque).apply {
+                    drawColor(android.graphics.Color.WHITE)
+                    drawBitmap(bitmap, 0f, 0f, null)
+                }
+                if (opaque !== bitmap) {
+                    bitmap.recycle()
+                    bitmap = opaque
+                }
                 if (bitmap.width != tw || bitmap.height != th) {
                     val scaled = Bitmap.createScaledBitmap(bitmap, tw, th, true)
                     if (scaled !== bitmap) {

@@ -829,6 +829,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             msgs
         }
         val queued = _state.value.queued
+        val livePending = _state.value.pending
         _state.value = _state.value.copy(
             messages = patched, streaming = false,
             activeTools = emptyList(), activeToolLabel = "",
@@ -837,8 +838,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // A no-op stop (idle tab after a 429) keeps the parked busy run:
             // clearing it would wipe the sheet highlight for no reason.
             busyRunId = if (wasStreaming) "" else _state.value.busyRunId,
-            pending = if (queued.isNotBlank() && _state.value.pending.isBlank()) queued
-                else _state.value.pending,
+            // Queued text concatenates when the composer is occupied
+            // (#339): same rule as newConversation/deleteThread — a stop
+            // must not eat queued text either, whichever field it lands in.
+            pending = when {
+                queued.isBlank() -> livePending
+                livePending.isBlank() -> queued
+                else -> "${livePending.trimEnd()} $queued"
+            },
         )
         // Persist the stopped partial so the interrupted flag (and the
         // text/trace so far) survives a thread switch or restart.
