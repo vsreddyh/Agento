@@ -102,7 +102,11 @@ not "someone else decided", and the app refreshes rather than attributing an
 action to another user. In the audit trail, `disposition=allowed` with a
 non-empty `error` means the tool ran and returned an error: `error != ""` is
 the tool-level failure signal, so a reader can separate "ran and failed" from
-"never ran" without parsing the payload. Secrets hygiene from the
+"never ran" without parsing the payload. The exception is a `relay_`-prefixed
+error, which marks a row the relay wrote about a call it could not observe
+(currently `relay_evicted`, when an unanswered entry left the pending table at
+its cap); those never reached the tool, so a filter for tool failures must
+exclude the prefix. Secrets hygiene from the
 issue stands: passwords/2FA never go through chat; the take-over path
 belongs to #312.
 

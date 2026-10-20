@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -229,6 +230,14 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			if err == io.EOF {
 				return nil
 			}
+			if errors.Is(err, errFrameTooLarge) {
+				// A framing fault is per-message, not per-connection: the
+				// reader has already drained to the next line boundary, so
+				// dropping one frame is safer than killing the pair and every
+				// hold it owns.
+				r.log.Printf("dropping oversized frame from Pi")
+				continue
+			}
 			return err
 		}
 		var env envelope
@@ -425,6 +434,10 @@ func (r *relay) pumpChildToPi(childOut io.Reader) error {
 			if err == io.EOF {
 				return fmt.Errorf("server process exited")
 			}
+			if errors.Is(err, errFrameTooLarge) {
+				r.log.Printf("dropping oversized frame from server")
+				continue
+			}
 			return err
 		}
 		var env envelope
@@ -549,7 +562,7 @@ func (r *relay) track(id json.RawMessage, name string, args map[string]any) {
 		// stall, and a fire-and-forget row is the one most likely to be lost
 		// to teardown — the exact hole this row exists to close.
 		r.audit(evicted.name, evicted.args, approvals.DispositionAllow,
-			"evicted unanswered at the pending cap; response not observed", "")
+			"relay_evicted: response not observed (pending cap)", "")
 	}
 }
 
@@ -607,6 +620,8 @@ func writeFrame(w io.Writer, line []byte) error {
 
 // readLine reads one LF-terminated frame, bounded. The trailing newline is
 // stripped; the returned bytes never include it.
+var errFrameTooLarge = errors.New("frame exceeds the size cap")
+
 func readLine(rd *bufio.Reader) ([]byte, error) {
 	var out []byte
 	for {
@@ -616,7 +631,16 @@ func readLine(rd *bufio.Reader) ([]byte, error) {
 		}
 		out = append(out, chunk...)
 		if len(out) > maxLineBytes {
-			return nil, fmt.Errorf("frame exceeds %d bytes", maxLineBytes)
+			// Drain to the next newline so the caller can keep reading
+			// frames: stopping mid-line would make the rest of this frame
+			// parse as a new one.
+			for isPrefix {
+				_, isPrefix, err = rd.ReadLine()
+				if err != nil {
+					return nil, err
+				}
+			}
+			return nil, errFrameTooLarge
 		}
 		if !isPrefix {
 			return out, nil
