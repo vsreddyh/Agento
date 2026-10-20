@@ -58,9 +58,10 @@ internal fun TeachDialog(
     var promoteName by remember(skill.id) { mutableStateOf("") }
     var deleteArmed by remember(skill.id) { mutableStateOf(false) }
     // A save collapses the editor; reopening re-seeds from the fresh row
-    // (onStartEdit below), so no stale snapshot survives a server
-    // normalization. Seeding lives at open time rather than here because a
-    // background reload mid-edit must never wipe in-progress typing.
+    // in the Edit button's onClick below, so no stale snapshot survives a
+    // server normalization. Seeding lives at open time rather than here
+    // because a background reload mid-edit must never wipe in-progress
+    // typing.
     LaunchedEffect(editSaves) {
         if (editSaves > 0) editing = false
     }

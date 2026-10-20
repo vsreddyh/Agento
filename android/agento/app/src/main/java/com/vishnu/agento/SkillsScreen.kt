@@ -109,6 +109,9 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var managing by remember { mutableStateOf<TaughtSkill?>(null) }
     var managingError by remember { mutableStateOf("") }
     var composerError by remember { mutableStateOf("") }
+    // Clip hints are information, not failure: they render in variant, not
+    // error red, so success-with-clip never reads as a failed save.
+    var composerNotice by remember { mutableStateOf("") }
     var managingBusy by remember { mutableStateOf(false) }
     var testOutput by remember { mutableStateOf("") }
     var composing by remember { mutableStateOf(false) }
@@ -199,6 +202,10 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             try {
                 action(teachApi, path).getOrThrow()
                 ensureActive()
+                // Same stale-path rule as loadTaught: a switch mid-write
+                // must not land this profile's success handling on the new
+                // one.
+                if (path != chatApi.pathFor(profile)) return@launch
                 onSuccess()
                 // Fresh path, not the tap-time one: a profile switch
                 // mid-write must reload where the user looks now.
@@ -424,9 +431,9 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                                 newBody = ""
                                                 composing = false
                                                 if (clipped) {
-                                                    composerError = "Saved, but the text clipped at the length cap."
+                                                    composerNotice = "Saved, but the text clipped at the length cap."
                                                 }
-                                                loadTaught(path)
+                                                loadTaught(chatApi.pathFor(profile))
                                             } catch (e: Exception) {
                                                 ensureActive()
                                                 composerError = e.message?.take(120) ?: "failed"
@@ -446,15 +453,16 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             }
                         }
                     }
-                    // Outside the composer gate: a clip hint or failure must
+                    // Outside the composer gate: hints and failures must
                     // survive the composer closing, or success hides its own
                     // notice.
-                    if (composerError.isNotBlank()) {
+                    if (composerError.isNotBlank() || composerNotice.isNotBlank()) {
                         item {
                             Text(
-                                composerError,
+                                (composerError + " " + composerNotice).trim(),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
+                                color = if (composerError.isNotBlank()) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -517,7 +525,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     action = { api, path ->
                         api.updateSkill(path, open.id, name = name, description = description, body = body)
                     },
-                    onSuccess = { editSaves++ },
+                    onSuccess = { editSaves++; testOutput = "" },
                 )
             },
             onTest = { input ->
@@ -531,13 +539,22 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 })
             },
             onActivate = {
-                mutate(action = { api, path -> api.activateSkill(path, open.id) })
+                mutate(
+                    action = { api, path -> api.activateSkill(path, open.id) },
+                    onSuccess = { testOutput = "" },
+                )
             },
             onDisable = {
-                mutate(action = { api, path -> api.disableSkill(path, open.id) })
+                mutate(
+                    action = { api, path -> api.disableSkill(path, open.id) },
+                    onSuccess = { testOutput = "" },
+                )
             },
             onPromote = { schedule, name ->
-                mutate(action = { api, path -> api.promoteSkill(path, open.id, schedule, name) })
+                mutate(
+                    action = { api, path -> api.promoteSkill(path, open.id, schedule, name) },
+                    onSuccess = { testOutput = "" },
+                )
             },
             onDelete = {
                 // Close only on success: mutate's onSuccess runs after the
@@ -545,7 +562,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 val id = open.id
                 mutate(
                     action = { api, path -> api.deleteSkill(path, id) },
-                    onSuccess = { managing = null },
+                    onSuccess = { managing = null; testOutput = "" },
                 )
             },
             onClose = { managing = null },

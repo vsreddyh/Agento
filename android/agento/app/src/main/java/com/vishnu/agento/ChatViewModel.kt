@@ -508,6 +508,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * transcript clipped at the server body cap — a long thread stores
      * less than was sent, and the writer must know. */
     fun saveThreadAsSkill(id: String, name: String, description: String, done: (String?, Boolean) -> Unit) {
+        // Check messages, not the export: exportMarkdown always emits at
+        // least a "# title" header, so a blank check on the body never fires
+        // and an empty thread would save a header-only draft.
+        if (threads.firstOrNull { it.id == id }?.messages.isNullOrEmpty()) {
+            done("Conversation is empty.", false)
+            return
+        }
+        // Sent whole: the server clips at its body cap and reports
+        // truncated, which the toast surfaces. A client-side cap would
+        // duplicate the server constant and drift from it; the worst case
+        // is one large POST the user explicitly tapped to send.
         val body = exportMarkdown(id)
         if (body.isBlank()) {
             done("Conversation is empty.", false)
