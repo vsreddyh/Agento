@@ -75,10 +75,12 @@ object ChatThreads {
             return "New conversation"
         }
         val oneLine = first.replace(Regex("\\s+"), " ")
-        val base = if (oneLine.length <= 42) oneLine else oneLine.take(41) + "…"
-        // Photo+text openers carry the signal too (#339): the switcher row
-        // shows the thread has photos, matching search/export markers.
-        return if (photos == 0) base else if (photos == 1) "$base [photo]" else "$base [$photos photos]"
+        // Photo signal with the budget kept (#339): the marker reserves
+        // its width first, so the row never exceeds 42 chars.
+        val suffix = if (photos == 0) "" else if (photos == 1) " [photo]" else " [$photos photos]"
+        val avail = maxOf(0, 42 - suffix.length)
+        val base = if (oneLine.length <= avail) oneLine else oneLine.take(maxOf(0, avail - 1)) + "…"
+        return base + suffix
     }
 
     fun load(context: Context, tab: String): List<ChatThread> {

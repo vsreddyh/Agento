@@ -512,9 +512,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         retargetApprovals()
         retargetMemory()
         // Same queued→pending restore as stop() (#339): killing the stream
-        // must not eat queued text — it returns to the composer (blank
-        // here, so it always carries over), never vanishes.
-        val parked = _state.value.queued.takeIf { it.isNotBlank() && _state.value.pending.isBlank() }.orEmpty()
+        // must not eat queued text. Concatenated when the composer is
+        // occupied (stop() drops there — a live-thread tradeoff); a fresh
+        // thread has no turn to confuse, so keeping every word wins.
+        val s = _state.value
+        val parked = when {
+            s.queued.isBlank() -> ""
+            s.pending.isBlank() -> s.queued
+            else -> "${s.pending.trimEnd()} ${s.queued}"
+        }
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = parked,
             // Staged photos die with the draft like every other thread
@@ -562,7 +568,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             retargetApprovals()
             retargetMemory()
             // Same restore as newConversation above (#339).
-            val kept = _state.value.queued.takeIf { it.isNotBlank() && _state.value.pending.isBlank() }.orEmpty()
+            val d = _state.value
+            val kept = when {
+                d.queued.isBlank() -> ""
+                d.pending.isBlank() -> d.queued
+                else -> "${d.pending.trimEnd()} ${d.queued}"
+            }
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = kept,

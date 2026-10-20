@@ -222,6 +222,9 @@ internal fun ChatTab(
     // returns with nothing to decode). Uri is Parcelable; the path is a
     // String; both restore.
     var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
+    // Confirm dialog before the Settings escape hatch (#339): auto-opening
+    // Settings on every tap would surprise-navigate on accidental taps.
+    var showCameraSettings by remember { mutableStateOf(false) }
     // True while a camera batch is decoding (#339): launchCamera's
     // delete-previous must skip a file with an in-flight decode, or a
     // rapid re-tap deletes it mid-read and turns a good capture into a
@@ -407,17 +410,10 @@ internal fun ChatTab(
         ) {
             // Permanent denial ("Don't allow again"): the request UI will
             // never show again, so a re-toast loops forever (#339). The
-            // only path forward is app Settings — opened directly since
-            // the user tapped Take photo and there is nowhere else to go.
-            vm.notify("Camera access is off — opening Settings to re-enable.", ToastKind.Info)
-            runCatching {
-                context.startActivity(
-                    Intent(
-                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        Uri.fromParts("package", context.packageName, null),
-                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                )
-            }
+            // only path forward is app Settings — offered as a confirm
+            // dialog (below), never auto-opened, so an accidental tap
+            // can't surprise-navigate away.
+            showCameraSettings = true
         } else {
             // State notice like every other attach refusal (#339).
             vm.notify("Camera permission is needed to take photos.")
@@ -486,6 +482,37 @@ internal fun ChatTab(
             )
         },
     )
+    // Camera permanently denied (#339): the request UI never shows again,
+    // so the dialog — not an auto-open — offers the Settings escape hatch.
+    // Explicit tap required; an accidental Take-photo tap must not
+    // surprise-navigate away.
+    if (showCameraSettings) {
+        AlertDialog(
+            onDismissRequest = { showCameraSettings = false },
+            title = { Text("Camera access is off") },
+            text = {
+                Text("Take-photo needs the camera. Open Settings to turn it back on, or use Choose photos instead.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showCameraSettings = false
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package", context.packageName, null),
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                    },
+                ) { Text("Open Settings") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCameraSettings = false }) { Text("Cancel") }
+            },
+        )
+    }
     if (showThreads) {
         ThreadSheet(
             title = title,
@@ -1401,7 +1428,18 @@ internal fun ChatScreen(
                     endLive()
                 } else {
                     silentRounds = 0
-                    onPending(heard)
+                    // Append when photos are staged (#339): the confirming
+                    // tap comes later, so each sentence must accumulate like
+                    // the one-shot mic path below — replacing would discard
+                    // every sentence but the last.
+                    val cur = state.pending
+                    onPending(
+                        if (cur.isBlank() || state.pendingAttachments.isEmpty()) {
+                            heard
+                        } else {
+                            "${cur.trimEnd()} $heard"
+                        },
+                    )
                     // Photos need a confirming tap (#339): live transcripts
                     // auto-send by design, but background speech firing a
                     // staged-photo turn with no confirmation is a

@@ -10,6 +10,7 @@ import android.util.Base64
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import kotlinx.serialization.Serializable
 import org.json.JSONArray
 import org.json.JSONObject
@@ -218,12 +219,14 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                         // A stall, not a deletion (#339): 100 consecutive
                         // 0-reads is a stuck provider stream, where retrying
                         // the same Uri may succeed — so this says try again
-                        // instead of sending the user off to re-pick.
+                        // instead of sending the user off to re-pick. Yields
+                        // while spinning so a stuck stream doesn't burn CPU.
                         if (++zeroStreak > 100) {
                             throw IllegalArgumentException(
                                 "Couldn't finish reading that photo — try again.",
                             )
                         }
+                        yield()
                         continue
                     }
                     zeroStreak = 0
@@ -272,7 +275,10 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // success path, the finally covers every throw between them.
             // Declared outside: the oversize check below reads them after.
             var encoded: String? = null
-            var largest = 0
+            // Smallest, not largest (#339): the error below reports the
+            // attempt that came CLOSEST to passing (q60 fails last), so a
+            // max() here would overstate the size that fell short.
+            var smallest = Int.MAX_VALUE
             try {
                 // EXIF orientation (#339 review): BitmapFactory ignores it, so a
                 // portrait phone photo would stage and send sideways. The
@@ -281,10 +287,15 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 // FLIP_HORIZONTAL/TRANSVERSE, which a rotation-only mapping
                 // would leave mirrored.
                 val orientation = runCatching {
-                    ExifInterface(java.io.ByteArrayInputStream(bytes)).getAttributeInt(
-                        ExifInterface.TAG_ORIENTATION,
-                        ExifInterface.ORIENTATION_NORMAL,
-                    )
+                    // use{} like every other stream here (#339): close is a
+                    // no-op on a byte-array stream, but the hygiene is the
+                    // same shape as the resolver reads above it.
+                    java.io.ByteArrayInputStream(bytes).use {
+                        ExifInterface(it).getAttributeInt(
+                            ExifInterface.TAG_ORIENTATION,
+                            ExifInterface.ORIENTATION_NORMAL,
+                        )
+                    }
                 }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
                 // Null means no transform: transposes and flips compose a mirror
                 // via negative scale, which createBitmap applies directly.
@@ -335,7 +346,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     val out = ByteArrayOutputStream()
                     bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
                     val candidate = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                    largest = maxOf(largest, candidate.length)
+                    smallest = minOf(smallest, candidate.length)
                     if (candidate.length <= MAX_IMAGE_BASE64_CHARS) {
                         encoded = candidate
                         break
@@ -345,7 +356,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 bitmap.recycle()
             }
             val final = encoded ?: throw IllegalStateException(
-                "Photo too large even after shrinking (${formatBytes(base64Bytes(largest))})" +
+                "Photo too large even after shrinking (${formatBytes(base64Bytes(smallest))})" +
                     " — the per-photo limit is about " +
                     "${formatBytes(base64Bytes(MAX_IMAGE_BASE64_CHARS))}. " +
                     "Pick a different photo.",

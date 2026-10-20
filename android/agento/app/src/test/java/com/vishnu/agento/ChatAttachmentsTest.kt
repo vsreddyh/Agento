@@ -198,6 +198,16 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun photoTextTitleKeepsBudget() {
+        val long = "word ".repeat(20).trim()
+        val title = ChatThreads.titleFor(
+            listOf(ChatMessage("user", long, 0L, attachments = listOf(attachment()))),
+        )
+        assertTrue(title.length <= 42)
+        assertTrue(title.endsWith("[photo]"))
+    }
+
+    @Test
     fun storedRoundTripKeepsAttachments() {
         val msgs = listOf(
             ChatMessage("user", "", 1L, attachments = listOf(attachment("AAA="), attachment("BBB="))),
