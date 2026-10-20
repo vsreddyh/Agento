@@ -122,12 +122,15 @@ private fun AttachmentThumb(
     // low-end scroll, so produceState moves it to IO (placeholder shows
     // until it lands) and awaitDispose recycles on change/unmount.
     val thumbKey = Triple(base64.length, base64.hashCode(), slot)
-    val bmp by produceState<android.graphics.Bitmap?>(null, thumbKey) {
+    val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
         value = withContext(Dispatchers.IO) {
             runCatching { decodeThumbnail(base64) }.getOrNull()
         }
         awaitDispose { runCatching { value?.takeUnless { it.isRecycled }?.recycle() } }
     }
+    // Local, not the delegate (#339): smart cast is impossible on a
+    // delegated property, so snapshot it once per composition.
+    val bmp = produced
     if (bmp != null) {
         Image(
             bitmap = bmp.asImageBitmap(),
