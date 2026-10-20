@@ -87,7 +87,11 @@ func (m *MemoryStore) GetApproval(_ context.Context, id string) (Approval, error
 	return a.Clone(), nil
 }
 
-// DecideApproval flips a pending approval terminal exactly once.
+// DecideApproval flips a pending approval terminal exactly once. Expiry is
+// checked against the caller's `at`, the decision instant (a deliberate
+// exception to the store's clock, matching Mongo): the row is being decided at
+// that moment everywhere, so comparing against m.now() would evaluate one
+// operation at two instants.
 func (m *MemoryStore) DecideApproval(_ context.Context, id string, approved bool, by string, at time.Time) (Approval, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
