@@ -100,6 +100,34 @@ internal fun parseAuditRow(o: JSONObject): AuditRow? {
  * Parsing is lenient; missing fields show as blank, undecodable rows are
  * logged and skipped rather than failing the list.
  */
+internal fun parseApprovalList(body: String): ApprovalsApi.ApprovalList {
+    val out = mutableListOf<GateApproval>()
+    val root = runCatching { JSONObject(body) }.getOrNull()
+    if (root == null) {
+        runCatching { Log.w("ApprovalsApi", "unparseable approvals body: ${body.take(120)}") }
+        return ApprovalList()
+    }
+    val arr = root.optJSONArray("approvals")
+    if (arr == null) {
+        runCatching { Log.w("ApprovalsApi", "approvals body has no array: ${body.take(120)}") }
+        return ApprovalList()
+    }
+    var dropped = 0
+    for (i in 0 until arr.length()) {
+        val obj = arr.optJSONObject(i) ?: continue
+        val row = parseApproval(obj)
+        if (row == null) {
+            dropped++
+            continue
+        }
+        out.add(row)
+    }
+    if (dropped > 0) {
+        runCatching { Log.w("ApprovalsApi", "dropped $dropped id-less approval row(s)") }
+    }
+    return ApprovalList(out, root.optString("degraded", "").isNotBlank())
+}
+
 class ApprovalsApi(context: Context) {
 
     private val appCtx = context.applicationContext
@@ -210,34 +238,6 @@ class ApprovalsApi(context: Context) {
             if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
             parseAuditList(it.body)
         }
-    }
-
-    internal fun parseApprovalList(body: String): ApprovalList {
-        val out = mutableListOf<GateApproval>()
-        val root = runCatching { JSONObject(body) }.getOrNull()
-        if (root == null) {
-            runCatching { Log.w("ApprovalsApi", "unparseable approvals body: ${body.take(120)}") }
-            return ApprovalList()
-        }
-        val arr = root.optJSONArray("approvals")
-        if (arr == null) {
-            runCatching { Log.w("ApprovalsApi", "approvals body has no array: ${body.take(120)}") }
-            return ApprovalList()
-        }
-        var dropped = 0
-        for (i in 0 until arr.length()) {
-            val obj = arr.optJSONObject(i) ?: continue
-            val row = parseApproval(obj)
-            if (row == null) {
-                dropped++
-                continue
-            }
-            out.add(row)
-        }
-        if (dropped > 0) {
-            runCatching { Log.w("ApprovalsApi", "dropped $dropped id-less approval row(s)") }
-        }
-        return ApprovalList(out, root.optString("degraded", "").isNotBlank())
     }
 
     private fun parseAuditList(body: String): List<AuditRow> {
