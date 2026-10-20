@@ -1028,6 +1028,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
          * instead of refreshing inside onSuccess avoids a double load whose
          * second, noticeless call cancels the first (single-flight). */
         notice: String? = null,
+        /** Whether the notice also survives a failed reload. */
+        stickyNotice: Boolean = false,
     ) {
         // Both the add here and the remove below run on Main (UI taps and
         // the Main-confined completion), so a plain set is safe; moving
@@ -1057,7 +1059,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // pending count.
                     onSuccess()
                     pollMemoryCount(path)
-                    if (_state.value.showMemory) refreshMemory(notice)
+                    if (_state.value.showMemory) refreshMemory(notice, stickyNotice)
                 }
             }
         }
@@ -1069,8 +1071,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Deletes one item: it is gone from the next turn. */
     fun deleteMemory(id: String) {
+        // Sticky like the truncation notice: the row is gone even if the
+        // reload fails, and silence would read as a failed delete.
         actOnMemory("item:$id", id, action = { path -> memoryApi.deleteMemory(path, id) },
-            notice = "Deleted.")
+            notice = "Deleted.", stickyNotice = true)
     }
 
     /** Saves an edit to text and/or topic. Trims like create: a
