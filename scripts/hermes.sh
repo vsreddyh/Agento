@@ -242,7 +242,7 @@ cmd_init() {
     info "Pruning unused images (prevents GBs of bloat)..."
     podman image prune -f 2>&1 | sed 's/^/  /' || true
 
-    mkdir -p "$PI_HOME" "$REPO/workspace"
+    mkdir -p "$PI_HOME" "$REPO/workspace" "$REPO/exports/browser"
     # No chown here, and that is the fix rather than an omission. This used to hand
     # the workspace to uid/gid 10000 because the official Hermes image ran as 10000
     # and bind mounts had to belong to it or the gateway crash-looped. Nothing runs as

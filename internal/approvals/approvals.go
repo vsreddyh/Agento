@@ -190,6 +190,14 @@ var gatedTools = map[string]map[string]bool{
 		// gate anywhere.
 		"save_memory": false, "list_memory": false,
 	},
+	"browser": {
+		// Navigation holds with the URL in front of the human: every domain
+		// is an explicit per-task approval, which is the #312 allowlist.
+		// Reads, screenshots and evidence saves run free once the page is
+		// approved; re-navigation to a new URL holds again.
+		"browser_goto": true, "browser_read": false,
+		"browser_screenshot": false, "browser_save_evidence": false,
+	},
 }
 
 // Redact returns a copy of args with secret-shaped values masked, recursing

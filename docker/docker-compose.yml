@@ -11,7 +11,7 @@
 #
 #   environment={'OPENCODE_API_KEY': '...', 'MONGODB_URI': 'mongodb+srv://...', 'MONGODB_DB': 'hermes'}
 #
-# and nothing else, so all five MCP servers failed with `MONGODB_URI is not set`
+# and nothing else, so all eight MCP servers failed with `MONGODB_URI is not set`
 # and the pi entrypoint refused to start. Usage is therefore:
 #
 #   environment:
@@ -94,7 +94,7 @@ services:
       #
       # Not waiting on pi's *health* is also the right behaviour independently: that
       # healthcheck is a real connectivity gate (its entrypoint refuses to start if
-      # any of the five MCP servers will not connect), so a proxy gated on it would
+      # any of the eight MCP servers will not connect), so a proxy gated on it would
       # take health-api's /api/* routes down with it — and health sync has nothing
       # to do with the agent.
       - pi
@@ -154,6 +154,12 @@ services:
       # Workspace checkouts from the retired side profiles (portals,
       # portfolio-resume) stay mounted but unmanaged (#289).
       - ../workspace:/workspace
+      # Exports, writable: the browser MCP server saves evidence bundles
+      # under browser/ (the Storage tab reads them via health-api). rw only
+      # here — health-api keeps its read-only mount — and the server jails
+      # every write under browser/ with generated filenames, so the agent
+      # cannot touch anything else in the tree.
+      - ../exports:/exports:rw
       # VPS SSH keys, least-privilege file mounts (read-only): kept for host-side
       # git by hand. No profile clones or pulls on its own any more.
       - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519:/root/.ssh/id_ed25519:ro
@@ -221,7 +227,7 @@ services:
       timeout: 5s
       retries: 10
       # Generous: the entrypoint runs `pi mcp list` before handing off, which
-      # connects all five MCP servers. A short start_period reports unhealthy while
+      # connects all eight MCP servers. A short start_period reports unhealthy while
       # that is still in progress.
       start_period: 60s
     restart: unless-stopped

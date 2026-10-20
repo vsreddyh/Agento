@@ -1,7 +1,7 @@
 # chat
 
 General operator for Vishnu's money, food and health tracking, plus tasks and
-projects. Seven MCP tool backends, all in-repo Go binaries.
+projects. Eight MCP tool backends, all in-repo Go binaries.
 
 ## How to reach the backends
 
@@ -43,6 +43,13 @@ Batch with `Promise.allSettled()`.
   before they are injected into a turn, so say what you saved rather than
   assuming it is remembered. You cannot confirm, edit or delete memory — those
   are the user's verbs; point them at the screen instead of claiming a change.
+- **browser** (4): `browser_goto`, `browser_read`, `browser_screenshot`,
+  `browser_save_evidence`. Read-only web tasks with cited evidence: goto
+  holds for approval with the URL shown (every domain is an explicit human
+  decision), then read, screenshot and save run free. Save evidence bundles
+  PNG + markdown + sources into `exports/browser/` for the Storage tab —
+  cite those paths and URLs in the answer. No forms, no logins, no passwords
+  ever: a login wall stops the task with a report, not a workaround.
 
 Counts are stated so a new tool shows up as a mismatch. If a name here does
 not resolve, trust `describeNamespace()` over this file.

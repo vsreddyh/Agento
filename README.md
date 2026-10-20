@@ -1,6 +1,6 @@
 # Agento Android stack
 
-Fully containerized agent stack running one chat profile against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one pi container** — one `pi` process for the profile behind an OpenAI-compatible gateway — serving the custom **Android app** (Chat tab + Settings), native browser automation via the built-in browser toolset, Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully containerized agent stack running one chat profile against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one pi container** — one `pi` process for the profile behind an OpenAI-compatible gateway — serving the custom **Android app** (Chat tab + Settings), headless-Chromium browser tasks via the `browser` MCP server, Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
@@ -46,7 +46,7 @@ and unmanaged.)
 | Specification | Minimum Requirement | Recommended (Production) | Notes |
 |---|---|---|---|
 | **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Image build (Go, LaTeX/tectonic) benefits from multiple cores. |
-| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The `pi` container (Node + Pi + five Go MCP servers) consumes ~1.2–1.8 GB steady-state. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
+| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The `pi` container (Node + Pi + eight Go MCP servers) consumes ~1.2–1.8 GB steady-state before first browse; re-measure for browsing workloads — headless Chromium (image layer + ~150–300 MB runtime per profile, see `vps.md`) lands on top. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
 | **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, Go build cache, local repo clones, Pi's own runtime caches, and logs. |
 | **OS** | Linux (Ubuntu 22.04+, Debian 12+, Arch, Fedora) | Ubuntu 22.04/24.04 LTS or Debian 12 | Linux kernel 5.10+ with systemd and package manager (`apt`, `pacman`, or `dnf`). |
 

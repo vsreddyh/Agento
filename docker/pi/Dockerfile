@@ -38,7 +38,7 @@ ARG NODE_IMAGE=node@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83
 # workspace is owned by host uid 10000, so a non-root process cannot write the
 # agent's session trees and repo checkouts there. See docker/pi/entrypoint.sh.
 #
-# Binary set: 7 MCP servers (memory is new) plus pi-gateway. Two binaries from the
+# Binary set: 8 MCP servers (browser is new) plus pi-gateway. Two binaries from the
 # old image are intentionally omitted, and neither is agent-reachable:
 #   retention — a one-shot lifecycle job. It runs as its own compose service
 #               (`podman-compose run --rm retention`) on its own image
@@ -72,6 +72,7 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/miser-money ./cmd/miser-money \
  && go build -trimpath -ldflags="-s -w" -o /out/project-manager ./cmd/project-manager \
  && go build -trimpath -ldflags="-s -w" -o /out/notes ./cmd/notes \
  && go build -trimpath -ldflags="-s -w" -o /out/memory ./cmd/memory \
+ && go build -trimpath -ldflags="-s -w" -o /out/browser ./cmd/browser \
  && go build -trimpath -ldflags="-s -w" -o /out/mcp-gate ./cmd/mcp-gate \
  && go build -trimpath -ldflags="-s -w" -o /out/pi-gateway ./cmd/pi-gateway
 
@@ -86,6 +87,16 @@ FROM ${NODE_IMAGE} AS runtime
 #   the git safe.directory registration.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates findutils curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# chromium — the browser MCP server drives it headless via chromedp. Debian
+# package, not pinned like the toolchain digests above: bookworm ships one
+# chromium per release, which is the same float-as-apt-practice as git and
+# curl on the line above. Headless + --no-sandbox (the server passes both:
+# no display exists and the container runs as root, which the sandbox
+# refuses). Nothing else in the image uses it; Pi itself has no browser.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends chromium \
  && rm -rf /var/lib/apt/lists/*
 
 # tectonic — the LaTeX engine the `resumes` profile compiles every tailored .tex
@@ -188,6 +199,7 @@ COPY --from=gobuild /out/task-manager     /usr/local/bin/task-manager
 COPY --from=gobuild /out/project-manager  /usr/local/bin/project-manager
 COPY --from=gobuild /out/notes             /usr/local/bin/notes
 COPY --from=gobuild /out/memory            /usr/local/bin/memory
+COPY --from=gobuild /out/browser           /usr/local/bin/browser
 COPY --from=gobuild /out/mcp-gate          /usr/local/bin/mcp-gate
 
 # pi-gateway is the container's main process, not an optional extra. It serves the
@@ -201,7 +213,7 @@ COPY --from=gobuild /out/pi-gateway       /usr/local/bin/pi-gateway
 RUN chmod 755 /usr/local/bin/miser-money /usr/local/bin/cookbook \
              /usr/local/bin/health-check /usr/local/bin/task-manager \
              /usr/local/bin/project-manager /usr/local/bin/notes \
-             /usr/local/bin/memory \
+             /usr/local/bin/memory /usr/local/bin/browser \
              /usr/local/bin/mcp-gate /usr/local/bin/pi-gateway
 
 COPY docker/pi/entrypoint.sh /usr/local/bin/entrypoint.sh

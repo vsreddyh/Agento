@@ -93,6 +93,8 @@ func TestPolicyTableIsComplete(t *testing.T) {
 		"notes": {"create_note", "get_note", "list_notes", "search_notes",
 			"update_note", "delete_note"},
 		"memory": {"save_memory", "list_memory"},
+		"browser": {"browser_goto", "browser_read", "browser_screenshot",
+			"browser_save_evidence"},
 	}
 	n := 0
 	for server, tools := range known {
@@ -110,8 +112,8 @@ func TestPolicyTableIsComplete(t *testing.T) {
 			t.Errorf("server %s table has %d rules for %d tools", server, len(rules), len(tools))
 		}
 	}
-	if n != 52 {
-		t.Errorf("pinned %d tools, want the 52 inventoried", n)
+	if n != 56 {
+		t.Errorf("pinned %d tools, want the 56 inventoried", n)
 	}
 }
 

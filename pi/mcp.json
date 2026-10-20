@@ -27,6 +27,10 @@
     "memory": {
       "command": "/usr/local/bin/mcp-gate",
       "args": ["--server", "memory", "--", "/usr/local/bin/memory"]
+    },
+    "browser": {
+      "command": "/usr/local/bin/mcp-gate",
+      "args": ["--server", "browser", "--", "/usr/local/bin/browser"]
     }
   }
 }
