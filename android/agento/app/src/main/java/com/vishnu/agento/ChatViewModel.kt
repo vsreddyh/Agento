@@ -794,12 +794,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Toasts that staged photos sit out this resend (#339):
      * retry/regenerate/continue resend history, never the composer's
-     * staging — said out loud like every other narrowing in this file. */
+     * staging — said out loud like every other narrowing in this file.
+     * Info, not Error: nothing failed, the photos are safe in the
+     * composer. */
     private fun noteParkedPhotos(verb: String) {
         if (_state.value.pendingAttachments.isNotEmpty()) {
             notify(
                 "$verb without the staged photos — they stay in the " +
                     "composer for your next message.",
+                ToastKind.Info,
             )
         }
     }
@@ -842,22 +845,35 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     _state.value = _state.value.copy(pending = "", queued = text)
                     // Same narrowing note as the branches around it (#339):
                     // the queued fire is text-only, so staged photos park —
-                    // said here too, not just for the image-only tap.
+                    // said here too, not just for the image-only tap. Info:
+                    // the photos are safe, nothing failed.
                     if (photos.isNotEmpty()) {
                         notify(
                             "Queued behind this reply — text sends, " +
                                 attachmentMarker(photos.size) +
                                 " stays staged for the next message.",
+                            ToastKind.Info,
                         )
                     }
+                } else {
+                    // Second tap while a queue is parked (#339): the new
+                    // text correctly stays in the composer, but with no
+                    // toast the tap reads dead — the class this PR keeps
+                    // eliminating.
+                    notify(
+                        "Already queued — sends when this reply finishes.",
+                        ToastKind.Info,
+                    )
                 }
             } else if (photos.isNotEmpty()) {
                 // Image-only tap while streaming (#339): nothing queues
                 // (the queue is text), so say the photos are waiting —
-                // otherwise the enabled send button looks dead.
+                // otherwise the enabled send button looks dead. Info, same
+                // reasoning as above.
                 notify(
                     "Still answering — photos stay staged and " +
                         "send with your next message.",
+                    ToastKind.Info,
                 )
             }
             return
@@ -893,12 +909,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         // Steering carries text only (#339): staged photos park with no
         // part in the steered turn — said here like every other narrowing,
-        // or the steer button silently drops the user's staging.
+        // or the steer button silently drops the user's staging. Info:
+        // parked, not failed.
         if (_state.value.pendingAttachments.isNotEmpty()) {
             notify(
                 "Steered the text — " +
                     attachmentMarker(_state.value.pendingAttachments.size) +
                     " stays staged for your next message.",
+                ToastKind.Info,
             )
         }
         val runId = _state.value.activeRunId
@@ -2131,6 +2149,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 "Sent the queued text — " +
                     attachmentMarker(_state.value.pendingAttachments.size) +
                     " still staged for your next message.",
+                ToastKind.Info,
             )
         }
         _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")

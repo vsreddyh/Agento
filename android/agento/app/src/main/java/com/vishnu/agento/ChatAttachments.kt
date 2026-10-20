@@ -177,7 +177,10 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 var total = 0L
                 while (true) {
                     val n = stream.read(buf)
-                    if (n <= 0) break
+                    // < 0 only: 0 is a legal (if rare) return, especially
+                    // from content-provider streams — breaking on it would
+                    // truncate the file into a bogus "not readable" error.
+                    if (n < 0) break
                     total += n
                     // The shrink happens after the read, so the ORIGINAL
                     // needs its own bound — far above any real photo, far

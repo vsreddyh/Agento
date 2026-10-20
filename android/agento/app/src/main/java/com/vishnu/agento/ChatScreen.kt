@@ -981,9 +981,12 @@ internal fun ChatScreen(
     // the pickers themselves live in ChatTab (onPickPhotos/onTakePhoto).
     var showAttachMenu by remember(tab) { mutableStateOf(false) }
     // Edit state belongs to one thread: a switch or a fresh thread closes it.
+    // The attach menu closes too (#339): it is keyed on tab, so without
+    // this a thread switch leaves it open over the new thread's composer.
     LaunchedEffect(state.threadId) {
         editingIndex = null
         confirmReplace = null
+        showAttachMenu = false
     }
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
