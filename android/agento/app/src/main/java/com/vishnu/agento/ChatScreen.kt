@@ -194,17 +194,9 @@ internal fun ChatTab(
     // description, then the transcript becomes a draft for review in Skills.
     var savingSkillId by remember { mutableStateOf<String?>(null) }
     val toasts = remember(scope) { ToastCenter(scope) }
-    // Startup sweep (#339): a process kill between the TakePicture write
-    // and the decode leaves a capture with no owner — per-batch finally
-    // covers cancel/leave-tab, not death. The cache dir holds ONLY these
-    // captures, so clearing it here bounds the litter to zero with no
-    // bookkeeping. Once per composition-creation, not per recomposition.
-    LaunchedEffect(Unit) {
-        runCatching {
-            context.cacheDir.resolve("camera").takeIf { it.exists() }?.listFiles()
-                ?.forEach { runCatching { it.delete() } }
-        }
-    }
+    // Photo attachments (#318): gallery picks need no permission (the picker
+    // returns read access to just the chosen images); the camera needs
+    // CAMERA plus a FileProvider Uri staged before TakePicture launches.
     // Photo attachments (#318): gallery picks need no permission (the picker
     // returns read access to just the chosen images); the camera needs
     // CAMERA plus a FileProvider Uri staged before TakePicture launches.
@@ -221,6 +213,22 @@ internal fun ChatTab(
     // "moved or deleted" error. Plain remember is right — a rotation
     // during decode cancels the batch anyway, so no restore is needed.
     var cameraBusy by remember { mutableStateOf(false) }
+    // Startup sweep (#339): a process kill between the TakePicture write
+    // and the decode leaves a capture with no owner — per-batch finally
+    // covers cancel/leave-tab, not death. The cache dir holds ONLY these
+    // captures, so clearing it here bounds the litter to zero with no
+    // bookkeeping. Once per composition-creation, not per recomposition —
+    // and sparing the restored capture: rotation/death while the camera
+    // app is foreground restores cameraPath, and sweeping its file would
+    // turn the returning capture into a "moved or deleted" error.
+    LaunchedEffect(Unit) {
+        runCatching {
+            val keep = cameraPath
+            context.cacheDir.resolve("camera").takeIf { it.exists() }?.listFiles()
+                ?.filter { it.absolutePath != keep }
+                ?.forEach { runCatching { it.delete() } }
+        }
+    }
     // One decode at a time, in pick order: each photo lands (or its named
     // error toasts) as it finishes, so a slow second image never blocks the
     // first one's thumbnail. Failures name the fix (too large, unreadable)
@@ -231,7 +239,13 @@ internal fun ChatTab(
     // [onBatchDone] fires on Main after the batch (camera uses it to drop
     // its in-flight flag).
     fun processUris(uris: List<Uri>, cleanup: File? = null, onBatchDone: () -> Unit = {}) {
-        if (uris.isEmpty()) return
+        // Done fires on early returns too (#339): the camera sets its
+        // in-flight flag before calling, so a cap refusal without the
+        // callback would stick the flag and leak the capture forever.
+        if (uris.isEmpty()) {
+            onBatchDone()
+            return
+        }
         // Unified on vm.notify (#339): the same cap refused here and
         // mid-batch below must have one lifetime — a composition toast is
         // lost on rotation while a state notice survives it.
@@ -240,12 +254,15 @@ internal fun ChatTab(
             vm.notify(
                 "At most $MAX_IMAGES_PER_TURN photos per turn — remove one first.",
             )
+            onBatchDone()
             return
         }
         val take = uris.take(slots)
         if (take.size < uris.size) {
             vm.notify(
-                "Only the first ${take.size} photos attached " +
+                // No "first" (#339): picker return order is not
+                // selection order, so "first" overpromises.
+                (if (take.size == 1) "Only 1 photo attached " else "Only ${take.size} photos attached ") +
                     "(at most $MAX_IMAGES_PER_TURN per turn).",
                 ToastKind.Info,
             )
@@ -2170,6 +2187,14 @@ internal fun ChatScreen(
                                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                     verticalAlignment = Alignment.CenterVertically,
                                                 ) {
+                                                    // Empty text allowed with photos
+                                                    // (#339): the editor reaches
+                                                    // image-only resends, which
+                                                    // send() supports — the VM
+                                                    // still refuses empty
+                                                    // text-only resends.
+                                                    val canResend = editDraft.isNotBlank() ||
+                                                        msg.attachments.isNotEmpty()
                                                     Button(
                                                         onClick = {
                                                             if (dropsTurns) {
@@ -2179,14 +2204,14 @@ internal fun ChatScreen(
                                                                 editingIndex = null
                                                             }
                                                         },
-                                                        enabled = editDraft.isNotBlank(),
+                                                        enabled = canResend,
                                                     ) { Text("Replace") }
                                                     OutlinedButton(
                                                         onClick = {
                                                             onFork(index, editDraft)
                                                             editingIndex = null
                                                         },
-                                                        enabled = editDraft.isNotBlank(),
+                                                        enabled = canResend,
                                                     ) { Text("Fork") }
                                                     TextButton(onClick = { editingIndex = null }) {
                                                         Text("Cancel")

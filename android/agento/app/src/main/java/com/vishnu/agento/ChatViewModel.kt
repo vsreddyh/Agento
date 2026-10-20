@@ -1599,9 +1599,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun replaceAndResend(index: Int, text: String) {
         if (_state.value.streaming || !_state.value.ready) return
         val clean = text.trim()
-        if (clean.isEmpty()) return
         val msgs = _state.value.messages
         if (index !in msgs.indices || msgs[index].role != "user") return
+        // Empty text is allowed only onto photos (#339): stripping the
+        // words off a photo+text turn yields the image-only shape send()
+        // supports — while an empty text-only resend stays refused.
+        if (clean.isEmpty() && msgs[index].attachments.isEmpty()) return
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
@@ -1629,9 +1632,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun forkAndResend(index: Int, text: String) {
         if (_state.value.streaming || !_state.value.ready) return
         val clean = text.trim()
-        if (clean.isEmpty()) return
         val msgs = _state.value.messages
         if (index !in msgs.indices || msgs[index].role != "user") return
+        // Same empty-text rule as Replace above (#339).
+        if (clean.isEmpty() && msgs[index].attachments.isEmpty()) return
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
