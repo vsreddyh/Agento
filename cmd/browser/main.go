@@ -93,7 +93,11 @@ func checkURL(raw string) (*url.URL, error) {
 	if host == "" {
 		return nil, fmt.Errorf("url has no host")
 	}
-	ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip", host)
+	// Bounded: the tool call must not hang past navTimeout on a dead
+	// resolver before Chromium is even involved.
+	resCtx, resCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer resCancel()
+	ips, err := net.DefaultResolver.LookupIP(resCtx, "ip", host)
 	if err != nil || len(ips) == 0 {
 		return nil, fmt.Errorf("cannot resolve %q", host)
 	}
@@ -162,6 +166,13 @@ type session struct {
 	mu     sync.Mutex
 	alloc  context.Context
 	cancel context.CancelFunc
+	// starting/ready single-flight concurrent first use: the second caller
+	// waits instead of launching a second Chromium.
+	starting bool
+	ready    chan struct{}
+	// lastUse is written in get() under the sessions lock; evictIdle reads
+	// it under the same lock. Never touched from tool handlers directly.
+	lastUse time.Time
 	// browserCancel stops the tab context. Stored, not dropped: a session
 	// that is ever torn down (idle prune, future close tool) cancels its
 	// own context instead of leaking the tab.
@@ -197,27 +208,97 @@ func (ss *sessions) get(profile string) *session {
 		s = &session{dir: filepath.Join(ss.agentDir, ".runtime", "browser", profile)}
 		ss.byProfile[profile] = s
 	}
-	// Startup prune covers fresh boots; this covers months-old processes
-	// (the server lives as long as Pi keeps it spawned). One walk a day.
+	s.lastUse = time.Now()
+	// Startup prune covers fresh boots and stray dirs; eviction covers live
+	// sessions in months-old processes (the server lives as long as Pi keeps
+	// it spawned). One walk a day.
 	if time.Since(ss.lastPrune) > 24*time.Hour {
 		ss.lastPrune = time.Now()
-		go pruneSessions(filepath.Join(ss.agentDir, ".runtime", "browser"))
+		base := filepath.Join(ss.agentDir, ".runtime", "browser")
+		ss.evictIdle()
+		go pruneSessions(base)
 	}
 	return s
+}
+
+// evictIdle cancels sessions idle past the TTL: their context dirs go AND
+// their Chromium + proxy listener stop. Disk-only pruning would leave a
+// months-old browser running with its profile dir deleted from under it,
+// and live browsers would accumulate one Chromium per touched profile with
+// no idle close path (no close tool by design). All state here is touched
+// under ss.mu only, so no session lock is needed.
+func (ss *sessions) evictIdle() {
+	cutoff := time.Now().Add(-sessionTTL)
+	for profile, s := range ss.byProfile {
+		if s.lastUse.After(cutoff) {
+			continue
+		}
+		log.Printf("browser: evicting idle session %s", profile)
+		if s.browserCancel != nil {
+			s.browserCancel()
+		}
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.proxyLn != nil {
+			s.proxyLn.Close()
+		}
+		if s.dir != "" {
+			os.RemoveAll(s.dir)
+		}
+		delete(ss.byProfile, profile)
+	}
 }
 
 // ensure launches Chromium on first use, not at server start: the entrypoint
 // `pi mcp list` gate must stay fast, and a profile that never browses must
 // never pay for a browser.
+// starting guards concurrent first use: the second caller waits on ready
+// instead of launching a second Chromium.
 func (s *session) ensure(chrome string) (context.Context, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.started {
+		b := s.browser
+		s.mu.Unlock()
+		return b, nil
+	}
+	if s.starting {
+		ch := s.ready
+		s.mu.Unlock()
+		<-ch
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !s.started {
+			return nil, fmt.Errorf("concurrent browser launch failed")
+		}
 		return s.browser, nil
 	}
-	ctxDir := filepath.Join(s.dir, "ctx")
+	s.starting = true
+	s.ready = make(chan struct{})
+	dir := s.dir
+	s.mu.Unlock()
+
+	bctx, btabCancel, balloc, bcancel, bln, berr := launchBrowser(dir, chrome)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	close(s.ready)
+	s.starting = false
+	if berr != nil {
+		return nil, berr
+	}
+	s.alloc, s.cancel, s.browserCancel, s.browser, s.started = balloc, bcancel, btabCancel, bctx, true
+	s.proxyLn = bln
+	return s.browser, nil
+}
+
+// launchBrowser starts Chromium outside any session lock: a slow launch must
+// not serialize reads and screenshots that do not need it yet. (They still
+// wait on ready above — they just do not hold the lock while doing so.)
+func launchBrowser(dir, chrome string) (bctx context.Context, btabCancel context.CancelFunc, balloc context.Context, bcancel context.CancelFunc, bln net.Listener, berr error) {
+	ctxDir := filepath.Join(dir, "ctx")
 	if err := os.MkdirAll(ctxDir, 0o755); err != nil {
-		return nil, fmt.Errorf("session dir: %v", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("session dir: %v", err)
 	}
 	// Every byte through the filtering proxy: re-validated per connection,
 	// so redirects and DNS rebindings face the same gate as the first URL.
@@ -225,7 +306,7 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 	// <-loopback bypass removal so even localhost goes through the check.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, fmt.Errorf("proxy listen: %v", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("proxy listen: %v", err)
 	}
 	go http.Serve(ln, &filteringProxy{check: publicIP})
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -257,19 +338,10 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 	// than parking an approval for a browser that can never start.
 	if err := chromedp.Do(browser, chromedp.Navigate("about:blank")); err != nil {
 		cancel()
-		return nil, fmt.Errorf("chromium launch failed: %v", err)
+		ln.Close()
+		return nil, nil, nil, nil, nil, fmt.Errorf("chromium launch failed: %v", err)
 	}
-	s.alloc, s.cancel, s.browserCancel, s.browser, s.started = alloc, cancel, browserCancel, browser, true
-	s.proxyLn = ln
-	// Resume the shot counter past restarts so evidence never overwrites.
-	entries, _ := os.ReadDir(s.dir)
-	for _, e := range entries {
-		var n int
-		if _, err := fmt.Sscanf(e.Name(), "shot-%d.png", &n); err == nil && n > s.shots {
-			s.shots = n
-		}
-	}
-	return s.browser, nil
+	return browser, browserCancel, alloc, cancel, ln, nil
 }
 
 func (s *session) shotPath() string {
@@ -433,22 +505,32 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
-			evCtx, cancel := context.WithTimeout(bctx, readTimeout)
-			defer cancel()
-			url, err := chromedp.Run(evCtx, chromedp.Location())
+			// Each step gets its own budget, not one shared deadline: a
+			// slow page that spends the whole budget on the read would
+			// flake the full-page screenshot — exactly the long pages
+			// evidence exists for.
+			url, err := runStep(bctx, func(ctx context.Context) (string, error) {
+				return chromedp.Run(ctx, chromedp.Location())
+			})
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
 			}
-			title, err := chromedp.Run(evCtx, chromedp.Title())
+			title, err := runStep(bctx, func(ctx context.Context) (string, error) {
+				return chromedp.Run(ctx, chromedp.Title())
+			})
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
 			}
-			text, err := chromedp.Run(evCtx,
-				chromedp.Evaluate[string](`document.body ? document.body.innerText : ""`))
+			text, err := runStep(bctx, func(ctx context.Context) (string, error) {
+				return chromedp.Run(ctx,
+					chromedp.Evaluate[string](`document.body ? document.body.innerText : ""`))
+			})
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
 			}
-			buf, err := chromedp.Run(evCtx, chromedp.FullScreenshot(90))
+			buf, err := runStep(bctx, func(ctx context.Context) ([]byte, error) {
+				return chromedp.Run(ctx, chromedp.FullScreenshot(90))
+			})
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
 			}
@@ -495,6 +577,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "browser:", err)
 		os.Exit(1)
 	}
+}
+
+// runStep runs one browser action under its own timeout off the session
+// context. Callers pass bctx (the unbounded session context), never an
+// already-budgeted one: nesting timeouts would silently shrink the step.
+func runStep[T any](bctx context.Context, fn func(context.Context) (T, error)) (T, error) {
+	ctx, cancel := context.WithTimeout(bctx, readTimeout)
+	defer cancel()
+	return fn(ctx)
 }
 
 func orDefault(s, fallback string) string {

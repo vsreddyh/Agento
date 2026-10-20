@@ -74,8 +74,11 @@ diverge from it; retention's pruning covers the same collections.
 
 ### Caps, stated
 
-- One navigation/read/screenshot: 30s each; the turn's own timeout bounds
-  the task.
+- One navigation/read/screenshot: 30s each (evidence gives each capture
+  step its own 30s rather than sharing one deadline); the turn's own
+  timeout bounds the task. First launch serializes concurrent tools per
+  profile behind a single-flight gate — one slow Chromium start holds the
+  others, accepted for v1 because launches are seconds and rare.
 - Extracted text: 12k runes per read (response says when it clipped).
 - Session TTL: 30 days idle, pruned lazily at server start.
 - Evidence: PNG + markdown + meta per save; no size cap beyond the page

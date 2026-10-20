@@ -16,7 +16,7 @@ CPU and RAM stay modest. No GPU needed.
 
 Numbers below are **measured** on the running stack, not guessed. Measured
 2026-10-04 on this host, `mimo-v2.6-flash` with `reasoning_effort: off`, three
-profiles discovered, five MCP servers connected.
+profiles discovered, five MCP servers connected (eight since #312).
 
 | Tier | RAM | CPU | Disk | Network |
 |---|---|---|---|---|
@@ -38,7 +38,7 @@ headroom for image builds, not for the agents — see [CPU](#cpu).
 
 | Container | fresh start | after 1 turn | after 3 turns at once |
 |---|---|---|---|
-| `pi` (three profiles + `pi-gateway` + five MCP servers) | ~283 MiB | ~320 MiB | ~353 MiB |
+| `pi` (three profiles + `pi-gateway` + five MCP servers, eight since #312) | ~283 MiB | ~320 MiB | ~353 MiB |
 | `health-api` | ~16 MiB | ~16 MiB | ~17 MiB |
 | `proxy` (nginx) | ~5 MiB | ~5 MiB | ~5 MiB |
 | **Stack total** | **~305 MiB** | **~341 MiB** | **~375 MiB** |
