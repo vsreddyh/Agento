@@ -49,15 +49,16 @@ const (
 	// array); units never exceed code points, so a short string skips the
 	// Array.from spread and only long ones pay for code-point slicing.
 	MaxReadRunes = 12000
-	// sessionTTL prunes idle browser profiles: cookies and state older than
-	// this with no fresh use go away on server start.
-	sessionTTL = 30 * 24 * time.Hour
 )
 
 var (
-	store   *sessions
-	profile string
-	exports string
+	// sessionTTL prunes idle browser profiles: cookies and state older than
+	// this with no fresh use go away on server start. A var (not const) so
+	// tests can force the idle path without waiting 30 days.
+	sessionTTL = 30 * 24 * time.Hour
+	store      *sessions
+	profile    string
+	exports    string
 )
 
 // fail reports an operational error on both channels, exactly like
@@ -261,7 +262,12 @@ func (ss *sessions) get(profile string) (*session, error) {
 		s = &session{dir: filepath.Join(ss.agentDir, ".runtime", "browser", profile)}
 		ss.byProfile[profile] = s
 	}
+	// Under s.mu as well as ss.mu: evictIdle's spare re-check reads
+	// lastUse holding only s.mu, so a bare write here races it. Lock order
+	// everywhere is ss.mu -> s.mu; this nests the same way.
+	s.mu.Lock()
 	s.lastUse = time.Now()
+	s.mu.Unlock()
 	// Touch the dir AND the context subdir: mtime is the only clock the
 	// startup disk walk can read, and it stats ctx/ when present — touching
 	// only the parent would leave a daily-used profile looking idle after

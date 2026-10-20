@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPublicIPRejectsNonPublic(t *testing.T) {
@@ -143,6 +144,34 @@ func TestEvictIdleTearsDown(t *testing.T) {
 	}
 	if _, err := os.Stat(s.dir); !os.IsNotExist(err) {
 		t.Fatalf("idle session dir survived: %v", err)
+	}
+}
+
+func TestGetEvictIdleConcurrent(t *testing.T) {
+	// lastUse was once written under ss.mu alone while evictIdle's spare
+	// re-check read it under s.mu alone: -race flags the pair. Hammer
+	// both so the race detector watches the exact access pair.
+	oldTTL := sessionTTL
+	sessionTTL = time.Millisecond
+	defer func() { sessionTTL = oldTTL }()
+	ss := &sessions{byProfile: map[string]*session{}, agentDir: t.TempDir()}
+	done := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for j := 0; j < 50; j++ {
+				if _, err := ss.get("chat"); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	for i := 0; i < 50; i++ {
+		ss.evictIdle()
+	}
+	for i := 0; i < 4; i++ {
+		<-done
 	}
 }
 
