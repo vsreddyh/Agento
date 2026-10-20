@@ -82,7 +82,9 @@ internal fun parseMemoryList(body: String): MemoryList {
         val out = mutableListOf<String>()
         root.optJSONArray(key)?.let { arr ->
             for (i in 0 until arr.length()) {
-                val v = arr.optString(i, "").trim()
+                // Strings only: optString would coerce a stray 42 into
+                // "42", which would render as a phantom toggle button.
+                val v = (arr.opt(i) as? String)?.trim() ?: continue
                 if (v.isNotBlank()) out.add(v)
             }
         }
