@@ -216,25 +216,33 @@ func TopicError(raw string) string {
 
 // CleanText trims an item's text and bounds it by runes. Empty text is
 // rejected by the stores; this only normalises.
+// Scrub normalises text and reports whether length was lost: one call
+// yields both the stored value and the writers' truncated signal, so the two
+// can never diverge (and the NUL/trim order lives in exactly one place).
+func Scrub(text string) (cleaned string, clipped bool) {
+	// NUL bytes are stripped, not rejected: a pasted control byte should not
+	// fail an otherwise good save.
+	t := strings.ReplaceAll(strings.TrimSpace(text), "\x00", "")
+	if utf8.RuneCountInString(t) > MaxText {
+		// Re-trim: rune 1000 can be a space, and a clipped value must not
+		// keep a trailing one.
+		return strings.TrimSpace(string([]rune(t)[:MaxText])), true
+	}
+	return t, false
+}
+
 // Clipped reports whether CleanText would shorten text by length, as
 // opposed to merely trimming whitespace or stripping NUL bytes. The writers'
 // truncated signal uses this so it means "rephrase, something was lost" and
 // not "a control byte was removed".
 func Clipped(text string) bool {
-	t := strings.ReplaceAll(strings.TrimSpace(text), "\x00", "")
-	return utf8.RuneCountInString(t) > MaxText
+	_, clipped := Scrub(text)
+	return clipped
 }
 
 func CleanText(text string) string {
-	// NUL bytes are stripped, not rejected: this returns a string, and a
-	// pasted control byte should not fail an otherwise good save.
-	t := strings.ReplaceAll(strings.TrimSpace(text), "\x00", "")
-	if utf8.RuneCountInString(t) > MaxText {
-		// Re-trim: rune 1000 can be a space, and a clipped value must not
-		// keep a trailing one.
-		t = strings.TrimSpace(string([]rune(t)[:MaxText]))
-	}
-	return t
+	cleaned, _ := Scrub(text)
+	return cleaned
 }
 
 // PromptBlock renders the memory a turn should carry. Only confirmed items in

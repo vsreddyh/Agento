@@ -80,3 +80,15 @@ func TestPrepareList(t *testing.T) {
 		}
 	}
 }
+
+func TestErrResultShape(t *testing.T) {
+	_, out, _ := errResult("caller bug", false)
+	for _, k := range []string{"ok", "error", "retryable", "persistent"} {
+		if _, ok := out[k]; !ok {
+			t.Fatalf("error shape missing %q: %#v", k, out)
+		}
+	}
+	if out["ok"] != false || out["retryable"] != false {
+		t.Fatalf("validation error shape = %#v", out)
+	}
+}

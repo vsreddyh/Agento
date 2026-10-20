@@ -117,6 +117,9 @@ func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
 // Get returns one item. Profile-scoped like the writes.
 func (s *MongoStore) Get(ctx context.Context, id, profile string) (Item, error) {
 	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return Item{}, NewStoreError("memory get needs a profile", false)
+	}
 	var it Item
 	if err := s.items.FindOne(ctx, bson.M{"_id": id, "profile": profile}).Decode(&it); err != nil {
 		if errors.Is(err, mongoDrv.ErrNoDocuments) {
@@ -132,6 +135,9 @@ func (s *MongoStore) Get(ctx context.Context, id, profile string) (Item, error) 
 // reads as NotFound instead of costing a Get-then-write pair.
 func (s *MongoStore) Update(ctx context.Context, id, profile string, u Update) (Item, error) {
 	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return Item{}, NewStoreError("memory update needs a profile", false)
+	}
 	if u.Text == nil && u.Topic == nil && u.Status == nil {
 		return Item{}, NewStoreError("memory update needs text, topic or status", false)
 	}
@@ -170,6 +176,9 @@ func (s *MongoStore) Update(ctx context.Context, id, profile string, u Update) (
 // Profile-scoped like Update.
 func (s *MongoStore) Delete(ctx context.Context, id, profile string) error {
 	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return NewStoreError("memory delete needs a profile", false)
+	}
 	res, err := s.items.DeleteOne(ctx, bson.M{"_id": id, "profile": profile})
 	if err != nil {
 		return NewStoreError("memory delete failed: "+err.Error(), true)

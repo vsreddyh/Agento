@@ -36,16 +36,24 @@ var (
 	ephemeral bool
 )
 
+// errResult is the one error shape: every failure carries ok, error,
+// retryable and persistent, so a strict client never sees a key go missing.
+// Validation failures are caller bugs (retryable false); store failures split
+// on Upstream, mirroring the HTTP 502/400/404 split.
+func errResult(msg string, retryable bool) (*mcp.CallToolResult, map[string]any, error) {
+	return result(map[string]any{
+		"ok": false, "error": msg, "retryable": retryable, "persistent": !ephemeral,
+	})
+}
+
 // fail reports a store error with a retry hint: Upstream means "Mongo is
-// down, try again later", anything else means "fix the call". The HTTP
-// surface splits these into 502/400/404; the agent gets the same split as a
-// bool so a looping agent can tell the two apart.
+// down, try again later", anything else means "fix the call".
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
 	retryable := false
 	if se, ok := err.(*memory.StoreError); ok && se.Upstream {
 		retryable = true
 	}
-	return nil, map[string]any{"ok": false, "error": err.Error(), "retryable": retryable}, nil
+	return errResult(err.Error(), retryable)
 }
 
 // prepareSave validates one save_memory call into a store-ready item plus
@@ -56,7 +64,7 @@ func prepareSave(profile string, in saveMemoryInput) (memory.Item, bool, string)
 	if !memory.UsableTopic(in.Topic) {
 		return memory.Item{}, false, memory.TopicError(in.Topic)
 	}
-	text := memory.CleanText(in.Text)
+	text, clipped := memory.Scrub(in.Text)
 	if text == "" {
 		return memory.Item{}, false, "text is required: one durable thing the user said"
 	}
@@ -69,7 +77,7 @@ func prepareSave(profile string, in saveMemoryInput) (memory.Item, bool, string)
 		Text:    text,
 		Source:  memory.SourceAgent,
 		Status:  memory.StatusPending,
-	}, memory.Clipped(in.Text), ""
+	}, clipped, ""
 }
 
 // prepareList maps one list_memory call into a store filter or a
@@ -96,7 +104,12 @@ func prepareList(profile string, in listMemoryInput) (memory.Filter, string) {
 }
 
 func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-	b, _ := json.Marshal(out)
+	// Marshal cannot realistically fail (small maps, NUL already stripped),
+	// but the text and structured channels must never silently disagree.
+	b, err := json.Marshal(out)
+	if err != nil {
+		log.Printf("memory: result marshal failed: %v", err)
+	}
 	return &mcp.CallToolResult{
 		Content:           []mcp.Content{&mcp.TextContent{Text: string(b)}},
 		StructuredContent: out,
@@ -162,7 +175,8 @@ func main() {
 		func(ctx context.Context, _ *mcp.CallToolRequest, in saveMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			item, truncated, errMsg := prepareSave(profile, in)
 			if errMsg != "" {
-				return result(map[string]any{"ok": false, "error": errMsg})
+				// Caller bug, not a store outage: same shape, retryable false.
+				return errResult(errMsg, false)
 			}
 			it, err := store.Create(ctx, item)
 			if err != nil {
@@ -189,7 +203,7 @@ func main() {
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			f, errMsg := prepareList(profile, in)
 			if errMsg != "" {
-				return result(map[string]any{"ok": false, "error": errMsg})
+				return errResult(errMsg, false)
 			}
 			items, err := store.List(ctx, f)
 			if err != nil {

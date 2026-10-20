@@ -301,10 +301,9 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 				memory.TopicError(body.Topic))
 			return
 		}
-		text := memory.CleanText(body.Text)
-		// Clipped, not merely trimmed/stripped: the signal means length was
-		// lost, matching save_memory.
-		truncated := memory.Clipped(body.Text)
+		// One call yields the stored value and the signal, so they cannot
+		// diverge; truncated means length lost, matching save_memory.
+		text, truncated := memory.Scrub(body.Text)
 		if text == "" {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "text",
 				"text is required")
@@ -367,8 +366,8 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 	// pasting past MaxText clips like a create, and the writer should know.
 	truncatedText := false
 	if body.Text != nil {
-		truncatedText = memory.Clipped(*body.Text)
-		text := memory.CleanText(*body.Text)
+		var text string
+		text, truncatedText = memory.Scrub(*body.Text)
 		if text == "" {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "text",
 				"text must not be empty")

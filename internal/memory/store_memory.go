@@ -96,6 +96,9 @@ func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
 // Get returns one item. Profile-scoped: a foreign id is NotFound.
 func (s *MemoryStore) Get(_ context.Context, id, profile string) (Item, error) {
 	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return Item{}, NewStoreError("memory get needs a profile", false)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	it, ok := s.items[id]
@@ -113,6 +116,9 @@ func (s *MemoryStore) Get(_ context.Context, id, profile string) (Item, error) {
 
 func (s *MemoryStore) Update(_ context.Context, id, profile string, u Update) (Item, error) {
 	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return Item{}, NewStoreError("memory update needs a profile", false)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it, ok := s.items[id]
@@ -151,6 +157,9 @@ func (s *MemoryStore) Update(_ context.Context, id, profile string, u Update) (I
 // Delete removes one item. Profile-scoped like Update.
 func (s *MemoryStore) Delete(_ context.Context, id, profile string) error {
 	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return NewStoreError("memory delete needs a profile", false)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it, ok := s.items[id]
