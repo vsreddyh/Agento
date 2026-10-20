@@ -386,7 +386,11 @@ func (s *Server) handleSkillPromote(w http.ResponseWriter, r *http.Request, prof
 	}
 	prompt := "Routine \"" + sk.Name + "\" (taught skill, profile " + profile + "). " +
 		"Follow the procedure below.\n\n" + teach.RenderSKILL(sk)
-	job, err := s.cfg.CronJobs.Create(ctx, name, prompt, body.Schedule, body.Delivery)
+	// Own budget, not the Get's leftovers: same starvation shape as the
+	// test-fire record had before it got a fresh ctx.
+	createCtx, createCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer createCancel()
+	job, err := s.cfg.CronJobs.Create(createCtx, name, prompt, body.Schedule, body.Delivery)
 	if err != nil {
 		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
 			bounded(err.Error()))

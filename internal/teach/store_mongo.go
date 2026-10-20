@@ -90,6 +90,7 @@ func (s *MongoStore) Create(ctx context.Context, in Skill) (Skill, error) {
 	if in.Body == "" {
 		return Skill{}, NewStoreError("skill needs a body", false)
 	}
+	in.Source = clipRunes(strings.TrimSpace(in.Source), MaxSource)
 	if in.ID == "" {
 		in.ID = NewID()
 	} else if !ValidID(in.ID) {

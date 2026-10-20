@@ -139,6 +139,10 @@ func CleanBody(b string) string {
 	return t
 }
 
+// MaxSource bounds the source label in runes: client-supplied like the
+// rest, so it clips like the rest instead of riding unbounded.
+const MaxSource = 200
+
 // clipRunes bounds free text stored alongside a record (test transcripts).
 func clipRunes(s string, max int) string {
 	if utf8.RuneCountInString(s) > max {

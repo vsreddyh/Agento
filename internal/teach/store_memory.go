@@ -46,6 +46,9 @@ func cleanCreate(in Skill) (Skill, error) {
 	if in.Body == "" {
 		return Skill{}, NewStoreError("skill needs a body", false)
 	}
+	// Source is client-supplied free text like the rest: trim and clip
+	// instead of riding unbounded.
+	in.Source = clipRunes(strings.TrimSpace(in.Source), MaxSource)
 	now := nowMillis()
 	if in.CreatedAt == 0 || in.CreatedAt > now {
 		in.CreatedAt = now
