@@ -45,6 +45,12 @@ const val MAX_IMAGE_SIDE_PX = 1568
  * history stay under [MAX_CHAT_WIRE_BYTES] with headroom. */
 const val MAX_IMAGE_BASE64_CHARS = 1_500_000
 
+/** Original-file read cap, bytes. The shrink happens after the read, so a
+ * mislabeled giant (e.g. a video shared as an image) must fail here with a
+ * named error rather than OOMing the decode. 32 MB is an order of magnitude
+ * above any real photo and far below heap danger. */
+const val MAX_SOURCE_BYTES = 32_000_000
+
 /** Client-side wire preflight, BYTES. Below the gateway's 4 MiB body cap on
  * purpose: exceeding this refuses with a named in-app error instead of an
  * opaque HTTP 413, and leaves room for JSON framing plus history text.
@@ -161,11 +167,36 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
     withContext(Dispatchers.IO) {
         runCatching {
             val resolver = context.contentResolver
+            // One bounded read, three uses (#339): bounds + pixels + EXIF
+            // previously opened the Uri 3×, which re-fetches cloud picker
+            // URIs (Google Photos) twice for nothing. Everything below
+            // decodes from these bytes instead of the stream.
+            val bytes = resolver.openInputStream(uri)?.use { stream ->
+                val out = ByteArrayOutputStream()
+                val buf = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    val n = stream.read(buf)
+                    if (n <= 0) break
+                    total += n
+                    // The shrink happens after the read, so the ORIGINAL
+                    // needs its own bound — far above any real photo, far
+                    // below an OOM from a mislabeled video file.
+                    if (total > MAX_SOURCE_BYTES) {
+                        throw IllegalStateException(
+                            "That file is too large to attach " +
+                                "(${formatBytes(total)}) — the original must be " +
+                                "under about ${formatBytes(MAX_SOURCE_BYTES.toLong())}.",
+                        )
+                    }
+                    out.write(buf, 0, n)
+                }
+                out.toByteArray()
+            } ?: throw IllegalArgumentException(
+                "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
+            )
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-                ?: throw IllegalArgumentException(
-                    "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
-                )
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
                 throw IllegalArgumentException(
                     "That file isn't a readable photo — Agento attaches images only, not documents.",
@@ -182,25 +213,22 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 sample *= 2
             }
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-            var bitmap = resolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it, null, opts)
-            } ?: throw IllegalArgumentException(
-                "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
-            )
+            var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                ?: throw IllegalArgumentException(
+                    "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
+                )
             // EXIF orientation (#339 review): BitmapFactory ignores it, so a
             // portrait phone photo would stage and send sideways. The
             // framework reader needs no extra dependency (minSdk 28 > 24).
             // Flips included: front-camera selfies commonly carry
             // FLIP_HORIZONTAL/TRANSVERSE, which a rotation-only mapping
             // would leave mirrored.
-            val orientation = resolver.openInputStream(uri)?.use { stream ->
-                runCatching {
-                    ExifInterface(stream).getAttributeInt(
-                        ExifInterface.TAG_ORIENTATION,
-                        ExifInterface.ORIENTATION_NORMAL,
-                    )
-                }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-            } ?: ExifInterface.ORIENTATION_NORMAL
+            val orientation = runCatching {
+                ExifInterface(java.io.ByteArrayInputStream(bytes)).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL,
+                )
+            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
             // Null means no transform: transposes and flips compose a mirror
             // via negative scale, which createBitmap applies directly.
             val matrix: Matrix? = when (orientation) {

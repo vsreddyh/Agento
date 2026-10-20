@@ -875,6 +875,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             send()
             return
         }
+        // Steering carries text only (#339): staged photos park with no
+        // part in the steered turn — said here like every other narrowing,
+        // or the steer button silently drops the user's staging.
+        if (_state.value.pendingAttachments.isNotEmpty()) {
+            notify(
+                "Steered the text — " +
+                    attachmentMarker(_state.value.pendingAttachments.size) +
+                    " stays staged for your next message.",
+            )
+        }
         val runId = _state.value.activeRunId
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {

@@ -92,6 +92,7 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -203,6 +204,12 @@ internal fun ChatTab(
     // returns with nothing to decode). Uri is Parcelable; the path is a
     // String; both restore.
     var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
+    // True while a camera batch is decoding (#339): launchCamera's
+    // delete-previous must skip a file with an in-flight decode, or a
+    // rapid re-tap deletes it mid-read and turns a good capture into a
+    // "moved or deleted" error. Plain remember is right — a rotation
+    // during decode cancels the batch anyway, so no restore is needed.
+    var cameraBusy by remember { mutableStateOf(false) }
     // One decode at a time, in pick order: each photo lands (or its named
     // error toasts) as it finishes, so a slow second image never blocks the
     // first one's thumbnail. Failures name the fix (too large, unreadable)
@@ -210,7 +217,9 @@ internal fun ChatTab(
     // temp file for a capture batch (deleted once decoded; gallery Uris
     // are not ours, so gallery batches pass none) — passed explicitly so
     // a concurrent gallery batch can never delete a capture still decoding.
-    fun processUris(uris: List<Uri>, cleanup: File? = null) {
+    // [onBatchDone] fires on Main after the batch (camera uses it to drop
+    // its in-flight flag).
+    fun processUris(uris: List<Uri>, cleanup: File? = null, onBatchDone: () -> Unit = {}) {
         if (uris.isEmpty()) return
         // Unified on vm.notify (#339): the same cap refused here and
         // mid-batch below must have one lifetime — a composition toast is
@@ -264,8 +273,12 @@ internal fun ChatTab(
                 // In finally, not after the loop (#339 review): leaving the
                 // tab mid-decode cancels this coroutine, and a trailing
                 // delete would be skipped — littering one capture per
-                // cancel. File IO is fine here; no state is touched.
+                // cancel. File IO is fine here; no state is touched. The
+                // completion callback runs on Main for the same reason —
+                // NonCancellable so a cancelled batch still drops the flag
+                // (otherwise every later launch skips its cleanup forever).
                 runCatching { cleanup?.takeIf { it.exists() }?.delete() }
+                withContext(Dispatchers.Main + NonCancellable) { onBatchDone() }
             }
         }
     }
@@ -280,7 +293,8 @@ internal fun ChatTab(
         cameraUri = null
         cameraPath = null
         if (ok && u != null) {
-            processUris(listOf(u), f)
+            cameraBusy = true
+            processUris(listOf(u), f) { cameraBusy = false }
         } else {
             runCatching { f?.takeIf { it.exists() }?.delete() }
         }
@@ -295,9 +309,13 @@ internal fun ChatTab(
             vm.notify("Couldn't start the camera — storage unavailable.")
             return
         }
-        // A re-tap stages a new Uri over the old one: delete the previous
-        // capture first so one littered file per re-tap never accumulates.
-        runCatching { cameraPath?.let(::File)?.takeIf { it.exists() }?.delete() }
+        // Skip the delete while a capture is decoding (#339): a rapid
+        // re-tap would delete the in-flight file mid-read and turn a good
+        // capture into a "moved or deleted" error. The in-flight batch's
+        // own cleanup deletes its file when it lands.
+        if (!cameraBusy) {
+            runCatching { cameraPath?.let(::File)?.takeIf { it.exists() }?.delete() }
+        }
         // UUID, not millis (#339): a rapid double-tap can mint the same
         // millisecond twice and point two captures at one file.
         val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
