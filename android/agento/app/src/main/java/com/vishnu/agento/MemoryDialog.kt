@@ -79,7 +79,17 @@ internal fun MemoryDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
                 ) {
-                    TextButton(onClick = onRefresh, enabled = !loading) {
+                    TextButton(
+                        onClick = {
+                            // Disarm here too: LaunchedEffect(items) only
+                            // fires on content change, and a refresh returning
+                            // identical rows would otherwise leave a stale arm
+                            // meeting the next Forget tap.
+                            forgetArmed = false
+                            onRefresh()
+                        },
+                        enabled = !loading,
+                    ) {
                         Text(if (loading) "Loading…" else "Refresh")
                     }
                 }

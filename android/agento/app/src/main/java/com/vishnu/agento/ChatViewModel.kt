@@ -962,8 +962,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Reloads the memory sheet. Failures keep the old rows and report
      * inside the sheet (never the chat banner). A [notice] survives a
-     * successful load (e.g. "already confirmed"). */
-    fun refreshMemory(notice: String? = null) {
+     * successful load (e.g. "already confirmed"); [stickyNotice] also
+     * survives a failed one, for information that holds regardless of the
+     * repaint (a clipped save clipped even if the rows did not reload). */
+    fun refreshMemory(notice: String? = null, stickyNotice: Boolean = false) {
         val path = _state.value.path
         _state.value = _state.value.copy(memoryLoading = true)
         memoryJob?.cancel()
@@ -990,9 +992,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     memoryPaused = rows?.paused ?: _state.value.memoryPaused,
                     memoryTopics = rows?.topics ?: _state.value.memoryTopics,
                     memoryWarnings = rows?.warnings ?: _state.value.memoryWarnings,
-                    memoryError = if (list.isFailure) {
+                    memoryError = if (list.isFailure && !stickyNotice) {
                         // The write succeeded; only the reload failed. The
-                        // notice must not read as a failed write.
+                        // notice must not read as a failed write — unless it
+                        // is sticky information about the write itself.
                         loadErr
                     } else {
                         listOf(notice.orEmpty(), loadErr)
@@ -1121,6 +1124,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     if (_state.value.showMemory) {
                         refreshMemory(
                             if (truncated) "Saved, but the text clipped at the length cap." else null,
+                            stickyNotice = truncated,
                         )
                     }
                 }
@@ -1174,7 +1178,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             // Pending-only page, like the approvals poll: counting needs no
             // rows, pauses or topics. Same limit as the sheet so the badge
-            // and the header cannot disagree past 100 pending.
+            // and the header cannot disagree past 200 pending.
             val n = memoryApi.listMemory(path, status = "pending", limit = 200)
                 .getOrNull()?.items?.size ?: return@launch
             withContext(Dispatchers.Main) {

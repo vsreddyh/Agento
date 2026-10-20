@@ -63,7 +63,10 @@ internal fun parseMemoryList(body: String): MemoryList {
     val arr = root.optJSONArray("items")
     if (arr != null) {
         for (i in 0 until arr.length()) {
-            val row = parseMemoryItem(arr.optJSONObject(i) ?: continue)
+            // Non-object rows count as dropped too: both undecodable
+            // shapes get the same log line, not two treatments.
+            val obj = arr.optJSONObject(i) ?: run { dropped++; continue }
+            val row = parseMemoryItem(obj)
             if (row == null) {
                 dropped++
                 continue
@@ -190,7 +193,7 @@ class MemoryApi(context: Context) {
         call("POST", "$path/api/memory", body).mapCatching {
             val root = JSONObject(checkOk(it).body)
             val item = parseMemoryItem(root.optJSONObject("item") ?: JSONObject())
-                ?: throw RuntimeException("HTTP 200: no item in ${it.body.take(120)}")
+                ?: throw RuntimeException("HTTP 200: no item")
             item to root.optBoolean("truncated", false)
         }
     }
@@ -211,7 +214,7 @@ class MemoryApi(context: Context) {
         call("PUT", "$path/api/memory/${encode(id)}", body).mapCatching {
             val root = JSONObject(checkOk(it).body)
             val item = parseMemoryItem(root.optJSONObject("item") ?: JSONObject())
-                ?: throw RuntimeException("HTTP 200: no item in ${it.body.take(120)}")
+                ?: throw RuntimeException("HTTP 200: no item")
             item to root.optBoolean("truncated", false)
         }
     }
