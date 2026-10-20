@@ -1163,12 +1163,15 @@ internal fun ChatScreen(
         speakingKey != null -> 1
         else -> 2
     }
-    // Driver bookkeeping lives up top (#317) so session
-    // start/end can reset it alongside the actual stop(). Restarts are
-    // skipped when already running in the target phase, so a
-    // micArmed/liveMode toggle with no phase change doesn't churn the
-    // AudioRecord.
-    LaunchedEffect(detectPhase, liveMode, micArmed) {
+    // Driver bookkeeping lives up top (#317) so session start/end can
+    // reset it alongside the actual stop(). Restarts are skipped when
+    // already running in the target phase, so a micArmed/liveMode toggle
+    // with no phase change doesn't churn the AudioRecord. speakingKey and
+    // streaming are keyed directly, not just via detectPhase, so a readout
+    // end re-evaluates the re-listen gate even when the phase doesn't flip
+    // (micArmed==false tap-to-talk degrades to silence after one reply
+    // otherwise — detecting stays false throughout, detectPhase stays 0).
+    LaunchedEffect(detectPhase, liveMode, micArmed, speakingKey, state.streaming) {
         val phaseChanged = detectPhase != detectCtl.phase
         detectCtl.phase = detectPhase
         if (detecting && (phaseChanged || !detectCtl.running)) {
