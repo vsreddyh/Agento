@@ -114,7 +114,7 @@ internal fun parseMemoryList(body: String): MemoryList {
     // Duplicated entries render one toggle each; membership still
     // behaves, but the sheet should not show the same button twice.
     fun dedup(v: List<String>): List<String> = v.distinct()
-    return MemoryList(items, dedup(stringsOf("paused")), dedup(stringsOf("topics")), stringsOf("warnings"))
+    return MemoryList(items, dedup(stringsOf("paused")), dedup(stringsOf("topics")), dedup(stringsOf("warnings")))
 }
 
 /**
@@ -199,7 +199,9 @@ class MemoryApi(context: Context) {
         var url = "$path/api/memory?limit=$limit"
         if (!status.isNullOrBlank()) url += "&status=${encode(status.trim())}"
         if (!topic.isNullOrBlank()) url += "&topic=${encode(topic.trim())}"
-        call("GET", url).mapCatching { parseMemoryList(checkOk(it).body) }
+        call("GET", url).mapCatching {
+            parseMemoryList(checkOk(it).body) ?: throw RuntimeException("unparseable response body")
+        }
     }
 
     /** Creates a user-written item: confirmed on arrival, no review loop

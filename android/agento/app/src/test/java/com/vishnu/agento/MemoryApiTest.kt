@@ -70,6 +70,6 @@ class MemoryApiTest {
         assertTrue(list.items.isEmpty())
         assertTrue(list.paused.isEmpty())
         assertTrue(list.topics.isEmpty())
-        assertEquals(0, parseMemoryList("not json").items.size)
+        assertNull(parseMemoryList("not json"))
     }
 }
