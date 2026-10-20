@@ -357,6 +357,9 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			// Teardown: nothing will decide this call, so fail closed now
 			// rather than park a row the exiting relay can never release.
 			r.log.Printf("denying %s/%s: relay is shutting down", r.server, params.Name)
+			// Inline, but still best-effort: the Pi pump is not joined, so
+			// process exit can cut this row like any other post-close pump
+			// audit. Only hold-path rows are guaranteed by the teardown join.
 			r.audit(params.Name, approvals.Redact(params.Arguments),
 				approvals.DispositionDenied,
 				"relay_closing: relay is shutting down; failed closed", "")

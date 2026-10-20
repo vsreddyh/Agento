@@ -228,7 +228,10 @@ const MaxAuditError = 300
 var secretValue = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:sk|pk|ghp|gho|ghs|ghu|xox[abprs])[-_][A-Za-z0-9_-]{8,}`),
 	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(`(?i)\b(?:api[_-]?key|access[_-]?key|token|password|secret)\s*[:=]\s*\S+`),
+	// Optional quotes on both sides of the separator: an upstream error often
+	// echoes JSON ({"token":"sk-..."}), where the name is quoted before the
+	// colon and the value after it.
+	regexp.MustCompile(`(?i)\b(?:api[_-]?key|access[_-]?key|token|password|secret)["']?\s*[:=]\s*["']?\S+`),
 }
 
 // ScrubError masks credential-shaped text in an upstream error and bounds the

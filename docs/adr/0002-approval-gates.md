@@ -125,7 +125,10 @@ Error scrubbing is pattern-based, not exhaustive: `args` are redacted by key,
 while `error` is free text and is only masked where it matches a
 credential-shaped pattern (plus a 300-rune cap). A server that echoes a bare
 secret with no recognizable prefix can still land it in a row, so the app must
-treat `error` as untrusted display text, not as a safe field. Secrets hygiene from the
+treat `error` as untrusted display text, not as a safe field. Known gaps in
+that pattern set are short bare values (`token is abc`) and secrets with no
+key or scheme marker at all; value scrubbing cannot be complete, and the
+300-rune cap is the only hard bound. Secrets hygiene from the
 issue stands: passwords/2FA never go through chat; the take-over path
 belongs to #312.
 

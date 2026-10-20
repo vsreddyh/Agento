@@ -258,6 +258,7 @@ func TestScrubErrorMasksCredentials(t *testing.T) {
 		{"invalid token sk-live-abcdef123456", "[redacted]"},
 		{"Authorization: Bearer abcdefghijklmnop", "[redacted]"},
 		{"api_key=supersecretvalue failed", "[redacted]"},
+		{`{"token":"sk-abcdef123456"}`, "[redacted]"},
 		{"no such note: abc", "no such note: abc"},
 	}
 	for _, c := range cases {
