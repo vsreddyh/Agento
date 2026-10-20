@@ -57,6 +57,11 @@ func TestTeachDraftLifecycle(t *testing.T) {
 		t.Fatalf("unreviewed promote: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
 
+	// Suffix verbs share the id guard: an over-long id 404s on /test as
+	// well as on the bare path, never reaching the store.
+	if rec := do(t, srv, http.MethodPost, "/api/skills/"+strings.Repeat("x", 65)+"/test", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("long suffix id: %d, want 404", rec.Code)
+	}
 	// Bad names and empty bodies fail at create, not later.
 	for _, tc := range []struct{ name, body string }{
 		{"bad name", `{"name":"Weekly Report","description":"x","body":"y"}`},

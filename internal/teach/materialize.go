@@ -25,7 +25,7 @@ func RuntimeDir(agentDir, profile string) string {
 //
 // Only the profile's own directory is touched; sibling profiles and the
 // committed skills tree are never listed, let alone removed.
-func Materialize(dir string, skills []Skill) (written int, skipped []string, err error) {
+func Materialize(dir string, skills []Skill) (written int, skipped []string, rerr error) {
 	active := make([]Skill, 0, len(skills))
 	for _, s := range skills {
 		if s.Status == StatusActive {
@@ -46,16 +46,23 @@ func Materialize(dir string, skills []Skill) (written int, skipped []string, err
 		// A file where the skill dir belongs (never created by this
 		// reconciler, but disks surprise) would wedge MkdirAll and with it
 		// every later skill: remove it and proceed, noisily.
+		// One bad skill must not wedge the rest alphabetically after it:
+		// record and continue; the next mutation retries. want[] still
+		// marks the name so the sweep does not delete a previous good
+		// copy over one failed write.
 		if st, err := os.Stat(skillDir); err == nil && !st.IsDir() {
 			if err := os.Remove(skillDir); err != nil {
-				return written, skipped, err
+				rerr = err
+				continue
 			}
 		}
 		if err := os.MkdirAll(skillDir, 0o755); err != nil {
-			return written, skipped, err
+			rerr = err
+			continue
 		}
 		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(RenderSKILL(s)), 0o644); err != nil {
-			return written, skipped, err
+			rerr = err
+			continue
 		}
 		written++
 	}
@@ -78,8 +85,9 @@ func Materialize(dir string, skills []Skill) (written int, skipped []string, err
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
-			return written, skipped, err
+			rerr = err
+			continue
 		}
 	}
-	return written, skipped, nil
+	return written, skipped, rerr
 }

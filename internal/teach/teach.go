@@ -70,6 +70,8 @@ type Skill struct {
 }
 
 // Update carries the mutable fields of an edit. Nil means "leave alone".
+// Source is deliberately absent: provenance is set at create and immutable
+// after, so no edit can re-attribute a procedure to another writer.
 type Update struct {
 	Name        *string
 	Description *string
@@ -103,6 +105,14 @@ func (e *StoreError) Error() string { return e.Msg }
 // NewStoreError builds a caller-facing store error.
 func NewStoreError(msg string, upstream bool) *StoreError {
 	return &StoreError{Msg: msg, Upstream: upstream}
+}
+
+// MaxLabel bounds short display labels (promoted job names) in runes.
+const MaxLabel = 200
+
+// ClipLabel trims and bounds a short label.
+func ClipLabel(s string) string {
+	return clipRunes(strings.TrimSpace(strings.ReplaceAll(s, "\x00", "")), MaxLabel)
 }
 
 // ClipInput trims and bounds a test input.

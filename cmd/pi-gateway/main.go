@@ -44,6 +44,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -87,8 +88,10 @@ func run() error {
 	// Taught skills (#314), opened before Pi starts: the runtime dir must
 	// hold this boot's files before the first --skill argument points at
 	// it, or a fresh deploy boots skill-less. Same database, sibling
-	// collection; without Mongo the routes serve an in-process store whose
-	// activations die with the process. Logged plainly below.
+	// collection. Two degraded modes, both logged: an immediate open failure
+	// serves an in-process store (activations die with the process), while a
+	// lazy open failure — unreachable Mongo surfacing at first use — 502s
+	// the routes with the cause in the log instead.
 	var teachStore teach.Store
 	if store, err := teach.FromEnv(); err != nil {
 		logger.Printf("teach: falling back to in-process (activations do not survive restart): %v", err)
@@ -105,25 +108,36 @@ func run() error {
 	}
 
 	// Startup reconcile runs here, not later, for the reason above: Mongo
-	// is the source of truth and the runtime dir is its cache.
-	for _, profile := range profiles {
+	// is the source of truth and the runtime dir is its cache. Profiles
+	// reconcile concurrently under one shared budget: serial 10s Lists would
+	// add 10s of boot per slow profile.
+	{
 		matCtx, cancelMat := context.WithTimeout(context.Background(), 10*time.Second)
-		skills, err := teachStore.List(matCtx, profile)
-		cancelMat()
-		if err != nil {
-			logger.Printf("teach: startup list failed for %s: %v", profile, err)
-			continue
+		defer cancelMat()
+		var matWG sync.WaitGroup
+		for _, profile := range profiles {
+			matWG.Add(1)
+			go func(profile string) {
+				defer matWG.Done()
+				skills, err := teachStore.List(matCtx, profile)
+				if err != nil {
+					logger.Printf("teach: startup list failed for %s: %v", profile, err)
+					return
+				}
+				n, skipped, err := teach.Materialize(teach.RuntimeDir(agentDir, profile), skills)
+				if err != nil {
+					logger.Printf("teach: startup materialize failed for %s: %v", profile, err)
+					return
+				}
+				if n > 0 {
+					logger.Printf("teach: materialized %d skill(s) for %s", n, profile)
+				}
+				if len(skipped) > 0 {
+					logger.Printf("teach: skipped unrenderable skill(s) for %s: %v", profile, skipped)
+				}
+			}(profile)
 		}
-		if n, skipped, err := teach.Materialize(teach.RuntimeDir(agentDir, profile), skills); err != nil {
-			logger.Printf("teach: startup materialize failed for %s: %v", profile, err)
-		} else {
-			if n > 0 {
-				logger.Printf("teach: materialized %d skill(s) for %s", n, profile)
-			}
-			if len(skipped) > 0 {
-				logger.Printf("teach: skipped unrenderable skill(s) for %s: %v", profile, skipped)
-			}
-		}
+		matWG.Wait()
 	}
 
 	// Crash files live under the bind-mounted agent dir, so they survive

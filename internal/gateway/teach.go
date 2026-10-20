@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -22,6 +23,9 @@ import (
 // (404, not 403).
 //
 //	GET    /api/skills                drafts + active + disabled for the profile
+//	(no GET /api/skills/{id} by design: the collection plus the verb
+//	routes cover every read the tab needs, and one fewer id route is one
+//	fewer probe surface)
 //	POST   /api/skills                create a draft (always draft)
 //	PUT    /api/skills/{id}           edit name/description/body
 //	DELETE /api/skills/{id}           delete (file drops on next reconcile)
@@ -81,6 +85,24 @@ func teachCtx(r *http.Request) (context.Context, context.CancelFunc) {
 // per-resource, so changing one never changes another's 404 contract.
 const maxSkillIDLen = 64
 
+// validSkillID holds on every verb, bare-id and suffixed alike: a 10KB id
+// must never reach Mongo on any path.
+func validSkillID(id string) bool {
+	return id != "" && len(id) <= maxSkillIDLen &&
+		!strings.Contains(id, "/") && !strings.ContainsRune(id, 0)
+}
+
+// handleSkillVerb validates the extracted id through the shared guard before
+// dispatching to a suffix handler.
+func (s *Server) handleSkillVerb(w http.ResponseWriter, r *http.Request, profile, id string,
+	fn func(w http.ResponseWriter, r *http.Request, profile, id string)) {
+	if !validSkillID(id) {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "", "unknown skill")
+		return
+	}
+	fn(w, r, profile, id)
+}
+
 // materialize reconciles the profile's runtime skill dir with its active
 // skills. Best-effort and logged: a failed write must not fail the API call
 // that triggered it, or a read-only filesystem would mask every skill edit
@@ -115,21 +137,29 @@ func (s *Server) handleTeach(w http.ResponseWriter, r *http.Request, rest, profi
 		s.handleSkillCollection(w, r, profile)
 		return
 	case strings.HasSuffix(path, "/test"):
-		s.handleSkillTest(w, r, profile, strings.TrimSuffix(path, "/test"))
+		s.handleSkillVerb(w, r, profile, strings.TrimSuffix(path, "/test"),
+			s.handleSkillTest)
 		return
 	case strings.HasSuffix(path, "/activate"):
-		s.handleSkillStatus(w, r, profile, strings.TrimSuffix(path, "/activate"), teach.StatusActive, "activate")
+		s.handleSkillVerb(w, r, profile, strings.TrimSuffix(path, "/activate"),
+			func(w http.ResponseWriter, r *http.Request, profile, id string) {
+				s.handleSkillStatus(w, r, profile, id, teach.StatusActive, "activate")
+			})
 		return
 	case strings.HasSuffix(path, "/disable"):
-		s.handleSkillStatus(w, r, profile, strings.TrimSuffix(path, "/disable"), teach.StatusDisabled, "disable")
+		s.handleSkillVerb(w, r, profile, strings.TrimSuffix(path, "/disable"),
+			func(w http.ResponseWriter, r *http.Request, profile, id string) {
+				s.handleSkillStatus(w, r, profile, id, teach.StatusDisabled, "disable")
+			})
 		return
 	case strings.HasSuffix(path, "/promote"):
-		s.handleSkillPromote(w, r, profile, strings.TrimSuffix(path, "/promote"))
+		s.handleSkillVerb(w, r, profile, strings.TrimSuffix(path, "/promote"),
+			s.handleSkillPromote)
 		return
 	}
 
 	// One skill, addressed by id.
-	if strings.Contains(path, "/") || len(path) > maxSkillIDLen || strings.ContainsRune(path, 0) {
+	if !validSkillID(path) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "", "unknown skill")
 		return
 	}
@@ -292,8 +322,16 @@ func (s *Server) handleSkillTest(w http.ResponseWriter, r *http.Request, profile
 		Input string `json:"input"`
 	}
 	if raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes)); err != nil {
-		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
-			"could not read the request body")
+		// Same split as decodeJSONBody: oversize is 413 (shrink it), anything
+		// else is 400 (fix the syntax).
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			apiError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "",
+				"request body exceeds the 4 MiB limit")
+		} else {
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+				"could not read the request body")
+		}
 		return
 	} else if len(bytes.TrimSpace(raw)) > 0 {
 		if err := json.Unmarshal(raw, &body); err != nil {
@@ -387,7 +425,9 @@ func (s *Server) handleSkillPromote(w http.ResponseWriter, r *http.Request, prof
 			"jobs are not configured on this gateway")
 		return
 	}
-	name := strings.TrimSpace(body.Name)
+	// A multi-KB name via promote must not bypass whatever the normal jobs
+	// route enforces: clip it like every other free-text label.
+	name := teach.ClipLabel(body.Name)
 	if name == "" {
 		name = sk.Name
 	}
