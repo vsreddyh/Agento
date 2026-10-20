@@ -511,7 +511,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Check messages, not the export: exportMarkdown always emits at
         // least a "# title" header, so a blank check on the body never fires
         // and an empty thread would save a header-only draft.
-        if (threads.firstOrNull { it.id == id }?.messages.isNullOrEmpty()) {
+        // Gone vs empty: a thread deleted while the dialog was open is
+        // not an empty conversation, and must not read as one.
+        val thread = threads.firstOrNull { it.id == id }
+        if (thread == null) {
+            done("Conversation is gone.", false)
+            return
+        }
+        if (thread.messages.isEmpty()) {
             done("Conversation is empty.", false)
             return
         }

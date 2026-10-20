@@ -158,7 +158,7 @@ class TeachApi(context: Context) {
             val root = parseObject(checkOk(it).body)
             val skill = parseTaughtSkill(root.optJSONObject("skill") ?: JSONObject())
                 ?: throw RuntimeException("response had no skill")
-            skill to root.optBoolean("truncated", false)
+            skill to mapTruncated(root)
         }
     }
 
@@ -200,13 +200,7 @@ class TeachApi(context: Context) {
         val req = JSONObject()
         if (input.isNotBlank()) req.put("input", input)
         call("POST", "$path/api/skills/${ApprovalsApi.encode(id)}/test", req).mapCatching {
-            // Missing output is unparseable, not empty: a 200 without the
-            // transcript must fail rather than show a blank test. has()
-            // rather than a sentinel default: a real output could spell
-            // anything.
-            val root = parseObject(checkOk(it).body)
-            if (!root.has("output")) throw RuntimeException("response had no output")
-            root.optString("output", "")
+            mapTestOutput(parseObject(checkOk(it).body))
         }
     }
 
@@ -247,6 +241,22 @@ class TeachApi(context: Context) {
         }
     }
 }
+
+/** Maps a test response to its transcript. Missing output is
+ * unparseable, not empty: a 200 without the transcript must fail rather
+ * than show a blank test. has() rather than a sentinel default: a real
+ * output could spell anything. Pure so the strict-output contract stays
+ * pinned by tests, not just by the suspend caller. */
+internal fun mapTestOutput(root: JSONObject): String {
+    if (!root.has("output")) throw RuntimeException("response had no output")
+    return root.optString("output", "")
+}
+
+/** Maps a write response to its truncation flag. Pure for the same reason:
+ * the clip signal is load-bearing (chat toast, composer hint), so its
+ * mapping is pinned, not incidental. */
+internal fun mapTruncated(root: JSONObject): Boolean =
+    root.optBoolean("truncated", false)
 
 /** Parses one skills list leniently, shared by the client and its tests.
  * Null when the whole body is unparseable or the "skills" key is missing:

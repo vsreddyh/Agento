@@ -70,4 +70,22 @@ class TeachApiTest {
     fun `parseSkillList fails missing key instead of wiping`() {
         assertNull(parseSkillList("""{"nope":[]}"""))
     }
+
+    @Test
+    fun `mapTestOutput fails missing output`() {
+        assertEquals("ran", mapTestOutput(JSONObject("""{"output":"ran"}""")))
+        assertEquals("", mapTestOutput(JSONObject("""{"output":""}""")))
+        try {
+            mapTestOutput(JSONObject("""{"nope":1}"""))
+            throw AssertionError("missing output accepted")
+        } catch (e: RuntimeException) {
+            assertEquals("response had no output", e.message)
+        }
+    }
+
+    @Test
+    fun `mapTruncated passes the flag through`() {
+        assertTrue(mapTruncated(JSONObject("""{"truncated":true}""")))
+        assertFalse(mapTruncated(JSONObject("""{}""")))
+    }
 }

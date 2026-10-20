@@ -466,13 +466,24 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     // Outside the composer gate: hints and failures must
                     // survive the composer closing, or success hides its own
                     // notice.
-                    if (composerError.isNotBlank() || composerNotice.isNotBlank()) {
+                    // Two gated items, never one merged line: an error and
+                    // a hint are different states, and concatenating them
+                    // would render success-with-clip as failure.
+                    if (composerError.isNotBlank()) {
                         item {
                             Text(
-                                (composerError + " " + composerNotice).trim(),
+                                composerError,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (composerError.isNotBlank()) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    if (composerNotice.isNotBlank()) {
+                        item {
+                            Text(
+                                composerNotice,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
