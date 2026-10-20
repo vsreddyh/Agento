@@ -257,7 +257,11 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request, h *agentHa
 			seen[strings.ToLower(sk.Name)] = true
 		}
 		for _, t := range taught {
-			if t.Status == teach.StatusDisabled || seen[strings.ToLower(t.Name)] {
+			// Same gate as Materialize: the tab must never show a skill Pi
+			// will never load. A hand-edited invalid name stays visible
+			// in /api/skills (its own review surface) but not here.
+			if t.Status == teach.StatusDisabled || seen[strings.ToLower(t.Name)] ||
+				!teach.ValidName(t.Name) {
 				continue
 			}
 			skills = append(skills, skillInfo{

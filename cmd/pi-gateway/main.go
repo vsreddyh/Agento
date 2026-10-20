@@ -113,7 +113,6 @@ func run() error {
 	// add 10s of boot per slow profile.
 	{
 		matCtx, cancelMat := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancelMat()
 		var matWG sync.WaitGroup
 		for _, profile := range profiles {
 			matWG.Add(1)
@@ -138,6 +137,7 @@ func run() error {
 			}(profile)
 		}
 		matWG.Wait()
+		cancelMat()
 	}
 
 	// Crash files live under the bind-mounted agent dir, so they survive

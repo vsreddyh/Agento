@@ -189,7 +189,10 @@ func RenderSKILL(s Skill) string {
 	name := SafeName(s)
 	var b strings.Builder
 	b.WriteString("---\nname: " + name + "\n")
-	b.WriteString("description: \"" + yamlEscape(s.Description) + "\"\n")
+	// collapseWS, not just escape: a hand-edited description with a newline
+	// would break the one-line frontmatter value that CleanDescription
+	// guarantees on write paths.
+	b.WriteString("description: \"" + yamlEscape(collapseWS(s.Description)) + "\"\n")
 	b.WriteString("---\n\n")
 	b.WriteString(s.Body + "\n")
 	return b.String()

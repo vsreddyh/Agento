@@ -86,10 +86,11 @@ func teachCtx(r *http.Request) (context.Context, context.CancelFunc) {
 const maxSkillIDLen = 64
 
 // validSkillID holds on every verb, bare-id and suffixed alike: a 10KB id
-// must never reach Mongo on any path.
+// must never reach Mongo on any path. One spelling with the store
+// (teach.ValidID): the gateway's maxSkillIDLen cap and the store charset
+// agree by construction, and a miss is 404 either way.
 func validSkillID(id string) bool {
-	return id != "" && len(id) <= maxSkillIDLen &&
-		!strings.Contains(id, "/") && !strings.ContainsRune(id, 0)
+	return len(id) <= maxSkillIDLen && teach.ValidID(id)
 }
 
 // handleSkillVerb validates the extracted id through the shared guard before
