@@ -212,17 +212,19 @@ internal fun ChatTab(
     // a concurrent gallery batch can never delete a capture still decoding.
     fun processUris(uris: List<Uri>, cleanup: File? = null) {
         if (uris.isEmpty()) return
+        // Unified on vm.notify (#339): the same cap refused here and
+        // mid-batch below must have one lifetime — a composition toast is
+        // lost on rotation while a state notice survives it.
         val slots = MAX_IMAGES_PER_TURN - state.pendingAttachments.size
         if (slots <= 0) {
-            toasts.toast(
+            vm.notify(
                 "At most $MAX_IMAGES_PER_TURN photos per turn — remove one first.",
-                ToastKind.Error,
             )
             return
         }
         val take = uris.take(slots)
         if (take.size < uris.size) {
-            toasts.toast(
+            vm.notify(
                 "Only the first ${take.size} photos attached " +
                     "(at most $MAX_IMAGES_PER_TURN per turn).",
                 ToastKind.Info,
@@ -301,7 +303,11 @@ internal fun ChatTab(
         // millisecond twice and point two captures at one file.
         val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
         val uri = runCatching {
-            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            // APPLICATION_ID, not packageName (#339): equal today (no
+            // flavors/suffixes — verified in build.gradle.kts), but an
+            // added .debug suffix would change applicationId while
+            // packageName stays put, breaking getUriForFile.
+            FileProvider.getUriForFile(context, "${BuildConfig.APPLICATION_ID}.fileprovider", file)
         }.getOrNull() ?: run {
             toasts.toast("Couldn't start the camera.", ToastKind.Error)
             return
@@ -332,10 +338,12 @@ internal fun ChatTab(
     // banner: the banner's Retry resends a TURN, which is wrong for a
     // staging problem. Consumed after showing so rotation never replays it.
     // Keyed on the generation too (#339): an identical repeat notice must
-    // re-fire rather than dedupe into a dead second tap.
+    // re-fire rather than dedupe into a dead second tap. Kind rides the
+    // state so info confirmations and error refusals share one plumbing
+    // with the same rotation-proof lifetime.
     LaunchedEffect(state.notice, state.noticeGen) {
         if (state.notice.isNotEmpty()) {
-            toasts.toast(state.notice, ToastKind.Error)
+            toasts.toast(state.notice, state.noticeKind)
             vm.consumeNotice()
         }
     }

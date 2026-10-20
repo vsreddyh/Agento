@@ -232,17 +232,23 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             }
             var encoded: String? = null
             var largest = 0
-            for (quality in listOf(80, 60)) {
-                val out = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
-                val candidate = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                largest = maxOf(largest, candidate.length)
-                if (candidate.length <= MAX_IMAGE_BASE64_CHARS) {
-                    encoded = candidate
-                    break
+            // try/finally, not recycle-then-throw (#339): a compress OOM or
+            // the oversize throw below would otherwise propagate out of
+            // runCatching with native pixels still live until GC.
+            try {
+                for (quality in listOf(80, 60)) {
+                    val out = ByteArrayOutputStream()
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                    val candidate = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+                    largest = maxOf(largest, candidate.length)
+                    if (candidate.length <= MAX_IMAGE_BASE64_CHARS) {
+                        encoded = candidate
+                        break
+                    }
                 }
+            } finally {
+                bitmap.recycle()
             }
-            bitmap.recycle()
             val final = encoded ?: throw IllegalStateException(
                 "Photo too large even after shrinking (${formatBytes(base64Bytes(largest))})" +
                     " — the per-photo limit is about " +

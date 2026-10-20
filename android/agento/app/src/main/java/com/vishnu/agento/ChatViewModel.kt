@@ -50,6 +50,9 @@ data class ChatUiState(
      * (notice, noticeGen), so tapping the same dead-send twice re-fires
      * instead of deduping into a second dead tap. */
     val noticeGen: Int = 0,
+    /** Toast styling for [notice] (#339): cap refusals are errors, pickup
+     * confirmations are info — one plumbing for both, same lifetime. */
+    val noticeKind: ToastKind = ToastKind.Error,
     val error: String = "",
     /** True once the persisted conversations finish loading; sends wait for it. */
     val ready: Boolean = false,
@@ -310,8 +313,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * Toast-host notice. Bumps the generation with every set so a repeated
      * identical notice re-fires instead of deduping silent (#339).
      */
-    fun notify(msg: String) {
-        _state.value = _state.value.copy(notice = msg, noticeGen = _state.value.noticeGen + 1)
+    fun notify(msg: String, kind: ToastKind = ToastKind.Error) {
+        _state.value = _state.value.copy(
+            notice = msg, noticeGen = _state.value.noticeGen + 1, noticeKind = kind,
+        )
     }
 
     fun removePendingAttachment(index: Int) {
@@ -1550,6 +1555,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
         // The edited turn keeps its photos (#339): resending the new text
         // without them would silently narrow the turn the user composed.
+        // Staged composer photos are deliberately NOT cleared here (unlike
+        // send()): send() clears because the staged photos WERE sent, while
+        // this sends the edited turn's carried photos — wiping the
+        // composer's unrelated staging would destroy user input.
         val history = msgs.take(index) +
             ChatMessage("user", clean, ChatThreads.now(), attachments = msgs[index].attachments)
         _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
@@ -1569,7 +1578,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
         // Same photo-carry rule as Replace above (#339): the forked turn is
-        // the edited turn, photos included.
+        // the edited turn, photos included. Composer staging survives here
+        // too, for the same reason stated there — it is unrelated input.
         val forked = msgs.take(index) +
             ChatMessage("user", clean, ChatThreads.now(), attachments = msgs[index].attachments)
         val fresh = ChatThread(
@@ -2072,6 +2082,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path)
         val history = _state.value.messages +
             ChatMessage("user", q, ChatThreads.now())
+        // The queued fire is text-only by design (see send()), so staged
+        // photos stay parked — said out loud (#339), because a silent
+        // text-only send after staging photos reads as a dropped attach.
+        if (_state.value.pendingAttachments.isNotEmpty()) {
+            notify(
+                "Sent the queued text — " +
+                    attachmentMarker(_state.value.pendingAttachments.size) +
+                    " still staged for your next message.",
+            )
+        }
         _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }
