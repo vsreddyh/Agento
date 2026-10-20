@@ -43,7 +43,9 @@ internal fun MemoryDialog(
     /** Ids (and "topic:…"/"new"/"forget" keys) with a write in flight. */
     acting: Set<String> = emptySet(),
     onConfirm: (String) -> Unit,
-    onEdit: (String, String, String) -> Unit,
+    /** onSaved fires only on success: the editor collapses then, so a failed
+     * save keeps the edit context alongside the error. */
+    onEdit: (String, String, String, () -> Unit) -> Unit,
     onDelete: (String) -> Unit,
     onTogglePause: (String, Boolean) -> Unit,
     /** onSaved fires only on success: the composer clears then, so a failed
@@ -118,7 +120,7 @@ internal fun MemoryDialog(
                                     editTopic = editTopic,
                                     onEditText = { editText = it },
                                     onEditTopic = { editTopic = it },
-                                    busy = item.id in acting,
+                                    busy = "id:${item.id}" in acting,
                                     onStartEdit = {
                                         editingId = item.id
                                         editText = item.text
@@ -126,8 +128,9 @@ internal fun MemoryDialog(
                                     },
                                     onCancelEdit = { editingId = null },
                                     onSaveEdit = {
-                                        onEdit(item.id, editText, editTopic)
-                                        editingId = null
+                                        onEdit(item.id, editText, editTopic) {
+                                            editingId = null
+                                        }
                                     },
                                     onConfirm = { onConfirm(item.id) },
                                     onDelete = { onDelete(item.id) },
@@ -150,7 +153,7 @@ internal fun MemoryDialog(
                                     editTopic = editTopic,
                                     onEditText = { editText = it },
                                     onEditTopic = { editTopic = it },
-                                    busy = item.id in acting,
+                                    busy = "id:${item.id}" in acting,
                                     onStartEdit = {
                                         editingId = item.id
                                         editText = item.text
@@ -158,8 +161,9 @@ internal fun MemoryDialog(
                                     },
                                     onCancelEdit = { editingId = null },
                                     onSaveEdit = {
-                                        onEdit(item.id, editText, editTopic)
-                                        editingId = null
+                                        onEdit(item.id, editText, editTopic) {
+                                            editingId = null
+                                        }
                                     },
                                     onConfirm = null,
                                     onDelete = { onDelete(item.id) },

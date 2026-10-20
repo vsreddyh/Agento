@@ -254,6 +254,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             effort = api.effortFor(tab, model),
             path = api.pathFor(tab),
         )
+        // The path can change here (profile switch in Settings): rows and
+        // the badge belong to the new profile, not the old one.
+        retargetMemory()
     }
 
     fun onPending(v: String) {
@@ -969,6 +972,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // views of the same rows, so there is no half to reconcile.
             val list = memoryApi.listMemory(path)
             withContext(Dispatchers.Main) {
+                // Stale load (path changed mid-flight): old-profile rows
+                // must not land on the new profile.
+                if (_state.value.path != path) return@withContext
                 val failedCode = ApprovalsApi.httpCode(list.exceptionOrNull()?.message)
                 val loadErr = if (list.isFailure) {
                     "Couldn't load memory" +
@@ -998,17 +1004,25 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * body; failures keep the old rows. */
     private val acting = mutableSetOf<String>()
 
-    private fun actOnMemory(id: String, action: suspend (String) -> Result<*>) {
+    private fun actOnMemory(
+        id: String,
+        action: suspend (String) -> Result<*>,
+        /** Runs on Main after a success: collapses editors, clears composers. */
+        onSuccess: () -> Unit = {},
+    ) {
         // Both the add here and the remove below run on Main (UI taps and
         // the Main-confined completion), so a plain set is safe; moving
-        // either side off Main needs a lock.
-        if (id.isBlank() || !acting.add(id)) return
+        // either side off Main needs a lock. Item ids share the set with
+        // "topic:…"/"new"/"forget", so they are namespaced: an id literally
+        // equal to "new" must not block the composer.
+        val key = "id:$id"
+        if (id.isBlank() || !acting.add(key)) return
         _state.value = _state.value.copy(actingMemory = acting.toSet())
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
             val result = action(path)
             withContext(Dispatchers.Main) {
-                acting.remove(id)
+                acting.remove(key)
                 _state.value = _state.value.copy(actingMemory = acting.toSet())
                 val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
                 if (result.isFailure) {
@@ -1016,8 +1030,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         memoryError = "Memory update failed" +
                             (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
                     )
-                } else if (_state.value.showMemory) {
-                    refreshMemory()
+                } else {
+                    // The badge refreshes even with the sheet closed: a
+                    // write that finished after close still changed the
+                    // pending count.
+                    onSuccess()
+                    pollMemoryCount(path)
+                    if (_state.value.showMemory) refreshMemory()
                 }
             }
         }
@@ -1034,20 +1053,25 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Saves an edit to text and/or topic. Trims like create: a
      * whitespace-only edit is a validation error here, not a server 400,
      * and an emptied topic keeps the old one instead of re-categorising to
-     * general by silence. */
-    fun editMemory(id: String, text: String, topic: String) {
+     * general by silence. The editor collapses via [onSaved]: on failure
+     * the edit context stays open alongside the error. */
+    fun editMemory(id: String, text: String, topic: String, onSaved: () -> Unit = {}) {
         val clean = text.trim()
         if (clean.isBlank()) {
             _state.value = _state.value.copy(memoryError = "Text is required.")
             return
         }
         val keepTopic = topic.trim()
-        actOnMemory(id) { path ->
-            memoryApi.updateMemory(
-                path, id, text = clean,
-                topic = keepTopic.ifBlank { null },
-            )
-        }
+        actOnMemory(
+            id = id,
+            action = { path ->
+                memoryApi.updateMemory(
+                    path, id, text = clean,
+                    topic = keepTopic.ifBlank { null },
+                )
+            },
+            onSuccess = onSaved,
+        )
     }
 
     /** Pauses or resumes one topic. Paused items stay on screen; they are
@@ -1072,7 +1096,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(actingMemory = acting.toSet())
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
-            val result = memoryApi.createMemory(path, topic.ifBlank { "general" }, text.trim())
+            val result = memoryApi.createMemory(path, topic.trim().ifBlank { "general" }, text.trim())
             withContext(Dispatchers.Main) {
                 acting.remove(key)
                 _state.value = _state.value.copy(actingMemory = acting.toSet())
@@ -1082,12 +1106,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         memoryError = "Couldn't save memory" +
                             (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
                     )
-                } else if (_state.value.showMemory) {
+                } else {
                     val truncated = result.getOrNull()?.second == true
                     onSaved()
-                    refreshMemory(
-                        if (truncated) "Saved, but the text clipped at the length cap." else null,
-                    )
+                    pollMemoryCount(path)
+                    if (_state.value.showMemory) {
+                        refreshMemory(
+                            if (truncated) "Saved, but the text clipped at the length cap." else null,
+                        )
+                    }
                 }
             }
         }
@@ -1111,8 +1138,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         memoryError = "Couldn't forget memory" +
                             (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
                     )
-                } else if (_state.value.showMemory) {
-                    refreshMemory("Forgot ${result.getOrNull() ?: 0} item(s). Pauses kept.")
+                } else {
+                    pollMemoryCount(path)
+                    if (_state.value.showMemory) {
+                        refreshMemory("Forgot ${result.getOrNull() ?: 0} item(s). Pauses kept.")
+                    }
                 }
             }
         }
@@ -1134,8 +1164,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * poll never lands on a new path. */
     private fun pollMemoryCount(path: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val n = memoryApi.listMemory(path)
-                .getOrNull()?.items?.count { it.isPending() } ?: return@launch
+            // Pending-only page, like the approvals poll: counting needs no
+            // rows, pauses or topics.
+            val n = memoryApi.listMemory(path, status = "pending", limit = 100)
+                .getOrNull()?.items?.size ?: return@launch
             withContext(Dispatchers.Main) {
                 if (_state.value.path != path) return@withContext
                 _state.value = _state.value.copy(pendingMemoryCount = n)
