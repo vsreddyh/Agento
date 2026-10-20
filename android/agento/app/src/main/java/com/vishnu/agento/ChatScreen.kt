@@ -2178,9 +2178,10 @@ internal fun ChatScreen(
                             FilledIconButton(
                                 onClick = stopThen(onSend),
                                 // Photos send without text (#318): an
-                                // image-only turn is a real turn.
+                                // image-only turn is a real turn. Counted
+                                // wired like the cap math (#339).
                                 enabled = (state.pending.isNotBlank() ||
-                                    state.pendingAttachments.isNotEmpty()) &&
+                                    state.pendingAttachments.wiredPhotos().isNotEmpty()) &&
                                     state.ready,
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")

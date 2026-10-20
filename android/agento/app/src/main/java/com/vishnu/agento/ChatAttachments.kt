@@ -334,13 +334,16 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     "That file isn't a readable photo — Agento attaches images only, not documents.",
                 )
             }
-            // Sample toward the TARGET box, not twice it (#339 review): a
-            // 12 MP capture sampled to ~3136px then scaled holds a ~30 MB
-            // transient bitmap; sampling straight at ~1568px halves the
-            // peak, and the exact fit below usually becomes a no-op.
+            // Sample toward JUST ABOVE the target box (#339): advance only
+            // while the next sample still covers it, so the decoded bitmap
+            // stays >= the target and the exact fit below is always a
+            // downscale. The old shape (first sample fitting INSIDE the
+            // box) undershot ~2x on large captures (4000px → sample 4 →
+            // 1000px) and then soft-UPSCALED to 1568 — worse than sampling
+            // to 2000px and downscaling.
             var sample = 1
-            while (bounds.outWidth / sample > MAX_IMAGE_SIDE_PX ||
-                bounds.outHeight / sample > MAX_IMAGE_SIDE_PX
+            while (bounds.outWidth / (sample * 2) >= MAX_IMAGE_SIDE_PX ||
+                bounds.outHeight / (sample * 2) >= MAX_IMAGE_SIDE_PX
             ) {
                 sample *= 2
             }
@@ -447,9 +450,12 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     // opaque fill above when the source had alpha (two
                     // full-size bitmaps live until its recycle) — and the
                     // q60 retry reallocates out while bitmap stays live.
-                    // Bounded and send-path-only (like the read transient
-                    // above), but the real hump, so a future "optimization"
-                    // of the buffer alone would miss it.
+                    // Plus the source `bytes` buffer itself, alive from the
+                    // read until decode returns (up to 32 MB adversarial,
+                    // single-digit MB real). Bounded and send-path-only
+                    // (like the read transient above), but the real hump,
+                    // so a future "optimization" of the buffer alone would
+                    // miss it.
                     // Checked, not assumed (#339): a false return leaves
                     // out empty, and an empty candidate would pass the cap
                     // as a zero-byte "photo" — silent corrupt payload wired

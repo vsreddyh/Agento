@@ -300,7 +300,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val wired = items.wiredPhotos()
         if (wired.isEmpty()) return
         val cur = _state.value.pendingAttachments
-        val room = MAX_IMAGES_PER_TURN - cur.size
+        // Counted wired (#339): cap slots are for photos that wire, so a
+        // blank can never spend one even if a future caller passes
+        // storage-read attachments.
+        val room = MAX_IMAGES_PER_TURN - cur.wiredPhotos().size
         if (room <= 0) {
             notify(capRefused(), ToastKind.Info)
             return
@@ -314,14 +317,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     /** True while the composer has a free photo slot (#339: re-checked
-     * mid-batch so two rapid picks don't both decode then drop). */
+     * mid-batch so two rapid picks don't both decode then drop). Counted
+     * wired like the cap math above. */
     fun hasAttachmentRoom(): Boolean =
-        _state.value.pendingAttachments.size < MAX_IMAGES_PER_TURN
+        _state.value.pendingAttachments.wiredPhotos().size < MAX_IMAGES_PER_TURN
 
     /** Live staged-photo count for tap-time cap math (#339): ChatTab reads
      * the ViewModel, not its last-recomposed snapshot, so a
-     * remove-then-rapid-repick sees the freed slot. */
-    fun pendingAttachmentCount(): Int = _state.value.pendingAttachments.size
+     * remove-then-rapid-repick sees the freed slot. Counted wired. */
+    fun pendingAttachmentCount(): Int = _state.value.pendingAttachments.wiredPhotos().size
 
     /**
      * Appends heard text to the composer (#339): live results accumulate
@@ -908,7 +912,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     fun send() {
-        val text = _state.value.pending.trim()
+        // Raw stored, trimmed checked (#339): the stored content rides
+        // exactly as typed (pasted-code indentation included — the wire
+        // verbatim path depends on it), while blankness gates on the
+        // trimmed form. Queued text stays trimmed (text-only fire).
+        val rawText = _state.value.pending
+        val text = rawText.trim()
         // Photos send with or without text (#318): an image-only turn is a
         // real turn (the server treats blank text + images as non-blank).
         val photos = _state.value.pendingAttachments
@@ -981,7 +990,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = api.pathFor(tab)
         _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path, queued = "")
         val history = _state.value.messages +
-            ChatMessage("user", text, ChatThreads.now(), attachments = photos)
+            ChatMessage("user", rawText, ChatThreads.now(), attachments = photos)
         _state.value = _state.value.copy(
             messages = history, pending = "", pendingAttachments = emptyList(),
             streaming = true, error = "",
