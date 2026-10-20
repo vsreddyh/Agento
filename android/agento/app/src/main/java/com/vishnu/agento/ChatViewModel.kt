@@ -506,8 +506,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         stopApprovalWatch()
         retargetApprovals()
         retargetMemory()
+        // Same queued→pending restore as stop() (#339): killing the stream
+        // must not eat queued text — it returns to the composer (blank
+        // here, so it always carries over), never vanishes.
+        val parked = _state.value.queued.takeIf { it.isNotBlank() && _state.value.pending.isBlank() }.orEmpty()
         _state.value = _state.value.copy(
-            messages = emptyList(), error = "", streaming = false, pending = "",
+            messages = emptyList(), error = "", streaming = false, pending = parked,
             // Staged photos die with the draft like every other thread
             // change (#339): a New with a parked photo must not fire it
             // into the fresh thread.
@@ -552,9 +556,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             stopApprovalWatch()
             retargetApprovals()
             retargetMemory()
+            // Same restore as newConversation above (#339).
+            val kept = _state.value.queued.takeIf { it.isNotBlank() && _state.value.pending.isBlank() }.orEmpty()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
-                threadId = next.id, error = "", streaming = false, pending = "",
+                threadId = next.id, error = "", streaming = false, pending = kept,
                 // Same staged-photos-die-with-the-draft rule as the other
                 // thread changes above (#339).
                 pendingAttachments = emptyList(),

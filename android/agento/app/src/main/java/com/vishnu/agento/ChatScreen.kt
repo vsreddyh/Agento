@@ -384,6 +384,24 @@ internal fun ChatTab(
     ) { granted ->
         if (granted) {
             launchCamera()
+        } else if (context is Activity &&
+            !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
+                context, Manifest.permission.CAMERA,
+            )
+        ) {
+            // Permanent denial ("Don't allow again"): the request UI will
+            // never show again, so a re-toast loops forever (#339). The
+            // only path forward is app Settings — opened directly since
+            // the user tapped Take photo and there is nowhere else to go.
+            vm.notify("Camera access is off — opening Settings to re-enable.", ToastKind.Info)
+            runCatching {
+                context.startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package", context.packageName, null),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
         } else {
             // State notice like every other attach refusal (#339).
             vm.notify("Camera permission is needed to take photos.")
@@ -445,6 +463,12 @@ internal fun ChatTab(
         onPickPhotos = { galleryLauncher.launch("image/*") },
         onTakePhoto = ::requestCamera,
         onRemovePhoto = vm::removePendingAttachment,
+        onLiveStagedPhotos = {
+            vm.notify(
+                "Heard you — photo still staged, tap send to include it.",
+                ToastKind.Info,
+            )
+        },
     )
     if (showThreads) {
         ThreadSheet(
@@ -982,6 +1006,10 @@ internal fun ChatScreen(
     onPickPhotos: () -> Unit = {},
     onTakePhoto: () -> Unit = {},
     onRemovePhoto: (Int) -> Unit = {},
+    /** Live transcript heard text while photos are staged (#339): the text
+     * parks in the composer for a confirming tap instead of auto-sending
+     * with the photos. */
+    onLiveStagedPhotos: () -> Unit = {},
     autoLiveGen: Int = 0,
 ) {
     val listState = rememberLazyListState()
@@ -1355,7 +1383,15 @@ internal fun ChatScreen(
                 } else {
                     silentRounds = 0
                     onPending(heard)
-                    onSend()
+                    // Photos need a confirming tap (#339): live transcripts
+                    // auto-send by design, but background speech firing a
+                    // staged-photo turn with no confirmation is a
+                    // wrong-image send. Text parks for the tap instead.
+                    if (state.pendingAttachments.isEmpty()) {
+                        onSend()
+                    } else {
+                        onLiveStagedPhotos()
+                    }
                 }
             }
             override fun onNoSpeech() {
@@ -1849,7 +1885,14 @@ internal fun ChatScreen(
                         // Stays live while streaming — staged photos park in
                         // the composer until the next explicit send.
                         Box {
-                            IconButton(onClick = { showAttachMenu = true }) {
+                            // Gated on ready like send (#339): staging work
+                            // before the thread loads just parks photos that
+                            // sit through the load into a "still loading"
+                            // notice at send time.
+                            IconButton(
+                                onClick = { showAttachMenu = true },
+                                enabled = state.ready,
+                            ) {
                                 Icon(Icons.Filled.Add, contentDescription = "Attach photo")
                             }
                             DropdownMenu(
