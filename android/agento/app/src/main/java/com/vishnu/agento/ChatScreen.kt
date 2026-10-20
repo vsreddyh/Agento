@@ -954,9 +954,13 @@ internal fun ChatScreen(
         bargeCancel = killedTurn
         announcedTools = emptyList()
         announcedLabel = ""
-        // Only a live readout hands off (review #338-6th): the streaming
-        // disjunct would be dead here — onStop() already cleared it — and
-        // a killed turn's first listen belongs to the stream-end effect.
+        // Only a live readout hands off (review #338-6th/7th): the
+        // streaming disjunct would be dead here — onStop() already cleared
+        // it — and a killed turn's first listen belongs to the stream-end
+        // effect. speakingKey is read pre-stop on purpose: tts.stop()
+        // cleared the Flow, but this snapshot predates recomposition, so it
+        // still reports the readout playing at entry — moving the read
+        // below would silently break readout handoff.
         val handoff = speakingKey != null
         if (!handoff && !killedTurn) liveListen()
     }
@@ -1455,12 +1459,17 @@ internal fun ChatScreen(
                         }
                         if (state.streaming) {
                             FilledTonalIconButton(onClick = {
-                                // Live stop cuts like a barge (review #338-6th):
+                                // Live stop cuts like a barge (review #338-6th/7th):
                                 // the user cut the turn to talk, so the loop
                                 // re-listens instead of reading back the
-                                // just-killed partial. Outside live mode the
+                                // just-killed partial. Cuts a playing cue too
+                                // — like onBargeIn, the loop must own the mic
+                                // before it re-listens. Outside live mode the
                                 // plain stop keeps its speak-the-partial path.
-                                if (liveMode) bargeCancel = true
+                                if (liveMode) {
+                                    tts.stop()
+                                    bargeCancel = true
+                                }
                                 onStop()
                             }) {
                                 Icon(Icons.Filled.Close, contentDescription = "Stop")
