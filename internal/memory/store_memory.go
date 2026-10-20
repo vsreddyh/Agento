@@ -64,6 +64,12 @@ func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
 	if i.ID == "" {
 		i.ID = NewID()
 	}
+	// A caller-supplied ID that already exists is rejected, not overwritten:
+	// Mongo fails the same insert on duplicate key, and silently re-homing
+	// another profile's row would be the worse mismatch.
+	if _, exists := s.items[i.ID]; exists {
+		return Item{}, NewStoreError("memory id already exists", false)
+	}
 	now := time.Now().UnixMilli()
 	if i.CreatedAt == 0 {
 		i.CreatedAt = now

@@ -143,7 +143,12 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "list_memory",
 		Description: "List what is remembered for this profile, newest first, optionally filtered by topic and/or status. Use it when the user asks what you remember, or before saving something that may already be recorded. Items include status: only confirmed items are applied to answers."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
+			// Filters forgive where writes reject (same rule as GET): a
+			// filter names what to show, so normalising "---" to general
+			// is harmless, while a write names where to store.
 			f := memory.Filter{Profile: profile, Topic: in.Topic}
+			// Exact lowercase like the HTTP contract: topics normalise,
+			// enums do not.
 			if st := strings.TrimSpace(in.Status); st != "" {
 				status := memory.Status(st)
 				if !status.Valid() {

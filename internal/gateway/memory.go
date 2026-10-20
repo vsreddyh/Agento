@@ -179,6 +179,8 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 	switch r.Method {
 	case http.MethodGet:
 		f := memory.Filter{Profile: profile}
+		// Statuses are exact lowercase: topics normalise, enums do not, so
+		// ?status=Confirmed is 400, not "confirmed".
 		if raw := strings.TrimSpace(r.URL.Query().Get("status")); raw != "" {
 			st := memory.Status(raw)
 			if !st.Valid() {
@@ -435,6 +437,9 @@ func (s *Server) memoryPrompt(ctx context.Context, profile string) string {
 	if s.memory == nil || strings.TrimSpace(profile) == "" {
 		return ""
 	}
+	// One 2s deadline covers both calls on purpose, like memoryCtx: a slow
+	// List starves the paused read and the turn carries no block, which is
+	// the fail-closed outcome ADR-0003 requires (never inject past a pause).
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	// ListCap, not PromptItems: the pause filter runs after the list, so a

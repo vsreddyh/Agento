@@ -161,6 +161,14 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	if _, err := s.Create(ctx, Item{Profile: "p", Text: "   "}); err == nil {
 		t.Fatal("empty-text create should fail")
 	}
+	// A caller-supplied ID that already exists is rejected, not overwritten
+	// (Mongo fails the same insert on duplicate key).
+	if _, err := s.Create(ctx, Item{ID: a.ID, Profile: "p", Text: "hijack"}); err == nil {
+		t.Fatal("duplicate-id create should fail")
+	}
+	if got, _ := s.Get(ctx, a.ID, "p"); got.Text != "uses tables" {
+		t.Fatalf("duplicate create overwrote the row: %+v", got)
+	}
 	long, err := s.Create(ctx, Item{Profile: "p", Text: strings.Repeat("y", MaxText+10)})
 	if err != nil {
 		t.Fatal(err)

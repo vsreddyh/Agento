@@ -81,7 +81,10 @@ func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
 	}
 	// The 200-item cap is enforced, not just read: beyond it the oldest rows
 	// are invisible to both the screen and the prompt, so the 201st create
-	// fails instead of writing an unreachable row.
+	// fails instead of writing an unreachable row. Count-then-insert is two
+	// round-trips, so two concurrent creates at 199 can both land at 201;
+	// accepted, because one gateway serves one turn per profile and the
+	// overflow is one row past a cap, not a lost write.
 	if n, err := s.items.CountDocuments(ctx, bson.M{"profile": i.Profile}); err != nil {
 		return Item{}, NewStoreError("memory count failed: "+err.Error(), true)
 	} else if n >= ListCap {
