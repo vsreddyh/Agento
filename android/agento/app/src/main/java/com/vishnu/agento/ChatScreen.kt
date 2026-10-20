@@ -395,7 +395,13 @@ internal fun ChatTab(
             cameraBusy = true
             processUris(listOf(u), f) {
                 cameraBusy = false
-                cameraPath = null
+                // Conditional clear (#339): a rapid re-tap overwrites the
+                // path with the second capture while the first still
+                // decodes — blanking unconditionally would strand the
+                // second flight with keep == null, letting a rotation
+                // sweep delete the file being read. Only the owning batch
+                // retires the path.
+                if (f != null && cameraPath == f.absolutePath) cameraPath = null
             }
         } else {
             runCatching { f?.takeIf { it.exists() }?.delete() }
@@ -1516,15 +1522,6 @@ internal fun ChatScreen(
                     } else {
                         onLiveStagedPhotos()
                     }
-                    // Photos need a confirming tap (#339): live transcripts
-                    // auto-send by design, but background speech firing a
-                    // staged-photo turn with no confirmation is a
-                    // wrong-image send. Text parks for the tap instead.
-                    if (!staged) {
-                        onSend()
-                    } else {
-                        onLiveStagedPhotos()
-                    }
                 }
             }
             override fun onNoSpeech() {
@@ -2413,20 +2410,21 @@ internal fun ChatScreen(
                                                 // Sent photos (#318) render above the
                                                 // text; an image-only turn shows no
                                                 // "…" placeholder — the thumbnails
-                                                // ARE the message. Counted wired
-                                                // (#339): blanks render nothing,
-                                                // and the text fallback below
-                                                // keys on the same count.
+                                                // ARE the message. Iterated wired
+                                                // (#339): the gate, the row, and
+                                                // the label all count the same
+                                                // wired list, so blanks render
+                                                // nothing and claim nothing.
                                                 val wiredBubble = msg.attachments.wiredPhotos()
                                                 if (wiredBubble.isNotEmpty()) {
                                                     Row(
                                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                     ) {
-                                                        msg.attachments.forEachIndexed { ai, a ->
+                                                        wiredBubble.forEachIndexed { ai, a ->
                                                             AttachmentThumb(
                                                                 base64 = a.base64,
                                                                 label = "Attached photo ${ai + 1} of " +
-                                                                    "${msg.attachments.size}",
+                                                                    "${wiredBubble.size}",
                                                                 modifier = Modifier.size(120.dp),
                                                                 slot = ai,
                                                                 stableId = a.id,
@@ -2587,8 +2585,9 @@ internal fun ChatScreen(
             val dropped = state.messages.drop(idx + 1).count { messageHasContent(it) }
             // Same invisibility as the inline editor above: the edited
             // turn's photos resend with the new text — named here so the
-            // confirmation covers the full resend.
-            val resendPhotos = state.messages.getOrNull(idx)?.attachments?.size ?: 0
+            // confirmation covers the full resend. Counted wired like the
+            // HintLine (#339).
+            val resendPhotos = state.messages.getOrNull(idx)?.attachments?.wiredPhotos()?.size ?: 0
             AlertDialog(
                 onDismissRequest = { confirmReplace = null },
                 title = { Text("Resend from edited message?") },
