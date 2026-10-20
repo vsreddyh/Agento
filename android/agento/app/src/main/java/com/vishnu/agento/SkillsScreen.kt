@@ -115,10 +115,12 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var composerNotice by remember { mutableStateOf("") }
     var managingBusy by remember { mutableStateOf(false) }
     var testOutput by remember { mutableStateOf("") }
-    var composing by remember { mutableStateOf(false) }
-    var newName by remember { mutableStateOf("") }
-    var newDescription by remember { mutableStateOf("") }
-    var newBody by remember { mutableStateOf("") }
+    // Keyed by profile: a switch mid-compose starts empty instead of
+    // carrying the old profile's typing into the new one's save.
+    var composing by remember(profile) { mutableStateOf(false) }
+    var newName by remember(profile) { mutableStateOf("") }
+    var newDescription by remember(profile) { mutableStateOf("") }
+    var newBody by remember(profile) { mutableStateOf("") }
     // Cancelled + replaced on every load() so a stale response can't
     // win; only the latest job may clear busy.
     var loadJob by remember { mutableStateOf<Job?>(null) }
