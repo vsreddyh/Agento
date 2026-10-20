@@ -155,13 +155,16 @@ func TestGetEvictIdleConcurrent(t *testing.T) {
 	sessionTTL = time.Millisecond
 	defer func() { sessionTTL = oldTTL }()
 	ss := &sessions{byProfile: map[string]*session{}, agentDir: t.TempDir()}
+	// Errors travel on a channel: t.Error is goroutine-safe, but calling
+	// it from workers keeps failing after the damage — fail fast instead.
+	errs := make(chan error, 4)
 	done := make(chan struct{})
 	for i := 0; i < 4; i++ {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			for j := 0; j < 50; j++ {
 				if _, err := ss.get("chat"); err != nil {
-					t.Error(err)
+					errs <- err
 					return
 				}
 			}
@@ -172,6 +175,10 @@ func TestGetEvictIdleConcurrent(t *testing.T) {
 	}
 	for i := 0; i < 4; i++ {
 		<-done
+	}
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
 	}
 }
 
