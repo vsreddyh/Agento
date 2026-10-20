@@ -37,7 +37,11 @@ A held call blocks only itself; other traffic keeps flowing. Everything fails
 closed: store outage, timeout, unknown tool, unknown server — all resolve to
 "not executed". A framing fault (an oversized line) is dropped and logged, not
 treated as a dead connection: the reader drains to the next boundary and the
-pair keeps serving.
+pair keeps serving. An oversize drop is reply-less by design — the line is
+larger than the cap precisely because it could not be parsed as a frame, so
+there is no id to answer, and Pi's own call timeout is the backstop. A SIGTERM
+or SIGINT drives the same teardown as a Pi hangup: pumps stop, holds expire,
+and the join writes their audit rows before exit.
 
 An MCP proxy was chosen over the alternatives because there is nowhere else
 to stand: Pi cannot pause a turn for approval, and the gateway only sees
@@ -122,7 +126,7 @@ Two response-code contracts the app relies on. Reading an expired row is a
 **404** — it is no longer in the live queue — while deciding that same row is a
 **409**: the decision arrived after the hold ended. The 409 means "too late",
 not "someone else decided", and the app refreshes rather than attributing an
-action to another user. In the audit trail, `disposition=allowed` with a
+action to another user. In the audit trail, `disposition=allowed` **or `approved`** with a
 non-empty `error` means the tool ran and returned an error: `error != ""` is
 the tool-level failure signal, so a reader can separate "ran and failed" from
 "never ran" without parsing the payload.

@@ -28,8 +28,10 @@ import (
 	"math/big"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"agento/internal/approvals"
@@ -93,7 +95,12 @@ func main() {
 	}
 	cancelSweep()
 	r := newRelay(*server, store, log.New(os.Stderr, "mcp-gate["+*server+"] ", log.LstdFlags))
-	if err := r.run(context.Background(), os.Stdin, os.Stdout, rest[0], rest[1:]); err != nil {
+	// A term signal drives the normal teardown (pumps close, holds cancel, the
+	// join runs and expiry rows land). Background() would let SIGTERM kill the
+	// process mid-hold, bypassing exactly the join that exists to record it.
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	if err := r.run(ctx, os.Stdin, os.Stdout, rest[0], rest[1:]); err != nil {
 		r.log.Printf("relay ended: %v", err)
 		os.Exit(1)
 	}
@@ -249,7 +256,9 @@ func (r *relay) run(
 		r.log.Printf("shutdown: held calls still recording after %s; continuing", budget)
 	}
 	stop()
-	child.Wait()
+	// Wait's error is expected here — stop() killed the child — so the exit
+	// status is not a signal; the prefixed stderr is the record of why.
+	_ = child.Wait()
 	// The second pump ends because of the teardown above, so it is read
 	// without waiting (a Pi-side reader can stay blocked on stdin forever).
 	// A non-clean cause is still worth a line: a clean hangup must not hide a
