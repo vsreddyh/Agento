@@ -120,8 +120,19 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
  * bounds a stuck gate far above any real camera session (single-digit
  * minutes at most) — while a session interrupted past even that reads as
  * dead and re-opens the overwrite race, which is the documented cost of
- * bounding the stuck gate at all. */
+ * bounding the stuck gate at all. MONOTONIC domain: always compared
+ * against elapsedRealtime(), never wall-clock — a user clock jump must
+ * not age a live intent into a dead one. */
 private const val CAMERA_PENDING_STALE_MS = 10 * 60 * 1000L
+
+/** Sweep age-out for non-keep camera orphans (#339): same duration, WALL
+ * domain — file mtimes are wall-clock, so this constant is compared
+ * against currentTimeMillis(), never elapsedRealtime(). Deliberately a
+ * separate constant despite the equal value: the two numbers live in
+ * different clock domains (a clock jump ages mtimes but not intents),
+ * and sharing one name would let a future edit retune the gate while
+ * silently retuning the sweep. */
+private const val CAMERA_SWEEP_STALE_MS = 10 * 60 * 1000L
 
 /**
  * Head/tail content sample for thumbnail keys (#339): a true prefix/suffix
@@ -378,7 +389,7 @@ internal fun ChatTab(
                 sweepDir.takeIf { it.exists() }?.listFiles()
                     ?.filter {
                         it.absolutePath != keep &&
-                            now - it.lastModified() > CAMERA_PENDING_STALE_MS
+                            now - it.lastModified() > CAMERA_SWEEP_STALE_MS
                     }
                     ?.forEach { runCatching { it.delete() } }
             }
@@ -415,14 +426,20 @@ internal fun ChatTab(
         // Undispatched runs the body synchronously on this thread, so
         // started==false after launch() proves never-ran, and the inline
         // fallback settles it exactly like the batch's !batchStarted path.
-        var started = false
+        // Visibility is UNDISPATCHED-dependent (#339): the write and the
+        // read run on the same thread with launch() sequenced between, so
+        // plain ordering would hold — but the flag is atomic anyway, so a
+        // future edit dropping UNDISPATCHED degrades to a redundant inline
+        // delete (harmless: exists()-gated) instead of a stale-false
+        // double-delete race. Belt and braces on a one-file leak.
+        val started = java.util.concurrent.atomic.AtomicBoolean(false)
         if (scope.isActive) {
             scope.launch(Dispatchers.IO + NonCancellable, CoroutineStart.UNDISPATCHED) {
-                started = true
+                started.set(true)
                 runCatching { f.takeIf { it.exists() }?.delete() }
             }
         }
-        if (!started) {
+        if (!started.get()) {
             runCatching { f.takeIf { it.exists() }?.delete() }
         }
     }

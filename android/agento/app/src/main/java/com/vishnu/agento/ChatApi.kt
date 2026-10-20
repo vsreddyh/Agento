@@ -626,14 +626,15 @@ class ChatApi(context: Context) {
             // via toByteArray() and then sending via toRequestBody() copies the
             // ~3.5 MB string twice back to back. contentLength() on the built
             // body is the same bytes OkHttp will write (the JSON media type
-            // declares UTF-8, so no charset ambiguity) — one copy instead of
-            // two, transient peak ~3x instead of ~4x. -1 (unknown length)
-            // refuses too: an unmeasurable body must not sail past the gate.
-            // Scoped pair (#339): raw falls out of scope with this block
-            // instead of living in the closure for the whole upload — one
-            // copy freed for the slow-upload seconds, leaving body alone
-            // with the request. Block value is the pair (an earlier
-            // revision ended on val declarations, which return Unit).
+            // declares UTF-8, so no charset ambiguity) — one encode instead
+            // of two. The string itself still lives with the body for the
+            // upload (toRequestBody retains it), so the scoped block saves
+            // the duplicate measure-copy at build time, not lifetime — peak
+            // at build is string + encoded bytes, steady upload holds the
+            // body alone. -1 (unknown length) refuses too: an unmeasurable
+            // body must not sail past the gate.
+            // Block value is the pair (an earlier revision ended on val
+            // declarations, which return Unit).
             val raw = payload.toString()
             val built = raw.toRequestBody(JSON)
             built to built.contentLength()

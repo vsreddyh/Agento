@@ -144,7 +144,13 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
         // and return untouched. Giants never reach the strip copy: the
         // raw ceiling inside isDecodableBase64 fails them O(1), and the
         // explicit length check below blanks them without building a
-        // 100 MB filtered copy first.
+        // 100 MB filtered copy first. Worst case below the ceiling is two
+        // walks + one bounded copy, all IO-confined (#339) — and both
+        // walks short-circuit: validity fails at the first bad char,
+        // all{} fails at the first non-whitespace, so only a fully-valid
+        // (then stripped + revalidated) or fully-homogeneous payload pays
+        // both. Adversarial ceiling for the whole branch is the 4M-char
+        // raw cap: bounded CPU on IO, bounded copies, never the send path.
         if (isDecodableBase64(a.base64)) {
             a
         } else if (a.base64.length > MAX_RAW_BASE64_CHARS) {
