@@ -805,8 +805,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // only, and silently attaching staged photos to a later turn would
         // send images the user never confirmed for THAT turn.
         if (_state.value.streaming) {
-            if (_state.value.queued.isBlank()) {
-                _state.value = _state.value.copy(pending = "", queued = text)
+            if (text.isNotEmpty()) {
+                if (_state.value.queued.isBlank()) {
+                    _state.value = _state.value.copy(pending = "", queued = text)
+                }
+            } else if (photos.isNotEmpty()) {
+                // Image-only tap while streaming (#339): nothing queues
+                // (the queue is text), so say the photos are waiting —
+                // otherwise the enabled send button looks dead.
+                _state.value = _state.value.copy(
+                    notice = "Still answering — photos stay staged and " +
+                        "send with your next message.",
+                )
             }
             return
         }

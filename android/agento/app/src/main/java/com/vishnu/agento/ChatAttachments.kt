@@ -42,16 +42,20 @@ const val MAX_IMAGES_PER_TURN = 2
 const val MAX_IMAGE_SIDE_PX = 1568
 
 /** Per-photo base64 cap, chars (~1.1 MiB raw). Two capped photos plus text
- * history stay under [MAX_CHAT_WIRE_CHARS] with headroom. */
+ * history stay under [MAX_CHAT_WIRE_BYTES] with headroom. */
 const val MAX_IMAGE_BASE64_CHARS = 1_500_000
 
-/** Client-side wire preflight, chars. Below the gateway's 4 MiB body cap on
+/** Client-side wire preflight, BYTES. Below the gateway's 4 MiB body cap on
  * purpose: exceeding this refuses with a named in-app error instead of an
- * opaque HTTP 413, and leaves room for JSON framing plus history text. */
-const val MAX_CHAT_WIRE_CHARS = 3_500_000
+ * opaque HTTP 413, and leaves room for JSON framing plus history text.
+ * Bytes, not chars (#339): base64 and framing are ASCII so the two agree
+ * for photos, but CJK/emoji history is multibyte — a char count would let
+ * a long non-ASCII thread sail past into the opaque 413 this preflight
+ * exists to prevent. */
+const val MAX_CHAT_WIRE_BYTES = 3_500_000
 
-/** `true` when a request body of [chars] must be refused client-side. */
-fun wireSizeExceeded(chars: Int): Boolean = chars > MAX_CHAT_WIRE_CHARS
+/** `true` when a request body of [bytes] must be refused client-side. */
+fun wireSizeExceeded(bytes: Int): Boolean = bytes > MAX_CHAT_WIRE_BYTES
 
 /** Wire form of one attachment: the `image_url` data URI the gateway's
  * multipart parser accepts (`internal/gateway/openai.go`). Remote URLs are

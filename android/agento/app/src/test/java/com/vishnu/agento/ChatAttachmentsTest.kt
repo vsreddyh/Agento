@@ -167,18 +167,20 @@ class ChatAttachmentsTest {
 
     @Test
     fun maxedOutTurnFitsPreflight() {
+        // Base64 is ASCII, so capped-photo chars ARE bytes; only history
+        // text can be multibyte, and the headroom below absorbs it.
         val worstPhotos = MAX_IMAGES_PER_TURN.toLong() * MAX_IMAGE_BASE64_CHARS
         assertTrue(
-            "2 capped photos ($worstPhotos chars) must fit the " +
-                "$MAX_CHAT_WIRE_CHARS-char preflight with room for framing",
-            worstPhotos < MAX_CHAT_WIRE_CHARS - 100_000L,
+            "2 capped photos ($worstPhotos bytes) must fit the " +
+                "$MAX_CHAT_WIRE_BYTES-byte preflight with room for framing",
+            worstPhotos < MAX_CHAT_WIRE_BYTES - 100_000L,
         )
     }
 
     @Test
     fun wirePreflightBoundary() {
-        assertFalse(wireSizeExceeded(MAX_CHAT_WIRE_CHARS))
-        assertTrue(wireSizeExceeded(MAX_CHAT_WIRE_CHARS + 1))
+        assertFalse(wireSizeExceeded(MAX_CHAT_WIRE_BYTES))
+        assertTrue(wireSizeExceeded(MAX_CHAT_WIRE_BYTES + 1))
     }
 
     @Test

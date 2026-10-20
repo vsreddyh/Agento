@@ -269,8 +269,20 @@ internal fun ChatTab(
         }
     }
     fun launchCamera() {
-        val dir = File(context.cacheDir, "camera").apply { mkdirs() }
-        val file = File(dir, "capture-${System.currentTimeMillis()}.jpg")
+        val dir = File(context.cacheDir, "camera")
+        // Checked, not assumed (#339): full storage fails mkdirs, and a
+        // bare TakePicture failure (ok=false) would leave the user with
+        // no hint why no camera appeared.
+        if (!dir.exists() && !dir.mkdirs()) {
+            toasts.toast("Couldn't start the camera — storage unavailable.", ToastKind.Error)
+            return
+        }
+        // A re-tap stages a new Uri over the old one: delete the previous
+        // capture first so one littered file per re-tap never accumulates.
+        runCatching { cameraPath?.let(::File)?.takeIf { it.exists() }?.delete() }
+        // UUID, not millis (#339): a rapid double-tap can mint the same
+        // millisecond twice and point two captures at one file.
+        val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
         val uri = runCatching {
             FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         }.getOrNull() ?: run {
@@ -2075,6 +2087,18 @@ internal fun ChatScreen(
                                                     modifier = Modifier.fillMaxWidth(),
                                                     maxLines = 6,
                                                 )
+                                                // Carried photos are invisible here
+                                                // (#339): the field is text-only,
+                                                // but Replace/Fork resends the
+                                                // turn's photos with it — say so,
+                                                // or an edit to "thanks" silently
+                                                // resends images.
+                                                if (msg.attachments.isNotEmpty()) {
+                                                    HintLine(
+                                                        attachmentMarker(msg.attachments.size) +
+                                                            " — resends with the edited text.",
+                                                    )
+                                                }
                                                 Spacer(modifier = Modifier.height(4.dp))
                                                 Row(
                                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2272,16 +2296,24 @@ internal fun ChatScreen(
             // turns, like the dropsTurns gate above — otherwise the dialog
             // reports "drops 0 later messages" while discarding photos.
             val dropped = state.messages.drop(idx + 1).count { messageHasContent(it) }
+            // Same invisibility as the inline editor above: the edited
+            // turn's photos resend with the new text — named here so the
+            // confirmation covers the full resend.
+            val resendPhotos = state.messages.getOrNull(idx)?.attachments?.size ?: 0
             AlertDialog(
                 onDismissRequest = { confirmReplace = null },
                 title = { Text("Resend from edited message?") },
                 text = {
                     Text(
-                        if (dropped == 1) {
+                        (if (dropped == 1) {
                             "This drops 1 later message and resends."
                         } else {
                             "This drops $dropped later messages and resends."
-                        }
+                        }) + if (resendPhotos > 0) {
+                            " " + attachmentMarker(resendPhotos) + " — resends too."
+                        } else {
+                            ""
+                        },
                     )
                 },
                 confirmButton = {

@@ -611,11 +611,15 @@ class ChatApi(context: Context) {
         // 413. Only reachable with photos today (per-photo caps bound each
         // image); a long text thread tripping it gets the same message.
         val raw = payload.toString()
-        if (wireSizeExceeded(raw.length)) {
+        // Sized in bytes at send time (#339): one transient encode of a
+        // body already fully in memory, exact where a char count lies for
+        // non-ASCII history.
+        val rawBytes = raw.toByteArray().size
+        if (wireSizeExceeded(rawBytes)) {
             trySend(
                 ChatEvent.Error(
-                    "Couldn't send: this turn is about ${formatBytes(raw.length.toLong())} " +
-                        "(limit about ${formatBytes(MAX_CHAT_WIRE_CHARS.toLong())}). " +
+                    "Couldn't send: this turn is about ${formatBytes(rawBytes.toLong())} " +
+                        "(limit about ${formatBytes(MAX_CHAT_WIRE_BYTES.toLong())}). " +
                         "Remove a photo or start a new conversation.",
                 ),
             )
