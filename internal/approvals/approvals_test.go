@@ -360,4 +360,8 @@ func TestStoresRedactOnWrite(t *testing.T) {
 	if len(rows) != 1 || rows[0].Args["token"] != "***" {
 		t.Fatalf("audit args = %#v, want token masked", rows)
 	}
+	if rows[0].At == 0 || rows[0].ExpiresAt.IsZero() {
+		t.Fatalf("audit stamps = At %d / ExpiresAt %v, want both stamped by the store",
+			rows[0].At, rows[0].ExpiresAt)
+	}
 }

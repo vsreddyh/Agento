@@ -254,8 +254,13 @@ func (s *MongoStore) Audit(ctx context.Context, e AuditEntry) error {
 	if e.ID == "" {
 		return NewStoreError("audit needs an id", false)
 	}
+	// One clock stamps both, for the same reason as the memory store.
+	now := s.clock()
+	if e.At == 0 {
+		e.At = now.UnixMilli()
+	}
 	if e.ExpiresAt.IsZero() {
-		e.ExpiresAt = s.clock().Add(AuditTTL)
+		e.ExpiresAt = now.Add(AuditTTL)
 	}
 	e.Args = Redact(e.Args)
 	if _, err := s.audit.InsertOne(ctx, e); err != nil {

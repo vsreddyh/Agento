@@ -582,7 +582,6 @@ func (r *relay) auditResponse(st *callState, line []byte) {
 
 // audit writes one audit row, redacted and best-effort.
 func (r *relay) audit(tool string, args map[string]any, disp approvals.Disposition, errMsg, approvalID string) {
-	now := time.Now()
 	e := approvals.AuditEntry{
 		ID:          approvals.NewID(),
 		Server:      r.server,
@@ -591,10 +590,9 @@ func (r *relay) audit(tool string, args map[string]any, disp approvals.Dispositi
 		Disposition: disp,
 		Error:       approvals.ScrubError(errMsg),
 		ApprovalID:  approvalID,
-		At:          now.UnixMilli(),
-		// ExpiresAt stays zero: the store stamps it from its own clock, so
-		// TTL behaviour is pinned in one place and the relay holds no retention
-		// rule of its own.
+		// At and ExpiresAt stay zero: the store stamps both from one clock, so
+		// the retention window is exactly 90 days by its own reckoning and TTL
+		// behaviour is pinned in one place. The relay holds no clock rule.
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()

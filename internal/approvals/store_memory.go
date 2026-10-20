@@ -172,8 +172,14 @@ func (m *MemoryStore) Audit(_ context.Context, e AuditEntry) error {
 	}
 	// Same 90-day contract as Mongo: the cap below is a memory bound, not the
 	// retention policy.
+	// One clock stamps both: otherwise TTL is storeClock+90d minus a caller's
+	// At, not exactly the window this store promises.
+	now := m.now()
+	if e.At == 0 {
+		e.At = now.UnixMilli()
+	}
 	if e.ExpiresAt.IsZero() {
-		e.ExpiresAt = m.now().Add(AuditTTL)
+		e.ExpiresAt = now.Add(AuditTTL)
 	}
 	e.Args = Redact(e.Args)
 	m.audit[e.ID] = e
