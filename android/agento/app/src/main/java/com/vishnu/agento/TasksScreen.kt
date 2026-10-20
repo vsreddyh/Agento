@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 
 package com.vishnu.agento
 
@@ -10,6 +10,8 @@ package com.vishnu.agento
  * list, which carries exactly what this file uses.
  */
 import android.content.Context
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,7 +33,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import java.util.Locale
@@ -372,7 +376,8 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     }
 }
 
-/** One project card: title + note + colored status chip + timestamp + menu. */
+/** One project card: title + note + colored status chip + timestamp + menu.
+ * Long-press opens the edit dialog. */
 @Composable
 internal fun TaskCard(
     task: ServerProject,
@@ -382,7 +387,16 @@ internal fun TaskCard(
 ) {
     var rowMenu by remember(task.id) { mutableStateOf(false) }
     val status = normalizeStatus(task.status)
-    Card(modifier = Modifier.fillMaxWidth()) {
+    val haptics = LocalHapticFeedback.current
+    Card(
+        modifier = Modifier.fillMaxWidth().combinedClickable(
+            onClick = {},
+            onLongClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                onEdit()
+            },
+        ),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
