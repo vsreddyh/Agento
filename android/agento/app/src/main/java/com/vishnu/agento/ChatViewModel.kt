@@ -360,7 +360,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (text.isBlank()) return
         val cur = _state.value.pending
         _state.value = _state.value.copy(
-            pending = if (cur.isBlank()) text else "${cur.trimEnd()} ${text.trimStart()}",
+            pending = if (cur.isBlank()) text else joinPending(cur, text),
         )
     }
 
@@ -368,16 +368,41 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * Toast-host notice (#339): appended to the queue, so a repeated
      * identical notice re-fires (distinct sequence) instead of deduping
      * silent — and two rapid notifies both surface instead of the second
-     * overwriting the first before the host fires.
+     * overwriting the first before the host fires. Main-confined like all
+     * `_state` writes in this PR's touchpoints (batch decode, camera
+     * callbacks, and every send/queue/flush path hop to Main before
+     * calling in — see the withContext(Main) sites): the remaining
+     * `viewModelScope.launch(IO)` writers are pre-existing (init, totals,
+     * runs, approvals, memory, recovery) and out of scope — the long-term
+     * fix is `MutableStateFlow` + `update {}`, not more hopping.
      */
     fun notify(msg: String, kind: ToastKind = ToastKind.Error) {
+        // Bounded at 3 (#339): ten rapid failures must not queue ten
+        // toasts — the oldest drop, the newest (most relevant) survive.
         _state.value = _state.value.copy(
-            notices = _state.value.notices + ToastNotice(msg, kind, ++noticeSeq),
+            notices = (_state.value.notices + ToastNotice(msg, kind, ++noticeSeq)).takeLast(3),
         )
     }
 
     /** Monotonic notice sequence for re-fire identity (see [notify]). */
     private var noticeSeq = 0L
+
+    /** Single spelling for the thread-load dead-tap answer (#339): nine
+     * call sites share this so the next reword can't fix eight and miss
+     * one. Callers keep their own voice gates; this only owns the words. */
+    private fun notifyLoading() =
+        notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+
+    /** Single spelling for the thread-change staged-discard notice (#339):
+     * four thread-change sites share this for the same reason. */
+    private fun stagedDiscardedNotice() =
+        notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
+
+    /** Single pending-joint spelling (#339): the concatenation gap
+     * normalizes to one space while both sides ride verbatim (pasted-code
+     * indentation included). Every composer-merge site uses this. */
+    private fun joinPending(first: String, second: String): String =
+        "${first.trimEnd()} ${second.trimStart()}"
 
     fun removePendingAttachment(index: Int) {
         val cur = _state.value.pendingAttachments
@@ -456,7 +481,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // the composer belongs to the thread being left, and a parked
         // photo firing into the wrong thread would be a silent mis-send —
         // so the discard itself voices instead of vanishing.
-        val hadStaged = _state.value.pendingAttachments.isNotEmpty()
+        val hadStaged = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
@@ -478,7 +503,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             showRuns = false, runsLoading = false,
         )
         if (hadStaged) {
-            notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
+            stagedDiscardedNotice()
         }
         refreshServerTotals()
         maybeResume(id, ChatThreads.toUi(target.messages))
@@ -531,7 +556,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             retargetApprovals()
             retargetMemory()
             // Same staged-discard voice as switchThread above (#339).
-            val hadStagedOpen = _state.value.pendingAttachments.isNotEmpty()
+            val hadStagedOpen = _state.value.pendingAttachments.wiredPhotoCount() > 0
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(target.messages),
                 threads = summaries(),
@@ -552,7 +577,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 showRuns = false, runsLoading = false,
             )
             if (hadStagedOpen) {
-                notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
+                stagedDiscardedNotice()
             }
             refreshServerTotals()
             maybeResume(id, ChatThreads.toUi(target.messages))
@@ -587,7 +612,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
                 _state.value.pending.isNotBlank()
             ) {
-                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+                notifyLoading()
             }
             return
         }
@@ -610,10 +635,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val parked = when {
             s.queued.isBlank() -> ""
             s.pending.isBlank() -> s.queued
-            else -> "${s.pending.trimEnd()} ${s.queued.trimStart()}"
+            else -> joinPending(s.pending, s.queued)
         }
         // Same staged-discard voice as switchThread (#339).
-        val hadStagedNew = _state.value.pendingAttachments.isNotEmpty()
+        val hadStagedNew = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = parked,
             // Staged photos die with the draft like every other thread
@@ -629,7 +654,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             showRuns = false, runsLoading = false,
         )
         if (hadStagedNew) {
-            notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
+            stagedDiscardedNotice()
         }
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
@@ -654,7 +679,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
                 _state.value.pending.isNotBlank()
             ) {
-                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+                notifyLoading()
             }
             return
         }
@@ -679,10 +704,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val kept = when {
                 d.queued.isBlank() -> ""
                 d.pending.isBlank() -> d.queued
-                else -> "${d.pending.trimEnd()} ${d.queued.trimStart()}"
+                else -> joinPending(d.pending, d.queued)
             }
             // Same staged-discard voice as switchThread (#339).
-            val hadStagedDelete = d.pendingAttachments.isNotEmpty()
+            val hadStagedDelete = d.pendingAttachments.wiredPhotoCount() > 0
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = kept,
@@ -695,7 +720,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 showRuns = false, runsLoading = false,
             )
             if (hadStagedDelete) {
-                notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
+                stagedDiscardedNotice()
             }
         }
         _state.value = _state.value.copy(threads = summaries())
@@ -940,7 +965,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             pending = when {
                 queued.isBlank() -> livePending
                 livePending.isBlank() -> queued
-                else -> "${livePending.trimEnd()} ${queued.trimStart()}"
+                else -> joinPending(livePending, queued)
             },
         )
         // Persist the stopped partial so the interrupted flag (and the
@@ -990,7 +1015,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // draft with no photos staged deserves the same answer, and
             // the photo half counts wired like every marker it gates.
             if (_state.value.pendingAttachments.wiredPhotoCount() > 0 || _state.value.pending.isNotBlank()) {
-                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+                notifyLoading()
             }
             return
         }
@@ -1020,7 +1045,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Voiced on text-or-wired-photos like every notice it gates (#339).
         if (!_state.value.ready) {
             if (text.isNotEmpty() || photos.wiredPhotoCount() > 0) {
-                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+                notifyLoading()
             }
             return
         }
@@ -1124,7 +1149,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (!_state.value.ready &&
                 (text.isNotEmpty() || _state.value.pendingAttachments.wiredPhotoCount() > 0)
             ) {
-                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+                notifyLoading()
             }
             return
         }
@@ -1803,7 +1828,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // draft with no photos staged deserves the same answer, and
             // the photo half counts wired like every marker it gates.
             if (_state.value.pendingAttachments.wiredPhotoCount() > 0 || _state.value.pending.isNotBlank()) {
-                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+                notifyLoading()
             }
             return
         }
@@ -1834,7 +1859,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // draft with no photos staged deserves the same answer, and
             // the photo half counts wired like every marker it gates.
             if (_state.value.pendingAttachments.wiredPhotoCount() > 0 || _state.value.pending.isNotBlank()) {
-                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+                notifyLoading()
             }
             return
         }
@@ -1858,10 +1883,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Edits a user message and resends from there (#122 Replace): history
      * after [index] is dropped. Callers confirm first when turns are lost. */
     fun replaceAndResend(index: Int, text: String) {
-        // !ready voiced like send()/retry() (#339); streaming stays silent
-        // (editor affordances hide while streaming — no dead tap reachable).
+        // !ready voiced like send()/retry() (#339): gated on staged
+        // content like the siblings — an empty composer voices nothing.
+        // Streaming stays silent (editor affordances hide while streaming —
+        // no dead tap reachable).
         if (!_state.value.ready) {
-            notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notifyLoading()
+            }
             return
         }
         if (_state.value.streaming) return
@@ -1911,9 +1942,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Forks a thread at an edited user message (#122): the copy (up to and
      * including the replacement) becomes a new conversation and sends. */
     fun forkAndResend(index: Int, text: String) {
-        // Same gate split as Replace above (#339).
+        // Same gated voice as Replace above (#339).
         if (!_state.value.ready) {
-            notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notifyLoading()
+            }
             return
         }
         if (_state.value.streaming) return
@@ -2444,7 +2479,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 pending = when {
                     live.isBlank() -> restore
                     restore.isEmpty() -> live
-                    else -> "${live.trimEnd()} ${restore.trimStart()}"
+                    else -> joinPending(live, restore)
                 },
             )
             return
@@ -2542,7 +2577,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             pending = if (s.pending.isBlank()) {
                 s.queued
             } else {
-                "${s.pending.trimEnd()} ${s.queued.trimStart()}"
+                joinPending(s.pending, s.queued)
             },
             queued = "",
         )

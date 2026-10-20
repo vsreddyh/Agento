@@ -389,6 +389,26 @@ internal fun ChatTab(
     // explicitly, since the callback runs post-switch) — and a mismatch
     // at any Main hop drops the batch with notice instead of staging
     // thread-A photos into thread B (see isThreadCurrent).
+    // Best-effort file cleanup, shared by every delete below (#339):
+    // exists()/delete() are disk IO, and callers run on Main
+    // picker/camera callbacks — so fire-and-forget off-main. NonCancellable
+    // like the batch finally: a tab-leave racing the call must not cancel
+    // the cleanup it just scheduled. And when the scope is already dead
+    // (tab left / rotation race), no child will run at all — NonCancellable
+    // can't resurrect a dead parent — so delete inline instead: unlink is
+    // a metadata op, safe on Main as a last resort, strictly better than
+    // an orphan. Declared before first use: batch returns, camera
+    // callback, and launch-failure path all call it.
+    fun deleteQuietly(f: File?) {
+        if (f == null) return
+        if (scope.isActive) {
+            scope.launch(Dispatchers.IO + NonCancellable) {
+                runCatching { f.takeIf { it.exists() }?.delete() }
+            }
+        } else {
+            runCatching { f.takeIf { it.exists() }?.delete() }
+        }
+    }
     fun processUris(
         uris: List<Uri>,
         cleanup: File? = null,
@@ -400,18 +420,6 @@ internal fun ChatTab(
         // callback would stick the flag and leak the capture forever.
         // The capture itself is deleted here too — the finally below only
         // runs when the batch body starts.
-        // Best-effort cleanup off-main (#339): exists()/delete() are disk
-        // IO, and these early returns run on Main picker/camera callbacks.
-        // Fire-and-forget is safe — deletes never gate anything below.
-        // NonCancellable like the batch finally: a tab-leave racing the
-        // return must not cancel the cleanup it just scheduled.
-        // Declared first: every return below calls it.
-        fun deleteQuietly(f: File?) {
-            if (f == null) return
-            scope.launch(Dispatchers.IO + NonCancellable) {
-                runCatching { f.takeIf { it.exists() }?.delete() }
-            }
-        }
         if (uris.isEmpty()) {
             deleteQuietly(cleanup)
             onBatchDone()
@@ -524,6 +532,21 @@ internal fun ChatTab(
                     // needs.
                     val result = prepareAttachment(appContext, u)
                     withContext(Dispatchers.Main) {
+                        // Home re-checked AFTER the decode (#339): the
+                        // pre-decode gate above and this hop bracket ~100ms
+                        // of blocking IO per photo — a thread switch landing
+                        // inside would otherwise stage thread-A photos into
+                        // thread B's composer, the exact mis-send class
+                        // homeThread exists to prevent. Drops with notice;
+                        // the photo is decoded and discarded (no restage —
+                        // the user re-picks in the right thread).
+                        if (!vm.isThreadCurrent(homeThread)) {
+                            vm.notify(
+                                "Thread switched — photos dropped, pick again.",
+                                ToastKind.Info,
+                            )
+                            return@withContext
+                        }
                         // State notices, not composition toasts (#339): a
                         // decode failure must survive rotation like the cap
                         // refusals do — same lifetime for every attach error.
@@ -622,10 +645,8 @@ internal fun ChatTab(
             }, cameraThread ?: vm.threadIdNow())
             cameraThread = null
         } else {
-            // Same fire-and-forget cleanup (NonCancellable inside).
-            scope.launch(Dispatchers.IO + NonCancellable) {
-                runCatching { f?.takeIf { it.exists() }?.delete() }
-            }
+            // Shared dead-scope-safe cleanup (inline when the scope died).
+            deleteQuietly(f)
             cameraPath = null
             // The third case above (ok + lost Uri): a capture deleted with
             // no notice would be silent data loss, so the impossible edge
@@ -664,6 +685,14 @@ internal fun ChatTab(
         // isDirectory, not exists: a stray FILE at this path would
         // otherwise pass the check and fail downstream as a generic
         // couldn't-start-the-camera instead of storage-unavailable.
+        // Snapshot Main state BEFORE the IO hop (#339): cameraBusy/cameraPath
+        // are remember-backed snapshot state — reading them inside the IO
+        // block risks illegal/stale snapshot access on low-end devices, and
+        // a stale cameraBusy=false could delete the in-flight capture
+        // mid-decode. Snapshots are plain values; the IO block never
+        // touches snapshot state again.
+        val wasBusy = cameraBusy
+        val prevPath = cameraPath
         scope.launch(Dispatchers.IO) {
             val dir = File(appTapContext.cacheDir, "camera")
             if (!dir.isDirectory && !dir.mkdirs()) {
@@ -675,10 +704,9 @@ internal fun ChatTab(
             // Skip the delete while a capture is decoding (#339): a rapid
             // re-tap would delete the in-flight file mid-read and turn a good
             // capture into a "moved or deleted" error. The in-flight batch's
-            // own cleanup deletes its file when it lands. Snapshot reads
-            // (cameraBusy/cameraPath) are Main-thread-safe.
-            if (!cameraBusy) {
-                runCatching { cameraPath?.let(::File)?.takeIf { it.exists() }?.delete() }
+            // own cleanup deletes its file when it lands.
+            if (!wasBusy) {
+                runCatching { prevPath?.let(::File)?.takeIf { it.exists() }?.delete() }
             }
             // UUID, not millis (#339): a rapid double-tap can mint the same
             // millisecond twice and point two captures at one file.
@@ -696,7 +724,9 @@ internal fun ChatTab(
             withContext(Dispatchers.Main) {
                 if (uri == null) {
                     vm.notify("Couldn't start the camera.")
-                    runCatching { file.takeIf { it.exists() }?.delete() }
+                    // Shared helper (dead-scope-safe), not an inline
+                    // exists()/delete() on Main (#339).
+                    deleteQuietly(file)
                     return@withContext
                 }
                 cameraUri = uri
@@ -716,9 +746,7 @@ internal fun ChatTab(
                 }.onFailure {
                     cameraPendingSince = 0L
                     cameraPath = null
-                    scope.launch(Dispatchers.IO + NonCancellable) {
-                        runCatching { file.takeIf { it.exists() }?.delete() }
-                    }
+                    deleteQuietly(file)
                     vm.notify("Couldn't start the camera.")
                 }
             }
@@ -730,6 +758,13 @@ internal fun ChatTab(
     // false+never-asked → toast; false+asked → Settings. Saveable: a
     // rotation between request and result must not lose the ask.
     var cameraAskedBefore by rememberSaveable { mutableStateOf(false) }
+    // Fresh Activity at callback time (#339): the launcher registration
+    // must not pin the pre-rotation Activity for rationale routing or the
+    // Settings intent — updated-state always holds the latest composition's
+    // Activity, and package/launch work uses the app context (never an
+    // Activity at all).
+    val appPermContext = context.applicationContext
+    val currentActivity = rememberUpdatedState(context.findActivity())
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -739,7 +774,7 @@ internal fun ChatTab(
         cameraPendingSince = 0L
         if (granted) {
             launchCamera()
-        } else if (context.findActivity()?.let {
+        } else if (currentActivity.value?.let {
                 // Unknown (null Activity) defaults to Settings (#339):
                 // without an Activity there is no rationale UI to consult,
                 // and the re-toast branch would loop forever — the escape
@@ -802,14 +837,17 @@ internal fun ChatTab(
     // not the error banner: the banner's Retry resends a TURN, which is
     // wrong for a staging problem. Head-first through the queue (#339):
     // two rapid notifies both surface instead of the second overwriting
-    // the first. Consumed after showing so rotation never replays them.
+    // the first. Consume-BEFORE-toast: a rotation landing between show and
+    // consume would otherwise replay the head in the new composition
+    // (double toast). Safe ordering only because toast() is synchronous —
+    // no suspension point sits between the two where cancel could land.
     // Keyed on the entry (text+kind+seq) so identical repeats re-fire
     // rather than deduping into a dead second tap.
     val headNotice = state.notices.firstOrNull()
     LaunchedEffect(headNotice) {
         if (headNotice != null) {
-            toasts.toast(headNotice.text, headNotice.kind)
             vm.consumeNotice()
+            toasts.toast(headNotice.text, headNotice.kind)
         }
     }
     // #64: never show raw "not set" — the header shows the model name when
@@ -875,11 +913,15 @@ internal fun ChatTab(
                 TextButton(
                     onClick = {
                         showCameraSettings = false
+                        // App context, not the composition Activity (#339):
+                        // the dialog may outlive a rotation, and the intent
+                        // carries NEW_TASK already — no Activity needed.
+                        val appDlgContext = context.applicationContext
                         runCatching {
-                            context.startActivity(
+                            appDlgContext.startActivity(
                                 Intent(
                                     Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                    Uri.fromParts("package", context.packageName, null),
+                                    Uri.fromParts("package", appDlgContext.packageName, null),
                                 ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                             )
                         }
@@ -1815,6 +1857,15 @@ internal fun ChatScreen(
                 if (heard.trimEnd('.', '!', '?').equals("stop", ignoreCase = true)) {
                     endLive()
                 } else {
+                    // Blank results (silence frames) park nothing (#339):
+                    // without this, an empty heard takes the staged branch
+                    // and toasts "photo still staged" for literal silence —
+                    // but the loop still re-arms (the round-57 stall fix
+                    // applies to silence too: the cycle is over either way).
+                    if (heard.isBlank()) {
+                        liveListen()
+                        return
+                    }
                     silentRounds = 0
                     // Staging reads come from the callback, not the snapshot
                     // (#339): the composition state can lag by a

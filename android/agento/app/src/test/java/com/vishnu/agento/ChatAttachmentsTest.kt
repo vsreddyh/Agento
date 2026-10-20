@@ -205,6 +205,35 @@ class ChatAttachmentsTest {
         )
     }
 
+    @Test
+    fun decodabilityPinsInputShapes() {
+        // Every shape canonicalizeAttachments() depends on (#339):
+        // whitespace (wrapped legacy), URL-safe alphabet, ragged length,
+        // all-padding, and giants all fail — only clean standard base64
+        // passes. Same-module test, so internal is visible.
+        assertTrue(isDecodableBase64("AAA="))
+        assertTrue(isDecodableBase64("TWFu"))
+        assertFalse(isDecodableBase64("AAA=\n"))
+        assertFalse(isDecodableBase64("AA A="))
+        assertFalse(isDecodableBase64("AB-_"))
+        assertFalse(isDecodableBase64("AAA"))
+        assertFalse(isDecodableBase64("===="))
+        assertFalse(isDecodableBase64(""))
+        assertFalse(isDecodableBase64("A".repeat(MAX_RAW_BASE64_CHARS + 4)))
+    }
+
+    @Test
+    fun dataUriRejectsRaggedPayload() {
+        // The wall the wire filter relies on (#339): a ragged payload
+        // reaching a direct caller throws the typed error, never renders.
+        try {
+            ChatAttachment(base64 = "!!!not-base64!!!").dataUri()
+            fail("ragged payload must throw, not render a corrupt data URI")
+        } catch (e: NamedAttachError) {
+            // Expected: typed pass-through bucket, not generic remap.
+        }
+    }
+
     // Content rule + markers.
 
     @Test

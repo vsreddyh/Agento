@@ -71,6 +71,14 @@ fun List<ChatAttachment>.wiredPhotoCount(): Int =
  * (the only place validity matters) are rare. */
 private fun ChatAttachment.isWired(): Boolean = base64.isNotBlank()
 
+/** Absolute raw-length ceiling for untrusted payloads (#339): no scan,
+// copy, or decode runs past this many chars no matter what the decoded
+ * size would be — 100 MB of spaces + a tiny payload must not buy a full
+ * walk plus a full copy before blanking. 4 M chars sits far above any
+ * legitimate payload (~1.5 M + framing whitespace) and far below danger.
+ * Checked FIRST (O(1)) in every validity/scan path below. */
+const val MAX_RAW_BASE64_CHARS = 4_000_000
+
 /** Decode-validity for the wire filter (#339): blank payloads never reach
  * here (isWired), but a hand-edited ragged payload (bad length, non-base64
  * alphabet) must not emit `data:...;base64,<ragged>` into an image_url
@@ -87,7 +95,7 @@ private fun ChatAttachment.isWired(): Boolean = base64.isNotBlank()
  * normalize first, or its photos will wire as text-only with no marker
  * (silent-looking data loss, by this design on purpose). */
 internal fun isDecodableBase64(s: String): Boolean {
-    if (s.isEmpty() || s.length % 4 != 0) return false
+    if (s.isEmpty() || s.length % 4 != 0 || s.length > MAX_RAW_BASE64_CHARS) return false
     var paddingStarted = false
     for ((i, c) in s.withIndex()) {
         if (c == '=') {
@@ -126,10 +134,14 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
         // Single-walk fast path (#339): isDecodableBase64 already rejects
         // whitespace, so no separate none{isWhitespace} proof walk — clean
         // payloads (everything this app writes) validate allocation-free
-        // and return untouched; the stripping copy below runs solely for
-        // payloads that actually need it (hand-edited or legacy).
+        // and return untouched. Giants never reach the strip copy: the
+        // raw ceiling inside isDecodableBase64 fails them O(1), and the
+        // explicit length check below blanks them without building a
+        // 100 MB filtered copy first.
         if (isDecodableBase64(a.base64)) {
             a
+        } else if (a.base64.length > MAX_RAW_BASE64_CHARS) {
+            a.copy(base64 = "")
         } else {
             val stripped = a.base64.filterNot { c -> c.isWhitespace() }
             when {
@@ -196,6 +208,18 @@ fun ChatAttachment.dataUri(): String {
     if (base64.isBlank()) {
         throw NamedAttachError(
             "ChatAttachment.dataUri requires a non-blank payload (filter wiredPhotos() first)",
+        )
+    }
+    // Decodability asserted too, not just non-blankness (#339): the wire
+    // filter requires wired + decodable, so a wrapped ("AAA=\n") or ragged
+    // ("!!!") payload reaching a direct caller must fail here — never emit
+    // a corrupt multiline/invalid data: URI while isWired() counts it as a
+    // photo and the wire drops it (UI claiming a photo that wires as bare
+    // text). Unreachable via canonical memory (load blanks these); this is
+    // the wall for future direct callers.
+    if (!isDecodableBase64(base64)) {
+        throw NamedAttachError(
+            "ChatAttachment.dataUri requires a decodable payload (ragged base64 never wires)",
         )
     }
     return "data:image/jpeg;base64,$base64"
@@ -737,13 +761,13 @@ fun decodeThumbnail(base64: String): Bitmap? {
     // propagate too, matching the stage path — a corrupt payload still
     // lands null via the Exception branch, never via masking the JVM.
     return try {
-        // Gated on decoded size, not raw length (#339): base64Bytes
-        // excludes framing whitespace the raw length counts, so a wrapped
-        // hand-edited payload gates on what decode will actually read.
-        // O(1) fast path first: decoded bytes never exceed raw chars, so a
-        // raw length at/below the cap skips the full scan — clean payloads
-        // (always ≤ cap by the staging invariant) pay zero walk, and only
-        // over-length raws run the precise measure for the wrapped edge.
+        // Absolute raw ceiling first (#339): no scan or decode runs on
+        // giants regardless of decoded size (see MAX_RAW_BASE64_CHARS).
+        // Then the decoded-size gate with its O(1) raw-length fast path
+        // (decoded bytes never exceed raw chars, so at/below-cap raws skip
+        // the full walk; only over-length raws pay the precise measure for
+        // the whitespace-wrapped edge).
+        if (base64.length > MAX_RAW_BASE64_CHARS) return null
         if (base64.length > MAX_IMAGE_BASE64_CHARS &&
             base64Bytes(base64) > MAX_IMAGE_BASE64_CHARS * 3L / 4L
         ) {
