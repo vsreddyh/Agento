@@ -227,4 +227,11 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	if _, err := s.List(ctx, Filter{Profile: "p", Status: Status("maybe")}); err == nil {
 		t.Fatal("unknown status should fail")
 	}
+	// An empty profile fans out across profiles, so it fails instead.
+	if _, err := s.List(ctx, Filter{}); err == nil {
+		t.Fatal("empty-profile list should fail")
+	}
+	if _, err := s.PausedTopics(ctx, "  "); err == nil {
+		t.Fatal("empty-profile paused should fail")
+	}
 }

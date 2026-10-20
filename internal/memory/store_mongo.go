@@ -197,6 +197,10 @@ func (s *MongoStore) DeleteAll(ctx context.Context, profile string) (int64, erro
 // List returns matching items, newest-created first (stable order; see
 // MemoryStore.List).
 func (s *MongoStore) List(ctx context.Context, f Filter) ([]Item, error) {
+	f.Profile = strings.TrimSpace(f.Profile)
+	if f.Profile == "" {
+		return nil, NewStoreError("memory list needs a profile", false)
+	}
 	// An unknown status is a caller bug, not an empty list: both writers
 	// validate first, but the store is the backstop, like the text invariant.
 	if f.Status != "" && !f.Status.Valid() {
@@ -260,6 +264,9 @@ func (s *MongoStore) SetTopicPaused(ctx context.Context, profile, topic string, 
 // backend sorts too, so the screen sees one deterministic order per backend.
 func (s *MongoStore) PausedTopics(ctx context.Context, profile string) ([]string, error) {
 	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return nil, NewStoreError("memory topics need a profile", false)
+	}
 	var doc struct {
 		Paused []string `bson:"paused"`
 	}

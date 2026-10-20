@@ -105,6 +105,10 @@ func (s *MemoryStore) Get(_ context.Context, id, profile string) (Item, error) {
 
 // Update applies a partial edit. A foreign profile's id is NotFound, the
 // same 404 the gateway returns for a missing id.
+//
+// UpdatedAt means last write, not last change: a same-value edit still bumps
+// it. Sorting is by CreatedAt, so the bump never re-floats an item.
+
 func (s *MemoryStore) Update(_ context.Context, id, profile string, u Update) (Item, error) {
 	profile = strings.TrimSpace(profile)
 	s.mu.Lock()
@@ -178,6 +182,12 @@ func (s *MemoryStore) DeleteAll(_ context.Context, profile string) (int64, error
 // so the screen and the prompt see the same standing order.
 func (s *MemoryStore) List(_ context.Context, f Filter) ([]Item, error) {
 	f.Profile = strings.TrimSpace(f.Profile)
+	// Empty means nothing here, not "all profiles": every other method is
+	// profile-scoped or rejects "", and the one read that fans out across
+	// profiles would break the per-profile contract.
+	if f.Profile == "" {
+		return nil, NewStoreError("memory list needs a profile", false)
+	}
 	if f.Status != "" && !f.Status.Valid() {
 		return nil, NewStoreError("unknown memory status", false)
 	}
@@ -239,6 +249,9 @@ func (s *MemoryStore) SetTopicPaused(_ context.Context, profile, topic string, p
 // screen reads paused as a list, and null is not a list.
 func (s *MemoryStore) PausedTopics(_ context.Context, profile string) ([]string, error) {
 	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return nil, NewStoreError("memory topics need a profile", false)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []string{}
