@@ -114,8 +114,8 @@ the tool-level failure signal, so a reader can separate "ran and failed" from
 A `relay_`-prefixed error marks a decision the relay made itself, not one a
 tool or a human made: `relay_protocol` (unparseable `tools/call`),
 `relay_notification` (gated call with no reply id), `relay_store` (store
-unavailable) and `relay_evicted` (unanswered row left the pending table at its
-cap). They never reached the tool, so a tool-failure filter must exclude the
+unavailable), `relay_closing` (a gated call arrived after teardown began) and
+`relay_evicted` (unanswered row left the pending table at its cap). They never reached the tool, so a tool-failure filter must exclude the
 prefix — and `denied` **without** the prefix means a human said no. The same
 convention applies to the synthetic tool name `(malformed)`: it is the audit
 entry for a frame the relay could not parse, and the app may show it as such

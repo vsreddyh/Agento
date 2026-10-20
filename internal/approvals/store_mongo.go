@@ -157,7 +157,13 @@ func (s *MongoStore) DecideApproval(ctx context.Context, id string, approved boo
 			// expired) reads 409. One extra read, failure path only.
 			var probe Approval
 			if perr := s.approvals.FindOne(ctx, bson.M{"_id": id}).Decode(&probe); perr != nil {
-				return Approval{}, &StoreError{Msg: "unknown approval " + id, NotFound: true}
+				if errors.Is(perr, mongoDrv.ErrNoDocuments) {
+					return Approval{}, &StoreError{Msg: "unknown approval " + id, NotFound: true}
+				}
+				// The probe failed for the same reason the decide did (outage,
+				// timeout): that is upstream, not a 404. Reporting 404 would
+				// tell the app the row never existed while Mongo was down.
+				return Approval{}, NewStoreError("approval decide probe failed: "+perr.Error(), true)
 			}
 			return Approval{}, &StoreError{Msg: "approval " + id + " is not pending", Conflict: true}
 		}
@@ -248,6 +254,9 @@ func (s *MongoStore) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 	if f.Tool != "" {
 		filter["tool"] = f.Tool
 	}
+	// Same expiresAt boundary as the memory backend and ListApprovals: TTL
+	// deletion lags, and the two stores must answer one query identically.
+	filter["expiresAt"] = bson.M{"$gt": time.Now()}
 	cur, err := s.audit.Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "at", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(int64(limit)))
 	if err != nil {

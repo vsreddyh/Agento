@@ -9,13 +9,22 @@ import (
 
 // MemoryStore is the fallback when MongoDB is unavailable, and what the
 // relay and gateway tests use. Same contract as the Mongo backend, minus
-// durability and minus TTL enforcement (expiry is checked per read, like the
-// runs fallback).
+// durability: expiry is enforced lazily per read instead of by a TTL monitor.
 type MemoryStore struct {
 	mu        sync.Mutex
 	approvals map[string]Approval
 	audit     map[string]AuditEntry
 	now       func() time.Time
+	// Logf is optional and nil-silent. It exists so a duplicate create reads
+	// the same in triage per backend; ids are ObjectIDs, so this is a retry,
+	// not a collision.
+	Logf func(string, ...any)
+}
+
+func (m *MemoryStore) logf(format string, args ...any) {
+	if m.Logf != nil {
+		m.Logf(format, args...)
+	}
 }
 
 // Shared reports false: this store lives in one process only.
@@ -42,6 +51,7 @@ func (m *MemoryStore) CreateApproval(_ context.Context, a Approval) error {
 		return NewStoreError("approval create needs an id", false)
 	}
 	if _, exists := m.approvals[a.ID]; exists {
+		m.logf("approvals: ignored duplicate create for %s", a.ID)
 		return nil
 	}
 	now := m.now()

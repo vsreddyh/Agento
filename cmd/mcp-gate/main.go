@@ -341,7 +341,28 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 		// agent call at a time, and each hold ends at waitFor regardless. A
 		// semaphore here would queue sensitive calls behind each other for no
 		// gain the turn's own serialisation does not already give.
+		// Under the same lock beginClose takes: after closing is set, no Add
+		// can land while run() is in holdWG.Wait() (a panic, not a lost row),
+		// and the budget snapshot below cannot be undersized by a late hold.
+		r.auditMu.Lock()
+		if r.closing {
+			r.auditMu.Unlock()
+			// Teardown: nothing will decide this call, so fail closed now
+			// rather than park a row the exiting relay can never release.
+			r.log.Printf("denying %s/%s: relay is shutting down", r.server, params.Name)
+			r.audit(params.Name, approvals.Redact(params.Arguments),
+				approvals.DispositionDenied,
+				"relay_closing: relay is shutting down; failed closed", "")
+			if hasReplyID(env.ID) {
+				if werr := r.writePi(rpcError(env.ID, -32000,
+					"relay is shutting down; failed closed")); werr != nil {
+					r.log.Printf("write to Pi failed: %v", werr)
+				}
+			}
+			continue
+		}
 		r.holdWG.Add(1)
+		r.auditMu.Unlock()
 		go func() {
 			defer r.holdWG.Done()
 			r.holdCall(line, env, params)
@@ -623,7 +644,11 @@ func (r *relay) auditAsync(tool string, args map[string]any,
 	}()
 }
 
-// beginClose stops new detached audits; later ones run inline.
+// beginClose stops new detached audits; later ones run inline. Inline is not
+// a survival guarantee for a pump that is still alive: only hold-path rows are
+// joined, and a frame the Pi pump handles during the teardown budget still
+// races process exit. It is best-effort by construction — and correct, because
+// such a frame arrived after the pair had already ended.
 func (r *relay) beginClose() {
 	r.auditMu.Lock()
 	r.closing = true

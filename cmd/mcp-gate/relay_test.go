@@ -488,3 +488,34 @@ func TestAuditAsyncIsInlineAfterClose(t *testing.T) {
 		t.Fatalf("audit = %+v, want the row written synchronously", audit)
 	}
 }
+
+// A gated call arriving after teardown starts is denied inline: it cannot be
+// parked (the relay is exiting) and it must not Add to a WaitGroup already
+// being waited on.
+func TestGatedCallAfterCloseFailsClosed(t *testing.T) {
+	store := approvals.NewMemoryStore()
+	out, child := &bufWriter{}, &bufWriter{}
+	r := testRelay(store)
+	r.out = out
+	r.childIn = child
+	r.beginClose()
+
+	line := `{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"delete_note","arguments":{"id":"abc"}}}` + "\n"
+	if err := r.pumpPiToChild(strings.NewReader(line)); err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	if child.String() != "" {
+		t.Fatalf("closing relay forwarded the call: %q", child.String())
+	}
+	if !strings.Contains(out.String(), "shutting down") {
+		t.Fatalf("Pi got no shutdown error: %q", out.String())
+	}
+	if list, _ := store.ListApprovals(context.Background(), approvals.ApprovalFilter{}); len(list) != 0 {
+		t.Fatalf("closing relay parked an approval: %+v", list)
+	}
+	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionDenied ||
+		!strings.Contains(audit[0].Error, "relay_closing") {
+		t.Fatalf("audit = %+v", audit)
+	}
+}
