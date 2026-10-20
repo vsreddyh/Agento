@@ -118,17 +118,33 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // win; only the latest job may clear busy.
     var loadJob by remember { mutableStateOf<Job?>(null) }
 
+    val teachApi = remember { TeachApi(context) }
+
+    /** Taught load with the same single-flight + path guard as load(): a
+     * profile switch mid-flight must not land old rows on the new path. */
+    var taughtJob by remember { mutableStateOf<Job?>(null) }
+
     fun loadTaught(path: String) {
         // One call carries every row the review surface needs; failures
         // keep old rows behind the section error, never a wipe.
         taughtError = ""
-        scope.launch {
-            val tr = TeachApi(context).listSkills(path)
-            taughtError = tr.exceptionOrNull()?.let {
-                "Taught skills unavailable (${it.message?.take(60) ?: "error"})."
-            } ?: ""
-            tr.getOrNull()?.let { taught = it }
+        taughtJob?.cancel()
+        var job: Job? = null
+        job = scope.launch {
+            try {
+                val tr = teachApi.listSkills(path)
+                ensureActive()
+                if (taughtJob == job && path == ChatApi(context).pathFor(profile)) {
+                    taughtError = tr.exceptionOrNull()?.let {
+                        "Taught skills unavailable (${it.message?.take(60) ?: "error"})."
+                    } ?: ""
+                    tr.getOrNull()?.let { taught = it }
+                }
+            } finally {
+                // No busy flag: the section repaints under the main spinner.
+            }
         }
+        taughtJob = job
     }
 
     fun load() {
@@ -159,16 +175,22 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     }
 
     /** Runs one taught-skill write, then reloads the section when it
-     * succeeds. Errors name the write, never the body; the dialog stays
-     * open with its context so a failure does not eat the edit. */
-    fun mutate(action: suspend (TeachApi, String) -> Any?) {
+     * succeeds. The action returns a Result which is folded here: returning
+     * it unfolded would reload silently on failure with no error shown.
+     * Errors name the write, never the body; the dialog stays open with its
+     * context so a failure does not eat the edit. */
+    fun mutate(
+        action: suspend (TeachApi, String) -> Result<*>,
+        onSuccess: () -> Unit = {},
+    ) {
         val path = ChatApi(context).pathFor(profile)
         managingBusy = true
         managingError = ""
         scope.launch {
             try {
-                action(TeachApi(context), path)
+                action(teachApi, path).getOrThrow()
                 ensureActive()
+                onSuccess()
                 loadTaught(path)
             } catch (e: Exception) {
                 ensureActive()
@@ -178,6 +200,9 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             }
         }
     }
+
+    /** Successful saves, consumed by the dialog to collapse its editor. */
+    var editSaves by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) { load() }
 
@@ -365,16 +390,15 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             ) {
                                 TextButton(
                                     onClick = {
-                                        val n = newName
-                                        val d = newDescription
-                                        val b = newBody
+                                        val n = newName.trim()
+                                        val d = newDescription.trim()
+                                        val b = newBody.trim()
                                         managingBusy = true
                                         managingError = ""
                                         scope.launch {
                                             try {
-                                                val api = TeachApi(context)
                                                 val path = ChatApi(context).pathFor(profile)
-                                                api.createDraft(path, n.trim(), d.trim(), b.trim())
+                                                teachApi.createDraft(path, n, d, b).getOrThrow()
                                                 ensureActive()
                                                 newName = ""
                                                 newDescription = ""
@@ -389,7 +413,11 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                             }
                                         }
                                     },
-                                    enabled = !managingBusy && newName.isNotBlank() && newBody.isNotBlank(),
+                                    // All three: the server requires name,
+                                    // description and body, so enabling on a
+                                    // subset would only earn a 400.
+                                    enabled = !managingBusy && newName.trim().isNotBlank() &&
+                                        newDescription.trim().isNotBlank() && newBody.trim().isNotBlank(),
                                 ) {
                                     Text(if (managingBusy) "Saving…" else "Save draft")
                                 }
@@ -455,13 +483,17 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     if (open != null) {
         TeachDialog(
             skill = open,
+            editSaves = editSaves,
             testOutput = testOutput,
             acting = managingBusy,
             error = managingError,
             onSaveEdit = { name, description, body ->
-                mutate { api, path ->
-                    api.updateSkill(path, open.id, name = name, description = description, body = body)
-                }
+                mutate(
+                    action = { api, path ->
+                        api.updateSkill(path, open.id, name = name, description = description, body = body)
+                    },
+                    onSuccess = { editSaves++ },
+                )
             },
             onTest = { input ->
                 testOutput = ""
@@ -479,9 +511,13 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 mutate { api, path -> api.promoteSkill(path, open.id, schedule, name) }
             },
             onDelete = {
+                // Close only on success: mutate's onSuccess runs after the
+                // write lands, so a failure keeps the dialog with its error.
                 val id = open.id
-                mutate { api, path -> api.deleteSkill(path, id) }
-                managing = null
+                mutate(
+                    action = { api, path -> api.deleteSkill(path, id) },
+                    onSuccess = { managing = null },
+                )
             },
             onClose = { managing = null },
         )

@@ -515,7 +515,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val result = teachApi.createDraft(path, name.trim(), description.trim(), body)
             withContext(Dispatchers.Main) {
-                if (_state.value.path != path) return@withContext
+                // Always answered, even across a profile switch: the dialog
+                // spins on this callback, and a stuck "Saving…" is worse
+                // than a toast for the old profile.
                 done(
                     if (result.isSuccess) null
                     else "Couldn't save draft" +

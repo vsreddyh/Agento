@@ -212,7 +212,9 @@ internal fun ChatTab(
         var saving by remember(savingId) { mutableStateOf(false) }
         var saveError by remember(savingId) { mutableStateOf("") }
         AlertDialog(
-            onDismissRequest = { savingSkillId = null },
+            // No dismiss mid-save: the callback toasts on landing, and a
+            // cancelled dialog must not celebrate a save nobody saw start.
+            onDismissRequest = { if (!saving) savingSkillId = null },
             title = { Text("Save as skill") },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -260,7 +262,9 @@ internal fun ChatTab(
                             }
                         }
                     },
-                    enabled = !saving && skillName.isNotBlank() && skillDescription.isNotBlank(),
+                    // Trimmed: "   " passes isNotBlank but sends "".
+                    enabled = !saving && skillName.trim().isNotBlank() &&
+                        skillDescription.trim().isNotBlank(),
                 ) {
                     Text(if (saving) "Saving…" else "Save draft")
                 }

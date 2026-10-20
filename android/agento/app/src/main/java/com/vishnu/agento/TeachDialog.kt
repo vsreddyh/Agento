@@ -13,6 +13,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,9 @@ internal fun TeachDialog(
     testOutput: String,
     acting: Boolean,
     error: String,
+    /** Successful saves from the screen: each increment collapses an open
+     * editor, so a saved edit never lingers over fresh rows. */
+    editSaves: Int = 0,
     onSaveEdit: (String, String, String) -> Unit,
     onTest: (String) -> Unit,
     onActivate: () -> Unit,
@@ -52,7 +56,10 @@ internal fun TeachDialog(
     var testInput by remember(skill.id) { mutableStateOf("") }
     var schedule by remember(skill.id) { mutableStateOf("") }
     var promoteName by remember(skill.id) { mutableStateOf("") }
-    var deleteArmed by remember { mutableStateOf(false) }
+    var deleteArmed by remember(skill.id) { mutableStateOf(false) }
+    LaunchedEffect(editSaves) {
+        if (editSaves > 0) editing = false
+    }
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text(skill.name.ifBlank { "Skill" }) },
@@ -173,7 +180,10 @@ internal fun TeachDialog(
                                     TextButton(onClick = onDisable, enabled = !acting) {
                                         Text("Disable")
                                     }
-                                } else if (!skill.isDisabled()) {
+                                } else {
+                                    // Drafts and disabled rows alike: the
+                                    // server refuses untested activations
+                                    // with a message, so both offer it.
                                     TextButton(onClick = onActivate, enabled = !acting) {
                                         Text(if (acting) "Working…" else "Activate")
                                     }

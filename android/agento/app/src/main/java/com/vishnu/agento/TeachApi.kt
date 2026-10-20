@@ -73,9 +73,6 @@ class TeachApi(context: Context) {
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
-
-        internal fun encode(v: String): String =
-            ApprovalsApi.encode(v)
     }
 
     private fun base(): String {
@@ -172,7 +169,7 @@ class TeachApi(context: Context) {
         if (name != null) req.put("name", name)
         if (description != null) req.put("description", description)
         if (body != null) req.put("body", body)
-        call("PUT", "$path/api/skills/${encode(id)}", req).mapCatching {
+        call("PUT", "$path/api/skills/${ApprovalsApi.encode(id)}", req).mapCatching {
             parseTaughtSkill(parseObject(checkOk(it).body).optJSONObject("skill") ?: JSONObject())
                 ?: throw RuntimeException("response had no skill")
         }
@@ -181,7 +178,7 @@ class TeachApi(context: Context) {
     /** Deletes one skill. Its file drops on the next reconcile. */
     suspend fun deleteSkill(path: String, id: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            call("DELETE", "$path/api/skills/${encode(id)}").mapCatching {
+            call("DELETE", "$path/api/skills/${ApprovalsApi.encode(id)}").mapCatching {
                 checkOk(it)
             }.map { }
         }
@@ -195,8 +192,12 @@ class TeachApi(context: Context) {
     ): Result<String> = withContext(Dispatchers.IO) {
         val req = JSONObject()
         if (input.isNotBlank()) req.put("input", input)
-        call("POST", "$path/api/skills/${encode(id)}/test", req).mapCatching {
-            parseObject(checkOk(it).body).optString("output", "")
+        call("POST", "$path/api/skills/${ApprovalsApi.encode(id)}/test", req).mapCatching {
+            // Missing output is unparseable, not empty: a 200 without the
+            // transcript must fail rather than show a blank test.
+            parseObject(checkOk(it).body).optString("output", "__missing__")
+                .takeUnless { it == "__missing__" }
+                ?: throw RuntimeException("response had no output")
         }
     }
 
@@ -204,7 +205,7 @@ class TeachApi(context: Context) {
      * Untested drafts fail with 400: review/test before run. */
     suspend fun activateSkill(path: String, id: String): Result<TaughtSkill> =
         withContext(Dispatchers.IO) {
-            call("POST", "$path/api/skills/${encode(id)}/activate").mapCatching {
+            call("POST", "$path/api/skills/${ApprovalsApi.encode(id)}/activate").mapCatching {
                 parseTaughtSkill(parseObject(checkOk(it).body).optJSONObject("skill") ?: JSONObject())
                     ?: throw RuntimeException("response had no skill")
             }
@@ -213,7 +214,7 @@ class TeachApi(context: Context) {
     /** Disables a skill: its file drops, the model stops seeing it. */
     suspend fun disableSkill(path: String, id: String): Result<TaughtSkill> =
         withContext(Dispatchers.IO) {
-            call("POST", "$path/api/skills/${encode(id)}/disable").mapCatching {
+            call("POST", "$path/api/skills/${ApprovalsApi.encode(id)}/disable").mapCatching {
                 parseTaughtSkill(parseObject(checkOk(it).body).optJSONObject("skill") ?: JSONObject())
                     ?: throw RuntimeException("response had no skill")
             }
@@ -231,7 +232,7 @@ class TeachApi(context: Context) {
         val req = JSONObject().put("schedule", schedule)
         if (name.isNotBlank()) req.put("name", name)
         if (delivery.isNotBlank()) req.put("delivery", delivery)
-        call("POST", "$path/api/skills/${encode(id)}/promote", req).mapCatching {
+        call("POST", "$path/api/skills/${ApprovalsApi.encode(id)}/promote", req).mapCatching {
             parseObject(checkOk(it).body).optJSONObject("job")?.optString("id", "").orEmpty()
                 .ifBlank { throw RuntimeException("response had no job") }
         }
