@@ -141,7 +141,7 @@ func ValidName(raw string) bool {
 
 // CleanDescription trims a description and bounds it by runes.
 func CleanDescription(d string) string {
-	t := collapseWS(d)
+	t := collapseWS(cleanFree(d))
 	if utf8.RuneCountInString(t) > MaxDescription {
 		t = strings.TrimSpace(string([]rune(t)[:MaxDescription]))
 	}
@@ -150,7 +150,7 @@ func CleanDescription(d string) string {
 
 // CleanBody trims a body and bounds it by runes.
 func CleanBody(b string) string {
-	t := strings.TrimSpace(strings.ReplaceAll(b, "\x00", ""))
+	t := strings.TrimSpace(cleanFree(b))
 	if utf8.RuneCountInString(t) > MaxBody {
 		t = strings.TrimSpace(string([]rune(t)[:MaxBody]))
 	}
@@ -171,6 +171,13 @@ func clipRunes(s string, max int) string {
 
 func collapseWS(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// cleanFree strips control bytes every free-text field agrees on: NUL rides
+// nowhere (not Mongo, not JSON, not frontmatter). Whitespace collapsing and
+// clipping stay per-field.
+func cleanFree(s string) string {
+	return strings.ReplaceAll(s, "\x00", "")
 }
 
 // SafeName returns the name if it is valid, else a fixed fallback: a

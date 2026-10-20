@@ -119,10 +119,15 @@ func (s *Server) materialize(profile string) {
 		s.cfg.Logf("teach: list for materialize failed for %s: %v", profile, err)
 		return
 	}
-	if _, skipped, err := s.cfg.TeachMaterialize(profile, skills); err != nil {
-		s.cfg.Logf("teach: materialize failed for %s: %v", profile, err)
-	} else if len(skipped) > 0 {
-		s.cfg.Logf("teach: skipped unrenderable skill(s) for %s: %v", profile, skipped)
+	if _, skipped, err := s.cfg.TeachMaterialize(profile, skills); err != nil || len(skipped) > 0 {
+		// Skips log alongside the error, not instead of it: one failed
+		// write must not hide unrenderable names.
+		if err != nil {
+			s.cfg.Logf("teach: materialize failed for %s: %v", profile, err)
+		}
+		if len(skipped) > 0 {
+			s.cfg.Logf("teach: skipped unrenderable skill(s) for %s: %v", profile, skipped)
+		}
 	}
 }
 
@@ -203,6 +208,10 @@ func (s *Server) handleSkillCollection(w http.ResponseWriter, r *http.Request, p
 			teachError(w, err)
 			return
 		}
+		// Full rows by design: with no GET-by-id route the list carries
+		// everything the review surface needs (body up to 20k runes plus a
+		// 4k transcript per row, up to 100 rows). Do not "optimize" it by
+		// dropping body — the tab edits from this payload.
 		out := make([]any, 0, len(skills))
 		for _, sk := range skills {
 			out = append(out, teachWire(sk))

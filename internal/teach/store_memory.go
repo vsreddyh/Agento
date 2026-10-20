@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // MemoryStore is the in-process backend used when no Mongo URI is
@@ -14,6 +15,16 @@ import (
 type MemoryStore struct {
 	mu     sync.RWMutex
 	skills map[string]Skill
+	// now is the clock every write boundary reads, mirroring MongoStore so
+	// time-dependent behavior pins on both backends. Nil means time.Now.
+	now func() time.Time
+}
+
+func (s *MemoryStore) clock() time.Time {
+	if s.now == nil {
+		return time.Now()
+	}
+	return s.now()
 }
 
 // NewMemoryStore builds an empty store.
@@ -21,7 +32,7 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{skills: make(map[string]Skill)}
 }
 
-func cleanCreate(in Skill) (Skill, error) {
+func cleanCreate(in Skill, now int64) (Skill, error) {
 	in.Profile = strings.TrimSpace(in.Profile)
 	if in.Profile == "" {
 		return Skill{}, NewStoreError("skill needs a profile", false)
@@ -40,10 +51,9 @@ func cleanCreate(in Skill) (Skill, error) {
 	}
 	// Source is client-supplied free text like the rest: trim and clip
 	// instead of riding unbounded.
-	in.Source = clipRunes(strings.TrimSpace(in.Source), MaxSource)
+	in.Source = clipRunes(strings.TrimSpace(cleanFree(in.Source)), MaxSource)
 	// CreatedAt is always stamped: a client-supplied past instant would
 	// backdate sort order, and nothing legitimate sets it.
-	now := nowMillis()
 	in.CreatedAt = now
 	in.UpdatedAt = now
 	// Drafts are born drafts: only review + test promote, never the create
@@ -62,7 +72,7 @@ func (s *MemoryStore) Create(_ context.Context, in Skill) (Skill, error) {
 	if in.ID != "" && !ValidID(in.ID) {
 		return Skill{}, NewStoreError("skill id must be 1-64 letters, digits, _ or -", false)
 	}
-	in, err := cleanCreate(in)
+	in, err := cleanCreate(in, s.clock().UnixMilli())
 	if err != nil {
 		return Skill{}, err
 	}
@@ -133,7 +143,7 @@ func (s *MemoryStore) Update(_ context.Context, id, profile string, u Update) (S
 		}
 		it.Body = b
 	}
-	it.UpdatedAt = nowMillis()
+	it.UpdatedAt = s.clock().UnixMilli()
 	s.skills[id] = it
 	return it, nil
 }
@@ -196,7 +206,7 @@ func (s *MemoryStore) SetStatus(_ context.Context, id, profile string, st Status
 		return Skill{}, NewStoreError("test the skill before activating it", false)
 	}
 	it.Status = st
-	it.UpdatedAt = nowMillis()
+	it.UpdatedAt = s.clock().UnixMilli()
 	s.skills[id] = it
 	return it, nil
 }
@@ -212,7 +222,7 @@ func (s *MemoryStore) RecordTest(_ context.Context, id, profile string, at int64
 	}
 	it.TestedAt = at
 	it.TestText = clipRunes(strings.TrimSpace(strings.ReplaceAll(text, "\x00", "")), MaxTestText)
-	it.UpdatedAt = nowMillis()
+	it.UpdatedAt = s.clock().UnixMilli()
 	s.skills[id] = it
 	return it, nil
 }

@@ -126,7 +126,6 @@ func run() error {
 				n, skipped, err := teach.Materialize(teach.RuntimeDir(agentDir, profile), skills)
 				if err != nil {
 					logger.Printf("teach: startup materialize failed for %s: %v", profile, err)
-					return
 				}
 				if n > 0 {
 					logger.Printf("teach: materialized %d skill(s) for %s", n, profile)
