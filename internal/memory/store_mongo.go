@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -109,6 +110,10 @@ func (s *MongoStore) Get(ctx context.Context, id string) (Item, error) {
 func (s *MongoStore) Update(ctx context.Context, id, profile string, u Update) (Item, error) {
 	set := bson.M{"updatedAt": time.Now().UnixMilli()}
 	if u.Text != nil {
+		// Same invariant as Create; see MemoryStore.Update.
+		if text := CleanText(*u.Text); text == "" {
+			return Item{}, NewStoreError("memory item needs text", false)
+		}
 		set["text"] = CleanText(*u.Text)
 	}
 	if u.Topic != nil {
@@ -207,7 +212,8 @@ func (s *MongoStore) SetTopicPaused(ctx context.Context, profile, topic string, 
 	return nil
 }
 
-// PausedTopics returns the paused topics for a profile.
+// PausedTopics returns the paused topics for a profile, sorted: the memory
+// backend sorts too, so the screen sees one deterministic order per backend.
 func (s *MongoStore) PausedTopics(ctx context.Context, profile string) ([]string, error) {
 	var doc struct {
 		Paused []string `bson:"paused"`
@@ -221,5 +227,6 @@ func (s *MongoStore) PausedTopics(ctx context.Context, profile string) ([]string
 	if doc.Paused == nil {
 		return []string{}, nil
 	}
+	sort.Strings(doc.Paused)
 	return doc.Paused, nil
 }

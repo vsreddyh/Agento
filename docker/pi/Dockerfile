@@ -22,7 +22,7 @@ ARG NODE_IMAGE=node@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83
 #
 # Two stages:
 #   gobuild — builds the in-repo MCP servers (money, cookbook, health-check,
-#             task-manager, project-manager, notes) exactly as before.
+#             task-manager, project-manager, notes, memory) exactly as before.
 #   runtime — Node for Pi (@earendil-works/pi-coding-agent) plus those
 #             binaries on PATH.
 #
@@ -38,7 +38,7 @@ ARG NODE_IMAGE=node@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83
 # workspace is owned by host uid 10000, so a non-root process cannot write the
 # agent's session trees and repo checkouts there. See docker/pi/entrypoint.sh.
 #
-# Binary set: 6 MCP servers (notes is new) plus pi-gateway. Two binaries from the
+# Binary set: 7 MCP servers (memory is new) plus pi-gateway. Two binaries from the
 # old image are intentionally omitted, and neither is agent-reachable:
 #   retention — a one-shot lifecycle job. It runs as its own compose service
 #               (`podman-compose run --rm retention`) on its own image
@@ -51,7 +51,7 @@ ARG NODE_IMAGE=node@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83
 # Stated as a count of what THIS image ships rather than as arithmetic against the
 # old image: "6 of the 7 the old image shipped" needed re-counting every time a
 # server was added, and was wrong twice — which is the failure mode this comment
-# then documents.
+# then documents. (memory made it 7; the count lives here and in pi/README.md.)
 #
 # git safe.directory is handled in entrypoint.sh, not here, because it must
 # discover the bind-mounted repos at runtime.

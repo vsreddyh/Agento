@@ -111,6 +111,9 @@ type Filter struct {
 // it; the gateway, the app routes and the memory MCP server share one.
 type Store interface {
 	Create(ctx context.Context, i Item) (Item, error)
+	// Get is unscoped and must never be used for authorization: it cannot
+	// tell "missing" from "another profile's". Update and Delete take the
+	// profile and treat a foreign id as NotFound.
 	Get(ctx context.Context, id string) (Item, error)
 	// Update and Delete are profile-scoped: a foreign id is NotFound, so one
 	// query both authorises and writes instead of a Get-then-write pair.

@@ -127,6 +127,11 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	if _, err := s.Update(ctx, b.ID, "p", Update{Text: &text, Status: &status}); err != nil {
 		t.Fatal(err)
 	}
+	// An edit must not blank an item either: same invariant as Create.
+	blank := "   "
+	if _, err := s.Update(ctx, b.ID, "p", Update{Text: &blank}); err == nil {
+		t.Fatal("blank-text update should fail")
+	}
 	// A foreign profile's id is NotFound, and the row is untouched.
 	other := "someone else"
 	if _, err := s.Update(ctx, b.ID, "q", Update{Text: &other}); err == nil {

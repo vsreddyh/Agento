@@ -85,6 +85,11 @@ func (s *MemoryStore) Update(_ context.Context, id, profile string, u Update) (I
 		return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
 	}
 	if u.Text != nil {
+		// Same invariant as Create: an edit must not blank an item. The
+		// gateway 400s this first, but the store is the backstop.
+		if text := CleanText(*u.Text); text == "" {
+			return Item{}, NewStoreError("memory item needs text", false)
+		}
 		it.Text = CleanText(*u.Text)
 	}
 	if u.Topic != nil {

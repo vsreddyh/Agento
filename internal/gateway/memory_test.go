@@ -219,6 +219,9 @@ func TestMemoryEmptyTopicAndNullPaused(t *testing.T) {
 	if !ok || len(paused) != 0 {
 		t.Fatalf("fresh paused = %#v, want []", body["paused"])
 	}
+	if _, ok := body["warnings"]; ok {
+		t.Fatalf("healthy read carries warnings = %#v", body["warnings"])
+	}
 
 	create := do(t, srv, http.MethodPost, "/api/memory",
 		`{"topic":"health","text":"likes tea"}`)

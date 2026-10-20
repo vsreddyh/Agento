@@ -31,6 +31,9 @@ import (
 var (
 	store   memory.Store
 	profile string
+	// ephemeral is true when no database is configured: saves land in this
+	// process only and can never reach the app's Memory screen.
+	ephemeral bool
 )
 
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
@@ -81,6 +84,7 @@ func main() {
 	if ms, err := memory.FromEnv(); err != nil {
 		log.Printf("memory: no database, using in-process store (saves will not reach the app): %v", err)
 		store = memory.NewMemoryStore()
+		ephemeral = true
 	} else {
 		store = ms
 	}
@@ -111,12 +115,19 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
+			note := "Saved as pending; the user confirms it in the app before it is used."
+			if ephemeral {
+				// The agent must not tell the user "saved": this item lives
+				// in the MCP process and the screen will never show it.
+				note = "Saved in this process only: no database is configured, so it will not reach the app's Memory screen and will vanish on restart."
+			}
 			return result(map[string]any{
-				"ok":        true,
-				"item":      it,
-				"status":    string(memory.StatusPending),
-				"truncated": truncated,
-				"note":      "Saved as pending; the user confirms it in the app before it is used.",
+				"ok":         true,
+				"item":       it,
+				"status":     string(memory.StatusPending),
+				"truncated":  truncated,
+				"persistent": !ephemeral,
+				"note":       note,
 			})
 		})
 

@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"agento/internal/memory"
 )
@@ -204,14 +203,20 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		paused, err := s.memory.PausedTopics(ctx, profile)
+		var warnings []string
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
 				apiError(w, http.StatusBadGateway, "upstream_error", "",
 					"the memory store did not answer in time")
 				return
 			}
-			memoryError(w, err)
-			return
+			// Display degrades; injection does not. A paused read failure
+			// must never steer a turn (memoryPrompt returns ""), but the
+			// screen showing items with pauses unknown beats showing
+			// nothing, and the warning says which it is.
+			paused = []string{}
+			warnings = []string{"paused topics unavailable; all topics shown as unpaused"}
+			s.cfg.Logf("memory: paused topics degraded for %s: %v", profile, err)
 		}
 		items := memoryFilter(all, f)
 		topics := memoryTopics(all, paused)
@@ -219,11 +224,15 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 		for _, it := range items {
 			out = append(out, memoryWire(it))
 		}
-		writeJSONResponse(w, http.StatusOK, map[string]any{
+		resp := map[string]any{
 			"items":  out,
 			"paused": paused,
 			"topics": topics,
-		})
+		}
+		if warnings != nil {
+			resp["warnings"] = warnings
+		}
+		writeJSONResponse(w, http.StatusOK, resp)
 		return
 	case http.MethodPost:
 		var body struct {
@@ -280,14 +289,12 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 	upd := memory.Update{}
 	if body.Topic != nil {
 		// An empty or punctuation-only topic would silently normalise to
-		// "general" and re-categorise the item; reject it instead.
-		stripped := strings.Map(func(r rune) rune {
-			if unicode.IsLetter(r) || unicode.IsDigit(r) {
-				return r
-			}
-			return -1
-		}, strings.ToLower(strings.TrimSpace(*body.Topic)))
-		if stripped == "" {
+		// "general" (NormalizeTopic's Trim(t,"-") fallback) and
+		// re-categorise the item; reject it instead. A topic that already
+		// spells general passes through.
+		if strings.TrimSpace(*body.Topic) == "" ||
+			(memory.NormalizeTopic(*body.Topic) == memory.DefaultTopic &&
+				!strings.EqualFold(strings.TrimSpace(*body.Topic), memory.DefaultTopic)) {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "topic",
 				"topic must contain a letter or digit")
 			return
