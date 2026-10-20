@@ -497,18 +497,18 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             },
             onTest = { input ->
                 testOutput = ""
-                mutate { api, path ->
+                mutate(action = { api, path ->
                     testOutput = api.testSkill(path, open.id, input).getOrThrow()
-                }
+                })
             },
             onActivate = {
-                mutate { api, path -> api.activateSkill(path, open.id) }
+                mutate(action = { api, path -> api.activateSkill(path, open.id) })
             },
             onDisable = {
-                mutate { api, path -> api.disableSkill(path, open.id) }
+                mutate(action = { api, path -> api.disableSkill(path, open.id) })
             },
             onPromote = { schedule, name ->
-                mutate { api, path -> api.promoteSkill(path, open.id, schedule, name) }
+                mutate(action = { api, path -> api.promoteSkill(path, open.id, schedule, name) })
             },
             onDelete = {
                 // Close only on success: mutate's onSuccess runs after the
