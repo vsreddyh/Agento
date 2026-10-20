@@ -16,8 +16,19 @@ import (
 type MongoStore struct {
 	approvals *mongoDrv.Collection
 	audit     *mongoDrv.Collection
+	// now is the clock every expiry boundary reads, mirroring MemoryStore so
+	// the TTL boundary is one value per operation instead of several
+	// time.Now() calls that can straddle it. Nil means time.Now.
+	now func() time.Time
 	// Logf receives operational notes. Nil discards them.
 	Logf func(string, ...any)
+}
+
+func (s *MongoStore) clock() time.Time {
+	if s.now == nil {
+		return time.Now()
+	}
+	return s.now()
 }
 
 // Shared reports true: Mongo is visible to every process holding the
@@ -40,6 +51,7 @@ func New(uri, dbName string) (*MongoStore, error) {
 	return &MongoStore{
 		approvals: db.Collection(ApprovalsCollection),
 		audit:     db.Collection(AuditCollection),
+		now:       time.Now,
 	}, nil
 }
 
@@ -100,7 +112,7 @@ func (s *MongoStore) CreateApproval(ctx context.Context, a Approval) error {
 	if a.ID == "" {
 		return NewStoreError("approval create needs an id", false)
 	}
-	now := time.Now()
+	now := s.clock()
 	if a.CreatedAt == 0 {
 		a.CreatedAt = now.UnixMilli()
 	}
@@ -133,7 +145,7 @@ func (s *MongoStore) GetApproval(ctx context.Context, id string) (Approval, erro
 		}
 		return Approval{}, NewStoreError("approval read failed: "+err.Error(), true)
 	}
-	if !a.ExpiresAt.IsZero() && !a.ExpiresAt.After(time.Now()) {
+	if !a.ExpiresAt.IsZero() && !a.ExpiresAt.After(s.clock()) {
 		return Approval{}, &StoreError{Msg: "unknown approval " + id, NotFound: true}
 	}
 	return a.Clone(), nil
@@ -204,7 +216,7 @@ func (s *MongoStore) ListApprovals(ctx context.Context, f ApprovalFilter) ([]App
 	// list as pending and then 409 on decide. Filter on the same
 	// expiresAt > now boundary GetApproval and DecideApproval use, and the
 	// list contract matches the memory store's lazy drop.
-	filter["expiresAt"] = bson.M{"$gt": time.Now()}
+	filter["expiresAt"] = bson.M{"$gt": s.clock()}
 	cur, err := s.approvals.Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(int64(limit)))
 	if err != nil {
@@ -236,7 +248,7 @@ func (s *MongoStore) Audit(ctx context.Context, e AuditEntry) error {
 		return NewStoreError("audit needs an id", false)
 	}
 	if e.ExpiresAt.IsZero() {
-		e.ExpiresAt = time.Now().Add(AuditTTL)
+		e.ExpiresAt = s.clock().Add(AuditTTL)
 	}
 	if _, err := s.audit.InsertOne(ctx, e); err != nil {
 		return NewStoreError("audit write failed: "+err.Error(), true)
@@ -259,7 +271,7 @@ func (s *MongoStore) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 	}
 	// Same expiresAt boundary as the memory backend and ListApprovals: TTL
 	// deletion lags, and the two stores must answer one query identically.
-	filter["expiresAt"] = bson.M{"$gt": time.Now()}
+	filter["expiresAt"] = bson.M{"$gt": s.clock()}
 	cur, err := s.audit.Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "at", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(int64(limit)))
 	if err != nil {

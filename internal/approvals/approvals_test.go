@@ -262,6 +262,8 @@ func TestScrubErrorMasksCredentials(t *testing.T) {
 		// Compact JSON: the match must stop at the value, not swallow the
 		// following fields into the replacement.
 		{`{"token":"sk-abcdef123456","note":"keep"}`, "[redacted]"},
+		{"passwd=hunter2 failed", "[redacted]"},
+		{`token="correct horse battery staple"`, "[redacted]"},
 		{"no such note: abc", "no such note: abc"},
 	}
 	for _, c := range cases {
@@ -280,6 +282,14 @@ func TestScrubErrorMasksCredentials(t *testing.T) {
 			t.Fatalf("ScrubError(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
+	// Extended key set and space-containing quoted values.
+	if got := ScrubError("passwd=hunter2 failed"); strings.Contains(got, "hunter2") {
+		t.Fatalf("passwd value survived: %q", got)
+	}
+	if got := ScrubError(`token="correct horse battery staple"`); strings.Contains(got, "correct horse") {
+		t.Fatalf("quoted multi-word value survived: %q", got)
+	}
+
 	// Compact JSON: the value match must terminate, leaving the next field.
 	got := ScrubError(`{"token":"sk-abcdef123456","note":"keep"}`)
 	if strings.Contains(got, "sk-abcdef") || !strings.Contains(got, `"note":"keep"`) {

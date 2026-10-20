@@ -228,10 +228,12 @@ const MaxAuditError = 300
 var secretValue = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:sk|pk|ghp|gho|ghs|ghu|xox[abprs])[-_][A-Za-z0-9_-]{8,}`),
 	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`),
-	// Optional quotes on both sides of the separator: an upstream error often
-	// echoes JSON ({"token":"sk-..."}), where the name is quoted before the
-	// colon and the value after it.
-	regexp.MustCompile(`(?i)\b(?:api[_-]?key|access[_-]?key|token|password|secret)["']?\s*[:=]\s*["']?[^"',}\s]+`),
+	// The key set mirrors isSecretKey so an upstream `passwd=...` is masked as
+	// surely as a `password` arg. Optional quotes on both sides of the
+	// separator: an error often echoes JSON ({"token":"sk-..."}).
+	regexp.MustCompile(`(?i)\b(?:password|passwd|pwd|passcode|secret|token|2fa|otp|api[_-]?key|apikey|private[_-]?key|credential|auth|bearer|cookie|session|access[_-]?key|accesskey|key)["']?\s*[:=]\s*"[^"]*"`),
+	regexp.MustCompile(`(?i)\b(?:password|passwd|pwd|passcode|secret|token|2fa|otp|api[_-]?key|apikey|private[_-]?key|credential|auth|bearer|cookie|session|access[_-]?key|accesskey|key)["']?\s*[:=]\s*'[^']*'`),
+	regexp.MustCompile(`(?i)\b(?:password|passwd|pwd|passcode|secret|token|2fa|otp|api[_-]?key|apikey|private[_-]?key|credential|auth|bearer|cookie|session|access[_-]?key|accesskey|key)["']?\s*[:=]\s*["']?[^"',}\s]+`),
 }
 
 // ScrubError masks credential-shaped text in an upstream error and bounds the
