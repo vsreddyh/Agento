@@ -3,6 +3,7 @@ package com.vishnu.agento
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -67,6 +68,18 @@ class ChatAttachmentsTest {
             "data:image/jpeg;base64,AAA=",
             ChatAttachment(mimeType = "image/png", base64 = "AAA=").dataUri(),
         )
+    }
+
+    @Test
+    fun dataUriRejectsBlankPayload() {
+        // The wall the wire filter relies on (#339): rendering an empty
+        // data URI must fail in tests, never wire it.
+        try {
+            ChatAttachment(base64 = "").dataUri()
+            fail("blank payload must throw, not render data:image/jpeg;base64,")
+        } catch (e: NamedAttachError) {
+            // Expected: typed pass-through bucket, not generic remap.
+        }
     }
 
     @Test
@@ -297,8 +310,21 @@ class ChatAttachmentsTest {
     }
 
     @Test
-    fun wiredPhotosWithIndexPreservesStagedSlots() {
-        // The strip renders wired but removes by staged slot: the mapping
+    fun canonicalizeAttachmentsNormalizesOnce() {
+        // Load-boundary contract (#339): whitespace strips, ragged blanks,
+        // valid payloads pass through untouched (same instance).
+        val valid = attachment("AAA=")
+        val out = canonicalizeAttachments(
+            listOf(valid, ChatAttachment(base64 = "  AAA=\n"), ChatAttachment(base64 = "!!!")),
+        )
+        assertEquals(3, out.size)
+        assertTrue(out[0] === valid)
+        assertEquals("AAA=", out[1].base64)
+        assertEquals("", out[2].base64)
+    }
+
+    @Test
+    fun wiredPhotosWithIndexPreservesStagedSlots() {        // The strip renders wired but removes by staged slot: the mapping
         // must carry the STAGED index, or remove deletes the wrong photo.
         val mapped = listOf(
             ChatAttachment(base64 = ""),

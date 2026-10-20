@@ -70,8 +70,10 @@ private fun ChatAttachment.isWired(): Boolean = base64.isNotBlank()
  * here (isWired), but a hand-edited ragged payload (bad length, non-base64
  * alphabet) must not emit `data:...;base64,<ragged>` into an image_url
  * part — the gateway would 400 what should be a client-side named shape.
- * Alphabet scan, no decode: runs per send, never per keystroke. */
-private fun isDecodableBase64(s: String): Boolean {
+ * Alphabet scan, no decode: runs per send, never per keystroke. Internal:
+ * the persistence loader canonicalizes with this too, so memory holds no
+ * wrapped-or-ragged payloads and the hot paths never need this check. */
+internal fun isDecodableBase64(s: String): Boolean {
     if (s.isEmpty() || s.length % 4 != 0) return false
     for (c in s) {
         if (c != '=' && c != '+' && c != '/' &&
@@ -88,6 +90,27 @@ private fun isDecodableBase64(s: String): Boolean {
  * re-rolling the predicate (or the remove index) at the call site. */
 fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachment>> =
     mapIndexedNotNull { i, a -> if (a.isWired()) IndexedValue(i, a) else null }
+
+/**
+ * Canonical form of persisted attachments (#339): storage is
+ * hand-editable, so payloads arrive stripped of framing whitespace — and
+ * anything still undecodable blanks out. Applied once at the load
+ * boundary (IO, never Main), so memory holds no wrapped-or-ragged
+ * payloads: the hot-path isWired() can stay a blank check while the wire
+ * filter asserts decode-validity, because load made them agree. Pure for
+ * testability; the next persist writes back the canonical form
+ * (self-healing, no notice — corrupt bytes are dropped, never sent).
+ */
+fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachment> =
+    attachments.map { a ->
+        val stripped = a.base64.filterNot { c -> c.isWhitespace() }
+        when {
+            stripped.isBlank() -> a.copy(base64 = "")
+            isDecodableBase64(stripped) ->
+                if (stripped.length == a.base64.length) a else a.copy(base64 = stripped)
+            else -> a.copy(base64 = "")
+        }
+    }
 
 /** Max photos per turn (#318). Two is the acceptance bar (two images in one
  * turn render and reach the agent); the cap keeps the wire body under the

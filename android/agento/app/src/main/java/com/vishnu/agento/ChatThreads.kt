@@ -150,6 +150,19 @@ object ChatThreads {
             threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText())
                 .filter { it.id.isNotEmpty() }
                 .take(MAX_THREADS)
+                // Canonicalized on load via canonicalizeAttachments (#339):
+                // storage is hand-editable; memory therefore holds no
+                // wrapped-or-ragged payloads, which is what lets the
+                // hot-path isWired() stay a blank check while the wire
+                // filter asserts decode-validity. Runs on IO callers only
+                // (never Main); the next persist writes back the canonical
+                // form (self-healing, no notice — corrupt bytes are
+                // dropped, never sent).
+                .map { t ->
+                    t.copy(messages = t.messages.map { m ->
+                        m.copy(attachments = canonicalizeAttachments(m.attachments))
+                    })
+                }
         }.getOrDefault(emptyList())
     }
 
@@ -191,6 +204,9 @@ object ChatThreads {
                 role = it.role,
                 content = it.content,
                 ts = it.ts,
+                // Already canonical: load() normalized every payload
+                // (whitespace stripped, undecodable blanked), so no
+                // per-message work happens here on the Main thread.
                 attachments = it.attachments,
                 tools = it.tools,
                 skills = it.skills,
