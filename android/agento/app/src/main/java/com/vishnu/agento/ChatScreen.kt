@@ -799,8 +799,9 @@ internal fun ChatScreen(
     // bookkeeping the toggle() key needs. Global, not per-tab: TTS is
     // hoisted at activity level, so per-tab counters restarting at 0 would
     // collide — toggle() on a live key stops instead of speaking. Never
-    // resets within the activity lifetime (rotation drops it, which is safe
-    // because onDispose stops TTS — no cue survives to collide).
+    // resets within the activity lifetime (a destination switch drops it,
+    // like rotation — safe because dispose stops TTS, so no cue survives
+    // to collide with a restarted live-cue-1).
     val cueKeys = remember { CueKeys() }
     // Detector bookkeeping (#317):
     // plain holder, not state — only the driver effect writes it in the
@@ -815,7 +816,10 @@ internal fun ChatScreen(
     // generation live at fire time (captured before the launch hop), so a
     // trigger can't leak across a hang-up→restart either. Global, not
     // per-tab: the trigger path (scope/latestBarge) is shared across tabs,
-    // so per-tab counters restarting at 0 would collide cross-tab.
+    // so per-tab counters restarting at 0 would collide cross-tab. (A
+    // destination switch drops it, like rotation — safe because the
+    // composition scope is cancelled, so no in-flight trigger survives to
+    // meet a reset generation.)
     val liveGen = remember { AtomicInteger(0) }
     fun onBargeIn(firedGen: Int) {
         // Stale-trigger guard (#317): drop triggers from a previous session
@@ -858,10 +862,17 @@ internal fun ChatScreen(
             // must not leave the holder claiming "running" (else no restart
             // on return), a stale barge claim must not reroute the next
             // stream end, and the bumped generation retires in-flight
-            // detector triggers so none leak into the other tab.
+            // detector triggers so none leak into the other tab. The
+            // milestone set is retired too: a turn settling while away never
+            // runs the stream-end retire, so a kept set would suppress the
+            // next turn's first cue for repeated tools. On a mid-turn return
+            // this only re-arms diffing — the next change still names just
+            // the latest delta, so nothing already heard repeats.
             detectCtl.running = false
             detectCtl.phase = -1
             bargeCancel = false
+            announcedTools = emptyList()
+            announcedLabel = ""
             liveGen.incrementAndGet()
             // #107: leaving the tab ends the session silently. A rotation
             // recreates the activity (isChangingConfigurations) and keeps
@@ -1503,6 +1514,13 @@ internal fun ChatScreen(
                         IconButton(
                             // Live: cut speech, drop the current listen, start
                             // fresh (no system dialog exists to stack).
+                            // speakingKey is read pre-stop on purpose: the
+                            // snapshot predates recomposition, so it still
+                            // reports the readout playing at tap time — a tap
+                            // mid-readout skips the direct listen and lets
+                            // the driver's wasSpeaking transition drive it,
+                            // while an idle tap listens immediately. Moving
+                            // the null-check below would flip both branches.
                             onClick = if (liveMode) {
                                 {
                                     tts.stop()
