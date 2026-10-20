@@ -100,7 +100,15 @@ internal fun parseAuditRow(o: JSONObject): AuditRow? {
  * Parsing is lenient; missing fields show as blank, undecodable rows are
  * logged and skipped rather than failing the list.
  */
-internal fun parseApprovalList(body: String): ApprovalsApi.ApprovalList {
+/** One approvals page: rows plus whether the store can decide them.
+ * Degraded means the gateway and relay hold different in-process stores:
+ * decisions made here can never reach a held call. */
+data class ApprovalList(
+    val approvals: List<GateApproval> = emptyList(),
+    val degraded: Boolean = false,
+)
+
+internal fun parseApprovalList(body: String): ApprovalList {
     val out = mutableListOf<GateApproval>()
     val root = runCatching { JSONObject(body) }.getOrNull()
     if (root == null) {
@@ -188,14 +196,6 @@ class ApprovalsApi(context: Context) {
             }
         }
     }
-
-    /** One approvals page: rows plus whether the store can decide them.
-     * Degraded means the gateway and relay hold different in-process
-     * stores: decisions made here can never reach a held call. */
-    data class ApprovalList(
-        val approvals: List<GateApproval> = emptyList(),
-        val degraded: Boolean = false,
-    )
 
     /** Lists approvals, newest first. Null status means all. */
     suspend fun listApprovals(
