@@ -296,7 +296,11 @@ func (ss *sessions) evictIdle() {
 		}
 		log.Printf("browser: evicting idle session %s", name)
 		// Explicit unlock at iteration end, not defer: N defers would hold
-		// every evicted session's lock until the function returns.
+		// every evicted session's lock until the function returns. The
+		// disk removal runs after unlock: a Chromium Cache makes RemoveAll
+		// seconds of IO, and ensure/shotPath for this profile must not
+		// block on it. dir is read into a local under the lock; nothing
+		// after touches session state except delete (needs only ss.mu).
 		s.mu.Lock()
 		if s.browserCancel != nil {
 			s.browserCancel()
@@ -307,10 +311,11 @@ func (ss *sessions) evictIdle() {
 		if s.proxyLn != nil {
 			s.proxyLn.Close()
 		}
-		if s.dir != "" {
-			os.RemoveAll(s.dir)
-		}
+		dir := s.dir
 		s.mu.Unlock()
+		if dir != "" {
+			os.RemoveAll(dir)
+		}
 		delete(ss.byProfile, name)
 	}
 }
@@ -817,6 +822,10 @@ func evidenceDir() (string, error) {
 	if err := os.MkdirAll(exports, 0o755); err != nil {
 		return "", err
 	}
+	// 10 tries is a bound, not a tunable: with ms timestamps + a 1M
+	// counter, exhaustion needs 10 same-ms collisions or a clock step-back
+	// landing on a live counter value 10 times running. Negligible for v1;
+	// on exhaustion the save fails loudly instead of clobbering.
 	var last string
 	for i := 0; i < 10; i++ {
 		name := p + "-" + time.Now().UTC().Format("20060102-150405.000") +
