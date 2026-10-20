@@ -23,7 +23,9 @@ record — still half-duplex, still no realtime transport.**
   cancel first, stops the local stream and the server run (`stop()`), and
   the stream-end effect re-listens instead of speaking the stopped
   partial or ending the session. Talking over the readout keeps its old
-  meaning (cut speech, re-listen).
+  meaning (cut speech, re-listen). The on-screen Stop claims the same way
+  in live mode — tapping it re-listens instead of replaying the partial;
+  outside live mode the plain stop keeps its speak-the-partial path.
 - Long tasks are audible. While a live turn streams, newly appearing tools
   are announced once per change ("Using log transaction" — the fresh server
   label when one arrived with the change, else the latest delta's last

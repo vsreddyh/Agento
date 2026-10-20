@@ -922,6 +922,13 @@ internal fun ChatScreen(
             endLive("Voice recognition unavailable on this device.")
             return
         }
+        // Mid-turn entry (review #338-6th): capture before onStop() clears
+        // it. A startLive-killed turn must not be spoken back: claim it like
+        // a barge so the stream-end effect re-listens instead of reading
+        // the just-killed partial, and skip the direct liveListen() below —
+        // the effect drives the first listen, so the recognizer starts
+        // exactly once (a double startListening burns a transient retry).
+        val killedTurn = state.streaming
         pendingLiveStart = false
         liveRec.cancel()
         tts.stop()
@@ -942,11 +949,16 @@ internal fun ChatScreen(
         interrupt.stop()
         detectCtl.running = false
         detectCtl.phase = -1
-        bargeCancel = false
+        // A killed turn arrives claimed (see above); a fresh start clears
+        // any stale claim from the previous session.
+        bargeCancel = killedTurn
         announcedTools = emptyList()
         announcedLabel = ""
-        val handoff = speakingKey != null || state.streaming
-        if (!handoff) liveListen()
+        // Only a live readout hands off (review #338-6th): the streaming
+        // disjunct would be dead here — onStop() already cleared it — and
+        // a killed turn's first listen belongs to the stream-end effect.
+        val handoff = speakingKey != null
+        if (!handoff && !killedTurn) liveListen()
     }
     // One-shot mic results flow through voiceLauncher below; only live
     // cycles arrive here. Reassigned each composition so closures stay fresh.
@@ -1442,7 +1454,15 @@ internal fun ChatScreen(
                             Icon(Icons.Filled.Mic, contentDescription = "Voice input")
                         }
                         if (state.streaming) {
-                            FilledTonalIconButton(onClick = onStop) {
+                            FilledTonalIconButton(onClick = {
+                                // Live stop cuts like a barge (review #338-6th):
+                                // the user cut the turn to talk, so the loop
+                                // re-listens instead of reading back the
+                                // just-killed partial. Outside live mode the
+                                // plain stop keeps its speak-the-partial path.
+                                if (liveMode) bargeCancel = true
+                                onStop()
+                            }) {
                                 Icon(Icons.Filled.Close, contentDescription = "Stop")
                             }
                         } else {
