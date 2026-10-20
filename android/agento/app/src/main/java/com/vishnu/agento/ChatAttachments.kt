@@ -172,15 +172,26 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // URIs (Google Photos) twice for nothing. Everything below
             // decodes from these bytes instead of the stream.
             val bytes = resolver.openInputStream(uri)?.use { stream ->
-                val out = ByteArrayOutputStream()
+                // Pre-sized 1 MB (#339): the default 32-byte buffer doubles
+                // its way to 32 MB (~64 MB transient at the top copy), and
+                // real photos land within an order of this anyway.
+                val out = ByteArrayOutputStream(1 shl 20)
                 val buf = ByteArray(8192)
                 var total = 0L
+                // A 0 return is legal but progress-less (#339): bail after
+                // a streak instead of spinning on a stuck provider stream.
+                var zeroStreak = 0
                 while (true) {
                     val n = stream.read(buf)
                     // < 0 only: 0 is a legal (if rare) return, especially
                     // from content-provider streams — breaking on it would
                     // truncate the file into a bogus "not readable" error.
                     if (n < 0) break
+                    if (n == 0) {
+                        if (++zeroStreak > 100) break
+                        continue
+                    }
+                    zeroStreak = 0
                     total += n
                     // The shrink happens after the read, so the ORIGINAL
                     // needs its own bound — far above any real photo, far
@@ -242,6 +253,12 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
                 // Null means no transform: transposes and flips compose a mirror
                 // via negative scale, which createBitmap applies directly.
+                // Mapping follows the EXIF orientation semantics (CIPA DC-008 /
+                // AOSP ExifInterface: TRANSPOSE = 90° + horizontal mirror,
+                // TRANSVERSE = 270° + horizontal mirror). The Bitmap path is
+                // JVM-untestable by design (stubbed android.jar), so the
+                // reference — not a test — is what pins this; do not "simplify"
+                // the mirror cases into pure rotations.
                 val matrix: Matrix? = when (orientation) {
                     ExifInterface.ORIENTATION_ROTATE_90 -> Matrix().apply { postRotate(90f) }
                     ExifInterface.ORIENTATION_ROTATE_180 -> Matrix().apply { postRotate(180f) }

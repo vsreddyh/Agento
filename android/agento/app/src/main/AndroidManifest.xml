@@ -22,6 +22,9 @@
          filtering) remain fully supported without a camera. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- CAMERA implies autofocus too: without this Play can still filter
+         fixed-focus camera devices, same reason as the line above. -->
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <!-- Live voice mode (#85): background speech detector that hears the user
          talking over the readout (hands-free interrupt). The one-shot system
          recognizer used for transcription needs no permission; without this,

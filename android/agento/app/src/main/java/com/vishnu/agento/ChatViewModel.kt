@@ -483,11 +483,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = api.pathFor(tab)
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
-            pending = "",
-            // Staged photos die with the text draft (#339): the composer
-            // belongs to the thread being left, and a parked photo firing
-            // into the wrong thread is a silent mis-send.
-            pendingAttachments = emptyList(), streaming = true, error = "", queued = "",
+            pending = "", streaming = true, error = "", queued = "",
         )
         doSend(msgs, path, provider, model, effort)
         return true
@@ -510,6 +506,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         retargetMemory()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
+            // Staged photos die with the draft like every other thread
+            // change (#339): a New with a parked photo must not fire it
+            // into the fresh thread.
+            pendingAttachments = emptyList(),
             threads = summaries(), threadId = threadId,
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
