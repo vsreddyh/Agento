@@ -20,7 +20,9 @@ import (
 //
 //	GET    /api/memory                items + paused topics + topic list
 //	POST   /api/memory                create (user-written, confirmed)
-//	PUT    /api/memory/{id}           edit text/topic/status
+//	PUT    /api/memory/{id}           edit text/topic/status (confirmed can
+//	                               move back to pending: un-confirming
+//	                               re-hides an item without deleting it)
 //	DELETE /api/memory/{id}           delete one item
 //	POST   /api/memory/forget         delete every item for the profile
 //	PUT    /api/memory/topics/{topic} pause or resume one topic
@@ -191,14 +193,17 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 			f.Status = st
 		}
 		// Filters forgive where writes reject: ?topic=--- reads as general
-		// with 200, while POST/PUT 400 the same shape. A filter names what
-		// to show, so normalising is harmless; a write names where to store,
-		// so silence would re-categorise.
+		// with 200, while POST/PUT 400 the same shape, and a whitespace-only
+		// ?topic= is unfiltered, not rejected. A filter names what to show,
+		// so normalising is harmless; a write names where to store, so
+		// silence would re-categorise.
 		if raw := strings.TrimSpace(r.URL.Query().Get("topic")); raw != "" {
 			f.Topic = memory.NormalizeTopic(raw)
 		}
 		// limit=0 means the default (ListCap here), not "no rows": 0 is the
 		// Go zero value for "unspecified", and the store maps <=0 to the cap.
+		// A huge limit clamps to the same cap with 200, for the same reason:
+		// never serve more than the profile can hold.
 		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 			n, err := strconv.Atoi(raw)
 			if err != nil || n < 0 {

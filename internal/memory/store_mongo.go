@@ -97,8 +97,9 @@ func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
 	i.UpdatedAt = now
 	i.Topic = NormalizeTopic(i.Topic)
 	if !i.Status.Valid() {
-		i.Status = StatusPending
+		return Item{}, NewStoreError("unknown memory status", false)
 	}
+	// Source passthrough is deliberate; see MemoryStore.Create.
 	if i.Source == "" {
 		i.Source = SourceUser
 	}
@@ -183,6 +184,9 @@ func (s *MongoStore) Delete(ctx context.Context, id, profile string) error {
 // are the user's learning policy, not something they remembered.
 func (s *MongoStore) DeleteAll(ctx context.Context, profile string) (int64, error) {
 	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return 0, NewStoreError("memory forget needs a profile", false)
+	}
 	res, err := s.items.DeleteMany(ctx, bson.M{"profile": profile})
 	if err != nil {
 		return 0, NewStoreError("memory forget failed: "+err.Error(), true)

@@ -169,7 +169,12 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	if got, _ := s.Get(ctx, a.ID, "p"); got.Text != "uses tables" {
 		t.Fatalf("duplicate create overwrote the row: %+v", got)
 	}
-	long, err := s.Create(ctx, Item{Profile: "p", Text: strings.Repeat("y", MaxText+10)})
+	// An unknown status is rejected, not coerced to pending: Update and
+	// List reject it, and Create must not be the lenient path.
+	if _, err := s.Create(ctx, Item{Profile: "p", Text: "x", Status: Status("maybe")}); err == nil {
+		t.Fatal("unknown status should fail")
+	}
+	long, err := s.Create(ctx, Item{Profile: "p", Text: strings.Repeat("y", MaxText+10), Status: StatusConfirmed})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,11 +212,11 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	// of writing a row neither the screen nor the prompt can reach.
 	s2 := NewMemoryStore()
 	for i := 0; i < ListCap; i++ {
-		if _, err := s2.Create(ctx, Item{Profile: "p", Text: "item"}); err != nil {
+		if _, err := s2.Create(ctx, Item{Profile: "p", Text: "item", Status: StatusConfirmed}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s2.Create(ctx, Item{Profile: "p", Text: "one too many"}); err == nil {
+	if _, err := s2.Create(ctx, Item{Profile: "p", Text: "one too many", Status: StatusConfirmed}); err == nil {
 		t.Fatal("201st create should fail")
 	}
 	// PausedTopics is a list, never null: the screen decodes it as an array.

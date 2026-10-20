@@ -78,6 +78,15 @@ func TestMemoryCRUD(t *testing.T) {
 	if got := decodeBody(t, upd)["item"].(map[string]any)["text"]; got != "Prefers weekly reports as a table." {
 		t.Fatalf("updated text = %v", got)
 	}
+	// Un-confirming is a valid verb: confirmed moves back to pending and
+	// leaves the prompt, without deleting the row.
+	demoted := do(t, srv, http.MethodPut, "/api/memory/"+id, `{"status":"pending"}`)
+	if demoted.Code != http.StatusOK {
+		t.Fatalf("demote: %d, want 200 (%s)", demoted.Code, demoted.Body)
+	}
+	if got := decodeBody(t, demoted)["item"].(map[string]any)["status"]; got != "pending" {
+		t.Fatalf("demoted status = %v, want pending", got)
+	}
 
 	if del := do(t, srv, http.MethodDelete, "/api/memory/"+id, ""); del.Code != http.StatusOK {
 		t.Fatalf("delete: %d %s", del.Code, del.Body)

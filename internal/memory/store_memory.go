@@ -76,9 +76,14 @@ func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
 	}
 	i.UpdatedAt = now
 	i.Topic = NormalizeTopic(i.Topic)
+	// An unknown status is a caller bug, not pending: Update and List reject
+	// it, and Create must not be the lenient path.
 	if !i.Status.Valid() {
-		i.Status = StatusPending
+		return Item{}, NewStoreError("unknown memory status", false)
 	}
+	// Source stays display-only passthrough (see its declaration): anything
+	// but a known writer label stores verbatim, because status — not source
+	// — is the trust boundary. Empty means the app wrote it.
 	if i.Source == "" {
 		i.Source = SourceUser
 	}
@@ -153,6 +158,9 @@ func (s *MemoryStore) Delete(_ context.Context, id, profile string) error {
 // DeleteAll forgets one profile's items, keeping its paused topics.
 func (s *MemoryStore) DeleteAll(_ context.Context, profile string) (int64, error) {
 	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return 0, NewStoreError("memory forget needs a profile", false)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var n int64
