@@ -370,6 +370,11 @@ type Store interface {
 	// MarkInterrupted flips pending rows expired at startup: a restart must
 	// not leave a "pending" row the relay that owned it will never read.
 	MarkInterrupted(ctx context.Context, at time.Time) (int64, error)
+	// MarkServerInterrupted flips one server's pending rows expired. A relay
+	// restart owns that server's queue outright (one relay per server), so
+	// the rows it finds at startup belong to a process that will never
+	// decide them. Scoped by server so six relays do not expire each other.
+	MarkServerInterrupted(ctx context.Context, server string, at time.Time) (int64, error)
 }
 
 // ApprovalFilter selects approvals. Zero values mean no constraint.

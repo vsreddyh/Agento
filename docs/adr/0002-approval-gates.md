@@ -107,6 +107,9 @@ relays, so `GET /api/approvals` filters by status only and a caller that wants
 one server narrows client-side. The audit trail, by contrast, is long and
 filterable (`?server=&tool=`), because history is read by cause. A server
 filter on the pending list would only matter if the queue were ever sharded.
+The pending poll must pass `?status=pending`: without it the route returns all
+live rows, and an expired-but-not-yet-TTL-swept row is still live for the rest
+of its 15-minute window (expiry is lazy; the audit trail is the history).
 
 Expiry is evaluated at one instant per operation. Reads and lists use the
 store's own clock; a **decision** uses the caller's decision instant (`at`),
@@ -123,6 +126,12 @@ action to another user. In the audit trail, `disposition=allowed` with a
 non-empty `error` means the tool ran and returned an error: `error != ""` is
 the tool-level failure signal, so a reader can separate "ran and failed" from
 "never ran" without parsing the payload.
+
+A relay that restarts expires its **own server's** pending rows at startup
+(`MarkServerInterrupted`): one relay owns one server, so those rows belonged
+to the process that died, and leaving them pending would show the app a card
+whose approval could never forward. The gateway's global `MarkInterrupted`
+still runs at its own startup for the whole collection.
 
 A `relay_`-prefixed error marks a decision the relay made itself, not one a
 tool or a human made: `relay_protocol` (unparseable `tools/call`),

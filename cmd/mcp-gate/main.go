@@ -81,6 +81,17 @@ func main() {
 		log.Printf("mcp-gate[%s] warning: server is not in the approval policy table; every tool call will hold", *server)
 	}
 	store := openStore(*server)
+	// A relay restart orphans the rows its previous instance was holding: the
+	// poll goroutine died with it, so nothing will ever decide them. Expire
+	// this server's pending rows before serving, so the app never shows a
+	// card whose approval can only be a no-op.
+	sweepCtx, cancelSweep := context.WithTimeout(context.Background(), storeTimeout)
+	if n, err := store.MarkServerInterrupted(sweepCtx, *server, time.Now()); err != nil {
+		log.Printf("mcp-gate[%s] warning: startup sweep failed: %v", *server, err)
+	} else if n > 0 {
+		log.Printf("mcp-gate[%s] expired %d orphaned approval(s) from a previous relay", *server, n)
+	}
+	cancelSweep()
 	r := newRelay(*server, store, log.New(os.Stderr, "mcp-gate["+*server+"] ", log.LstdFlags))
 	if err := r.run(context.Background(), os.Stdin, os.Stdout, rest[0], rest[1:]); err != nil {
 		r.log.Printf("relay ended: %v", err)

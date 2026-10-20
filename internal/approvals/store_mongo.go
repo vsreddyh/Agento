@@ -302,7 +302,7 @@ func (s *MongoStore) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 			skipped++
 			continue
 		}
-		out = append(out, e)
+		out = append(out, e.Clone())
 	}
 	if skipped > 0 {
 		s.logf("approvals: skipped %d undecodable audit row(s)", skipped)
@@ -311,6 +311,22 @@ func (s *MongoStore) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 		return nil, NewStoreError("audit list failed: "+err.Error(), true)
 	}
 	return out, nil
+}
+
+// MarkServerInterrupted expires one server's pending rows at relay startup.
+// Scoped by server because six relays share the collection and a restart of
+// one must not touch another's live hold.
+func (s *MongoStore) MarkServerInterrupted(ctx context.Context, server string, at time.Time) (int64, error) {
+	res, err := s.approvals.UpdateMany(ctx,
+		bson.M{"server": server, "status": string(StatusPending)},
+		bson.M{"$set": bson.M{
+			"status":    string(StatusExpired),
+			"updatedAt": at.UnixMilli(), "decidedAt": at.UnixMilli(),
+		}})
+	if err != nil {
+		return 0, NewStoreError("mark server interrupted: "+err.Error(), true)
+	}
+	return res.ModifiedCount, nil
 }
 
 // MarkInterrupted expires pending rows at startup and deletes expired ones,

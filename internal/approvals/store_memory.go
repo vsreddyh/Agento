@@ -247,6 +247,24 @@ func (m *MemoryStore) ListAudit(_ context.Context, f AuditFilter) ([]AuditEntry,
 	return out, nil
 }
 
+// MarkServerInterrupted expires this server's pending rows at relay startup.
+func (m *MemoryStore) MarkServerInterrupted(_ context.Context, server string, at time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var n int64
+	for id, a := range m.approvals {
+		if a.Server != server || a.Status != StatusPending {
+			continue
+		}
+		a.Status = StatusExpired
+		a.UpdatedAt = at.UnixMilli()
+		a.DecidedAt = at.UnixMilli()
+		m.approvals[id] = a
+		n++
+	}
+	return n, nil
+}
+
 // MarkInterrupted expires pending rows that predate the restart: a restart
 // orphans the relay that owned their wait, and a "pending" row nobody reads
 // would lie until TTL. Rows created at/after `at` belong to this process's

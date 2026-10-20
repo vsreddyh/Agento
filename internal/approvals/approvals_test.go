@@ -392,3 +392,27 @@ func TestStoresRedactOnWrite(t *testing.T) {
 			rows[0].At, rows[0].ExpiresAt)
 	}
 }
+
+// A relay restart expires only its own server's queue: six relays share one
+// collection, and one restarting must not kill another's live hold.
+func TestMarkServerInterruptedIsScoped(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	mine := Approval{ID: NewID(), Server: "notes", Tool: "delete_note"}
+	other := Approval{ID: NewID(), Server: "miser-money", Tool: "log_transaction"}
+	for _, a := range []Approval{mine, other} {
+		if err := m.CreateApproval(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := m.MarkServerInterrupted(ctx, "notes", time.Now())
+	if err != nil || n != 1 {
+		t.Fatalf("marked %d, err %v; want 1", n, err)
+	}
+	if got, err := m.GetApproval(ctx, mine.ID); err != nil || got.Status != StatusExpired {
+		t.Fatalf("own row = %+v, %v; want expired", got, err)
+	}
+	if got, err := m.GetApproval(ctx, other.ID); err != nil || got.Status != StatusPending {
+		t.Fatalf("other server row = %+v, %v; want untouched pending", got, err)
+	}
+}
