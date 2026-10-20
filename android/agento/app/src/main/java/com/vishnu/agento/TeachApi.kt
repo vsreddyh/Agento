@@ -46,6 +46,8 @@ internal fun parseTaughtSkill(o: JSONObject): TaughtSkill? {
         body = optStr(o, "body"),
         status = optStr(o, "status"),
         source = optStr(o, "source"),
+        // Timestamps are numeric-only by server contract: a string stamp
+        // reads 0 (untested/unknown) rather than coercing.
         testedAt = o.optLong("tested_at", 0L),
         testText = optStr(o, "test_text"),
         createdAt = o.optLong("created_at", 0L),
@@ -138,22 +140,25 @@ class TeachApi(context: Context) {
             }
         }
 
-    /** Creates a draft: always draft, never active on arrival. */
+    /** Creates a draft: always draft, never active on arrival. Returns
+     * the skill plus whether the body clipped at the server cap. */
     suspend fun createDraft(
         path: String,
         name: String,
         description: String,
         body: String,
         source: String = "",
-    ): Result<TaughtSkill> = withContext(Dispatchers.IO) {
+    ): Result<Pair<TaughtSkill, Boolean>> = withContext(Dispatchers.IO) {
         val req = JSONObject()
             .put("name", name)
             .put("description", description)
             .put("body", body)
         if (source.isNotBlank()) req.put("source", source)
         call("POST", "$path/api/skills", req).mapCatching {
-            parseTaughtSkill(parseObject(checkOk(it).body).optJSONObject("skill") ?: JSONObject())
+            val root = parseObject(checkOk(it).body)
+            val skill = parseTaughtSkill(root.optJSONObject("skill") ?: JSONObject())
                 ?: throw RuntimeException("response had no skill")
+            skill to root.optBoolean("truncated", false)
         }
     }
 
@@ -253,21 +258,21 @@ internal fun parseSkillList(body: String): List<TaughtSkill>? {
     }
     val out = mutableListOf<TaughtSkill>()
     var dropped = 0
-    val arr = root.optJSONArray("skills")
-    if (arr != null) {
-        for (i in 0 until arr.length()) {
-            val obj = arr.optJSONObject(i)
-            if (obj == null) {
-                dropped++
-                continue
-            }
-            val row = parseTaughtSkill(obj)
-            if (row == null) {
-                dropped++
-                continue
-            }
-            out.add(row)
+    // A missing key is a contract break, not an empty list: failing keeps
+    // old rows behind an error instead of wiping the section.
+    val arr = root.optJSONArray("skills") ?: return null
+    for (i in 0 until arr.length()) {
+        val obj = arr.optJSONObject(i)
+        if (obj == null) {
+            dropped++
+            continue
         }
+        val row = parseTaughtSkill(obj)
+        if (row == null) {
+            dropped++
+            continue
+        }
+        out.add(row)
     }
     if (dropped > 0) {
         runCatching { Log.w("TeachApi", "dropped $dropped undecodable skill row(s)") }

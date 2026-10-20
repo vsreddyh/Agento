@@ -504,11 +504,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Saves a thread's transcript as a skill draft for review in Skills.
      * Nothing runs from it: drafts are inert until reviewed, tested and
-     * activated. [done] receives null on success or a code-only error. */
-    fun saveThreadAsSkill(id: String, name: String, description: String, done: (String?) -> Unit) {
+     * activated. [done] receives an error (null on success) and whether the
+     * transcript clipped at the server body cap — a long thread stores
+     * less than was sent, and the writer must know. */
+    fun saveThreadAsSkill(id: String, name: String, description: String, done: (String?, Boolean) -> Unit) {
         val body = exportMarkdown(id)
         if (body.isBlank()) {
-            done("Conversation is empty.")
+            done("Conversation is empty.", false)
             return
         }
         val path = _state.value.path
@@ -517,11 +519,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 // Always answered, even across a profile switch: the dialog
                 // spins on this callback, and a stuck "Saving…" is worse
-                // than a toast for the old profile.
+                // than a toast for the old profile. Local misconfiguration
+                // surfaces verbatim (it names the fix); server failures stay
+                // code-only.
+                val detail = result.exceptionOrNull()?.message.orEmpty()
+                val truncated = result.getOrNull()?.second == true
                 done(
                     if (result.isSuccess) null
+                    else if ("Server URL not configured" in detail) detail
                     else "Couldn't save draft" +
-                        (ApprovalsApi.httpCode(result.exceptionOrNull()?.message)?.let { " (HTTP $it)" } ?: "") + ".",
+                        (ApprovalsApi.httpCode(detail)?.let { " (HTTP $it)" } ?: "") + ".",
+                    truncated,
                 )
             }
         }

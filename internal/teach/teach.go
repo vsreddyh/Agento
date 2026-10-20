@@ -115,6 +115,11 @@ func ClipLabel(s string) string {
 	return clipRunes(strings.TrimSpace(strings.ReplaceAll(s, "\x00", "")), MaxLabel)
 }
 
+// ClippedBody reports whether CleanBody would shorten a body by length.
+func ClippedBody(b string) bool {
+	return utf8.RuneCountInString(strings.TrimSpace(cleanFree(b))) > MaxBody
+}
+
 // ClipInput trims and bounds a test input.
 func ClipInput(s string) string {
 	return clipRunes(strings.TrimSpace(strings.ReplaceAll(s, "\x00", "")), MaxInput)

@@ -231,6 +231,9 @@ func (s *Server) handleSkillCollection(w http.ResponseWriter, r *http.Request, p
 		}
 		ctx, cancel := teachCtx(r)
 		defer cancel()
+		// Truncation is load-bearing for thread transcripts: a long chat
+		// clips at MaxBody, and the writer must know it stored less.
+		clipped := teach.ClippedBody(body.Body)
 		sk, err := s.teach.Create(ctx, teach.Skill{
 			Profile:     profile,
 			Name:        body.Name,
@@ -250,7 +253,7 @@ func (s *Server) handleSkillCollection(w http.ResponseWriter, r *http.Request, p
 		// Drafts do not materialize, but reconcile anyway: a rename race or
 		// a failed earlier write converges here for free.
 		s.materialize(profile)
-		writeJSONResponse(w, http.StatusOK, map[string]any{"skill": teachWire(sk)})
+		writeJSONResponse(w, http.StatusOK, map[string]any{"skill": teachWire(sk), "truncated": clipped})
 		return
 	default:
 		w.Header().Set("Allow", "GET, POST")

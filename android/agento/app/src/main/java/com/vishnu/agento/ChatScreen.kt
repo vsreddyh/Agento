@@ -252,11 +252,15 @@ internal fun ChatTab(
                     onClick = {
                         saving = true
                         saveError = ""
-                        vm.saveThreadAsSkill(savingId, skillName, skillDescription) { err ->
+                        vm.saveThreadAsSkill(savingId, skillName, skillDescription) { err, truncated ->
                             saving = false
                             if (err == null) {
                                 savingSkillId = null
-                                toasts.toast("Draft saved — review it in Skills.", ToastKind.Success)
+                                toasts.toast(
+                                    if (truncated) "Draft saved, long thread clipped — review it in Skills."
+                                    else "Draft saved — review it in Skills.",
+                                    ToastKind.Success,
+                                )
                             } else {
                                 saveError = err
                             }

@@ -108,6 +108,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var taughtError by remember { mutableStateOf("") }
     var managing by remember { mutableStateOf<TaughtSkill?>(null) }
     var managingError by remember { mutableStateOf("") }
+    var composerError by remember { mutableStateOf("") }
     var managingBusy by remember { mutableStateOf(false) }
     var testOutput by remember { mutableStateOf("") }
     var composing by remember { mutableStateOf(false) }
@@ -119,6 +120,9 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var loadJob by remember { mutableStateOf<Job?>(null) }
 
     val teachApi = remember { TeachApi(context) }
+    // Hoisted alongside the api: pathFor is pure config, and every
+    // construction builds an OkHttpClient for nothing.
+    val chatApi = remember { ChatApi(context) }
 
     /** Taught load with the same single-flight + path guard as load(): a
      * profile switch mid-flight must not land old rows on the new path. */
@@ -134,7 +138,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             try {
                 val tr = teachApi.listSkills(path)
                 ensureActive()
-                if (taughtJob == job && path == ChatApi(context).pathFor(profile)) {
+                if (taughtJob == job && path == chatApi.pathFor(profile)) {
                     taughtError = tr.exceptionOrNull()?.let {
                         "Taught skills unavailable (${it.message?.take(60) ?: "error"})."
                     } ?: ""
@@ -152,7 +156,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         busy = true
         skillsError = ""
         loaded = false
-        val path = ChatApi(context).pathFor(profile)
+        val path = chatApi.pathFor(profile)
         loadTaught(path)
         var job: Job? = null
         job = scope.launch {
@@ -183,7 +187,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         action: suspend (TeachApi, String) -> Result<*>,
         onSuccess: () -> Unit = {},
     ) {
-        val path = ChatApi(context).pathFor(profile)
+        val path = chatApi.pathFor(profile)
         managingBusy = true
         managingError = ""
         scope.launch {
@@ -352,7 +356,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     if (taughtError.isNotBlank()) {
                         item {
                             ErrorCard(raw = taughtError, onRetry = {
-                                loadTaught(ChatApi(context).pathFor(profile))
+                                loadTaught(chatApi.pathFor(profile))
                             })
                         }
                     }
@@ -394,10 +398,10 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                         val d = newDescription.trim()
                                         val b = newBody.trim()
                                         managingBusy = true
-                                        managingError = ""
+                                        composerError = ""
                                         scope.launch {
                                             try {
-                                                val path = ChatApi(context).pathFor(profile)
+                                                val path = chatApi.pathFor(profile)
                                                 teachApi.createDraft(path, n, d, b).getOrThrow()
                                                 ensureActive()
                                                 newName = ""
@@ -407,7 +411,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                                 loadTaught(path)
                                             } catch (e: Exception) {
                                                 ensureActive()
-                                                managingError = e.message?.take(120) ?: "failed"
+                                                composerError = e.message?.take(120) ?: "failed"
                                             } finally {
                                                 managingBusy = false
                                             }
@@ -423,10 +427,10 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                 }
                             }
                         }
-                        if (managingError.isNotBlank() && managing == null) {
+                        if (composerError.isNotBlank()) {
                             item {
                                 Text(
-                                    managingError,
+                                    composerError,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.error,
                                 )
