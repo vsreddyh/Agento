@@ -66,6 +66,8 @@ func (s *MemoryStore) Create(_ context.Context, in Skill) (Skill, error) {
 	defer s.mu.Unlock()
 	if in.ID == "" {
 		in.ID = NewID()
+	} else if !ValidID(in.ID) {
+		return Skill{}, NewStoreError("skill id must be 1-64 letters, digits, _ or -", false)
 	}
 	if _, exists := s.skills[in.ID]; exists {
 		return Skill{}, NewStoreError("skill id already exists", false)

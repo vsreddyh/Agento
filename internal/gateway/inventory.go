@@ -35,6 +35,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"agento/internal/teach"
 )
@@ -77,6 +78,10 @@ type skillInfo struct {
 	Enabled     bool   `json:"enabled"`
 	Path        string `json:"path,omitempty"`
 	Scope       string `json:"scope,omitempty"`
+	// Status survives only on taught rows (draft/active): Pi-loaded skills
+	// leave it empty, and the app distinguishes draft from active by it
+	// rather than by convention.
+	Status string `json:"status,omitempty"`
 }
 
 // toolsetInfo is one row in the app's MCP page. `tools` is omitted rather than
@@ -241,7 +246,11 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request, h *agentHa
 	// Disabled skills stay hidden: stopping must read as gone. A name
 	// collision with a Pi-loaded skill keeps Pi's row (the model sees that
 	// one); the taught row's description names the conflict instead.
-	if taught, err := s.teach.List(ctx, h.profile); err == nil {
+	// Its own budget, not the Pi call's leftovers: under a slow Pi the
+	// taught rows must not vanish intermittently from their own review tab.
+	tctx, tcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer tcancel()
+	if taught, err := s.teach.List(tctx, h.profile); err == nil {
 		seen := make(map[string]bool, len(skills))
 		for _, sk := range skills {
 			seen[strings.ToLower(sk.Name)] = true
@@ -255,6 +264,7 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request, h *agentHa
 				Description: bounded(t.Description),
 				Enabled:     t.Status == teach.StatusActive,
 				Scope:       "taught",
+				Status:      string(t.Status),
 			})
 		}
 		sort.Slice(skills, func(i, j int) bool {

@@ -84,6 +84,48 @@ func run() error {
 	logger := log.New(os.Stderr, "[gateway] ", log.LstdFlags|log.Lmsgprefix)
 	logger.Printf("profiles: %s", strings.Join(profiles, ", "))
 
+	// Taught skills (#314) open before Pi starts: the runtime dir must hold
+	// this boot's files before the first --skill argument points at it. A
+	// fresh deploy wipes the container filesystem, so reconciling after Pi
+	// starts would boot skill-less and only the next restart would fix it.
+	// Taught skills (#314). Same database, sibling collection. Without
+	// Mongo the routes still work from an in-process store, but activation
+	// cannot survive a restart and the materialized files are the only copy
+	// Pi ever sees — so an activation here would silently un-teach on the
+	// next boot. Log that plainly rather than silently degrade.
+	var teachStore teach.Store
+	if store, err := teach.FromEnv(); err != nil {
+		logger.Printf("teach: falling back to in-process (activations do not survive restart): %v", err)
+		teachStore = teach.NewMemoryStore()
+	} else {
+		teachStore = store
+		store.Logf = logger.Printf
+		// Background, not the signal ctx: it does not exist yet this early
+		// in startup, and these are bounded one-shot calls anyway.
+		indexCtx, cancelIndex := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := store.EnsureIndexes(indexCtx); err != nil {
+			logger.Printf("teach: index setup failed: %v", err)
+		}
+		cancelIndex()
+	}
+
+	// Startup reconcile runs here, not later, for the reason above: Mongo
+	// is the source of truth and the runtime dir is its cache.
+	for _, profile := range profiles {
+		matCtx, cancelMat := context.WithTimeout(context.Background(), 10*time.Second)
+		skills, err := teachStore.List(matCtx, profile)
+		cancelMat()
+		if err != nil {
+			logger.Printf("teach: startup list failed for %s: %v", profile, err)
+			continue
+		}
+		if n, err := teach.Materialize(teach.RuntimeDir(agentDir, profile), skills); err != nil {
+			logger.Printf("teach: startup materialize failed for %s: %v", profile, err)
+		} else if n > 0 {
+			logger.Printf("teach: materialized %d skill(s) for %s", n, profile)
+		}
+	}
+
 	// Crash files live under the bind-mounted agent dir, so they survive
 	// container restarts (#290). Self-cleaning: files older than the TTL
 	// are deleted here, at startup, and after each write.
@@ -104,33 +146,37 @@ func run() error {
 	for _, profile := range profiles {
 		dir := filepath.Join(profileDir, profile)
 
+		// Pi args build in two steps because Go allows only one spread per
+		// append call: the committed skills first, then the taught-skills
+		// runtime dir (nil when it holds no valid skill, so a profile with
+		// nothing taught starts unchanged).
+		piArgs := append(
+			[]string{"--model", defaultModel, "--session-dir", filepath.Join(agentDir, "sessions")},
+			// Per-profile skills, named explicitly.
+			//
+			// Pi does NOT discover a bare skills/ directory in the working
+			// directory. Measured with one distinctly-named skill per candidate
+			// location and PI_CODING_AGENT_DIR set: <agent-dir>/skills/ is found,
+			// <cwd>/skills/ is not, and <cwd>/.agents/skills/ is not either
+			// (project resources need trust, which a headless RPC session never
+			// grants). So --skill <path> is the only route to skills that differ
+			// per profile, and it is repeatable.
+			//
+			// Only added when the profile has at least one valid skill (a subdirectory
+			// containing a SKILL.md): passing --skill at a path with no skill in it
+			// is at best inert and at worst an error, and a skill-less profile must
+			// still start. No count of which profiles have skills, because that
+			// goes stale the moment someone adds one.
+			skillArgs(profileSkillDir(dir))...,
+		)
+		piArgs = append(piArgs,
+			skillArgs(teach.RuntimeDir(agentDir, profile))...,
+		)
+
 		client, err := pi.Start(ctx, pi.Options{
-			Bin: piBin,
-			Dir: dir,
-			Args: append(append(
-				[]string{"--model", defaultModel, "--session-dir", filepath.Join(agentDir, "sessions")},
-				// Per-profile skills, named explicitly.
-				//
-				// Pi does NOT discover a bare skills/ directory in the working
-				// directory. Measured with one distinctly-named skill per candidate
-				// location and PI_CODING_AGENT_DIR set: <agent-dir>/skills/ is found,
-				// <cwd>/skills/ is not, and <cwd>/.agents/skills/ is not either
-				// (project resources need trust, which a headless RPC session never
-				// grants). So --skill <path> is the only route to skills that differ
-				// per profile, and it is repeatable.
-				//
-				// Only added when the profile has at least one valid skill (a subdirectory
-				// containing a SKILL.md): passing --skill at a path with no skill in it
-				// is at best inert and at worst an error, and a skill-less profile must
-				// still start. No count of which profiles have skills, because that
-				// goes stale the moment someone adds one.
-				skillArgs(profileSkillDir(dir))...,
-			),
-				// Taught skills (#314): the runtime dir materialized from
-				// Mongo. skillArgs is nil when it holds no valid skill, so
-				// a profile with nothing taught starts unchanged.
-				skillArgs(teach.RuntimeDir(agentDir, profile))...,
-			),
+			Bin:  piBin,
+			Dir:  dir,
+			Args: piArgs,
 			// Env replaces rather than merges, so the parent environment is copied
 			// explicitly — setting it to just the provider key would leave the child
 			// without PATH and the exec failure would look unrelated.
@@ -328,25 +374,6 @@ func run() error {
 		cancelIndex()
 	}
 
-	// Taught skills (#314). Same database, sibling collection. Without
-	// Mongo the routes still work from an in-process store, but activation
-	// cannot survive a restart and the materialized files are the only copy
-	// Pi ever sees — so an activation here would silently un-teach on the
-	// next boot. Log that plainly rather than silently degrade.
-	var teachStore teach.Store
-	if store, err := teach.FromEnv(); err != nil {
-		logger.Printf("teach: falling back to in-process (activations do not survive restart): %v", err)
-		teachStore = teach.NewMemoryStore()
-	} else {
-		teachStore = store
-		store.Logf = logger.Printf
-		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
-		if err := store.EnsureIndexes(indexCtx); err != nil {
-			logger.Printf("teach: index setup failed: %v", err)
-		}
-		cancelIndex()
-	}
-
 	// The test-fire runner is the cron runner's sibling, not its child: it
 	// needs the same key and model but no job store, so a Mongo-less stack
 	// still answers "no runner" honestly instead of failing open.
@@ -359,24 +386,6 @@ func run() error {
 		teachRunner = runner.Run
 	} else {
 		logger.Printf("teach: no OPENCODE_API_KEY, skill tests unavailable")
-	}
-
-	// Startup reconcile: Mongo is the source of truth, the runtime dir is a
-	// cache. A deploy wipes the container filesystem, so without this the
-	// first boot after an activation would start Pi skill-less.
-	for _, profile := range profiles {
-		matCtx, cancelMat := context.WithTimeout(ctx, 10*time.Second)
-		skills, err := teachStore.List(matCtx, profile)
-		cancelMat()
-		if err != nil {
-			logger.Printf("teach: startup list failed for %s: %v", profile, err)
-			continue
-		}
-		if n, err := teach.Materialize(teach.RuntimeDir(agentDir, profile), skills); err != nil {
-			logger.Printf("teach: startup materialize failed for %s: %v", profile, err)
-		} else if n > 0 {
-			logger.Printf("teach: materialized %d skill(s) for %s", n, profile)
-		}
 	}
 
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")

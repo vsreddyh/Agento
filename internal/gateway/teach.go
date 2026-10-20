@@ -1,7 +1,10 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -113,10 +116,10 @@ func (s *Server) handleTeach(w http.ResponseWriter, r *http.Request, rest, profi
 		s.handleSkillTest(w, r, profile, strings.TrimSuffix(path, "/test"))
 		return
 	case strings.HasSuffix(path, "/activate"):
-		s.handleSkillStatus(w, r, profile, strings.TrimSuffix(path, "/activate"), teach.StatusActive)
+		s.handleSkillStatus(w, r, profile, strings.TrimSuffix(path, "/activate"), teach.StatusActive, "activate")
 		return
 	case strings.HasSuffix(path, "/disable"):
-		s.handleSkillStatus(w, r, profile, strings.TrimSuffix(path, "/disable"), teach.StatusDisabled)
+		s.handleSkillStatus(w, r, profile, strings.TrimSuffix(path, "/disable"), teach.StatusDisabled, "disable")
 		return
 	case strings.HasSuffix(path, "/promote"):
 		s.handleSkillPromote(w, r, profile, strings.TrimSuffix(path, "/promote"))
@@ -246,8 +249,8 @@ func (s *Server) handleSkillUpdate(w http.ResponseWriter, r *http.Request, profi
 	writeJSONResponse(w, http.StatusOK, map[string]any{"skill": teachWire(sk)})
 }
 
-func (s *Server) handleSkillStatus(w http.ResponseWriter, r *http.Request, profile, id string, st teach.Status) {
-	if !requireMethod(w, r, http.MethodPost, "/api/skills/{id}/"+string(st)) {
+func (s *Server) handleSkillStatus(w http.ResponseWriter, r *http.Request, profile, id string, st teach.Status, verb string) {
+	if !requireMethod(w, r, http.MethodPost, "/api/skills/{id}/"+verb) {
 		return
 	}
 	ctx, cancel := teachCtx(r)
@@ -280,11 +283,20 @@ func (s *Server) handleSkillTest(w http.ResponseWriter, r *http.Request, profile
 			"no model runner is configured for skill tests")
 		return
 	}
+	// The input is optional, but a present-but-malformed one must not run
+	// the model: read the body rather than trusting ContentLength, which
+	// chunked requests declare as -1.
 	var body struct {
 		Input string `json:"input"`
 	}
-	if r.ContentLength > 0 {
-		if err := decodeJSONBody(w, r, &body); err != nil {
+	if raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes)); err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+			"could not read the request body")
+		return
+	} else if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+				"could not parse the request body as JSON")
 			return
 		}
 	}
@@ -314,13 +326,13 @@ func (s *Server) handleSkillTest(w http.ResponseWriter, r *http.Request, profile
 			"the test run failed: "+bounded(err.Error()))
 		return
 	}
-	sk, err = s.teach.RecordTest(ctx, id, profile, time.Now().UnixMilli(), text)
+	// Fresh budget, not the expired request ctx: the 120s model call above
+	// outlived teachCtx's 5s, and reusing it would 502 every Mongo record
+	// while memory (which ignores ctx) stayed green in tests.
+	recCtx, recCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer recCancel()
+	sk, err = s.teach.RecordTest(recCtx, id, profile, time.Now().UnixMilli(), text)
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			apiError(w, http.StatusBadGateway, "upstream_error", "",
-				"the skill store did not answer in time")
-			return
-		}
 		teachError(w, err)
 		return
 	}

@@ -106,6 +106,16 @@ func NewStoreError(msg string, upstream bool) *StoreError {
 // Pi-command-safe, lowercase. Checked in the stores and the gateway alike.
 var nameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
 
+// idRe bounds caller-supplied ids: routing caps at 64 chars and rejects
+// slashes, so an over-long id would create an unreachable row. Generated
+// ids are 24-hex and always pass.
+var idRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// ValidID reports whether a caller-supplied id is storable and routable.
+func ValidID(id string) bool {
+	return idRe.MatchString(id)
+}
+
 // ValidName reports whether a raw name is a usable skill name.
 func ValidName(raw string) bool {
 	return nameRe.MatchString(strings.TrimSpace(raw))

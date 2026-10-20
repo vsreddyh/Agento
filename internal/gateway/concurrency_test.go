@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"agento/internal/pi"
+	"agento/internal/teach"
 )
 
 // Two concurrent turns on one profile would race Pi's single session and
@@ -2456,7 +2457,10 @@ func TestSkillsRowShape(t *testing.T) {
 		fields = append(fields, typ.Field(i).Name)
 	}
 	sort.Strings(fields)
-	want := []string{"Description", "Enabled", "Name", "Path", "Scope"}
+	// Status joined deliberately for #314: taught rows (scope "taught")
+	// carry draft/active so the tab distinguishes them; Pi-loaded rows leave
+	// it empty via omitempty. Populated below, not a rotting field.
+	want := []string{"Description", "Enabled", "Name", "Path", "Scope", "Status"}
 	if strings.Join(fields, ",") != strings.Join(want, ",") {
 		t.Fatalf("skillInfo fields = %v, want exactly %v. A field nothing populates "+
 			"is wire surface that only rots — if you are adding one, populate it and "+
@@ -2475,5 +2479,47 @@ func TestSkillsRowShape(t *testing.T) {
 	// enabled is always present (no omitempty) so the app's optFlag has a bool to read.
 	if v, ok := rows[0]["enabled"].(bool); !ok || !v {
 		t.Fatalf("enabled = %v, want true", rows[0]["enabled"])
+	}
+	// Taught rows merge in: a draft (enabled false, status draft) and an
+	// active skill (enabled true, status active) alongside the Pi row, which
+	// carries no status key at all.
+	store := srv.teach.(*teach.MemoryStore)
+	ctx := context.Background()
+	if _, err := store.Create(ctx, teach.Skill{
+		Profile: "default", Name: "t-draft", Description: "d", Body: "b",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	act, err := store.Create(ctx, teach.Skill{
+		Profile: "default", Name: "t-active", Description: "a", Body: "b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordTest(ctx, act.ID, "default", 1, "ok"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetStatus(ctx, act.ID, "default", teach.StatusActive); err != nil {
+		t.Fatal(err)
+	}
+	rec = get(t, srv, "/v1/skills", "test-token")
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3: %s", len(rows), rec.Body)
+	}
+	byName := map[string]map[string]any{}
+	for _, r := range rows {
+		byName[r["name"].(string)] = r
+	}
+	if d := byName["t-draft"]; d["enabled"] != false || d["status"] != "draft" || d["scope"] != "taught" {
+		t.Fatalf("draft row = %#v", d)
+	}
+	if a := byName["t-active"]; a["enabled"] != true || a["status"] != "active" {
+		t.Fatalf("active row = %#v", a)
+	}
+	if _, ok := byName["note-taking"]["status"]; ok {
+		t.Fatalf("Pi row carries status: %#v", byName["note-taking"])
 	}
 }

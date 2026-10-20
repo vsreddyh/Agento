@@ -92,6 +92,8 @@ func (s *MongoStore) Create(ctx context.Context, in Skill) (Skill, error) {
 	}
 	if in.ID == "" {
 		in.ID = NewID()
+	} else if !ValidID(in.ID) {
+		return Skill{}, NewStoreError("skill id must be 1-64 letters, digits, _ or -", false)
 	}
 	now := s.clock().UnixMilli()
 	if in.CreatedAt == 0 || in.CreatedAt > now {
@@ -162,6 +164,9 @@ func (s *MongoStore) Update(ctx context.Context, id, profile string, u Update) (
 		return Skill{}, &StoreError{Msg: "unknown skill " + id, NotFound: true}
 	}
 	if err != nil {
+		if mongoDrv.IsDuplicateKeyError(err) {
+			return Skill{}, NewStoreError("a skill with that name already exists", false)
+		}
 		return Skill{}, NewStoreError("skill update failed: "+err.Error(), true)
 	}
 	return it, nil
@@ -224,26 +229,25 @@ func (s *MongoStore) SetStatus(ctx context.Context, id, profile string, st Statu
 		}
 		return it, nil
 	}
-	// Activate reads the row first: an untested skill must not go active,
-	// and the check has to see the stored testedAt, not a caller claim.
-	var cur Skill
-	if err := s.skills.FindOne(ctx, bson.M{"_id": id, "profile": profile}).Decode(&cur); err != nil {
-		if errors.Is(err, mongoDrv.ErrNoDocuments) {
-			return Skill{}, &StoreError{Msg: "unknown skill " + id, NotFound: true}
-		}
-		return Skill{}, NewStoreError("skill read failed: "+err.Error(), true)
-	}
-	if cur.TestedAt == 0 {
-		return Skill{}, NewStoreError("test the skill before activating it", false)
-	}
+	// Activate is one atomic update: the filter itself requires a recorded
+	// test, so no concurrent edit/test can interleave between a read and a
+	// write. A miss is either unknown or untested; the probe tells which so
+	// the error stays honest.
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
 	var it Skill
 	err := s.skills.FindOneAndUpdate(ctx,
-		bson.M{"_id": id, "profile": profile},
+		bson.M{"_id": id, "profile": profile, "testedAt": bson.M{"$ne": 0}},
 		bson.M{"$set": bson.M{"status": st, "updatedAt": s.clock().UnixMilli()}},
 		opts).Decode(&it)
 	if errors.Is(err, mongoDrv.ErrNoDocuments) {
-		return Skill{}, &StoreError{Msg: "unknown skill " + id, NotFound: true}
+		var probe Skill
+		if perr := s.skills.FindOne(ctx, bson.M{"_id": id, "profile": profile}).Decode(&probe); perr != nil {
+			if errors.Is(perr, mongoDrv.ErrNoDocuments) {
+				return Skill{}, &StoreError{Msg: "unknown skill " + id, NotFound: true}
+			}
+			return Skill{}, NewStoreError("skill read failed: "+perr.Error(), true)
+		}
+		return Skill{}, NewStoreError("test the skill before activating it", false)
 	}
 	if err != nil {
 		return Skill{}, NewStoreError("skill status failed: "+err.Error(), true)

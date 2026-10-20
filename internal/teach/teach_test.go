@@ -44,6 +44,14 @@ func TestMemoryLifecycle(t *testing.T) {
 	if _, err := s.Create(ctx, Skill{Profile: "p", Name: "Weekly", Description: "x", Body: "y"}); err == nil {
 		t.Fatal("uppercase name accepted")
 	}
+	// the second twin fails: names are unique per profile, and this pins
+	// the duplicate path rather than the validation path
+	if _, err := s.Create(ctx, Skill{Profile: "p", Name: "twin", Description: "first", Body: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(ctx, Skill{Profile: "p", Name: "twin", Description: "second", Body: "2"}); err == nil {
+		t.Fatal("duplicate name accepted")
+	}
 	a, err := s.Create(ctx, Skill{Profile: "p", Name: "weekly", Description: "  does things  ", Body: "do it"})
 	if err != nil {
 		t.Fatal(err)
@@ -51,10 +59,6 @@ func TestMemoryLifecycle(t *testing.T) {
 	// the lifecycle starts at draft, always
 	if a.Name != "weekly" || a.Status != StatusDraft || a.Description != "does things" {
 		t.Fatalf("create = %+v", a)
-	}
-	// names are unique per profile, exact
-	if _, err := s.Create(ctx, Skill{Profile: "p", Name: "Weekly", Description: "x", Body: "y"}); err == nil {
-		t.Fatal("duplicate name accepted")
 	}
 	if _, err := s.Create(ctx, Skill{Profile: "q", Name: "weekly", Description: "x", Body: "y"}); err != nil {
 		t.Fatalf("cross-profile name blocked: %v", err)

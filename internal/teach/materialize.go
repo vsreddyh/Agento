@@ -30,20 +30,35 @@ func Materialize(dir string, skills []Skill) (int, error) {
 	}
 	sort.Slice(active, func(a, b int) bool { return active[a].Name < active[b].Name })
 	want := make(map[string]bool, len(active))
+	written := 0
 	for _, s := range active {
+		// Belt and suspenders: names are validated on write, but a
+		// hand-edited row with "../" must never escape dir through Join.
+		if !ValidName(s.Name) {
+			continue
+		}
 		want[s.Name] = true
 		skillDir := filepath.Join(dir, s.Name)
+		// A file where the skill dir belongs (never created by this
+		// reconciler, but disks surprise) would wedge MkdirAll and with it
+		// every later skill: remove it and proceed, noisily.
+		if st, err := os.Stat(skillDir); err == nil && !st.IsDir() {
+			if err := os.Remove(skillDir); err != nil {
+				return 0, err
+			}
+		}
 		if err := os.MkdirAll(skillDir, 0o755); err != nil {
 			return 0, err
 		}
 		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(RenderSKILL(s)), 0o644); err != nil {
 			return 0, err
 		}
+		written++
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return len(active), nil
+			return written, nil
 		}
 		return 0, err
 	}
@@ -62,7 +77,5 @@ func Materialize(dir string, skills []Skill) (int, error) {
 			return 0, err
 		}
 	}
-	// Path safety: every name below passed ValidName, which admits no dot
-	// and no slash, so Join cannot escape dir even for a hostile row.
-	return len(active), nil
+	return written, nil
 }
