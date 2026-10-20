@@ -172,6 +172,11 @@ func (s *MemoryStore) List(_ context.Context, profile string) ([]Skill, error) {
 		}
 		return out[a].ID > out[b].ID
 	})
+	// Same cap as Mongo: the Store contract is one contract, even though a
+	// hundred taught skills per profile is nowhere in sight.
+	if len(out) > ListCap {
+		out = out[:ListCap]
+	}
 	return out, nil
 }
 

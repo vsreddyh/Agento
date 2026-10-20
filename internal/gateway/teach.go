@@ -340,7 +340,10 @@ func (s *Server) handleSkillTest(w http.ResponseWriter, r *http.Request, profile
 		teachError(w, err)
 		return
 	}
-	writeJSONResponse(w, http.StatusOK, map[string]any{"skill": teachWire(sk), "output": text})
+	// The wire copy is the stored copy: TestText is already clipped, so one
+	// long run cannot make one large API response. The writer saw the full
+	// stream at test time; the record is what travels.
+	writeJSONResponse(w, http.StatusOK, map[string]any{"skill": teachWire(sk), "output": sk.TestText})
 }
 
 // handleSkillPromote creates a cron job running the skill's procedure on a
@@ -388,7 +391,7 @@ func (s *Server) handleSkillPromote(w http.ResponseWriter, r *http.Request, prof
 	if name == "" {
 		name = sk.Name
 	}
-	prompt := "Routine \"" + sk.Name + "\" (taught skill, profile " + profile + "). " +
+	prompt := "Routine \"" + teach.SafeName(sk) + "\" (taught skill, profile " + profile + "). " +
 		"Follow the procedure below.\n\n" + teach.RenderSKILL(sk)
 	// Own budget, not the Get's leftovers: same starvation shape as the
 	// test-fire record had before it got a fresh ctx.

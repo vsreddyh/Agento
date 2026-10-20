@@ -87,6 +87,35 @@ func TestMemoryLifecycle(t *testing.T) {
 	}
 }
 
+func TestSafeNameFallsBack(t *testing.T) {
+	if got := SafeName(Skill{Name: "weekly"}); got != "weekly" {
+		t.Fatalf("SafeName = %q", got)
+	}
+	if got := SafeName(Skill{Name: "../x"}); got != "invalid-name" {
+		t.Fatalf("SafeName = %q", got)
+	}
+	if got := RenderSKILL(Skill{Name: "a\nb", Description: "d", Body: "b"}); !strings.Contains(got, "name: invalid-name") {
+		t.Fatalf("rendered hostile name:\n%s", got)
+	}
+}
+
+func TestMemoryListCaps(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	for i := 0; i < ListCap+5; i++ {
+		if _, err := s.Create(ctx, Skill{Profile: "p", Name: "s" + strings.Repeat("a", 3) + string(rune('a'+i%26)) + string(rune('0'+i/26%10)) + string(rune('0'+i/260%10)), Description: "d", Body: "b"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := s.List(ctx, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != ListCap {
+		t.Fatalf("list = %d, want cap %d", len(list), ListCap)
+	}
+}
+
 func TestMaterializeReconciles(t *testing.T) {
 	dir := t.TempDir()
 	n, skipped, err := Materialize(dir, []Skill{

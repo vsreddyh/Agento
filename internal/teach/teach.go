@@ -163,15 +163,20 @@ func collapseWS(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// RenderSKILL renders the SKILL.md Pi loads: frontmatter in the same shape
-// as the committed skills, then the procedure body verbatim. The name is
-// re-validated here, not just on write: a hand-edited row with a newline or
-// quote must not break frontmatter or inject YAML at render time.
-func RenderSKILL(s Skill) string {
-	name := s.Name
-	if !ValidName(name) {
-		name = "invalid-name"
+// SafeName returns the name if it is valid, else a fixed fallback: a
+// hand-edited row must never inject YAML at render time or raw text into a
+// cron prompt. Used everywhere a stored name crosses a trust boundary.
+func SafeName(s Skill) string {
+	if ValidName(s.Name) {
+		return s.Name
 	}
+	return "invalid-name"
+}
+
+// RenderSKILL renders the SKILL.md Pi loads: frontmatter in the same shape
+// as the committed skills, then the procedure body verbatim.
+func RenderSKILL(s Skill) string {
+	name := SafeName(s)
 	var b strings.Builder
 	b.WriteString("---\nname: " + name + "\n")
 	b.WriteString("description: \"" + yamlEscape(s.Description) + "\"\n")
