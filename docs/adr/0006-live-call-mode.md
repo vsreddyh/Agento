@@ -25,7 +25,10 @@ record — still half-duplex, still no realtime transport.**
   partial or ending the session. Talking over the readout keeps its old
   meaning (cut speech, re-listen). The on-screen Stop claims the same way
   in live mode — tapping it re-listens instead of replaying the partial;
-  outside live mode the plain stop keeps its speak-the-partial path.
+  outside live mode the plain stop keeps its speak-the-partial path. An
+  approval-stalled turn barges like any other: the claim stops the stream
+  and the server run (cancelling the approval watch), held calls survive
+  in the sheet, and the loop keeps talking.
 - Long tasks are audible. While a live turn streams, newly appearing tools
   are announced once per change ("Using log transaction" — the fresh server
   label when one arrived with the change, else the latest delta's last
