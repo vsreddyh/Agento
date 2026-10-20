@@ -1004,7 +1004,13 @@ internal fun ChatScreen(
         // lie armed and fail one AudioRecord alloc per phase transition.
         // Say so out loud, like the permission-launcher denial path does.
         micArmed = interrupt.hasPermission(context)
-        if (!micArmed) toasts.toast("Live mode needs microphone access.", ToastKind.Error)
+        if (!micArmed) {
+            // No permission, no loop (#317): falling through would listen
+            // once, fatal, and end — flash-then-die with two toasts. Stay
+            // out and say why; the next tap retries via the launcher path.
+            endLive("Live mode needs microphone access.")
+            return
+        }
         // Fresh call state (#317): a previous session's barge claim or
         // milestone set must not leak into this one. The detector is
         // stopped and its holder reset too (#317) so the
@@ -1217,7 +1223,10 @@ internal fun ChatScreen(
         if (wasSpeaking && speakingKey == null && liveMode && !state.streaming) {
             liveListen()
         }
-        wasSpeaking = speakingKey != null
+        // Cues never arm the gate (#317): only a reply finish re-listens.
+        // A cut cue would otherwise leave a stale true behind and the next
+        // driver run would double the stream-end effect's own listen.
+        wasSpeaking = speakingKey != null && !cueSpeaking
     }
     // Tool milestones (#317): while a live turn streams, announce newly
     // appearing tools once per change so a long task is audible. The cue
