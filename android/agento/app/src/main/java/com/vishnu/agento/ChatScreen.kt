@@ -112,7 +112,17 @@ private fun AttachmentThumb(
     label: String,
     modifier: Modifier = Modifier,
 ) {
-    val bmp = remember(base64) { runCatching { decodeThumbnail(base64) }.getOrNull() }
+    // Keyed by (length, hashCode), not the string (#339 review): remember's
+    // equality check would memcmp ~1.5 M chars on every recomposition.
+    // hashCode() walks once — the JVM caches it — and is O(1) after that.
+    val thumbKey = base64.length to base64.hashCode()
+    val bmp = remember(thumbKey) { runCatching { decodeThumbnail(base64) }.getOrNull() }
+    // Recycled with the composition: the remembered ~256px bitmap is owned
+    // here, never shared, so disposing it on key change/unmount leaks
+    // nothing and cannot pull pixels from under a live Image.
+    DisposableEffect(thumbKey) {
+        onDispose { runCatching { bmp?.takeUnless { it.isRecycled }?.recycle() } }
+    }
     if (bmp != null) {
         Image(
             bitmap = bmp.asImageBitmap(),
@@ -186,8 +196,13 @@ internal fun ChatTab(
     // Photo attachments (#318): gallery picks need no permission (the picker
     // returns read access to just the chosen images); the camera needs
     // CAMERA plus a FileProvider Uri staged before TakePicture launches.
-    var cameraUri by remember { mutableStateOf<Uri?>(null) }
-    var cameraFile by remember { mutableStateOf<File?>(null) }
+    var cameraUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    // File path, not the File (#339 review): rotation while the camera app
+    // is foreground destroys this composition, and only saveable state
+    // survives — a lost Uri/File silently drops the capture (TakePicture
+    // returns with nothing to decode). Uri is Parcelable; the path is a
+    // String; both restore.
+    var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
     // One decode at a time, in pick order: each photo lands (or its named
     // error toasts) as it finishes, so a slow second image never blocks the
     // first one's thumbnail. Failures name the fix (too large, unreadable)
@@ -214,24 +229,25 @@ internal fun ChatTab(
             )
         }
         scope.launch(Dispatchers.IO) {
-            for (u in take) {
-                val result = prepareAttachment(context, u)
-                withContext(Dispatchers.Main) {
-                    result
-                        .onSuccess { vm.addPendingAttachments(listOf(it)) }
-                        .onFailure {
-                            toasts.toast(
-                                it.message ?: "Couldn't attach that photo.",
-                                ToastKind.Error,
-                            )
-                        }
+            try {
+                for (u in take) {
+                    val result = prepareAttachment(context, u)
+                    withContext(Dispatchers.Main) {
+                        result
+                            .onSuccess { vm.addPendingAttachments(listOf(it)) }
+                            .onFailure {
+                                toasts.toast(
+                                    it.message ?: "Couldn't attach that photo.",
+                                    ToastKind.Error,
+                                )
+                            }
+                    }
                 }
-            }
-            // The camera capture has served its purpose once decoded into the
-            // staged payload: delete it so captures never litter the cache.
-            // Back on Main: snapshot state is main-thread only, and the
-            // delete pairs with the batch that created the file.
-            withContext(Dispatchers.Main) {
+            } finally {
+                // In finally, not after the loop (#339 review): leaving the
+                // tab mid-decode cancels this coroutine, and a trailing
+                // delete would be skipped — littering one capture per
+                // cancel. File IO is fine here; no state is touched.
                 runCatching { cleanup?.takeIf { it.exists() }?.delete() }
             }
         }
@@ -243,9 +259,9 @@ internal fun ChatTab(
         ActivityResultContracts.TakePicture(),
     ) { ok ->
         val u = cameraUri
-        val f = cameraFile
+        val f = cameraPath?.let(::File)
         cameraUri = null
-        cameraFile = null
+        cameraPath = null
         if (ok && u != null) {
             processUris(listOf(u), f)
         } else {
@@ -262,7 +278,7 @@ internal fun ChatTab(
             return
         }
         cameraUri = uri
-        cameraFile = file
+        cameraPath = file.absolutePath
         cameraLauncher.launch(uri)
     }
     val cameraPermission = rememberLauncherForActivityResult(

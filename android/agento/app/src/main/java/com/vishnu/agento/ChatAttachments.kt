@@ -3,6 +3,8 @@ package com.vishnu.agento
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.util.Base64
 import java.io.ByteArrayOutputStream
@@ -117,8 +119,8 @@ fun messageContentJson(
     return arr
 }
 
-/** Raw size of a base64 payload in bytes, for human-sized error messages. */
-fun base64Bytes(base64: String): Long = (base64.length * 3L) / 4L
+/** Raw size of a base64 payload of [chars] in bytes, for human-sized error messages. */
+fun base64Bytes(chars: Int): Long = (chars * 3L) / 4L
 
 /** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal, never blank. */
 fun formatBytes(bytes: Long): String {
@@ -151,11 +153,13 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     "That file isn't a readable photo — Agento attaches images only, not documents.",
                 )
             }
-            // Sample down powers of two until the decoded bitmap is near the
-            // target box; the exact fit happens via scaling below.
+            // Sample toward the TARGET box, not twice it (#339 review): a
+            // 12 MP capture sampled to ~3136px then scaled holds a ~30 MB
+            // transient bitmap; sampling straight at ~1568px halves the
+            // peak, and the exact fit below usually becomes a no-op.
             var sample = 1
-            while (bounds.outWidth / sample > MAX_IMAGE_SIDE_PX * 2 ||
-                bounds.outHeight / sample > MAX_IMAGE_SIDE_PX * 2
+            while (bounds.outWidth / sample > MAX_IMAGE_SIDE_PX ||
+                bounds.outHeight / sample > MAX_IMAGE_SIDE_PX
             ) {
                 sample *= 2
             }
@@ -165,10 +169,38 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             } ?: throw IllegalArgumentException(
                 "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
             )
+            // EXIF orientation (#339 review): BitmapFactory ignores it, so a
+            // portrait phone photo would stage and send sideways. The
+            // framework reader needs no extra dependency (minSdk 28 > 24).
+            val rotation = resolver.openInputStream(uri)?.use { stream ->
+                runCatching {
+                    when (
+                        ExifInterface(stream).getAttributeInt(
+                            ExifInterface.TAG_ORIENTATION,
+                            ExifInterface.ORIENTATION_NORMAL,
+                        )
+                    ) {
+                        ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                        ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                        ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                        else -> 0f
+                    }
+                }.getOrDefault(0f)
+            } ?: 0f
+            if (rotation != 0f) {
+                val matrix = Matrix().apply { postRotate(rotation) }
+                val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                // Referential on purpose: equality is referential for Bitmaps,
+                // and only a new instance may recycle the old one.
+                if (rotated !== bitmap) {
+                    bitmap.recycle()
+                    bitmap = rotated
+                }
+            }
             val (tw, th) = downscaledSize(bitmap.width, bitmap.height)
             if (bitmap.width != tw || bitmap.height != th) {
                 val scaled = Bitmap.createScaledBitmap(bitmap, tw, th, true)
-                if (scaled != bitmap) {
+                if (scaled !== bitmap) {
                     bitmap.recycle()
                     bitmap = scaled
                 }
@@ -187,9 +219,9 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             }
             bitmap.recycle()
             val final = encoded ?: throw IllegalStateException(
-                "Photo too large even after shrinking (${formatBytes(largest * 3L / 4L)})" +
+                "Photo too large even after shrinking (${formatBytes(base64Bytes(largest))})" +
                     " — the per-photo limit is about " +
-                    "${formatBytes(MAX_IMAGE_BASE64_CHARS * 3L / 4L)}. " +
+                    "${formatBytes(base64Bytes(MAX_IMAGE_BASE64_CHARS))}. " +
                     "Try a smaller crop.",
             )
             ChatAttachment(mimeType = "image/jpeg", base64 = final)
@@ -204,6 +236,9 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
  */
 fun decodeThumbnail(base64: String): Bitmap? {
     return runCatching {
+        // DEFAULT on decode is deliberate asymmetry with the NO_WRAP encode
+        // above: encode must not emit newlines (data URIs are single-line),
+        // while decode stays lenient toward payloads written by older builds.
         val bytes = Base64.decode(base64, Base64.DEFAULT)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)

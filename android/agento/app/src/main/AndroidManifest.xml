@@ -17,8 +17,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Chat photo attachments (#318): camera captures staged in the
          composer. Gallery picks need no permission (the system picker
-         grants read access to just the chosen images). -->
+         grants read access to just the chosen images). The uses-feature
+         stays not-required: gallery-only devices (ChromeOS, Play
+         filtering) remain fully supported without a camera. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Live voice mode (#85): background speech detector that hears the user
          talking over the readout (hands-free interrupt). The one-shot system
          recognizer used for transcription needs no permission; without this,
