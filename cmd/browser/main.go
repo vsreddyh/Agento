@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"net"
 	"net/http"
@@ -55,8 +56,17 @@ var (
 	exports string
 )
 
+// fail reports an operational error on both channels, exactly like
+// result() does for validation errors: Pi surfaces Content as the tool
+// result text, so a Content-less failure would read as a blank tool result
+// in the transcript while the structured map held the reason.
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
-	return nil, map[string]any{"ok": false, "error": err.Error()}, nil
+	out := map[string]any{"ok": false, "error": err.Error()}
+	b, _ := json.Marshal(out)
+	return &mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: string(b)}},
+		StructuredContent: out,
+	}, out, nil
 }
 
 func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
@@ -228,20 +238,25 @@ type sessions struct {
 func (ss *sessions) get(profile string) *session {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
+	// Validated here, not just at startup: the signature invites
+	// non-global callers, and a "../x" profile must never become a path.
+	if !safeName.MatchString(profile) {
+		profile = "invalid-profile"
+	}
 	s, ok := ss.byProfile[profile]
 	if !ok {
 		s = &session{dir: filepath.Join(ss.agentDir, ".runtime", "browser", profile)}
 		ss.byProfile[profile] = s
 	}
 	s.lastUse = time.Now()
-	// Startup prune covers fresh boots and stray dirs; eviction covers live
-	// sessions in months-old processes (the server lives as long as Pi keeps
-	// it spawned). One walk a day.
+	// Eviction (live sessions, lastUse-aware) runs daily here. The
+	// filesystem walk runs ONLY at server start (main): its mtime test
+	// cannot tell a daily-used profile with a stable file set from an
+	// abandoned one, and deleting a running browser's dir from under it is
+	// exactly what evictIdle exists to prevent.
 	if time.Since(ss.lastPrune) > 24*time.Hour {
 		ss.lastPrune = time.Now()
-		base := filepath.Join(ss.agentDir, ".runtime", "browser")
 		ss.evictIdle()
-		go pruneSessions(base)
 	}
 	return s
 }
@@ -527,13 +542,15 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
-			shotCtx, cancel := context.WithTimeout(bctx, readTimeout)
-			defer cancel()
 			var buf []byte
 			if in.FullPage {
-				buf, err = chromedp.Run(shotCtx, chromedp.FullScreenshot(90))
+				buf, err = runStep(bctx, func(ctx context.Context) ([]byte, error) {
+					return chromedp.Run(ctx, chromedp.FullScreenshot(90))
+				})
 			} else {
-				buf, err = chromedp.Run(shotCtx, chromedp.CaptureScreenshot())
+				buf, err = runStep(bctx, func(ctx context.Context) ([]byte, error) {
+					return chromedp.Run(ctx, chromedp.CaptureScreenshot())
+				})
 			}
 			if err != nil {
 				return fail(fmt.Errorf("screenshot failed: %v", err))
@@ -648,6 +665,14 @@ func runStepVoid(bctx context.Context, fn func(context.Context) error) error {
 	return err
 }
 
+// fnv32 abbreviates a long profile for generated dirnames: 8 hex chars,
+// enough that a shared 24-char prefix plus same-ms saves stay distinct.
+func fnv32(s string) string {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return fmt.Sprintf("%08x", h.Sum32())
+}
+
 func orDefault(s, fallback string) string {
 	if strings.TrimSpace(s) == "" {
 		return fallback
@@ -687,9 +712,12 @@ func evidenceDir() (string, error) {
 	// a dir and silently overwrite each other's shot.png. The profile is
 	// capped first: safeName allows 64 chars and the timestamp adds 20, so
 	// a long-but-legal profile would fail its own jail below.
+	// Hashed cap: two profiles sharing a 32-char prefix (legal) plus
+	// same-ms saves (scripted) must not collide. 24 + 1 + 8 + 1 + 19 fits
+	// the 64-char jail with room.
 	p := profile
-	if len(p) > 32 {
-		p = p[:32]
+	if len(p) > 24 {
+		p = p[:24] + "-" + fnv32(p)
 	}
 	name := p + "-" + time.Now().UTC().Format("20060102-150405.000")
 	// exports already ends in /browser (default /exports/browser): the
