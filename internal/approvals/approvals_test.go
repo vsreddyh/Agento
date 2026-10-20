@@ -259,6 +259,9 @@ func TestScrubErrorMasksCredentials(t *testing.T) {
 		{"Authorization: Bearer abcdefghijklmnop", "[redacted]"},
 		{"api_key=supersecretvalue failed", "[redacted]"},
 		{`{"token":"sk-abcdef123456"}`, "[redacted]"},
+		// Compact JSON: the match must stop at the value, not swallow the
+		// following fields into the replacement.
+		{`{"token":"sk-abcdef123456","note":"keep"}`, "[redacted]"},
 		{"no such note: abc", "no such note: abc"},
 	}
 	for _, c := range cases {
@@ -277,6 +280,12 @@ func TestScrubErrorMasksCredentials(t *testing.T) {
 			t.Fatalf("ScrubError(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
+	// Compact JSON: the value match must terminate, leaving the next field.
+	got := ScrubError(`{"token":"sk-abcdef123456","note":"keep"}`)
+	if strings.Contains(got, "sk-abcdef") || !strings.Contains(got, `"note":"keep"`) {
+		t.Fatalf("compact JSON scrub = %q, want the secret masked and note kept", got)
+	}
+
 	long := strings.Repeat("x", MaxAuditError+50)
 	if n := utf8.RuneCountInString(ScrubError(long)); n != MaxAuditError {
 		t.Fatalf("long error scrubbed to %d runes, want %d", n, MaxAuditError)

@@ -231,7 +231,7 @@ var secretValue = []*regexp.Regexp{
 	// Optional quotes on both sides of the separator: an upstream error often
 	// echoes JSON ({"token":"sk-..."}), where the name is quoted before the
 	// colon and the value after it.
-	regexp.MustCompile(`(?i)\b(?:api[_-]?key|access[_-]?key|token|password|secret)["']?\s*[:=]\s*["']?\S+`),
+	regexp.MustCompile(`(?i)\b(?:api[_-]?key|access[_-]?key|token|password|secret)["']?\s*[:=]\s*["']?[^"',}\s]+`),
 }
 
 // ScrubError masks credential-shaped text in an upstream error and bounds the

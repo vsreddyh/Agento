@@ -102,6 +102,12 @@ exactly one principal to attribute a decision to. Per-user attribution arrives
 with per-user auth, and until then the field should be read as "decided from
 the app", not as an audit-grade user id.
 
+The pending list is global by design: approvals are one queue across all six
+relays, so `GET /api/approvals` filters by status only and a caller that wants
+one server narrows client-side. The audit trail, by contrast, is long and
+filterable (`?server=&tool=`), because history is read by cause. A server
+filter on the pending list would only matter if the queue were ever sharded.
+
 Two response-code contracts the app relies on. Reading an expired row is a
 **404** — it is no longer in the live queue — while deciding that same row is a
 **409**: the decision arrived after the hold ended. The 409 means "too late",
@@ -125,7 +131,10 @@ Error scrubbing is pattern-based, not exhaustive: `args` are redacted by key,
 while `error` is free text and is only masked where it matches a
 credential-shaped pattern (plus a 300-rune cap). A server that echoes a bare
 secret with no recognizable prefix can still land it in a row, so the app must
-treat `error` as untrusted display text, not as a safe field. Known gaps in
+treat `error` as untrusted display text, not as a safe field. Arguments are
+redacted by key *substring*, so a future display field like `author` (or
+`monkey`) renders as `***`: redacted args are display-only and must never be
+read back as data. Known gaps in
 that pattern set are short bare values (`token is abc`) and secrets with no
 key or scheme marker at all; value scrubbing cannot be complete, and the
 300-rune cap is the only hard bound. Secrets hygiene from the
