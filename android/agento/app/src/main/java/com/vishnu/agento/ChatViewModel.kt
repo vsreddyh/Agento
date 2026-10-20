@@ -1044,11 +1044,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Confirms a pending proposal: it joins the next turn's prompt. */
     fun confirmMemory(id: String) =
-        actOnMemory(id) { path -> memoryApi.updateMemory(path, id, status = "confirmed") }
+        actOnMemory(id, action = { path -> memoryApi.updateMemory(path, id, status = "confirmed") })
 
     /** Deletes one item: it is gone from the next turn. */
     fun deleteMemory(id: String) =
-        actOnMemory(id) { path -> memoryApi.deleteMemory(path, id) }
+        actOnMemory(id, action = { path -> memoryApi.deleteMemory(path, id) })
 
     /** Saves an edit to text and/or topic. Trims like create: a
      * whitespace-only edit is a validation error here, not a server 400,
@@ -1079,7 +1079,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * …/topics/ is a 404), so it never fires. */
     fun toggleMemoryPause(topic: String, paused: Boolean) {
         if (topic.isBlank()) return
-        actOnMemory("topic:$topic") { path -> memoryApi.setTopicPaused(path, topic, paused) }
+        actOnMemory("topic:$topic", action = { path -> memoryApi.setTopicPaused(path, topic, paused) })
     }
 
     /** Writes a user item: confirmed on arrival, no review loop for the
