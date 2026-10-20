@@ -535,7 +535,18 @@ func main() {
 			if err != nil {
 				return fail(fmt.Errorf("title read failed: %v", err))
 			}
-			return result(map[string]any{"ok": true, "url": u.String(), "title": title})
+			// Actual landing URL, not the requested one: redirects
+			// (http→https, trailing slashes, shortlinks) move the browser,
+			// and citing the requested URL would cite the wrong page.
+			landed, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
+				return chromedp.Run(ctx, chromedp.Location())
+			})
+			if err != nil {
+				return fail(fmt.Errorf("location read failed: %v", err))
+			}
+			return result(map[string]any{
+				"ok": true, "url": landed, "requested_url": u.String(), "title": title,
+			})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "browser_read",

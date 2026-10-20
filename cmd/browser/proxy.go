@@ -186,8 +186,10 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 }
 
 // stripHopHeaders removes the headers named by Connection plus the fixed
-// hop-by-hop set. Transfer-Encoding is deliberately kept: Go's response
-// reader needs it to frame a chunked body.
+// hop-by-hop set. Transfer-Encoding is deliberately kept HERE: Go's response
+// reader needs it to frame a chunked body. The response path Dels it after
+// decode (Go re-frames on the way out) — kept-for-framing and
+// forwarded-verbatim are different things.
 func stripHopHeaders(h http.Header) {
 	for _, v := range h["Connection"] {
 		for _, name := range strings.Split(v, ",") {

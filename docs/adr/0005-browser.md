@@ -85,6 +85,8 @@ diverge from it; retention's pruning covers the same collections.
   a restart never finds anything the evictor would have taken.
 - Evidence: PNG + markdown + meta per save; no size cap beyond the page
   itself, and full-page screenshots of long pages are large by nature.
+  Working `shot-*.png` files accumulate in the session dir alongside
+  evidence (same 30d TTL reaps both); only evidence bundles reach exports.
 
 ### Fallback honesty
 
