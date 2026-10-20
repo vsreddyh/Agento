@@ -2022,15 +2022,26 @@ internal fun ChatScreen(
                     // Staged photos (#318): thumbnails with per-photo remove.
                     // They send with the next turn even when the turn has no
                     // text; the count line states the per-turn cap up front.
-                    if (state.pendingAttachments.isNotEmpty()) {
+                    // All counts wired (#339): the strip describes the same
+                    // cap math addPendingAttachments enforces, so blanks
+                    // (impossible from the picker, possible in theory) can
+                    // never read "1/2 photos" with 2 slots free.
+                    val stagedWired = state.pendingAttachments.wiredPhotos()
+                    if (stagedWired.isNotEmpty()) {
                         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                state.pendingAttachments.forEachIndexed { i, a ->
+                                // Rendered wired, removed by staged index
+                                // (#339): blanks (theoretical only) render
+                                // nothing, while remove still targets the
+                                // staged slot the ViewModel holds.
+                                state.pendingAttachments.mapIndexedNotNull { i, a ->
+                                    if (a.base64.isNotBlank()) i to a else null
+                                }.forEach { (i, a) ->
                                     Box {
                                         AttachmentThumb(
                                             base64 = a.base64,
                                             label = "Staged photo ${i + 1} of " +
-                                                "${state.pendingAttachments.size}",
+                                                "${stagedWired.size}",
                                             modifier = Modifier.size(64.dp),
                                             slot = i,
                                             stableId = a.id,
@@ -2054,7 +2065,7 @@ internal fun ChatScreen(
                                 }
                             }
                             Text(
-                                "${state.pendingAttachments.size}/$MAX_IMAGES_PER_TURN photos — " +
+                                "${stagedWired.size}/$MAX_IMAGES_PER_TURN photos — " +
                                     "sent with your next message.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2492,9 +2503,15 @@ internal fun ChatScreen(
                                                     }
                                                 }
                                                 if (msg.content.isNotBlank() || wiredBubble.isEmpty()) {
+                                                    // Rendered trimEnd, stored raw
+                                                    // (#339): storage is wire-verbatim
+                                                    // since round-37, so trailing
+                                                    // newlines would render as blank
+                                                    // lines — trimmed for display,
+                                                    // never for the wire.
                                                     SelectionContainer {
                                                         Text(
-                                                            msg.content.ifEmpty { "…" },
+                                                            msg.content.trimEnd().ifEmpty { "…" },
                                                             style = MaterialTheme.typography.bodyMedium,
                                                         )
                                                     }

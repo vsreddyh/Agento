@@ -340,10 +340,12 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // downscale. The old shape (first sample fitting INSIDE the
             // box) undershot ~2x on large captures (4000px → sample 4 →
             // 1000px) and then soft-UPSCALED to 1568 — worse than sampling
-            // to 2000px and downscaling.
+            // to 2000px and downscaling. Long arithmetic throughout: Int
+            // sample*2 could overflow near 2^30 (same overflow discipline
+            // as downscaledSize below).
             var sample = 1
-            while (bounds.outWidth / (sample * 2) >= MAX_IMAGE_SIDE_PX ||
-                bounds.outHeight / (sample * 2) >= MAX_IMAGE_SIDE_PX
+            while (bounds.outWidth / (sample.toLong() * 2) >= MAX_IMAGE_SIDE_PX ||
+                bounds.outHeight / (sample.toLong() * 2) >= MAX_IMAGE_SIDE_PX
             ) {
                 sample *= 2
             }

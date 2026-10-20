@@ -332,12 +332,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * sentence by sentence (like the one-shot mic path), and the read +
      * write happen atomically here so rapid results can't clobber each
      * other on a stale snapshot. Also preserves user-typed text the old
-     * replace dropped.
+     * replace dropped. Joint symmetric like every other concatenation in
+     * this file (#339): the gap normalizes, both sides ride verbatim.
      */
     fun appendPending(text: String) {
         val cur = _state.value.pending
         _state.value = _state.value.copy(
-            pending = if (cur.isBlank()) text else "${cur.trimEnd()} $text",
+            pending = if (cur.isBlank()) text else "${cur.trimEnd()} ${text.trimStart()}",
         )
     }
 
