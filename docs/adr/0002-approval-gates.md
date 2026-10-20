@@ -135,9 +135,11 @@ treat `error` as untrusted display text, not as a safe field. Arguments are
 redacted by key *substring*, so a future display field like `author` (or
 `monkey`) renders as `***`: redacted args are display-only and must never be
 read back as data. Known gaps in
-that pattern set are short bare values (`token is abc`) and secrets with no
-key or scheme marker at all; value scrubbing cannot be complete, and the
-300-rune cap is the only hard bound. Secrets hygiene from the
+that pattern set are short bare values (`token is abc`), an unquoted
+multi-word value (`token=correct horse battery staple` masks only the first
+word), and secrets with no key or scheme marker at all; quoted multi-word
+values are covered. Value scrubbing cannot be complete, and the 300-rune cap
+is the only hard bound. Secrets hygiene from the
 issue stands: passwords/2FA never go through chat; the take-over path
 belongs to #312.
 

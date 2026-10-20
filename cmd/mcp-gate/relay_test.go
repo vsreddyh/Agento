@@ -519,3 +519,20 @@ func TestGatedCallAfterCloseFailsClosed(t *testing.T) {
 		t.Fatalf("audit = %+v", audit)
 	}
 }
+
+// rpcError's fallback is defensive (hasReplyID means the id decoded), but a
+// malformed RawMessage must still produce a valid frame with a null id rather
+// than a bare newline the client reads as a protocol violation.
+func TestRPCErrorFallsBackToNullID(t *testing.T) {
+	got := rpcError(json.RawMessage(`{`), -32602, "bad params")
+	var frame map[string]any
+	if err := json.Unmarshal(got, &frame); err != nil {
+		t.Fatalf("rpcError produced invalid JSON: %q", got)
+	}
+	if id, ok := frame["id"]; !ok || id != nil {
+		t.Fatalf("id = %#v, want null", frame["id"])
+	}
+	if _, ok := frame["error"]; !ok {
+		t.Fatalf("frame = %q, want an error object", got)
+	}
+}

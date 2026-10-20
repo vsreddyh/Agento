@@ -158,6 +158,10 @@ func (s *MongoStore) DecideApproval(ctx context.Context, id string, approved boo
 	if approved {
 		status = StatusApproved
 	}
+	// `at` is the caller's decision instant, not s.clock(): the decision is
+	// being made at that moment everywhere (gateway and relay call it with
+	// time.Now()), and comparing it against the store's own clock would let
+	// the row's expiry be evaluated at two instants in one operation.
 	res := s.approvals.FindOneAndUpdate(ctx,
 		bson.M{"_id": id, "status": string(StatusPending), "expiresAt": bson.M{"$gt": at}},
 		bson.M{"$set": bson.M{
