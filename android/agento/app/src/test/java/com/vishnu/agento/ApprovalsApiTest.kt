@@ -86,4 +86,15 @@ class ApprovalsApiTest {
         assertEquals(null, ApprovalsApi.httpCode("weird"))
         assertEquals(null, ApprovalsApi.httpCode(null))
     }
+
+    @Test
+    fun `parseApprovalList carries degraded flag`() {
+        val degraded = parseApprovalList(
+            """{"approvals":[],"degraded":"store is not shared"}""",
+        )
+        assertTrue(degraded.approvals.isEmpty())
+        assertTrue(degraded.degraded)
+        val healthy = parseApprovalList("""{"approvals":[]}""")
+        assertFalse(healthy.degraded)
+    }
 }

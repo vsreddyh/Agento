@@ -72,6 +72,7 @@ internal fun ApprovalsDialog(
     auditRows: List<AuditRow>,
     loading: Boolean,
     error: String,
+    degraded: Boolean = false,
     /** Ids with a decision in flight: their buttons disable so a double tap
      * cannot fire two decisions. */
     deciding: Set<String> = emptySet(),
@@ -97,6 +98,14 @@ internal fun ApprovalsDialog(
                         error,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    )
+                }
+                if (degraded) {
+                    Text(
+                        "Approvals unavailable: the server cannot reach held calls right now — decisions would not land.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     )
                 }

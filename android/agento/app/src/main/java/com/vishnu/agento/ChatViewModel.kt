@@ -83,6 +83,9 @@ data class ChatUiState(
     /** Pending approvals right now: badges the approvals entry and raises
      * the in-turn banner while streaming. */
     val pendingApprovalCount: Int = 0,
+    /** Split-brain signal from the server: decisions here cannot reach held
+     * calls. The sheet banners it instead of showing an undecidable queue. */
+    val approvalsDegraded: Boolean = false,
     /** Approval ids with a decision in flight: cards disable their buttons
      * so a double tap cannot fire two decisions. */
     val decidingApprovals: Set<String> = emptySet(),
@@ -909,14 +912,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     ""
                 }
                 _state.value = _state.value.copy(
-                    approvals = pending.getOrNull() ?: _state.value.approvals,
+                    approvals = pending.getOrNull()?.approvals ?: _state.value.approvals,
                     auditRows = audit.getOrNull() ?: _state.value.auditRows,
                     approvalsLoading = false,
                     approvalsError = listOf(notice.orEmpty(), loadErr)
                         .filter { it.isNotBlank() }
                         .joinToString(" "),
-                    pendingApprovalCount = pending.getOrNull()?.size
+                    pendingApprovalCount = pending.getOrNull()?.approvals?.size
                         ?: _state.value.pendingApprovalCount,
+                    // Sticky until a non-degraded load clears it: flapping
+                    // the banner on every blip would hide real pendings
+                    // behind a warning that comes and goes.
+                    approvalsDegraded = pending.getOrNull()?.degraded
+                        ?: _state.value.approvalsDegraded,
                 )
             }
         }
@@ -983,13 +991,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private suspend fun pollApprovalCount(path: String) {
         // Failures keep the old count: a network blip must not zero the
         // badge into "no pending".
-        val n = approvalsApi.listApprovals(path, status = "pending", limit = 100)
-            .getOrNull()?.size ?: return
+        val page = approvalsApi.listApprovals(path, status = "pending", limit = 100)
+            .getOrNull() ?: return
+        val n = page.approvals.size
         withContext(Dispatchers.Main) {
             // Stale poll (profile switched mid-flight): the old profile's
             // count must not land on the new one.
             if (_state.value.path != path) return@withContext
-            _state.value = _state.value.copy(pendingApprovalCount = n)
+            _state.value = _state.value.copy(
+                pendingApprovalCount = n,
+                approvalsDegraded = page.degraded || _state.value.approvalsDegraded,
+            )
         }
     }
 

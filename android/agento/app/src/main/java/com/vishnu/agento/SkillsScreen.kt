@@ -228,7 +228,10 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     managingError = e.message?.take(120) ?: "failed"
                 }
             } finally {
-                managingBusy = false
+                // Guarded like every other state write here: a switch
+                // mid-write must not clear the new profile's flag (whose own
+                // write may be in flight behind this finally).
+                if (path == chatApi.pathFor(profile)) managingBusy = false
             }
         }
     }

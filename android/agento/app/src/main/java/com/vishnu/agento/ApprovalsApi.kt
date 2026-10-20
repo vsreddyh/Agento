@@ -161,12 +161,20 @@ class ApprovalsApi(context: Context) {
         }
     }
 
+    /** One approvals page: rows plus whether the store can decide them.
+     * Degraded means the gateway and relay hold different in-process
+     * stores: decisions made here can never reach a held call. */
+    data class ApprovalList(
+        val approvals: List<GateApproval> = emptyList(),
+        val degraded: Boolean = false,
+    )
+
     /** Lists approvals, newest first. Null status means all. */
     suspend fun listApprovals(
         path: String,
         status: String? = null,
         limit: Int = 50,
-    ): Result<List<GateApproval>> = withContext(Dispatchers.IO) {
+    ): Result<ApprovalList> = withContext(Dispatchers.IO) {
         var url = "$path/api/approvals?limit=$limit"
         if (!status.isNullOrBlank()) url += "&status=${encode(status.trim())}"
         call("GET", url).mapCatching {
@@ -204,12 +212,12 @@ class ApprovalsApi(context: Context) {
         }
     }
 
-    private fun parseApprovalList(body: String): List<GateApproval> {
+    internal fun parseApprovalList(body: String): ApprovalList {
         val out = mutableListOf<GateApproval>()
         val root = runCatching { JSONObject(body) }.getOrNull()
         if (root == null) {
             runCatching { Log.w("ApprovalsApi", "unparseable approvals body: ${body.take(120)}") }
-            return out
+            return ApprovalList()
         }
         val arr = root.optJSONArray("approvals")
         if (arr == null) {
@@ -229,7 +237,7 @@ class ApprovalsApi(context: Context) {
         if (dropped > 0) {
             runCatching { Log.w("ApprovalsApi", "dropped $dropped id-less approval row(s)") }
         }
-        return out
+        return ApprovalList(out, root.optString("degraded", "").isNotBlank())
     }
 
     private fun parseAuditList(body: String): List<AuditRow> {
