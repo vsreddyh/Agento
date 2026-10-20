@@ -291,8 +291,11 @@ func (s *Server) handleSkillUpdate(w http.ResponseWriter, r *http.Request, profi
 		return
 	}
 	// An edit to an active skill changes what Pi loads: re-materialize.
+	// Truncated parity with create: an edit pasting past MaxBody clips,
+	// and the writer should know.
+	truncated := body.Body != nil && teach.ClippedBody(*body.Body)
 	s.materialize(profile)
-	writeJSONResponse(w, http.StatusOK, map[string]any{"skill": teachWire(sk)})
+	writeJSONResponse(w, http.StatusOK, map[string]any{"skill": teachWire(sk), "truncated": truncated})
 }
 
 func (s *Server) handleSkillStatus(w http.ResponseWriter, r *http.Request, profile, id string, st teach.Status, verb string) {

@@ -164,21 +164,24 @@ class TeachApi(context: Context) {
 
     /** Edits name/description/body. Null fields are left alone; empty
      * strings overwrite and fail server-side (the dialog requires all three
-     * non-blank, so it never sends one). */
+     * non-blank, so it never sends one). Returns the truncation flag like
+     * create; the dialog shows the reloaded (clipped) row on next open. */
     suspend fun updateSkill(
         path: String,
         id: String,
         name: String? = null,
         description: String? = null,
         body: String? = null,
-    ): Result<TaughtSkill> = withContext(Dispatchers.IO) {
+    ): Result<Pair<TaughtSkill, Boolean>> = withContext(Dispatchers.IO) {
         val req = JSONObject()
         if (name != null) req.put("name", name)
         if (description != null) req.put("description", description)
         if (body != null) req.put("body", body)
         call("PUT", "$path/api/skills/${ApprovalsApi.encode(id)}", req).mapCatching {
-            parseTaughtSkill(parseObject(checkOk(it).body).optJSONObject("skill") ?: JSONObject())
+            val root = parseObject(checkOk(it).body)
+            val skill = parseTaughtSkill(root.optJSONObject("skill") ?: JSONObject())
                 ?: throw RuntimeException("response had no skill")
+            skill to mapTruncated(root)
         }
     }
 

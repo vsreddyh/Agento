@@ -106,15 +106,18 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // Taught skills (#314): user procedures with a draft → test → activate
     // lifecycle, managed here (the inventory above stays read-only).
     var taught by remember { mutableStateOf<List<TaughtSkill>>(emptyList()) }
-    var taughtError by remember { mutableStateOf("") }
-    var managing by remember { mutableStateOf<TaughtSkill?>(null) }
-    var managingError by remember { mutableStateOf("") }
-    var composerError by remember { mutableStateOf("") }
+    // Error/notice/dialog state is keyed by profile like the composer
+    // fields: a switch must not carry the old profile's errors, hints or
+    // open dialog into the new one.
+    var taughtError by remember(profile) { mutableStateOf("") }
+    var managing by remember(profile) { mutableStateOf<TaughtSkill?>(null) }
+    var managingError by remember(profile) { mutableStateOf("") }
+    var composerError by remember(profile) { mutableStateOf("") }
     // Clip hints are information, not failure: they render in variant, not
     // error red, so success-with-clip never reads as a failed save.
-    var composerNotice by remember { mutableStateOf("") }
+    var composerNotice by remember(profile) { mutableStateOf("") }
     var managingBusy by remember { mutableStateOf(false) }
-    var testOutput by remember { mutableStateOf("") }
+    var testOutput by remember(profile) { mutableStateOf("") }
     // Keyed by profile: a switch mid-compose starts empty instead of
     // carrying the old profile's typing into the new one's save.
     var composing by remember(profile) { mutableStateOf(false) }
