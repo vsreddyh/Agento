@@ -56,10 +56,11 @@ record — still half-duplex, still no realtime transport.**
   restart can't cancel the old detector job out from under the new
   AudioRecord — the explicit stop() is the only lifetime manager.
   A start failure never downgrades the session: contention with a
-  dying recorder reads the same as a dead mic, so the next phase change
-  retries instead of sticking the loop in tap-to-talk — the failed phase
-  itself stays unmonitored until that retry, so a busy mic stretches that
-  phase's deaf window past the usual ~400 ms calibration.
+  dying recorder reads the same as a dead mic, so one retry follows after
+  ~2 s in-phase and the next phase change retries after that, instead of
+  sticking the loop in tap-to-talk — a failure that outlasts both still
+  leaves the rest of that phase unmonitored, stretching its deaf window
+  past the usual ~400 ms calibration.
 
 What this still is not: full-duplex realtime. There is no duplex audio
 path, no barge-in *during* the 400 ms calibration windows, speech during

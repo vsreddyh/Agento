@@ -80,6 +80,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -807,10 +808,17 @@ internal fun ChatScreen(
     // the actual stop(): the holder must never claim "stopped" while the
     // recorder still holds the mic, or vice versa.
     val detectCtl = remember(tab) { DetectCtl() }
-    fun onBargeIn() {
-        // Stale-trigger guard (#317): the detector posts via scope.launch,
-        // so a trigger from just before hang-up can land after liveMode is
-        // false — it must not claim and kill a post-hang-up turn.
+    // Session generation for stale detector triggers (#317): the detector
+    // posts via scope.launch, so a trigger fired just before hang-up can
+    // land after it. endLive/startLive bump this; onBargeIn only honors the
+    // generation live at fire time (captured before the launch hop), so a
+    // trigger can't leak across a hang-up→restart either.
+    val liveGen = remember(tab) { AtomicInteger(0) }
+    fun onBargeIn(firedGen: Int) {
+        // Stale-trigger guard (#317): drop triggers from a previous session
+        // generation, and anything landing after hang-up — neither may claim
+        // and kill a turn the user started after hanging up.
+        if (firedGen != liveGen.get()) return
         if (!liveMode) return
         tts.stop()
         if (state.streaming) {
@@ -822,7 +830,7 @@ internal fun ChatScreen(
     // remembered lambda reads the latest handler instead of the first
     // composition's closure over state/onStop.
     val latestBarge by rememberUpdatedState(::onBargeIn)
-    val interrupt = remember(tab) { LiveInterrupt({ scope.launch { latestBarge() } }) }
+    val interrupt = remember(tab) { LiveInterrupt({ val g = liveGen.get(); scope.launch { latestBarge(g) } }) }
     var micArmed by remember(tab) { mutableStateOf(interrupt.hasPermission(context)) }
     // In-app recognizer for live mode (#85): headless, so our overlay
     // (status + End button) stays visible — the system dialog would cover it.
@@ -870,6 +878,9 @@ internal fun ChatScreen(
         pendingLiveStart = false
         // Retire any barge claim and milestone set with the session (#317):
         // a stale claim must not reroute the next turn's stream end.
+        // Bump the session generation too: in-flight detector triggers from
+        // this session die with it instead of landing in the next one.
+        liveGen.incrementAndGet()
         bargeCancel = false
         announcedTools = emptyList()
         announcedLabel = ""
@@ -963,7 +974,9 @@ internal fun ChatScreen(
         detectCtl.running = false
         detectCtl.phase = -1
         // A killed turn arrives claimed (see above); a fresh start clears
-        // any stale claim from the previous session.
+        // any stale claim from the previous session and opens a new trigger
+        // generation, so pre-start detector firings can't leak into it.
+        liveGen.incrementAndGet()
         bargeCancel = killedTurn
         announcedTools = emptyList()
         announcedLabel = ""
@@ -1138,7 +1151,11 @@ internal fun ChatScreen(
                 // task unmonitored until the next transition. Wait one
                 // mic-release beat, then retry once — a phase change cancels
                 // this effect first, and a session reset flips detectCtl
-                // phase, so a stale retry can't arm a dead phase.
+                // phase, so a stale retry can't arm a dead phase. No stop()
+                // precedes the retry: failed starts return before the job is
+                // assigned, and start() reports true only for an already
+                // active job, so a second stop() would only race the
+                // recorder the retry is about to use.
                 delay(DETECT_RETRY_MS)
                 if (detecting && detectPhase == detectCtl.phase) {
                     detectCtl.running = interrupt.start(scope)
