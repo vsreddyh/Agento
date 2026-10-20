@@ -788,11 +788,13 @@ internal fun ChatScreen(
     // the last non-empty label independently, so a label-only frame must
     // re-fire the milestone effect too (review #338-1).
     var announcedLabel by remember(tab) { mutableStateOf("") }
-    // Monotonic cue-key counter (review #338-7, #338-5th): plain holder,
-    // not state — only the milestone effect touches it, so publishing
-    // would recompose the whole screen once per cue for bookkeeping the
-    // toggle() key needs. Never resets on purpose: toggle() needs a key
-    // no still-playing cue holds, and a reset could collide with one.
+    // Monotonic cue-key counter (review #338-7, #338-5th, #338-8th):
+    // plain holder, not state — only the milestone effect touches it, so
+    // publishing would recompose the whole screen once per cue for
+    // bookkeeping the toggle() key needs. Never resets within one activity
+    // lifetime: toggle() needs a key no still-playing cue holds, and a
+    // reset could collide with one. (Rotation drops remember(tab), which is
+    // safe because onDispose stops TTS — no cue survives to collide.)
     val cueKeys = remember(tab) { CueKeys() }
     // Detector bookkeeping (review #338-followup-3, #338-3-followup):
     // plain holder, not state — only the driver effect writes it in the
@@ -938,7 +940,10 @@ internal fun ChatScreen(
         silentRounds = 0
         transientRetries = 0
         livePartial = ""
-        micArmed = true
+        // Re-check, don't assume (review #338-8th): both callers gate on
+        // permission, but a revoke in the gap must start tap-to-talk, not
+        // lie armed and fail one AudioRecord alloc per phase transition.
+        micArmed = interrupt.hasPermission(context)
         // Fresh call state (#317): a previous session's barge claim or
         // milestone set must not leak into this one. The detector is
         // stopped and its holder reset too (review #338-3-followup) so the
