@@ -166,6 +166,11 @@ func (s *MongoStore) ListApprovals(ctx context.Context, f ApprovalFilter) ([]App
 	if f.Status != "" {
 		filter["status"] = string(f.Status)
 	}
+	// TTL deletion lags (up to a minute), so an expired row would otherwise
+	// list as pending and then 409 on decide. Filter on the same
+	// expiresAt > now boundary GetApproval and DecideApproval use, and the
+	// list contract matches the memory store's lazy drop.
+	filter["expiresAt"] = bson.M{"$gt": time.Now()}
 	cur, err := s.approvals.Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(int64(limit)))
 	if err != nil {

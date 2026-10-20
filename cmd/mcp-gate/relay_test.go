@@ -250,3 +250,26 @@ func ioPipe(t *testing.T) (*os.File, *os.File) {
 func testLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
 }
+
+// A tools/call notification (no id) has no response to observe, so the allow
+// path audits it inline. Without that, "every proxied call is audited" was
+// false for exactly the calls the relay cannot track.
+func TestAllowNotificationIsAudited(t *testing.T) {
+	store := approvals.NewMemoryStore()
+	r := testRelay(store)
+	r.childIn = &bufWriter{}
+	line := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_notes","arguments":{}}}` + "\n"
+	if err := r.pumpPiToChild(strings.NewReader(line)); err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	audit, err := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audit) != 1 {
+		t.Fatalf("audit rows = %d, want 1", len(audit))
+	}
+	if audit[0].Tool != "list_notes" || audit[0].Disposition != approvals.DispositionAllow {
+		t.Fatalf("audit = %+v", audit[0])
+	}
+}

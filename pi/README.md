@@ -99,7 +99,7 @@ things about it are deliberate, and both were got wrong while writing it:
 
 Verified end to end in the real container (three-profile era; single-profile
 since #289 — kept as the method record): the entrypoint registers three repos as
-`safe.directory`, `pi mcp list` connects all five MCP servers (11/11/9/7/5), all
+`safe.directory`, `pi mcp list` connects all six MCP servers (11/11/9/7/5/6), all
 three profiles are discovered, `/healthz` answers 200, auth rejects both a missing
 and a wrong bearer token with 401, and each profile answers from its own
 `AGENTS.md`:
@@ -374,7 +374,7 @@ compose service; the fifth landed with the cutover.
 |---|---|
 | **Auth** | done. The `pi` service takes `PASSWORD=${PASSWORD:-}`, the same value the Hermes gateway did, so a tab can be repointed without re-entering it. Verified: both a missing and a wrong bearer token answer 401. |
 | **SSH mounts** | done (retired #289 with the side profiles). Same three keypair mounts and the same fail-closed `GIT_SSH_COMMAND` as `gateway`, so story/resumes pushed their repos unchanged while they existed. |
-| **Healthcheck** | done. `curl -fsS http://localhost:8643/healthz` inside the container, with a 60s `start_period` because the entrypoint connects all five MCP servers first. The entrypoint's `pi mcp list` is the connectivity gate; this is the port check on top of it. |
+| **Healthcheck** | done. `curl -fsS http://localhost:8643/healthz` inside the container, with a 60s `start_period` because the entrypoint connects all six MCP servers first. The entrypoint's `pi mcp list` is the connectivity gate; this is the port check on top of it. |
 | **`depends_on`** | done, in the short list form (`- pi`). The long form is not available on this stack at all: podman-compose builds its dependency graph with `deps = {x: {} for x in deps}`, so any `condition:` value is an unhashable dict and it dies with `TypeError: cannot use 'dict' as a dict key` before reading a service. Verified in both spellings. The short form still means *start pi first* — podman-compose's own `config` output renders it as `condition: service_started` — and ordering is all this needs, because nginx re-resolves `pi` per request. Deliberately **not** gated on pi's *health*: that healthcheck fails whenever its MCP check does, and a proxy held back by it would take health-api's `/api/*` routes down too — health sync has nothing to do with the agent. |
 | **nginx prefix stripping** | done, in the cutover PR. `rewrite ^/p(/.*)$ $1 break;` before `proxy_pass $chat`, and it is load-bearing rather than tidying. Measured against nginx 1.27 with echo upstreams: with the rewrite `/p/chat/v1/chat/completions` arrives as `/chat/v1/chat/completions`; without it the original path arrives unchanged, and pi-gateway reads the first segment `p` as a profile name and 404s. |
 
@@ -503,7 +503,7 @@ comment:
 **Personality survived.** Checked rather than assumed: `git show f6feafc:gateway/SOUL.md`
 — pinned, because the path stops existing once this stack merges — opens "You are
 the Hermes god profile", and `pi/profiles/god/AGENTS.md` opens
-"General operator for Vishnu's money, food and health tracking… Five MCP tool
+"General operator for Vishnu's money, food and health tracking… Six MCP tool
 backends". Same for `Portas-Maintainer` (story) and `Job Bot` (resumes) — the
 Hermes `SOUL.md` files were rewritten as Pi `AGENTS.md` files, role statement
 first, rather than lost. Pi has no `SOUL` concept of its own, and none is needed:
@@ -557,7 +557,7 @@ The subagent is a **separate `pi` process** driven over RPC, not an in-process
 
 An SDK session does not load the CLI's built-in extensions, so reproducing MCP
 means hand-building a `DefaultResourceLoader`. That does work — 43 MCP tools,
-measured — but the child then owns five MCP server subprocesses that nothing ever
+measured — but the child then owns six MCP server subprocesses that nothing ever
 reclaims:
 
 | step | result |
@@ -677,7 +677,7 @@ with the real code (`cannot use cwd <path>: EACCES`).
 
 ### One at a time, not in parallel
 
-Each delegation is one `pi` process plus five MCP servers, so parallel calls fan out
+Each delegation is one `pi` process plus six MCP servers, so parallel calls fan out
 linearly. The tool description says to call them serially rather than shipping a
 semaphore: a hard cap would throttle legitimate parallel work, and Pi already runs a
 tool batch in order by default. This is a prompt-level guard, not an enforced one —

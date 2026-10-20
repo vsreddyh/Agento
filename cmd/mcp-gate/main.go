@@ -39,6 +39,13 @@ const maxLineBytes = 32 << 20
 // pollInterval is how often a held call re-reads its approval.
 const pollInterval = 2 * time.Second
 
+// storeTimeout bounds one approvals-store call. Mongo's server-selection
+// budget is longer than this on a wedged cluster, and every one of these calls
+// sits on a traffic path: a create on a Pi request, a poll between polls, an
+// audit on a response. Unbounded, one wedged client stalls a hold past its own
+// deadline and makes best-effort audit writes block the relay.
+const storeTimeout = 5 * time.Second
+
 // envelope is the JSON-RPC shape the relay routes on. IDs stay raw: numbers
 // and strings must round-trip byte-identical.
 type envelope struct {
@@ -205,7 +212,17 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			continue
 		}
 		if !approvals.NeedsApproval(r.server, params.Name, params.Arguments) {
-			r.track(string(env.ID), params.Name, approvals.Redact(params.Arguments))
+			redacted := approvals.Redact(params.Arguments)
+			id := string(env.ID)
+			if id == "" || id == "null" {
+				// A call with no id gets no response to observe, so its allow
+				// row is written here. track() would no-op and the call would
+				// forward with no audit entry, which is the one hole in
+				// "every proxied call is recorded".
+				r.audit(params.Name, redacted, approvals.DispositionAllow, "", "")
+			} else {
+				r.track(id, params.Name, redacted)
+			}
 			if err := r.writeChild(line); err != nil {
 				r.log.Printf("write to server failed: %v", err)
 				return err
@@ -228,9 +245,14 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 		Args:   redacted,
 		Status: approvals.StatusPending,
 	}
-	if err := r.store.CreateApproval(context.Background(), a); err != nil {
+	createCtx, cancelCreate := context.WithTimeout(context.Background(), storeTimeout)
+	err := r.store.CreateApproval(createCtx, a)
+	cancelCreate()
+	if err != nil {
 		r.log.Printf("create approval: %v (failing closed)", err)
-		r.writePi(rpcError(env.ID, -32000, "approval store unavailable; failing closed"))
+		if werr := r.writePi(rpcError(env.ID, -32000, "approval store unavailable; failing closed")); werr != nil {
+			r.log.Printf("write to Pi failed: %v", werr)
+		}
 		r.audit(params.Name, redacted, approvals.DispositionDenied, "approval store unavailable", "")
 		return
 	}
@@ -259,10 +281,14 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 	defer ticker.Stop()
 	expire := func(reason string) {
 		r.log.Printf("approval %s %s", a.ID, reason)
-		if err := r.store.TimeoutApproval(context.Background(), a.ID, time.Now()); err != nil {
+		expireCtx, cancelExpire := context.WithTimeout(context.Background(), storeTimeout)
+		if err := r.store.TimeoutApproval(expireCtx, a.ID, time.Now()); err != nil {
 			r.log.Printf("timeout approval %s: %v", a.ID, err)
 		}
-		r.writePi(rpcError(env.ID, -32000, "approval "+a.ID+" "+reason+"; failing closed"))
+		cancelExpire()
+		if werr := r.writePi(rpcError(env.ID, -32000, "approval "+a.ID+" "+reason+"; failing closed")); werr != nil {
+			r.log.Printf("write to Pi failed: %v", werr)
+		}
 		r.audit(params.Name, redacted, approvals.DispositionExpired, reason, a.ID)
 	}
 	pollFails := 0
@@ -279,7 +305,9 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 			}
 			return
 		case <-ticker.C:
-			got, err := r.store.GetApproval(context.Background(), a.ID)
+			pollCtx, cancelPoll := context.WithTimeout(context.Background(), storeTimeout)
+			got, err := r.store.GetApproval(pollCtx, a.ID)
+			cancelPoll()
 			if err != nil {
 				// A store outage spins here until expiry; log sparsely so
 				// triage sees it without one line per poll.
@@ -295,12 +323,23 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 				// arrives, and raw args must not sit in it. Audit redacts
 				// again — same output, safe in-memory copy.
 				r.track(id, params.Name, redacted)
-				r.writeChild(line)
+				if werr := r.writeChild(line); werr != nil {
+					// Approved but undeliverable: the audit row must say so,
+					// or a reader sees "approved" while Pi never got an
+					// answer. The hold is over either way — the turn's
+					// failure is the stream's to report.
+					r.log.Printf("approval %s: write to server failed: %v", a.ID, werr)
+					r.audit(params.Name, redacted, approvals.DispositionApproved,
+						"approved but not delivered to the server: "+werr.Error(), a.ID)
+					return
+				}
 				r.audit(params.Name, redacted, approvals.DispositionApproved, "", a.ID)
 				return
 			case approvals.StatusDenied, approvals.StatusExpired:
 				r.log.Printf("approval %s %s", a.ID, got.Status)
-				r.writePi(rpcError(env.ID, -32000, "denied by user (approval "+a.ID+")"))
+				if werr := r.writePi(rpcError(env.ID, -32000, "denied by user (approval "+a.ID+")")); werr != nil {
+					r.log.Printf("write to Pi failed: %v", werr)
+				}
 				r.audit(params.Name, redacted, approvals.DispositionDenied, "denied by user", a.ID)
 				return
 			}
@@ -365,7 +404,9 @@ func (r *relay) audit(tool string, args map[string]any, disp approvals.Dispositi
 		At:          now.UnixMilli(),
 		ExpiresAt:   now.Add(approvals.AuditTTL),
 	}
-	if err := r.store.Audit(context.Background(), e); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	if err := r.store.Audit(ctx, e); err != nil {
 		r.log.Printf("audit write failed: %v", err)
 	}
 }
