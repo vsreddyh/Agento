@@ -258,10 +258,14 @@ fun messageContentJson(
  * Precondition: valid base64 (length % 4 == 0) — a hand-edited payload
  * with a ragged length floors down by up to 2 B, which is acceptable for
  * approximate error strings and never reached (wire/display paths filter
- * to decode-valid payloads via wiredPhotos()). */
+ * to decode-valid payloads via wiredPhotos()). Framing whitespace
+ * (`\n` from older wrapped payloads, which decode stays lenient toward)
+ * is excluded first: it is not content, and measuring it would overstate
+ * the named size by the newline count. */
 fun base64Bytes(base64: String): Long {
-    val padding = base64.takeLastWhile { it == '=' }.length
-    return (base64.length / 4L) * 3L - padding
+    val stripped = base64.filterNot { it == '\n' || it == '\r' }
+    val padding = stripped.takeLastWhile { it == '=' }.length
+    return (stripped.length / 4L) * 3L - padding
 }
 
 /** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal, never blank.

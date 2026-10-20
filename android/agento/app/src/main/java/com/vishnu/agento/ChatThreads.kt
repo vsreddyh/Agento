@@ -110,12 +110,20 @@ object ChatThreads {
         val base = if (oneLine.length <= avail) {
             oneLine
         } else if (avail >= 1) {
-            // Never split a surrogate pair (#339): a high surrogate at the
-            // cut drops with its missing low half rather than rendering �
-            // in the switcher row.
-            oneLine.take(avail - 1).let {
-                if (it.isNotEmpty() && it.last().isHighSurrogate()) it.dropLast(1) else it
-            } + "…"
+            // Grapheme-safe cut (#339): BreakIterator walks extended
+            // grapheme clusters (ZWJ emoji, flag pairs, surrogate pairs),
+            // so the cut never splits a cluster — lone surrogates and
+            // half-flags can't reach the switcher row. Takes the last
+            // boundary within budget; the "…" replaces the rest.
+            val breaks = java.text.BreakIterator.getCharacterInstance()
+            breaks.setText(oneLine)
+            var end = 0
+            var n = breaks.first()
+            while (n != java.text.BreakIterator.DONE && n <= avail - 1) {
+                end = n
+                n = breaks.next()
+            }
+            oneLine.substring(0, end) + "…"
         } else {
             ""
         }

@@ -357,6 +357,28 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun titleNeverSplitsGraphemeClusters() {
+        // ZWJ family emoji (man+ZWJ+woman+ZWJ+girl) must not split
+        // mid-cluster. Asserts portably (budget + no lone surrogates),
+        // not exact-cluster: ICU versions may group ZWJ differently, but
+        // a lone half is never acceptable output anywhere.
+        val cluster = "\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67"
+        val title = ChatThreads.titleFor(
+            listOf(ChatMessage("user", "a".repeat(39) + cluster + "b", 0L)),
+        )
+        assertTrue(title.length <= 42)
+        val chars = title.toCharArray()
+        for (i in chars.indices) {
+            if (chars[i].isHighSurrogate()) {
+                assertTrue(i + 1 < chars.size && chars[i + 1].isLowSurrogate())
+            }
+            if (chars[i].isLowSurrogate()) {
+                assertTrue(i > 0 && chars[i - 1].isHighSurrogate())
+            }
+        }
+    }
+
+    @Test
     fun storedRoundTripKeepsAttachments() {
         val msgs = listOf(
             ChatMessage("user", "", 1L, attachments = listOf(attachment("AAA="), attachment("BBB="))),
@@ -423,10 +445,12 @@ class ChatAttachmentsTest {
     @Test
     fun base64BytesAdjustsForPadding() {
         // "TQ==" is 1 byte, not (4*3)/4 = 3 — the named oversize error
-        // must report the real size, not 1–2 B high.
+        // must report the real size, not 1–2 B high. Framing whitespace
+        // is not content either.
         assertEquals(1L, base64Bytes("TQ=="))
         assertEquals(2L, base64Bytes("TWE="))
         assertEquals(3L, base64Bytes("TWFu"))
         assertEquals(0L, base64Bytes(""))
+        assertEquals(1L, base64Bytes("TQ==\n"))
     }
 }

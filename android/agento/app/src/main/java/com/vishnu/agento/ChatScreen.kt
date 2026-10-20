@@ -297,10 +297,14 @@ internal fun ChatTab(
     /** True while a camera intent launched recently enough to still return.
      * Monotonic clock (#339): wall-clock jumps (user-set time, NTP slew)
      * would age a 1-minute-old intent into a 31-minute-old one and reopen
-     * the overwrite — or future-date it and stick the gate. */
-    fun isCameraPending(): Boolean =
-        cameraPendingSince != 0L &&
-            SystemClock.elapsedRealtime() - cameraPendingSince < CAMERA_PENDING_STALE_MS
+     * the overwrite — or future-date it and stick the gate. A negative age
+     * means reboot since arming (boot clock reset): no intent survives
+     * that, so the gate reads open instead of stuck. */
+    fun isCameraPending(): Boolean {
+        if (cameraPendingSince == 0L) return false
+        val age = SystemClock.elapsedRealtime() - cameraPendingSince
+        return age >= 0 && age < CAMERA_PENDING_STALE_MS
+    }
     // Startup sweep (#339): a process kill between the TakePicture write
     // and the decode leaves a capture with no owner — per-batch finally
     // covers cancel/leave-tab, not death. The cache dir holds ONLY these
@@ -416,6 +420,9 @@ internal fun ChatTab(
         // navigate-away + result race can deliver picker output after the
         // composition scope died — launching then is a no-op whose body
         // (and its onBatchDone flag reset) never runs, sticking cameraBusy.
+        // Silent by design: the batch never started and nothing staged, so
+        // there is nothing to report — same rationale as the zero-landed
+        // cancel silence in the loop below.
         // Undispatched for the same reason: the body starts synchronously,
         // so the try/finally below is entered before any later cancel can
         // land — no window between launch and first suspension skips it.

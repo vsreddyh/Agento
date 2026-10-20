@@ -622,8 +622,15 @@ class ChatApi(context: Context) {
         // declares UTF-8, so no charset ambiguity) — one copy instead of
         // two, transient peak ~3x instead of ~4x. -1 (unknown length)
         // refuses too: an unmeasurable body must not sail past the gate.
-        val body = raw.toRequestBody(JSON)
-        val rawBytes = body.contentLength()
+        // Scoped pair (#339): raw falls out of scope here instead of living
+        // in the closure for the whole upload — one copy freed for the
+        // slow-upload seconds, leaving body alone with the request.
+        val measured = run {
+            val body = raw.toRequestBody(JSON)
+            body to body.contentLength()
+        }
+        val body = measured.first
+        val rawBytes = measured.second
         if (wireSizeExceeded(rawBytes)) {
             // Phrased for what's actually measured (#339): rawBytes is the
             // whole request JSON (full thread + framing), so "this turn"
