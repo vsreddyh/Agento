@@ -26,6 +26,9 @@ class ChatTts(context: Context) {
 
     private var engine: TextToSpeech? = null
     private var ready = false
+    /** True once the engine initialized successfully; cues check this so a
+     * pre-ready toggle can't park a cue in `pending` and speak it late. */
+    val isReady: Boolean get() = ready
     private var failed = false
     private var pending: Pair<String, String>? = null
     /** Utterance ID of the last queued chunk; only its completion clears state. */

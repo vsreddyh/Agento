@@ -24,21 +24,29 @@ record — still half-duplex, still no realtime transport.**
   the stream-end effect re-listens instead of speaking the stopped
   partial or ending the session. Talking over the readout keeps its old
   meaning (cut speech, re-listen).
-- Long tasks are audible. While a live turn streams, each new tool is
-  spoken once ("Using log transaction" — server label when present, else
-  the tool's last segment de-snaked). Milestones ride `live-cue-*` TTS
-  keys: the detector stays off for cues (short self-speech must not
-  self-trigger), their completion never starts listening, and an
-  engine-dead cue stays silent — the reply path reports TTS failure
-  loudly at stream end instead of killing a working call over a cue.
+- Long tasks are audible. While a live turn streams, newly appearing tools
+  are announced once per change ("Using log transaction" — the fresh server
+  label when one arrived with the change, else the latest delta's last
+  segment de-snaked). A batch that seeds several tools at once yields one
+  cue naming the latest, and the whole batch counts as announced.
+  Milestones ride `live-cue-*` TTS keys: the detector stays off for cues
+  (short self-speech must not self-trigger), their completion never starts
+  listening, cues are skipped while TTS isn't up (a parked cue would speak
+  late, possibly after the turn), and an engine-dead cue stays silent —
+  the reply path reports TTS failure loudly at stream end instead of
+  killing a working call over a cue.
 - Hang-up adds nothing. Every live turn already lands in the thread,
   including user-stopped partials (marked interrupted). Ending is silent;
   the thread is the summary.
-- Phase-keyed detection. The detector restarts on every phase transition
-  (quiet room → readout bleed → back) so the floor recalibrates instead
-  of carrying a quiet-room threshold into speech, which would cut every
-  reply. Milestones cost two restarts each; the deaf window is the
-  existing ~400 ms calibration.
+- Phase-keyed detection. The detector restarts on genuine phase
+  transitions (quiet room → readout bleed → back, plus streaming↔cue flaps
+  at two restarts per milestone) so the floor recalibrates instead of
+  carrying a quiet-room threshold into speech, which would cut every
+  reply. Each restart's deaf window is the existing ~400 ms calibration,
+  and redundant restarts are skipped when already running in the target
+  phase. A start failure never downgrades the session: contention with a
+  dying recorder reads the same as a dead mic, so the next phase change
+  retries instead of sticking the loop in tap-to-talk.
 
 What this still is not: full-duplex realtime. There is no duplex audio
 path, no barge-in *during* the 400 ms calibration windows, speech during
