@@ -255,10 +255,13 @@ func (ss *sessions) get(profile string) (*session, error) {
 		ss.byProfile[profile] = s
 	}
 	s.lastUse = time.Now()
-	// Touch the dir: mtime is the only clock the startup disk walk can
-	// read, so each use refreshes it. Without this a daily-used profile
-	// with a stable file set looks idle to pruneSessions after a restart.
-	_ = os.Chtimes(s.dir, time.Now(), time.Now())
+	// Touch the dir AND the context subdir: mtime is the only clock the
+	// startup disk walk can read, and it stats ctx/ when present — touching
+	// only the parent would leave a daily-used profile looking idle after
+	// a restart. Failures ignored: this is a hint, not a write.
+	now := time.Now()
+	_ = os.Chtimes(s.dir, now, now)
+	_ = os.Chtimes(filepath.Join(s.dir, "ctx"), now, now)
 	// Eviction (live sessions, lastUse-aware) runs daily here. The
 	// filesystem walk runs ONLY at server start (main): its mtime test
 	// cannot tell a daily-used profile with a stable file set from an
@@ -348,6 +351,9 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 		s.launchErr = berr
 		return nil, berr
 	}
+	// Cleared on success: a stale launch error must not outlive the retry
+	// that fixed it for the next reader to trip over.
+	s.launchErr = nil
 	s.alloc, s.cancel, s.browserCancel, s.browser, s.started = balloc, bcancel, btabCancel, bctx, true
 	s.proxyLn = bln
 	// Resume the shot counter past restarts so a new process never
@@ -508,7 +514,7 @@ func main() {
 			}); err != nil {
 				return fail(fmt.Errorf("navigation failed: %v", err))
 			}
-			title, err := runStep(bctx, navTimeout, func(ctx context.Context) (string, error) {
+			title, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx, chromedp.Title())
 			})
 			if err != nil {
@@ -541,7 +547,7 @@ func main() {
 			if err != nil {
 				return fail(fmt.Errorf("read failed: %v", err))
 			}
-			title, err := runStep(bctx, navTimeout, func(ctx context.Context) (string, error) {
+			title, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx, chromedp.Title())
 			})
 			if err != nil {
@@ -625,7 +631,7 @@ func main() {
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
 			}
-			title, err := runStep(bctx, navTimeout, func(ctx context.Context) (string, error) {
+			title, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx, chromedp.Title())
 			})
 			if err != nil {
