@@ -179,6 +179,21 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun blankPayloadIsNoContent() {
+        // The blank-payload-is-no-content rule the wire filter relies on
+        // (#339): a hand-edited {"base64":""} turn must not pass resend
+        // filters as content while wiring as bare text.
+        assertFalse(
+            messageHasContent(
+                ChatMessage("user", "", 0L, attachments = listOf(ChatAttachment(base64 = ""))),
+            ),
+        )
+        assertTrue(
+            listOf(ChatAttachment(base64 = ""), attachment()).wiredPhotos().size == 1,
+        )
+    }
+
+    @Test
     fun markerSingularAndPlural() {
         assertEquals("[1 photo attached]", attachmentMarker(1))
         assertEquals("[3 photos attached]", attachmentMarker(3))

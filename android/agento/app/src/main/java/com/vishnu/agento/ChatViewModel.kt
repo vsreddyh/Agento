@@ -292,18 +292,21 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * the notice below fires only if a caller bypasses it. Excess photos
      * are dropped with a notice, never silently. One string + Info for the
      * whole cap family (#339): the UI paths say exactly this — nothing
-     * failed, the cap held, so no Error styling anywhere.
+     * failed, the cap held, so no Error styling anywhere. Blanks filtered
+     * up front: only wired photos occupy cap slots, so a future caller
+     * passing storage-read attachments can't spend the cap on blanks.
      */
     fun addPendingAttachments(items: List<ChatAttachment>) {
-        if (items.isEmpty()) return
+        val wired = items.wiredPhotos()
+        if (wired.isEmpty()) return
         val cur = _state.value.pendingAttachments
         val room = MAX_IMAGES_PER_TURN - cur.size
         if (room <= 0) {
             notify(capRefused(), ToastKind.Info)
             return
         }
-        val take = items.take(room)
-        val dropped = items.size - take.size
+        val take = wired.take(room)
+        val dropped = wired.size - take.size
         _state.value = _state.value.copy(pendingAttachments = cur + take)
         if (dropped > 0) {
             notify(capRefused(), ToastKind.Info)
@@ -319,6 +322,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * the ViewModel, not its last-recomposed snapshot, so a
      * remove-then-rapid-repick sees the freed slot. */
     fun pendingAttachmentCount(): Int = _state.value.pendingAttachments.size
+
+    /**
+     * Appends heard text to the composer (#339): live results accumulate
+     * sentence by sentence (like the one-shot mic path), and the read +
+     * write happen atomically here so rapid results can't clobber each
+     * other on a stale snapshot. Also preserves user-typed text the old
+     * replace dropped.
+     */
+    fun appendPending(text: String) {
+        val cur = _state.value.pending
+        _state.value = _state.value.copy(
+            pending = if (cur.isBlank()) text else "${cur.trimEnd()} $text",
+        )
+    }
 
     /**
      * Toast-host notice. Bumps the generation with every set so a repeated
@@ -1582,8 +1599,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // terminal is live (running, cancelling, or a future state) —
             // narrowing to `running` would strand exactly the edge cases
             // resume exists for.
+            // Image-only tails match on blank prompt (#339): the server
+            // persists Prompt as the raw text ("" for photo-only turns),
+            // so a live run of "" beside an image-only tail is the same
+            // turn — and resending the identical history reproduces the
+            // identical reattach key (text + image signature). A false
+            // positive (live TEXT run, image-only tail) only 429s at the
+            // server's own text+images comparison — never misattaches.
+            val imageOnlyTail = last.content.isBlank() &&
+                last.attachments.wiredPhotos().isNotEmpty()
             val run = runs.firstOrNull {
-                !it.isTerminal() && it.conversationId == threadId && promptMatches(last.content, it.prompt)
+                !it.isTerminal() && it.conversationId == threadId &&
+                    (promptMatches(last.content, it.prompt) ||
+                        (imageOnlyTail && it.prompt.isBlank()))
             } ?: return@launch
             // Bounded: re-clearing only loses the once-guard for threads long
             // dead, whose resend finds no live run and no-ops.
@@ -1692,7 +1720,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Edits a user message and resends from there (#122 Replace): history
      * after [index] is dropped. Callers confirm first when turns are lost. */
     fun replaceAndResend(index: Int, text: String) {
-        if (_state.value.streaming || !_state.value.ready) return
+        // !ready voiced like send()/retry() (#339); streaming stays silent
+        // (editor affordances hide while streaming — no dead tap reachable).
+        if (!_state.value.ready) {
+            notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            return
+        }
+        if (_state.value.streaming) return
         val clean = text.trim()
         val msgs = _state.value.messages
         if (index !in msgs.indices || msgs[index].role != "user") return
@@ -1726,7 +1760,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Forks a thread at an edited user message (#122): the copy (up to and
      * including the replacement) becomes a new conversation and sends. */
     fun forkAndResend(index: Int, text: String) {
-        if (_state.value.streaming || !_state.value.ready) return
+        // Same gate split as Replace above (#339).
+        if (!_state.value.ready) {
+            notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            return
+        }
+        if (_state.value.streaming) return
         val clean = text.trim()
         val msgs = _state.value.messages
         if (index !in msgs.indices || msgs[index].role != "user") return

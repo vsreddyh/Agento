@@ -536,6 +536,7 @@ internal fun ChatTab(
                 ToastKind.Info,
             )
         },
+        onAppendPending = vm::appendPending,
         hasStagedPhotos = { vm.pendingAttachmentCount() > 0 },
     )
     // Camera permanently denied (#339): the request UI never shows again,
@@ -1109,6 +1110,9 @@ internal fun ChatScreen(
      * parks in the composer for a confirming tap instead of auto-sending
      * with the photos. */
     onLiveStagedPhotos: () -> Unit = {},
+    /** Live result accumulation (#339): appends heard text atomically in
+     * the ViewModel so rapid results can't clobber on a stale snapshot. */
+    onAppendPending: (String) -> Unit = {},
     /** Live read of staged-photo state (#339): the listener closure must
      * not use the composition snapshot (recomposition lag), so ChatTab
      * supplies the ViewModel read directly. */
@@ -1499,15 +1503,19 @@ internal fun ChatScreen(
                     // Append when photos are staged (#339): the confirming
                     // tap comes later, so each sentence must accumulate like
                     // the one-shot mic path below — replacing would discard
-                    // every sentence but the last.
-                    val cur = state.pending
-                    onPending(
-                        if (cur.isBlank() || !staged) {
-                            heard
-                        } else {
-                            "${cur.trimEnd()} $heard"
-                        },
-                    )
+                    // every sentence but the last. Accumulated inside the
+                    // VM (same lag class as the gate): a snapshot base here
+                    // would drop the previous sentence on rapid results.
+                    onAppendPending(heard)
+                    // Photos need a confirming tap (#339): live transcripts
+                    // auto-send by design, but background speech firing a
+                    // staged-photo turn with no confirmation is a
+                    // wrong-image send. Text parks for the tap instead.
+                    if (!staged) {
+                        onSend()
+                    } else {
+                        onLiveStagedPhotos()
+                    }
                     // Photos need a confirming tap (#339): live transcripts
                     // auto-send by design, but background speech firing a
                     // staged-photo turn with no confirmation is a
