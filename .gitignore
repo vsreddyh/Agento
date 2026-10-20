@@ -15,6 +15,10 @@ docker/.env
 # ────────────────────────────────────────────────────────
 run/
 
+# Taught-skill materialization (#314): Mongo is the source of truth, this
+# tree is a cache rebuilt on every gateway start. Never committed.
+pi/.runtime/
+
 # ────────────────────────────────────────────────────────
 # Workspace (per-bot cwd, host-only)
 # ────────────────────────────────────────────────────────
@@ -117,13 +121,21 @@ Thumbs.db
 .idea/
 *.pyc
 __pycache__/
-# Go build outputs
+# Go build outputs (single-package `go build` drops the binary in cwd)
+# NOTE: always `go build -o /tmp/...` for a binary you keep; never bare
+# `go build ./cmd/...` in the repo root, or the next `git add -A` commits it.
 /health-api
+/pi-gateway
 /mongo
 /retention
 /miser-money
 /cookbook
 /health-check
+/task-manager
+/project-manager
+/notes
+/memory
+/mcp-gate
 
 # browser runtime state (page dumps, console logs)
 .playwright-mcp/

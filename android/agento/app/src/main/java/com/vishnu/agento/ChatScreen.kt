@@ -34,6 +34,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Approval
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -80,6 +82,11 @@ import com.mikepenz.markdown.m3.Markdown
 import java.util.Locale
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+
+/** Pending count as both the badge and the banner show it: one cap, one
+ * wording, so the two can never disagree above 99. */
+private fun pendingCountLabel(count: Int): String = if (count > 99) "99+" else "$count"
+
 /** Builds the Chat ViewModel so the single tab keeps isolated history. */
 class ChatViewModelFactory(
     internal val app: android.app.Application,
@@ -127,6 +134,9 @@ internal fun ChatTab(
     }
     var showModel by remember { mutableStateOf(false) }
     var showThreads by remember { mutableStateOf(false) }
+    // Thread id awaiting skill naming (#314): the dialog collects a name +
+    // description, then the transcript becomes a draft for review in Skills.
+    var savingSkillId by remember { mutableStateOf<String?>(null) }
     val toasts = remember(scope) { ToastCenter(scope) }
     // #64: never show raw "not set" — the header shows the model name when
     // configured and a setup prompt otherwise.
@@ -142,7 +152,20 @@ internal fun ChatTab(
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop,
         onSteer = vm::steer, onRuns = vm::openRuns,
         onCloseRuns = vm::closeRuns, onCancelRun = vm::cancelRun,
-        onRefreshRuns = vm::refreshRuns,
+        onRefreshRuns = vm::refreshRuns, onApprovals = vm::openApprovals,
+        onCloseApprovals = vm::closeApprovals,
+        onApprove = { vm.decideApproval(it, true) },
+        onDeny = { vm.decideApproval(it, false) },
+        onRefreshApprovals = vm::refreshApprovals,
+        onMemory = vm::openMemory,
+        onCloseMemory = vm::closeMemory,
+        onConfirmMemory = vm::confirmMemory,
+        onEditMemory = vm::editMemory,
+        onDeleteMemory = vm::deleteMemory,
+        onToggleMemoryPause = vm::toggleMemoryPause,
+        onCreateMemory = vm::createMemory,
+        onForgetMemory = vm::forgetMemory,
+        onRefreshMemory = vm::refreshMemory,
         onNew = vm::newConversation, onRetry = vm::retry,
         onRegenerate = vm::regenerate, onContinue = vm::continueTurn,
         onReplace = vm::replaceAndResend, onFork = vm::forkAndResend,
@@ -161,6 +184,7 @@ internal fun ChatTab(
                 vm.deleteThread(it)
                 toasts.toast("Conversation deleted.", ToastKind.Success)
             },
+            onSaveSkill = { savingSkillId = it },
             onExport = { id ->
                 val text = vm.exportMarkdown(id)
                 if (text.isNotEmpty()) {
@@ -181,6 +205,84 @@ internal fun ChatTab(
             onChanged = { vm.refreshConfig(); onConfigChanged() },
             onClose = { showModel = false })
     }
+    val savingId = savingSkillId
+    if (savingId != null) {
+        var skillName by remember(savingId) { mutableStateOf("") }
+        var skillDescription by remember(savingId) { mutableStateOf("") }
+        var saving by remember(savingId) { mutableStateOf(false) }
+        var saveError by remember(savingId) { mutableStateOf("") }
+        AlertDialog(
+            // No dismiss mid-save: the callback toasts on landing, and a
+            // cancelled dialog must not celebrate a save nobody saw start.
+            onDismissRequest = { if (!saving) savingSkillId = null },
+            title = { Text("Save as skill") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "The transcript becomes a draft for review in Skills — " +
+                            "nothing runs until you review, test and activate it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (saveError.isNotBlank()) {
+                        Text(
+                            saveError,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        )
+                    }
+                    OutlinedTextField(
+                        value = skillName,
+                        onValueChange = { skillName = it },
+                        label = { Text("Name (lowercase, hyphens)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                    OutlinedTextField(
+                        value = skillDescription,
+                        onValueChange = { skillDescription = it },
+                        label = { Text("Description") },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        saving = true
+                        saveError = ""
+                        vm.saveThreadAsSkill(savingId, skillName, skillDescription) { err, truncated ->
+                            saving = false
+                            if (err == null) {
+                                savingSkillId = null
+                                toasts.toast(
+                                    if (truncated) "Draft saved, long thread clipped — review it in Skills."
+                                    else "Draft saved — review it in Skills.",
+                                    ToastKind.Success,
+                                )
+                            } else {
+                                saveError = err
+                            }
+                        }
+                    },
+                    // Trimmed: "   " passes isNotBlank but sends "".
+                    enabled = !saving && skillName.trim().isNotBlank() &&
+                        skillDescription.trim().isNotBlank(),
+                ) {
+                    Text(if (saving) "Saving…" else "Save draft")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { savingSkillId = null },
+                    enabled = !saving,
+                ) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
 }
 
 /** Conversation switcher: search, jump, rename, delete, export. */
@@ -196,6 +298,7 @@ internal fun ThreadSheet(
     onRename: (String, String) -> Unit,
     onDelete: (String) -> Unit,
     onExport: (String) -> Unit,
+    onSaveSkill: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
@@ -273,6 +376,10 @@ internal fun ThreadSheet(
                                         DropdownMenuItem(
                                             text = { Text("Share / export") },
                                             onClick = { menu = false; onExport(t.id) },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Save as skill") },
+                                            onClick = { menu = false; onSaveSkill(t.id) },
                                         )
                                         DropdownMenuItem(
                                             text = { Text("Delete") },
@@ -556,6 +663,20 @@ internal fun ChatScreen(
     onCloseRuns: () -> Unit = {},
     onCancelRun: (String) -> Unit = {},
     onRefreshRuns: () -> Unit = {},
+    onApprovals: () -> Unit = {},
+    onCloseApprovals: () -> Unit = {},
+    onApprove: (String) -> Unit = {},
+    onDeny: (String) -> Unit = {},
+    onRefreshApprovals: () -> Unit = {},
+    onMemory: () -> Unit = {},
+    onCloseMemory: () -> Unit = {},
+    onConfirmMemory: (String) -> Unit = {},
+    onEditMemory: (String, String, String, () -> Unit) -> Unit = { _, _, _, _ -> },
+    onDeleteMemory: (String) -> Unit = {},
+    onToggleMemoryPause: (String, Boolean) -> Unit = { _, _ -> },
+    onCreateMemory: (String, String, () -> Unit) -> Unit = { _, _, _ -> },
+    onForgetMemory: () -> Unit = {},
+    onRefreshMemory: () -> Unit = {},
     onNew: () -> Unit,
     onRetry: () -> Unit,
     onRegenerate: () -> Unit = {},
@@ -943,6 +1064,41 @@ internal fun ChatScreen(
                     ) {
                         Icon(Icons.Filled.List, contentDescription = "Runs")
                     }
+                    // Approvals (#313): held tool calls need an explicit
+                    // decision, and a gate stalls the stream with no frames.
+                    // Badged with the pending count; always enabled once
+                    // ready — approvals are global, not per-thread.
+                    BadgedBox(
+                        badge = {
+                            if (state.pendingApprovalCount > 0) {
+                                Badge { Text(pendingCountLabel(state.pendingApprovalCount)) }
+                            }
+                        },
+                    ) {
+                        IconButton(
+                            onClick = onApprovals,
+                            enabled = state.ready,
+                        ) {
+                            Icon(Icons.Filled.Approval, contentDescription = "Approvals")
+                        }
+                    }
+                    // Memory (#315): learned facts. Badged with pending
+                    // proposals awaiting review; always enabled once ready —
+                    // memory is per-profile, not per-thread.
+                    BadgedBox(
+                        badge = {
+                            if (state.pendingMemoryCount > 0) {
+                                Badge { Text(pendingCountLabel(state.pendingMemoryCount)) }
+                            }
+                        },
+                    ) {
+                        IconButton(
+                            onClick = onMemory,
+                            enabled = state.ready,
+                        ) {
+                            Icon(Icons.Filled.Psychology, contentDescription = "Memory")
+                        }
+                    }
                     // Auto-read: speak each finished reply aloud.
                     //
                     // role = Switch (#283): the icon's description already
@@ -1011,6 +1167,27 @@ internal fun ChatScreen(
                                 // it happens (#283), for the same reason.
                                 .semantics { liveRegion = LiveRegionMode.Polite },
                         )
+                    }
+                    // Held approval (#313): a gate stalls the stream with no
+                    // frames, which otherwise reads as thinking. The watch
+                    // raises the count; the banner points at the sheet.
+                    if (state.streaming && state.pendingApprovalCount > 0) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            // The gate-stalled-stream signal a screen-reader
+                            // user most needs: same live region as the tool
+                            // banners above.
+                            TextButton(
+                                onClick = onApprovals,
+                                modifier = Modifier.semantics {
+                                    liveRegion = LiveRegionMode.Polite
+                                },
+                            ) {
+                                Text("Approval needed (${pendingCountLabel(state.pendingApprovalCount)})")
+                            }
+                        }
                     }
                     // Queue-or-send (#122): the composer stays live while
                     // streaming. Parking a send here auto-fires it on Done;
@@ -1552,6 +1729,42 @@ internal fun ChatScreen(
                 onRefresh = onRefreshRuns,
                 onCancel = onCancelRun,
                 onClose = onCloseRuns,
+            )
+        }
+        // Approval gates (#313): pending cards with approve/deny, audit below.
+        if (state.showApprovals) {
+            ApprovalsDialog(
+                approvals = state.approvals,
+                auditRows = state.auditRows,
+                loading = state.approvalsLoading,
+                error = state.approvalsError,
+                degraded = state.approvalsDegraded,
+                deciding = state.decidingApprovals,
+                onApprove = onApprove,
+                onDeny = onDeny,
+                onRefresh = onRefreshApprovals,
+                onClose = onCloseApprovals,
+            )
+        }
+        // Per-profile memory (#315): proposals to confirm, rows to edit or
+        // delete, topic pause toggles, and a composer for user items.
+        if (state.showMemory) {
+            MemoryDialog(
+                items = state.memoryItems,
+                paused = state.memoryPaused,
+                topics = state.memoryTopics,
+                warnings = state.memoryWarnings,
+                loading = state.memoryLoading,
+                error = state.memoryError,
+                acting = state.actingMemory,
+                onConfirm = onConfirmMemory,
+                onEdit = onEditMemory,
+                onDelete = onDeleteMemory,
+                onTogglePause = onToggleMemoryPause,
+                onCreate = onCreateMemory,
+                onForget = onForgetMemory,
+                onRefresh = onRefreshMemory,
+                onClose = onCloseMemory,
             )
         }
     }

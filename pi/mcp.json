@@ -1,28 +1,32 @@
 {
   "mcpServers": {
     "miser-money": {
-      "command": "/usr/local/bin/miser-money",
-      "args": []
+      "command": "/usr/local/bin/mcp-gate",
+      "args": ["--server", "miser-money", "--", "/usr/local/bin/miser-money"]
     },
     "cookbook": {
-      "command": "/usr/local/bin/cookbook",
-      "args": []
+      "command": "/usr/local/bin/mcp-gate",
+      "args": ["--server", "cookbook", "--", "/usr/local/bin/cookbook"]
     },
     "health-check": {
-      "command": "/usr/local/bin/health-check",
-      "args": []
+      "command": "/usr/local/bin/mcp-gate",
+      "args": ["--server", "health-check", "--", "/usr/local/bin/health-check"]
     },
     "task-manager": {
-      "command": "/usr/local/bin/task-manager",
-      "args": []
+      "command": "/usr/local/bin/mcp-gate",
+      "args": ["--server", "task-manager", "--", "/usr/local/bin/task-manager"]
     },
     "project-manager": {
-      "command": "/usr/local/bin/project-manager",
-      "args": []
+      "command": "/usr/local/bin/mcp-gate",
+      "args": ["--server", "project-manager", "--", "/usr/local/bin/project-manager"]
     },
     "notes": {
-      "command": "/usr/local/bin/notes",
-      "args": []
+      "command": "/usr/local/bin/mcp-gate",
+      "args": ["--server", "notes", "--", "/usr/local/bin/notes"]
+    },
+    "memory": {
+      "command": "/usr/local/bin/mcp-gate",
+      "args": ["--server", "memory", "--", "/usr/local/bin/memory"]
     }
   }
 }

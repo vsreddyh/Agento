@@ -878,3 +878,21 @@ func TestTerminalShapesMarkTruncation(t *testing.T) {
 	}
 	t.Fatal("no snapshot frame in the stream")
 }
+
+func TestReattachIgnoresInjectedMemory(t *testing.T) {
+	// Memory (#315) prefixes the agent's copy with a block; promptFull keeps
+	// the user's exact text. A reattach (or forget/edit mid-turn) must
+	// compare the user's text, or injecting memory would make every new turn
+	// look like a retry of an old one.
+	userText := "what did I say about reports?"
+	lr := newLiveRun(runs.Run{Prompt: userText}, nil, "c1")
+	lr.promptFull = userText
+	// Simulate injection: the stored prompt now carries the block.
+	lr.run.Prompt = "[Memory: things you have learned]\n- (style) tables\n[/Memory]\n\n" + userText
+	if got, _ := lr.reattachKey(); got != userText {
+		t.Fatalf("reattach compares %q, want the bare user text", got)
+	}
+	if got := lr.prompt(); got != userText {
+		t.Fatalf("prompt() = %q, want the bare user text", got)
+	}
+}

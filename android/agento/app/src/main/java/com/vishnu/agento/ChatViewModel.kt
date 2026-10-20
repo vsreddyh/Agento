@@ -73,6 +73,36 @@ data class ChatUiState(
      * chat error banner (whose Retry resends a turn — a runs-list outage
      * must not offer that). */
     val runsError: String = "",
+    /** Approvals sheet for held tool calls (#313): pending cards with
+     * approve/deny, plus the audit trail below. */
+    val showApprovals: Boolean = false,
+    val approvals: List<GateApproval> = emptyList(),
+    val approvalsLoading: Boolean = false,
+    val approvalsError: String = "",
+    val auditRows: List<AuditRow> = emptyList(),
+    /** Pending approvals right now: badges the approvals entry and raises
+     * the in-turn banner while streaming. */
+    val pendingApprovalCount: Int = 0,
+    /** Split-brain signal from the server: decisions here cannot reach held
+     * calls. The sheet banners it instead of showing an undecidable queue. */
+    val approvalsDegraded: Boolean = false,
+    /** Approval ids with a decision in flight: cards disable their buttons
+     * so a double tap cannot fire two decisions. */
+    val decidingApprovals: Set<String> = emptySet(),
+    /** Memory sheet for learned facts (#315): pending proposals to confirm,
+     * confirmed rows to edit/delete, topic pause toggles, and a composer. */
+    val showMemory: Boolean = false,
+    val memoryItems: List<MemoryItem> = emptyList(),
+    val memoryPaused: List<String> = emptyList(),
+    val memoryTopics: List<String> = emptyList(),
+    val memoryWarnings: List<String> = emptyList(),
+    val memoryLoading: Boolean = false,
+    val memoryError: String = "",
+    /** Pending proposals right now: badges the memory entry. */
+    val pendingMemoryCount: Int = 0,
+    /** Memory ids with a write in flight: their buttons disable so a double
+     * tap cannot fire two writes. */
+    val actingMemory: Set<String> = emptySet(),
 )
 
 /** Device-observed usage for one conversation thread, summed from
@@ -135,6 +165,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     private val api = ChatApi(app)
     private val runsApi = RunsApi(app)
+    private val approvalsApi = ApprovalsApi(app)
+    private val memoryApi = MemoryApi(app)
+    private val teachApi = TeachApi(app)
     private val serverApi = ServerApi(app)
     private val appCtx: Application = app
 
@@ -158,6 +191,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * newer open or a thread change cancels the older one, so stale rows
      * can never land on another thread. */
     private var runsJob: Job? = null
+
+    /** Approval watch while a turn streams: a held call stalls the stream
+     * with no frames, which otherwise reads as thinking. Polls pending
+     * approvals so the banner can point at the approvals sheet. */
+    private var approvalWatch: Job? = null
 
     /** Drops a pending recovery, if any. Called on every active-thread
      * change (switch/new/delete/fork), send, and stop — recovery belongs
@@ -202,6 +240,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 ready = true,
             )
             refreshServerTotals()
+            // Pending proposals badge without opening the sheet: one light
+            // list at launch, then again on every retarget below.
+            pollMemoryCount(api.pathFor(tab))
             // App-killed turn recovery (#311): an unanswered user tail with
             // a live server run resends into the existing run.
             maybeResume(threadId, ChatThreads.toUi(active.messages))
@@ -217,6 +258,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             effort = api.effortFor(tab, model),
             path = api.pathFor(tab),
         )
+        // The path can change here (profile switch in Settings): rows and
+        // the badge belong to the new profile, not the old one.
+        retargetMemory()
     }
 
     fun onPending(v: String) {
@@ -266,6 +310,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threadId = id
         cancelRecovery()
         runsJob?.cancel()
+        stopApprovalWatch()
+        retargetApprovals()
+        retargetMemory()
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
@@ -328,6 +375,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             threadId = id
             cancelRecovery()
             runsJob?.cancel()
+            stopApprovalWatch()
+            retargetApprovals()
+            retargetMemory()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(target.messages),
                 threads = summaries(),
@@ -376,6 +426,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threadId = fresh.id
         cancelRecovery()
         runsJob?.cancel()
+        stopApprovalWatch()
+        retargetApprovals()
+        retargetMemory()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
@@ -415,6 +468,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             threadId = next.id
             cancelRecovery()
             runsJob?.cancel()
+            stopApprovalWatch()
+            retargetApprovals()
+            retargetMemory()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
@@ -446,6 +502,78 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 updatedAt = it.updatedAt,
                 count = it.messages.size,
             )
+        }
+    }
+
+    /** Saves a thread's transcript as a skill draft for review in Skills.
+     * Nothing runs from it: drafts are inert until reviewed, tested and
+     * activated. [done] receives an error (null on success) and whether the
+     * transcript clipped at the server body cap — a long thread stores
+     * less than was sent, and the writer must know. */
+    fun saveThreadAsSkill(id: String, name: String, description: String, done: (String?, Boolean) -> Unit) {
+        // Check messages, not the export: exportMarkdown always emits at
+        // least a "# title" header, so a blank check on the body never fires
+        // and an empty thread would save a header-only draft.
+        // Gone vs empty: a thread deleted while the dialog was open is
+        // not an empty conversation, and must not read as one.
+        val thread = threads.firstOrNull { it.id == id }
+        if (thread == null) {
+            done("Conversation is gone.", false)
+            return
+        }
+        if (thread.messages.isEmpty()) {
+            done("Conversation is empty.", false)
+            return
+        }
+        // Sent whole: the server clips at its body cap and reports
+        // truncated, which the toast surfaces. A client-side cap would
+        // duplicate the server constant and drift from it; the worst case
+        // is one large POST the user explicitly tapped to send.
+        val body = exportMarkdown(id)
+        if (body.isBlank()) {
+            done("Conversation is empty.", false)
+            return
+        }
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            // Rechecked, not captured: a profile switch mid-save must not
+            // write the old profile's draft. An error, not a silent success:
+            // done(null) would toast "Draft saved" for nothing written.
+            if (path != api.pathFor(tab)) {
+                withContext(Dispatchers.Main) { done("Profile changed — try again.", false) }
+                return@launch
+            }
+            // Source links the draft to its thread: the review surface
+            // shows where the procedure came from.
+            val result = teachApi.createDraft(path, name.trim(), description.trim(), body, source = "thread:$id")
+            withContext(Dispatchers.Main) {
+                // Rechecked after the write too: a switch during the network
+                // call lands the draft on the old profile, and success must
+                // not toast for a row the user no longer looks at.
+                if (path != api.pathFor(tab)) {
+                    done("Profile changed — try again.", false)
+                    return@withContext
+                }
+                // Always answered, even across a profile switch: the dialog
+                // spins on this callback, and a stuck "Saving…" is worse
+                // than a toast for the old profile. Local misconfiguration
+                // surfaces verbatim (it names the fix); server failures stay
+                // code-only.
+                val detail = result.exceptionOrNull()?.message.orEmpty()
+                val truncated = result.getOrNull()?.second == true
+                // Server messages pass through bounded like loadTaught does:
+                // they are validation/contract strings ("unparseable
+                // response body", "skill name must be…"), never memory text,
+                // and the actionable one beats a bare code.
+                done(
+                    if (result.isSuccess) null
+                    else detail.take(120).ifBlank {
+                        "Couldn't save draft" +
+                            (ApprovalsApi.httpCode(detail)?.let { " (HTTP $it)" } ?: "") + "."
+                    },
+                    truncated,
+                )
+            }
         }
     }
 
@@ -503,6 +631,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // A pending recovery belongs to the turn just stopped: it must not
         // resurrect text behind whatever the user does next.
         cancelRecovery()
+        stopApprovalWatch()
+        // The badge may still name a gate held at stop time: refresh it like
+        // the Done/Error paths do, instead of freezing the pre-turn count.
+        refreshApprovalCount()
         // Stop the server-side run this tab started, not just the local
         // socket (#311): closing the stream no longer cancels the work, so a
         // stop that stayed local would leave the agent running invisibly.
@@ -729,6 +861,442 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
+    /** Opens the approvals sheet and loads pending cards + audit (#313). */
+    fun openApprovals() {
+        if (!_state.value.ready) return
+        // Drop stale rows up front: the first paint is the spinner, never
+        // the previous session's cards.
+        _state.value = _state.value.copy(
+            showApprovals = true, approvalsError = "",
+            approvals = emptyList(), auditRows = emptyList(),
+        )
+        refreshApprovals()
+    }
+
+    fun closeApprovals() {
+        // A load that lands after close only wastes a call and its rows are
+        // cleared on the next open; cancel it anyway.
+        approvalsJob?.cancel()
+        approvalsJob = null
+        _state.value = _state.value.copy(showApprovals = false)
+    }
+
+    /** Single-flight approvals load: a newer open or manual refresh cancels
+     * the older one, so stale rows can never land. */
+    private var approvalsJob: Job? = null
+
+    /** Reloads pending approvals and the recent audit trail. Failures keep
+     * the old rows and report inside the sheet (never the chat banner). A
+     * [notice] survives a successful load (e.g. "already decided"). */
+    fun refreshApprovals(notice: String? = null) {
+        val path = _state.value.path
+        _state.value = _state.value.copy(approvalsLoading = true)
+        approvalsJob?.cancel()
+        approvalsJob = viewModelScope.launch(Dispatchers.IO) {
+            // Same limit as pollApprovalCount: a smaller page here would
+            // shrink the badge the moment the sheet opens.
+            val pending = approvalsApi.listApprovals(path, status = "pending", limit = 100)
+            val audit = approvalsApi.listAudit(path, limit = 50)
+            withContext(Dispatchers.Main) {
+                // Per-half: a half that loaded replaces its rows; any half
+                // that failed reports without wiping the good half. Errors
+                // name the HTTP code, never the body. A [notice] (e.g.
+                // "already decided") must survive that failure too, so the
+                // two are joined rather than one replacing the other.
+                val failedCode = ApprovalsApi.httpCode(pending.exceptionOrNull()?.message)
+                    ?: ApprovalsApi.httpCode(audit.exceptionOrNull()?.message)
+                val loadErr = if (pending.isFailure || audit.isFailure) {
+                    "Couldn't load approvals" +
+                        (failedCode?.let { " (HTTP $it)" } ?: "") + "."
+                } else {
+                    ""
+                }
+                _state.value = _state.value.copy(
+                    approvals = pending.getOrNull()?.approvals ?: _state.value.approvals,
+                    auditRows = audit.getOrNull() ?: _state.value.auditRows,
+                    approvalsLoading = false,
+                    approvalsError = listOf(notice.orEmpty(), loadErr)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" "),
+                    pendingApprovalCount = pending.getOrNull()?.approvals?.size
+                        ?: _state.value.pendingApprovalCount,
+                    // Sticky until a non-degraded load clears it: flapping
+                    // the banner on every blip would hide real pendings
+                    // behind a warning that comes and goes.
+                    approvalsDegraded = pending.getOrNull()?.degraded
+                        ?: _state.value.approvalsDegraded,
+                )
+            }
+        }
+    }
+
+    /** Decides a held call: approve runs it, deny fails it back to the turn
+     * as a tool error. Double-taps collapse into one call; a 409 (someone
+     * else decided) reloads with a transient note instead of a retry prompt. */
+    private val deciding = mutableSetOf<String>()
+
+    fun decideApproval(id: String, approve: Boolean) {
+        // Both the add here and the remove below run on Main (UI taps and
+        // the Main-confined completion), so a plain set is safe; moving
+        // either side off Main needs a lock.
+        if (id.isBlank() || !deciding.add(id)) return
+        _state.value = _state.value.copy(decidingApprovals = deciding.toSet())
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = approvalsApi.decide(path, id, approve)
+            withContext(Dispatchers.Main) {
+                deciding.remove(id)
+                _state.value = _state.value.copy(decidingApprovals = deciding.toSet())
+                // A 409 means someone else decided first: reload (the row
+                // leaves pending) with a transient note, never a retry
+                // prompt — retrying a decided id 409s again. Errors name
+                // the HTTP code, never the body.
+                val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
+                if (result.isFailure && code != "409") {
+                    _state.value = _state.value.copy(
+                        approvalsError = "Decision failed" +
+                            (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
+                    )
+                } else if (_state.value.showApprovals) {
+                    refreshApprovals(
+                        if (result.isFailure) "Already decided — refreshed." else null,
+                    )
+                }
+                refreshApprovalCount()
+            }
+        }
+    }
+
+    /** Light pending count for the badge/banner, without touching rows. */
+    private fun refreshApprovalCount() {
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            pollApprovalCount(path)
+        }
+    }
+
+    /** Watch cadence while streaming: immediate poll, then every 5s. A gate
+     * held at turn start otherwise reads as thinking for a full interval. */
+    private fun startApprovalWatch(path: String) {
+        approvalWatch?.cancel()
+        approvalWatch = viewModelScope.launch(Dispatchers.IO) {
+            pollApprovalCount(path)
+            while (true) {
+                delay(5_000)
+                pollApprovalCount(path)
+            }
+        }
+    }
+
+    private suspend fun pollApprovalCount(path: String) {
+        // Failures keep the old count: a network blip must not zero the
+        // badge into "no pending".
+        val page = approvalsApi.listApprovals(path, status = "pending", limit = 100)
+            .getOrNull() ?: return
+        val n = page.approvals.size
+        withContext(Dispatchers.Main) {
+            // Stale poll (profile switched mid-flight): the old profile's
+            // count must not land on the new one.
+            if (_state.value.path != path) return@withContext
+            // Assigned, not OR-accumulated: recovery clears via poll, and
+            // only a full sheet load sets it otherwise. A transient degraded
+            // must not stick past recovery behind a stale banner.
+            _state.value = _state.value.copy(
+                pendingApprovalCount = n,
+                approvalsDegraded = page.degraded,
+            )
+        }
+    }
+
+    private fun stopApprovalWatch() {
+        approvalWatch?.cancel()
+        approvalWatch = null
+    }
+
+    /** A thread/profile change retires any approvals load started under the
+     * old path. Approvals are global, so reopen the sheet against the new
+     * path rather than leaving a cancelled load's spinner behind. */
+    private fun retargetApprovals() {
+        approvalsJob?.cancel()
+        approvalsJob = null
+        if (_state.value.showApprovals) refreshApprovals()
+    }
+
+    /** Opens the memory sheet and loads items + pauses + topics (#315). */
+    fun openMemory() {
+        if (!_state.value.ready) return
+        // Drop stale rows up front: the first paint is the spinner, never
+        // the previous session's items.
+        _state.value = _state.value.copy(
+            showMemory = true, memoryError = "", memoryWarnings = emptyList(),
+            memoryItems = emptyList(), memoryPaused = emptyList(),
+            memoryTopics = emptyList(),
+        )
+        refreshMemory()
+    }
+
+    fun closeMemory() {
+        // A load that lands after close only wastes a call and its rows are
+        // cleared on the next open; cancel it anyway and drop the spinner so
+        // a cancelled load cannot leave a stale true behind.
+        memoryJob?.cancel()
+        memoryJob = null
+        _state.value = _state.value.copy(showMemory = false, memoryLoading = false)
+    }
+
+    /** Single-flight memory load: a newer open or manual refresh cancels
+     * the older one, so stale rows can never land. */
+    private var memoryJob: Job? = null
+
+    /** Reloads the memory sheet. Failures keep the old rows and report
+     * inside the sheet (never the chat banner). A [notice] survives a
+     * successful load (e.g. "already confirmed"); [stickyNotice] also
+     * survives a failed one, for information that holds regardless of the
+     * repaint (a clipped save clipped even if the rows did not reload). */
+    fun refreshMemory(notice: String? = null, stickyNotice: Boolean = false) {
+        val path = _state.value.path
+        _state.value = _state.value.copy(memoryLoading = true)
+        memoryJob?.cancel()
+        memoryJob = viewModelScope.launch(Dispatchers.IO) {
+            // One call carries items + pauses + topics: the screen's three
+            // views of the same rows, so there is no half to reconcile.
+            val list = memoryApi.listMemory(path)
+            withContext(Dispatchers.Main) {
+                // Stale load (path changed mid-flight): old-profile rows
+                // must not land on the new profile. Loading clears first so
+                // the guard never leaves a stuck spinner behind.
+                _state.value = _state.value.copy(memoryLoading = false)
+                if (_state.value.path != path) return@withContext
+                val failedCode = ApprovalsApi.httpCode(list.exceptionOrNull()?.message)
+                val loadErr = if (list.isFailure) {
+                    "Couldn't load memory" +
+                        (failedCode?.let { " (HTTP $it)" } ?: "") + "."
+                } else {
+                    ""
+                }
+                val rows = list.getOrNull()
+                _state.value = _state.value.copy(
+                    memoryItems = rows?.items ?: _state.value.memoryItems,
+                    memoryPaused = rows?.paused ?: _state.value.memoryPaused,
+                    memoryTopics = rows?.topics ?: _state.value.memoryTopics,
+                    memoryWarnings = rows?.warnings ?: _state.value.memoryWarnings,
+                    memoryError = if (list.isFailure && !stickyNotice) {
+                        // The write succeeded; only the reload failed. The
+                        // notice must not read as a failed write — unless it
+                        // is sticky information about the write itself.
+                        loadErr
+                    } else {
+                        listOf(notice.orEmpty(), loadErr)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" ")
+                    },
+                    pendingMemoryCount = rows?.items?.count { it.isPending() }
+                        ?: _state.value.pendingMemoryCount,
+                )
+            }
+        }
+    }
+
+    /** Runs one memory write with its button disabled, then reloads the
+     * sheet when it is still open. Errors name the HTTP code, never the
+     * body; failures keep the old rows. */
+    private val acting = mutableSetOf<String>()
+
+    private fun actOnMemory(
+        /** Namespaced by the caller: "item:\u2026" for rows, "topic:\u2026" for
+         * pauses. Namespacing by kind, not by sniffing the id string, so an
+         * item literally named "topic:x" still keys as an item and can never
+         * collide with a pause key or bare "new"/"forget". */
+        key: String,
+        id: String,
+        action: suspend (String) -> Result<*>,
+        /** Runs on Main after a success: collapses editors, clears composers. */
+        onSuccess: () -> Unit = {},
+        /** Notice carried into the completion's own refresh: passing it here
+         * instead of refreshing inside onSuccess avoids a double load whose
+         * second, noticeless call cancels the first (single-flight). */
+        notice: String? = null,
+        /** Whether the notice also survives a failed reload. */
+        stickyNotice: Boolean = false,
+    ) {
+        // Both the add here and the remove below run on Main (UI taps and
+        // the Main-confined completion), so a plain set is safe; moving
+        // either side off Main needs a lock.
+        if (id.isBlank() || !acting.add(key)) return
+        _state.value = _state.value.copy(actingMemory = acting.toSet())
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = action(path)
+            withContext(Dispatchers.Main) {
+                acting.remove(key)
+                _state.value = _state.value.copy(actingMemory = acting.toSet())
+                // A switch mid-write retires the whole completion: the
+                // write belonged to the old profile, so neither its success
+                // (repaint/badge) nor its failure (sheet error) may land on
+                // the new one.
+                if (_state.value.path != path) return@withContext
+                val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
+                if (result.isFailure) {
+                    _state.value = _state.value.copy(
+                        memoryError = "Memory update failed" +
+                            (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
+                    )
+                } else {
+                    // The badge refreshes even with the sheet closed: a
+                    // write that finished after close still changed the
+                    // pending count.
+                    onSuccess()
+                    pollMemoryCount(path)
+                    if (_state.value.showMemory) refreshMemory(notice, stickyNotice)
+                }
+            }
+        }
+    }
+
+    /** Confirms a pending proposal: it joins the next turn's prompt. */
+    fun confirmMemory(id: String) =
+        actOnMemory("item:$id", id, action = { path -> memoryApi.updateMemory(path, id, status = "confirmed") })
+
+    /** Deletes one item: it is gone from the next turn. */
+    fun deleteMemory(id: String) {
+        // Sticky like the truncation notice: the row is gone even if the
+        // reload fails, and silence would read as a failed delete.
+        actOnMemory("item:$id", id, action = { path -> memoryApi.deleteMemory(path, id) },
+            notice = "Deleted.", stickyNotice = true)
+    }
+
+    /** Saves an edit to text and/or topic. Trims like create: a
+     * whitespace-only edit is a validation error here, not a server 400,
+     * and an emptied topic keeps the old one instead of re-categorising to
+     * general by silence. The editor collapses via [onSaved]: on failure
+     * the edit context stays open alongside the error. */
+    fun editMemory(id: String, text: String, topic: String, onSaved: () -> Unit = {}) {
+        val clean = text.trim()
+        if (clean.isBlank()) {
+            _state.value = _state.value.copy(memoryError = "Text is required.")
+            return
+        }
+        val keepTopic = topic.trim()
+        actOnMemory(
+            key = "item:$id",
+            id = id,
+            action = { path ->
+                memoryApi.updateMemory(
+                    path, id, text = clean,
+                    topic = keepTopic.ifBlank { null },
+                )
+            },
+            onSuccess = onSaved,
+        )
+    }
+
+    /** Pauses or resumes one topic. Paused items stay on screen; they are
+     * simply not injected into turns. A blank topic has no route (PUT
+     * …/topics/ is a 404), so it never fires. */
+    fun toggleMemoryPause(topic: String, paused: Boolean) {
+        if (topic.isBlank()) return
+        actOnMemory("topic:$topic", topic, action = { path -> memoryApi.setTopicPaused(path, topic, paused) })
+    }
+
+    /** Writes a user item: confirmed on arrival, no review loop for the
+     * person whose memory it is. A clipped save reports it in-sheet. The
+     * composer clears via [onSaved]: on failure the typed text stays so the
+     * error does not eat it. */
+    fun createMemory(topic: String, text: String, onSaved: () -> Unit = {}) {
+        if (text.isBlank()) {
+            _state.value = _state.value.copy(memoryError = "Text is required.")
+            return
+        }
+        val key = "new"
+        if (!acting.add(key)) return
+        _state.value = _state.value.copy(actingMemory = acting.toSet())
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = memoryApi.createMemory(path, topic.trim().ifBlank { "general" }, text.trim())
+            withContext(Dispatchers.Main) {
+                acting.remove(key)
+                _state.value = _state.value.copy(actingMemory = acting.toSet())
+                // Same stale-path rule as actOnMemory: a switch mid-save
+                // must not clear the new profile's composer or repaint it.
+                if (_state.value.path != path) return@withContext
+                val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
+                if (result.isFailure) {
+                    _state.value = _state.value.copy(
+                        memoryError = "Couldn't save memory" +
+                            (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
+                    )
+                } else {
+                    val truncated = result.getOrNull()?.second == true
+                    onSaved()
+                    pollMemoryCount(path)
+                    if (_state.value.showMemory) {
+                        refreshMemory(
+                            if (truncated) "Saved, but the text clipped at the length cap." else null,
+                            stickyNotice = truncated,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /** Forgets every item for the profile. Pauses survive (policy, not
+     * memory). Two-tap in the sheet; this is the second tap. */
+    fun forgetMemory() {
+        val key = "forget"
+        if (!acting.add(key)) return
+        _state.value = _state.value.copy(actingMemory = acting.toSet())
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = memoryApi.forgetMemory(path)
+            withContext(Dispatchers.Main) {
+                acting.remove(key)
+                _state.value = _state.value.copy(actingMemory = acting.toSet())
+                if (_state.value.path != path) return@withContext
+                val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
+                if (result.isFailure) {
+                    _state.value = _state.value.copy(
+                        memoryError = "Couldn't forget memory" +
+                            (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
+                    )
+                } else {
+                    pollMemoryCount(path)
+                    if (_state.value.showMemory) {
+                        refreshMemory("Forgot ${result.getOrNull() ?: 0} item(s). Pauses kept.")
+                    }
+                }
+            }
+        }
+    }
+
+    /** A thread/profile change retires any memory load started under the
+     * old path, reopening the sheet against the new one. The badge count
+     * refreshes regardless: pending proposals must badge on launch and on
+     * switch, not only after the first open. */
+    private fun retargetMemory() {
+        memoryJob?.cancel()
+        memoryJob = null
+        if (_state.value.showMemory) refreshMemory()
+        pollMemoryCount(_state.value.path)
+    }
+
+    /** Light pending-proposal count for the badge, without touching rows.
+     * Mirrors pollApprovalCount: failures keep the old count, and a stale
+     * poll never lands on a new path. */
+    private fun pollMemoryCount(path: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            // The sheet's own query, not a pending-only page: with 200+
+            // mixed-status rows a filtered window could count pendings the
+            // sheet's window excludes (or vice versa). Same rows, same count.
+            val n = memoryApi.listMemory(path, limit = 200)
+                .getOrNull()?.items?.count { it.isPending() } ?: return@launch
+            withContext(Dispatchers.Main) {
+                if (_state.value.path != path) return@withContext
+                _state.value = _state.value.copy(pendingMemoryCount = n)
+            }
+        }
+    }
+
     /**
      * Reattaches an app-killed turn (#311): a trailing user message plus a
      * live server run with the same prompt means resending streams the
@@ -893,6 +1461,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threadId = fresh.id
         cancelRecovery()
         runsJob?.cancel()
+        stopApprovalWatch()
+        retargetApprovals()
+        retargetMemory()
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
@@ -941,6 +1512,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         streamJob?.cancel()
         // A new turn supersedes any pending recovery of the previous one.
         cancelRecovery()
+        // Watch for held approvals while this turn streams: a gate stalls
+        // the stream with no frames, and the banner is the only signal.
+        stopApprovalWatch()
+        startApprovalWatch(path)
         // Fresh generation: events from any older turn still buffered go
         // stale (see stop()). Captured below; every handler checks it.
         sendGen++
@@ -1193,6 +1768,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // so the queued send's doSend never "cancels" the
                         // just-finished collection it runs inside of.
                         streamJob = null
+                        stopApprovalWatch()
+                        refreshApprovalCount()
                         if (event.interrupted || cancelled) {
                             // A dropped stream does NOT auto-fire the queued send.
                             //
@@ -1251,6 +1828,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // A queued send never auto-fires after a failure (no failure
                         // cascades): hand it back to the composer instead.
                         parkQueued()
+                        stopApprovalWatch()
+                        refreshApprovalCount()
                         if (kept.size == msgs.size) upsertActive(kept)
                         persist()
                         // A kept partial is a flagged cut-off turn exactly

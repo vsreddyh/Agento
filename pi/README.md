@@ -9,7 +9,7 @@ state (see `.gitignore`).
 | path | committed | purpose |
 |---|---|---|
 | `settings.json` | yes | Pi's own knobs — tool selection, retry, cache warming. **Not** personality. |
-| `mcp.json` | yes | the five in-repo Go MCP servers: miser-money, cookbook, health-check, task-manager, project-manager. |
+| `mcp.json` | yes | the seven in-repo Go MCP servers: miser-money, cookbook, health-check, task-manager, project-manager, notes, memory. |
 | `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all of them. |
 | `profiles/<name>/AGENTS.md` | yes | one per profile (`chat` only since #289). Each profile's own instructions and personality. |
 | `profiles/<name>/skills/` | yes | Per-profile skills. **Not discovered as laid out** — see the profile-skills finding below; loaded by an explicit `--skill` path per profile. |
@@ -40,7 +40,7 @@ even for an untrusted directory. Treat the content of one as untrusted input.
 **calls `die` if any server fails to connect**. That check only became active when
 this PR added `mcp.json`, so the pi service must carry:
 
-- `MONGODB_URI` and `MONGODB_DB` — every one of the five servers opens the shared
+- `MONGODB_URI` and `MONGODB_DB` — every one of the seven servers opens the shared
   Atlas database on startup and fails to connect without them
 - `OPENCODE_API_KEY` — already enforced by the entrypoint
 
@@ -99,7 +99,7 @@ things about it are deliberate, and both were got wrong while writing it:
 
 Verified end to end in the real container (three-profile era; single-profile
 since #289 — kept as the method record): the entrypoint registers three repos as
-`safe.directory`, `pi mcp list` connects all five MCP servers (11/11/9/7/5), all
+`safe.directory`, `pi mcp list` connects all seven MCP servers (11/11/9/8/5/6/2), all
 three profiles are discovered, `/healthz` answers 200, auth rejects both a missing
 and a wrong bearer token with 401, and each profile answers from its own
 `AGENTS.md`:
@@ -193,7 +193,7 @@ is a separate line item.)
 The MCP servers are left at `codemode` exposure, which is Pi's default. Their tools
 are therefore **not declared to the model**; it reaches them from a `codemode`
 script as `tools.mcp__<server>__<tool>({...})`, finding them with `searchTools()`,
-`describeTool()` or `describeNamespace()`. That keeps 43 tool definitions out of
+`describeTool()` or `describeNamespace()`. That keeps 52 tool definitions out of
 every request, which is most of the token saving available here.
 
 The cost is that the model has to write JavaScript to call a tool, and the model
@@ -223,6 +223,28 @@ through nginx — not `pi` itself.
 | `GET /api/runs/{id}/events` | yes — SSE snapshot, then live frames | run subscription |
 | `POST /api/runs/{id}/steer` | yes — queues an instruction into the running turn | Pi RPC `steer` |
 | `POST /api/runs/{id}/cancel` | yes — aborts, keeps partial output | Pi RPC `abort` |
+| `GET /api/approvals` (+ `/{profile}/api/approvals`) | yes — filters `status`, `limit` | `approvals` (Mongo), memory fallback |
+| `POST /api/approvals/{id}/approve` | yes — releases the held call, exactly once | approval store |
+| `POST /api/approvals/{id}/deny` | yes — refuses it, Pi gets a tool error | approval store |
+| `GET /api/audit` (+ `/{profile}/api/audit`) | yes — filters `server`, `tool`, `limit` | `audit_log` (Mongo, 90-day TTL) |
+| `GET /api/memory` (+ `/{profile}/api/memory`) | yes — items, paused topics, topic list | `memory_items` (Mongo), memory fallback |
+| `POST /api/memory` | yes — create a confirmed, user-written item | memory store |
+| `PUT /api/memory/{id}` | yes — edit text/topic or confirm a pending item | memory store |
+| `DELETE /api/memory/{id}` | yes — real delete, gone from the next turn | memory store |
+| `POST /api/memory/forget` | yes — delete every item for the profile | memory store |
+| `PUT /api/memory/topics/{topic}` | yes — pause/resume one topic | memory store |
+
+Approval gates (#313) hold sensitive tool calls in `mcp-gate`, the relay every
+`mcp.json` entry points through: money writes, deletes, rewrites and real
+prunes wait up to 14 minutes for a decision here, then run or fail closed.
+See `docs/adr/0002-approval-gates.md`.
+
+Memory (#315) is the per-profile store behind the app's Memory screen. The
+gateway prefixes confirmed, unpaused items onto each turn; agent-proposed items
+land pending until the user confirms them, and deletion is immediate. The
+`memory` MCP server (routed through `mcp-gate` like the rest) is how the agent
+proposes one, scoped by the `AGENTO_PROFILE` the gateway passes to Pi. See
+`docs/adr/0003-memory.md`.
 
 Runs are the resumable chat-turn surface (#311): one executing turn per profile,
 state in Mongo with a 7-day TTL, and a gateway restart marks stale rows
@@ -365,7 +387,7 @@ compose service; the fifth landed with the cutover.
 |---|---|
 | **Auth** | done. The `pi` service takes `PASSWORD=${PASSWORD:-}`, the same value the Hermes gateway did, so a tab can be repointed without re-entering it. Verified: both a missing and a wrong bearer token answer 401. |
 | **SSH mounts** | done (retired #289 with the side profiles). Same three keypair mounts and the same fail-closed `GIT_SSH_COMMAND` as `gateway`, so story/resumes pushed their repos unchanged while they existed. |
-| **Healthcheck** | done. `curl -fsS http://localhost:8643/healthz` inside the container, with a 60s `start_period` because the entrypoint connects all five MCP servers first. The entrypoint's `pi mcp list` is the connectivity gate; this is the port check on top of it. |
+| **Healthcheck** | done. `curl -fsS http://localhost:8643/healthz` inside the container, with a 60s `start_period` because the entrypoint connects all seven MCP servers first. The entrypoint's `pi mcp list` is the connectivity gate; this is the port check on top of it. |
 | **`depends_on`** | done, in the short list form (`- pi`). The long form is not available on this stack at all: podman-compose builds its dependency graph with `deps = {x: {} for x in deps}`, so any `condition:` value is an unhashable dict and it dies with `TypeError: cannot use 'dict' as a dict key` before reading a service. Verified in both spellings. The short form still means *start pi first* — podman-compose's own `config` output renders it as `condition: service_started` — and ordering is all this needs, because nginx re-resolves `pi` per request. Deliberately **not** gated on pi's *health*: that healthcheck fails whenever its MCP check does, and a proxy held back by it would take health-api's `/api/*` routes down too — health sync has nothing to do with the agent. |
 | **nginx prefix stripping** | done, in the cutover PR. `rewrite ^/p(/.*)$ $1 break;` before `proxy_pass $chat`, and it is load-bearing rather than tidying. Measured against nginx 1.27 with echo upstreams: with the rewrite `/p/chat/v1/chat/completions` arrives as `/chat/v1/chat/completions`; without it the original path arrives unchanged, and pi-gateway reads the first segment `p` as a profile name and 404s. |
 
@@ -494,7 +516,7 @@ comment:
 **Personality survived.** Checked rather than assumed: `git show f6feafc:gateway/SOUL.md`
 — pinned, because the path stops existing once this stack merges — opens "You are
 the Hermes god profile", and `pi/profiles/god/AGENTS.md` opens
-"General operator for Vishnu's money, food and health tracking… Five MCP tool
+"General operator for Vishnu's money, food and health tracking… Six MCP tool
 backends". Same for `Portas-Maintainer` (story) and `Job Bot` (resumes) — the
 Hermes `SOUL.md` files were rewritten as Pi `AGENTS.md` files, role statement
 first, rather than lost. Pi has no `SOUL` concept of its own, and none is needed:
@@ -547,8 +569,8 @@ The subagent is a **separate `pi` process** driven over RPC, not an in-process
 `createAgentSession`. That is not a style preference; the in-process route leaks.
 
 An SDK session does not load the CLI's built-in extensions, so reproducing MCP
-means hand-building a `DefaultResourceLoader`. That does work — 43 MCP tools,
-measured — but the child then owns five MCP server subprocesses that nothing ever
+means hand-building a `DefaultResourceLoader`. That does work — 52 MCP tools,
+measured — but the child then owns seven MCP server subprocesses that nothing ever
 reclaims:
 
 | step | result |
@@ -557,9 +579,9 @@ reclaims:
 | MCP extension closes connections | **only** on `session_shutdown` |
 | `AgentSessionRuntime.dispose()` | does emit it — but does not reproduce the MCP wiring (0 tools) |
 | `session.extensionRunnerRef.current` | **unpopulated** for SDK sessions, so the event cannot be raised by hand |
-| shared loader across children | corrupts MCP: 43 tools → 23, servers dying |
+| shared loader across children | corrupts MCP: the tool set collapses mid-session, servers dying |
 
-Measured cost of the in-process route: **five processes stranded per delegation**,
+Measured cost of the in-process route: **seven MCP server processes stranded per delegation**,
 accumulating for the life of the container. A process is reaped by
 `RpcClient.stop()`, which SIGTERMs the CLI and the CLI closes its own MCP clients on
 the way out — **0 processes left behind**, measured across repeated delegations.
@@ -572,7 +594,7 @@ What the child's flags buy, each structural rather than checked at runtime:
 | flag | why |
 |---|---|
 | `--no-extensions` | the child loads no extension, **including this one**, so `spawn_subagent` does not exist in its world and it cannot recurse. A depth counter is a limit a bug could step past; an absent tool cannot be called. |
-| `-e builtin:mcp -e builtin:codemode -e builtin:tool-search` | `--no-extensions` disables the built-in extensions too, so they are re-enabled by name. Without this the child has no money/cookbook/health/task/project tools and delegation is useless. Measured: 50 tools, 43 of them MCP. |
+| `-e builtin:mcp -e builtin:codemode -e builtin:tool-search` | `--no-extensions` disables the built-in extensions too, so they are re-enabled by name. Without this the child has no money/cookbook/health/task/project tools and delegation is useless. Measured: 59 tools, 52 of them MCP. |
 | `--no-session` | no session file per delegation for the gateway's session store — which has never heard of these conversations — to accumulate. |
 | forwarded `--skill <path>` | read from this process's own `argv`, so per-profile skills reach the child. |
 
@@ -582,7 +604,7 @@ single turn's cost. That figure is folded into the tool result's own `usage`, be
 Pi adds nested result usage to the caller totals — otherwise delegation looks nearly
 free while being one of the most expensive things the agent can do. Stats are fetched
 **best-effort**: a failure there sets `details.usageUnavailable` rather than throwing,
-because discarding an answer the parent already paid six processes for is the worst
+because discarding an answer the parent already paid eight processes for is the worst
 available outcome, and the natural response — retry — pays that cost again.
 
 ### What the tool validates before it spawns anything
@@ -594,7 +616,7 @@ during startup:
 | input | rule | why |
 |---|---|---|
 | `task` | must be non-empty and <= 20k characters | output is truncated on the way back, so input is bounded for symmetry; 20k chars (~5k tokens) is generous, and the error tells the caller to name files rather than paste them |
-| `timeoutSeconds` | must be finite and >= 1s, capped at 900s | a subagent pins six processes for as long as it runs, so a sub-second timeout would pay the full spawn cost to expire immediately; `0` silently becoming the default would hide the mistake |
+| `timeoutSeconds` | must be finite and >= 1s, capped at 900s | a subagent pins eight processes for as long as it runs, so a sub-second timeout would pay the full spawn cost to expire immediately; `0` silently becoming the default would hide the mistake |
 | `thinking` | an explicitly requested level must be one of `off, minimal, low, medium, high, xhigh, max` | Pi **silently accepts an unknown level**, so a typo would leave the child at a depth nobody chose. The **inherited** level is passed through unvalidated on purpose — it came from a working parent, and checking it would mean a new Pi level breaks delegation for every profile using it |
 | `cwd` | must be non-empty, exist, and be a directory; a relative path resolves against this agent's directory | a typo guard, **not** a security boundary — the caller already holds `bash` and full filesystem access. `""` is a typo, not an inheritance request |
 | `model` | trimmed, must name a model, resolved against the parent's registry | the CLI resolves lazily, so an unknown id would otherwise fail on the child's first turn; `undefined` inherits but `""` is a typo, and `provider/` with no model must not reach the registry |
@@ -612,7 +634,7 @@ holding.
 
 | thing | before | after |
 |---|---|---|
-| `client.start()` | unbounded — `timeoutMs` covered only `promptAndWait`, so a child stalling while connecting MCP sat there past `timeoutSeconds` with six processes pinned | raced against the same `timeoutMs` by `within()`, which clears its timer in `.finally`. Losing the race costs nothing but the wait: the caller's `finally` still stops the child |
+| `client.start()` | unbounded — `timeoutMs` covered only `promptAndWait`, so a child stalling while connecting MCP sat there past `timeoutSeconds` with eight processes pinned | raced against the same `timeoutMs` by `within()`, which clears its timer in `.finally`. Losing the race costs nothing but the wait: the caller's `finally` still stops the child |
 | `answerOf` | joined every `text_delta` first and truncated the result, so a runaway child could bloat the parent before the cut | accumulation stops at `2 × MAX_RESULT_CHARS`. The overshoot is deliberate — it leaves `truncate` enough text to report how many characters were actually dropped instead of a made-up number |
 | `cliPath()` | returned `process.argv[1]` as-is; a relative entry passes `existsSync` here and then resolves against the child's cwd | returned absolute. Same bug class as the relative `cwd` and relative `--skill` cases above: verified here, wrong there, no error |
 
@@ -648,7 +670,7 @@ schema already enforces these types, so this is defence for a caller that does n
 
 The `finally` that calls `client.stop()` is the one wait with no budget behind it:
 the startup and prompt deadlines were both inside `timeoutSeconds`, but a child
-stalling while closing its MCP servers would pin all six processes indefinitely,
+stalling while closing its MCP servers would pin all eight processes indefinitely,
 with nothing left waiting on them. `stop()` is therefore raced against its own
 30s ceiling — deliberately outside `MAX_TIMEOUT_MS`, because by then the call has
 already failed or answered and there is no delegation budget left to spend.
@@ -668,7 +690,7 @@ with the real code (`cannot use cwd <path>: EACCES`).
 
 ### One at a time, not in parallel
 
-Each delegation is one `pi` process plus five MCP servers, so parallel calls fan out
+Each delegation is one `pi` process plus seven MCP servers, so parallel calls fan out
 linearly. The tool description says to call them serially rather than shipping a
 semaphore: a hard cap would throttle legitimate parallel work, and Pi already runs a
 tool batch in order by default. This is a prompt-level guard, not an enforced one —

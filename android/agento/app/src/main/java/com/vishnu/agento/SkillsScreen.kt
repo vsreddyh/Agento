@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -102,20 +103,80 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var skillsError by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
+    // Taught skills (#314): user procedures with a draft → test → activate
+    // lifecycle, managed here (the inventory above stays read-only).
+    var taught by remember { mutableStateOf<List<TaughtSkill>>(emptyList()) }
+    // Error/notice/dialog state is keyed by profile like the composer
+    // fields: a switch must not carry the old profile's errors, hints or
+    // open dialog into the new one.
+    var taughtError by remember(profile) { mutableStateOf("") }
+    var managing by remember(profile) { mutableStateOf<TaughtSkill?>(null) }
+    var managingError by remember(profile) { mutableStateOf("") }
+    var composerError by remember(profile) { mutableStateOf("") }
+    // Clip hints are information, not failure: they render in variant, not
+    // error red, so success-with-clip never reads as a failed save.
+    var composerNotice by remember(profile) { mutableStateOf("") }
+    var managingBusy by remember(profile) { mutableStateOf(false) }
+    var manageNotice by remember(profile) { mutableStateOf("") }
+    var testOutput by remember(profile) { mutableStateOf("") }
+    // Keyed by profile: a switch mid-compose starts empty instead of
+    // carrying the old profile's typing into the new one's save.
+    var composing by remember(profile) { mutableStateOf(false) }
+    var newName by remember(profile) { mutableStateOf("") }
+    var newDescription by remember(profile) { mutableStateOf("") }
+    var newBody by remember(profile) { mutableStateOf("") }
     // Cancelled + replaced on every load() so a stale response can't
     // win; only the latest job may clear busy.
     var loadJob by remember { mutableStateOf<Job?>(null) }
+
+    val teachApi = remember { TeachApi(context) }
+    // Hoisted alongside the api: pathFor is pure config, and every
+    // construction builds an OkHttpClient for nothing.
+    val chatApi = remember { ChatApi(context) }
+    val serverApi = remember { ServerApi(context) }
+    // Composer writes track their own busy flag: sharing managingBusy with
+    // the dialog would disable Edit/Activate/Test on every composer save
+    // and vice versa.
+    var composerBusy by remember(profile) { mutableStateOf(false) }
+
+    /** Taught load with the same single-flight + path guard as load(): a
+     * profile switch mid-flight must not land old rows on the new path. */
+    var taughtJob by remember { mutableStateOf<Job?>(null) }
+
+    fun loadTaught(path: String) {
+        // One call carries every row the review surface needs; failures
+        // keep old rows behind the section error, never a wipe.
+        taughtError = ""
+        taughtJob?.cancel()
+        var job: Job? = null
+        job = scope.launch {
+            try {
+                val tr = teachApi.listSkills(path)
+                ensureActive()
+                if (taughtJob == job && path == chatApi.pathFor(profile)) {
+                    taughtError = tr.exceptionOrNull()?.let {
+                        "Taught skills unavailable (${it.message?.take(60) ?: "error"})."
+                    } ?: ""
+                    tr.getOrNull()?.let { taught = it }
+                }
+            } finally {
+                // No busy flag: the section repaints under the main spinner.
+            }
+        }
+        taughtJob = job
+    }
 
     fun load() {
         loadJob?.cancel()
         busy = true
         skillsError = ""
         loaded = false
-        val path = ChatApi(context).pathFor(profile)
+        val path = chatApi.pathFor(profile)
+        loadTaught(path)
         var job: Job? = null
         job = scope.launch {
             try {
-                val sr = ServerApi(context).listSkills(path)
+                val sr = serverApi.listSkills(path)
                 // A cancel landing mid-await must not leave stale state.
                 ensureActive()
                 if (loadJob == job) {
@@ -131,6 +192,54 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         }
         loadJob = job
     }
+
+    /** Runs one taught-skill write, then reloads the section when it
+     * succeeds. The action returns a Result which is folded here: returning
+     * it unfolded would reload silently on failure with no error shown.
+     * Errors name the write, never the body; the dialog stays open with its
+     * context so a failure does not eat the edit. */
+    fun mutate(
+        action: suspend (TeachApi, String) -> Result<*>,
+        onSuccess: () -> Unit = {},
+    ) {
+        val path = chatApi.pathFor(profile)
+        managingBusy = true
+        managingError = ""
+        scope.launch {
+            try {
+                action(teachApi, path).getOrThrow()
+                ensureActive()
+                // Same stale-path rule as loadTaught: a switch mid-write
+                // must not land this profile's success handling on the new
+                // one.
+                if (path != chatApi.pathFor(profile)) return@launch
+                onSuccess()
+                // Fresh path, not the tap-time one: a profile switch
+                // mid-write must reload where the user looks now.
+                loadTaught(chatApi.pathFor(profile))
+            } catch (e: Exception) {
+                // Cancellation is not failure: rethrow before the guard so
+                // a cancelled write never surfaces as an error row.
+                if (e is CancellationException) throw e
+                ensureActive()
+                // Same guard as success: a failed write for the old profile
+                // must not surface on the new one either.
+                if (path == chatApi.pathFor(profile)) {
+                    managingError = e.message?.take(120) ?: "failed"
+                }
+            } finally {
+                // Guarded like every other state write here: a switch
+                // mid-write must not clear the new profile's flag (whose own
+                // write may be in flight behind this finally).
+                if (path == chatApi.pathFor(profile)) managingBusy = false
+            }
+        }
+    }
+
+    /** Successful saves, consumed by the dialog to collapse its editor. */
+    var editSaves by remember(profile) { mutableStateOf(0) }
+    /** Successful schedules: the dialog clears its cron fields on each. */
+    var promoteSaves by remember(profile) { mutableStateOf(0) }
 
     LaunchedEffect(Unit) { load() }
 
@@ -261,8 +370,264 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             HintLine("No skills match this search.")
                         }
                     }
+                    // ── Taught by you (#314) ──
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Taught by you",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = {
+                                composing = !composing
+                                if (composing) {
+                                    composerError = ""
+                                    composerNotice = ""
+                                }
+                            }) {
+                                Text(if (composing) "Cancel" else "New")
+                            }
+                        }
+                    }
+                    if (taughtError.isNotBlank()) {
+                        item {
+                            ErrorCard(raw = taughtError, onRetry = {
+                                loadTaught(chatApi.pathFor(profile))
+                            })
+                        }
+                    }
+                    if (composing) {
+                        item {
+                            OutlinedTextField(
+                                value = newName,
+                                onValueChange = { newName = it },
+                                label = { Text("Name (lowercase, hyphens)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        item {
+                            OutlinedTextField(
+                                value = newDescription,
+                                onValueChange = { newDescription = it },
+                                label = { Text("Description") },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        item {
+                            OutlinedTextField(
+                                value = newBody,
+                                onValueChange = { newBody = it },
+                                label = { Text("Procedure") },
+                                minLines = 3,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        val n = newName.trim()
+                                        val d = newDescription.trim()
+                                        val b = newBody.trim()
+                                        composerBusy = true
+                                        composerError = ""
+                                        composerNotice = ""
+                                        val tapPath = chatApi.pathFor(profile)
+                                        scope.launch {
+                                            try {
+                                                val (_, clipped) = teachApi.createDraft(tapPath, n, d, b, source = "skills-screen").getOrThrow()
+                                                ensureActive()
+                                                // Same guard as the catch below: a switch
+                                                // mid-save must not clear the new
+                                                // profile's composer for the old
+                                                // profile's draft.
+                                                if (tapPath != chatApi.pathFor(profile)) return@launch
+                                                // Fields always clear: keeping them invites
+                                                // a second tap duplicating the draft.
+                                                // The clip hint lives outside the
+                                                // composer gate below, so closing
+                                                // never hides it.
+                                                newName = ""
+                                                newDescription = ""
+                                                newBody = ""
+                                                composing = false
+                                                if (clipped) {
+                                                    composerNotice = "Saved, but the text clipped at the length cap."
+                                                }
+                                                loadTaught(chatApi.pathFor(profile))
+                                            } catch (e: Exception) {
+                                                if (e is CancellationException) throw e
+                                                ensureActive()
+                                                // Same guard as mutate: a failed save for
+                                                // the old profile must not surface on
+                                                // the new one.
+                                                if (tapPath == chatApi.pathFor(profile)) {
+                                                    composerError = e.message?.take(120) ?: "failed"
+                                                }
+                                            } finally {
+                                                composerBusy = false
+                                            }
+                                        }
+                                    },
+                                    // All three: the server requires name,
+                                    // description and body, so enabling on a
+                                    // subset would only earn a 400.
+                                    enabled = !composerBusy && newName.trim().isNotBlank() &&
+                                        newDescription.trim().isNotBlank() && newBody.trim().isNotBlank(),
+                                ) {
+                                    Text(if (composerBusy) "Saving…" else "Save draft")
+                                }
+                            }
+                        }
+                    }
+                    // Outside the composer gate: hints and failures must
+                    // survive the composer closing, or success hides its own
+                    // notice.
+                    // Two gated items, never one merged line: an error and
+                    // a hint are different states, and concatenating them
+                    // would render success-with-clip as failure.
+                    if (composerError.isNotBlank()) {
+                        item {
+                            Text(
+                                composerError,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    if (composerNotice.isNotBlank()) {
+                        item {
+                            Text(
+                                composerNotice,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    if (taught.isEmpty() && taughtError.isBlank()) {
+                        item {
+                            HintLine("Nothing taught yet — save a thread from chat, or write one here.")
+                        }
+                    }
+                    items(taught, key = { "t:" + it.id }) { t ->
+                        Card(
+                            onClick = {
+                                managing = t
+                                managingError = ""
+                                manageNotice = ""
+                                testOutput = ""
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(t.name.ifBlank { "?" }, style = MaterialTheme.typography.bodyLarge)
+                                    if (t.description.isNotBlank()) {
+                                        Text(
+                                            t.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                                Text(
+                                    t.status.ifBlank { "?" } + if (t.isTested()) "" else " · untested",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (t.isActive()) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+    // The open row re-resolves by id on every recomposition: reloads land
+    // new objects, and the dialog must show the fresh status/body, not the
+    // tapped snapshot.
+    // No fallback snapshot: when the id vanishes from a reload (deleted
+    // elsewhere), the dialog closes instead of showing a dead row. A null
+    // managing already means closed everywhere else.
+    val open = managing?.let { m -> taught.firstOrNull { it.id == m.id } }
+    LaunchedEffect(open) {
+        if (managing != null && open == null) managing = null
+    }
+    if (open != null) {
+        TeachDialog(
+            skill = open,
+            editSaves = editSaves,
+            promoteSaves = promoteSaves,
+            testOutput = testOutput,
+            acting = managingBusy,
+            error = managingError,
+            notice = manageNotice,
+            onSaveEdit = { name, description, body ->
+                var clipped = false
+                mutate(
+                    action = { api, path ->
+                        api.updateSkill(path, open.id, name = name, description = description, body = body)
+                            .onSuccess { clipped = it.second }
+                    },
+                    onSuccess = {
+                        editSaves++
+                        testOutput = ""
+                        manageNotice =
+                            if (clipped) "Saved, but the text clipped at the length cap."
+                            else ""
+                    },
+                )
+            },
+            onTest = { input ->
+                testOutput = ""
+                mutate(action = { api, path ->
+                    // Blank output is a ran-empty signal, not a not-run one:
+                    // without the marker the two are indistinguishable.
+                    api.testSkill(path, open.id, input).onSuccess {
+                        testOutput = it.ifBlank { "(no output)" }
+                    }
+                })
+            },
+            onActivate = {
+                mutate(
+                    action = { api, path -> api.activateSkill(path, open.id) },
+                    onSuccess = { testOutput = "" },
+                )
+            },
+            onDisable = {
+                mutate(
+                    action = { api, path -> api.disableSkill(path, open.id) },
+                    onSuccess = { testOutput = "" },
+                )
+            },
+            onPromote = { schedule, name ->
+                mutate(
+                    action = { api, path -> api.promoteSkill(path, open.id, schedule, name) },
+                    onSuccess = { testOutput = ""; promoteSaves++ },
+                )
+            },
+            onDelete = {
+                // Close only on success: mutate's onSuccess runs after the
+                // write lands, so a failure keeps the dialog with its error.
+                val id = open.id
+                mutate(
+                    action = { api, path -> api.deleteSkill(path, id) },
+                    onSuccess = { managing = null; testOutput = "" },
+                )
+            },
+            onClose = { managing = null },
+        )
     }
 }

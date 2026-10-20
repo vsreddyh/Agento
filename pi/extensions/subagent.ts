@@ -11,11 +11,11 @@
  *
  *  - An SDK session (`createAgentSession`) does not load the CLI's built-in
  *    extensions, so reproducing MCP means building a `DefaultResourceLoader` by hand.
- *    That works — 43 MCP tools, verified — but the child then owns five MCP server
+ *    That works — 52 MCP tools, verified — but the child then owns seven MCP server
  *    subprocesses that nothing ever reclaims. `AgentSession.dispose()` does not emit
  *    `session_shutdown`, which is the only event the MCP extension closes its
  *    connections on, and `AgentSessionRuntime.dispose()` (which does emit it) does not
- *    reproduce the MCP wiring. Measured: every delegation stranded five processes,
+ *    reproduce the MCP wiring. Measured: every delegation stranded seven MCP server processes,
  *    accumulating for the life of the container.
  *  - A process is reaped by `RpcClient.stop()`, which SIGTERMs the CLI; the CLI closes
  *    its own MCP clients on the way out. Measured: zero processes left behind, across
@@ -76,7 +76,7 @@ const MAX_RESULT_CHARS = 8000;
 /**
  * Fail if `work` has not settled within `ms`.
  *
- * Startup is bounded for the same reason the prompt is: six processes are pinned from
+ * Startup is bounded for the same reason the prompt is: eight processes are pinned from
  * the moment `start()` is called, and a child that stalls while connecting MCP would
  * otherwise sit there well past `timeoutSeconds` with nothing waiting on it. The
  * caller still tears the child down in its `finally`, so losing the race costs
@@ -97,7 +97,7 @@ function within<T>(ms: number, what: string, work: Promise<T>): Promise<T> {
  * What is left of the delegation's budget.
  *
  * Startup and the prompt share one ceiling rather than each getting the full
- * `timeoutMs`: the ceiling exists to bound how long six processes stay pinned, and
+ * `timeoutMs`: the ceiling exists to bound how long eight processes stay pinned, and
  * two phases each granted the whole number would let one call hold them for twice
  * the time the caller asked to be capped at.
  */
@@ -126,7 +126,7 @@ const MAX_TASK_CHARS = 20_000;
 /**
  * Hard ceiling on a delegation, which is also the default.
  *
- * A subagent pins six processes (one CLI plus five MCP servers) for as long as it
+ * A subagent pins eight processes (one CLI plus seven MCP servers) for as long as it
  * runs, so the upper bound is a resource decision, not a preference. It is
  * deliberately one-sided: `timeoutSeconds` can only *shorten* a delegation, never
  * extend it past the ceiling. Work that cannot finish inside it should be split
@@ -139,7 +139,7 @@ const MAX_TIMEOUT_MS = 900_000;
  *
  * `stop()` runs in a `finally` after the call has already failed or answered, so
  * there is no budget left to spend and nothing left waiting on it. Without its own
- * bound, a child stalling while closing its MCP servers would hold all six processes
+ * bound, a child stalling while closing its MCP servers would hold all eight processes
  * indefinitely — the one leak this file is written to prevent.
  */
 const TEARDOWN_TIMEOUT_MS = 30_000;
@@ -245,7 +245,7 @@ function unrecognised(events: readonly SessionEvent[]): string {
  *
  * Rejected rather than clamped at the low end: `0` and negatives are nonsense, and
  * silently turning `0` into the 15-minute default hides the mistake. The floor is 1s
- * because anything below that still pays the full cost — a process and five MCP
+ * because anything below that still pays the full cost — a process and seven MCP
  * servers — to time out almost immediately.
  */
 function resolveTimeout(seconds: number | undefined): number {
@@ -335,7 +335,7 @@ function resolveCwd(requested: unknown, base: string): string {
 /**
  * Reject a task with nothing in it.
  *
- * An empty prompt would otherwise start a process, connect five MCP servers, and
+ * An empty prompt would otherwise start a process, connect seven MCP servers, and
  * then return nothing — the most expensive way to do nothing.
  *
  * Takes `unknown` deliberately: `task` is required in the schema, but depending on
@@ -538,7 +538,7 @@ const spawnSubagent = defineTool({
 		"hypothesis end to end. Do not use it to split a task whose steps depend on " +
 		"each other, and do not use it to avoid work you can simply do: every call " +
 		"starts a second agent, which costs real tokens. A subagent cannot spawn " +
-		"another. Call these one at a time — each one holds a pi process and five " +
+		"another. Call these one at a time — each one holds a pi process and seven " +
 		"MCP servers for as long as it runs, so several at once multiplies both.",
 	parameters: Type.Object({
 		task: Type.String({
@@ -587,6 +587,12 @@ const spawnSubagent = defineTool({
 		const timeoutMs = resolveTimeout(params.timeoutSeconds);
 		const thinking = resolveThinking(params.thinking, ctx.thinkingLevel);
 
+		// No explicit env: the child inherits process.env, including the
+		// AGENTO_PROFILE the gateway sets on the Pi child. The memory MCP
+		// server scopes save_memory by that variable, so subagent saves land
+		// in this profile. If a future Pi version sanitises the child env,
+		// subagent saves would silently fall back to the default profile —
+		// pass AGENTO_PROFILE explicitly then.
 		const client = new RpcClient({
 			cliPath: cliPath(),
 			cwd,
@@ -663,7 +669,7 @@ const spawnSubagent = defineTool({
 			//
 			// The answer is the deliverable; the stats are metadata on it. Fetching
 			// them after the run means a failure here would throw away work the parent
-			// has already paid six processes for, and the natural response — retry —
+			// has already paid eight processes for, and the natural response — retry —
 			// would pay that cost again. So a failure is recorded, not raised.
 			let stats: Awaited<ReturnType<typeof client.getSessionStats>> | undefined;
 			try {
@@ -700,7 +706,7 @@ const spawnSubagent = defineTool({
 			//
 			// Bounded, because teardown is the one wait with no budget behind it: the
 			// startup and prompt deadlines were both inside `timeoutMs`, but a child
-			// stalling while closing its MCP servers would otherwise pin all six
+			// stalling while closing its MCP servers would otherwise pin all eight
 			// processes indefinitely, with nothing left waiting on them. Thirty
 			// seconds is far longer than teardown has ever taken and far shorter than
 			// the ceiling.
