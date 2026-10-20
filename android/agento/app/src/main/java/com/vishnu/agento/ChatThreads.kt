@@ -67,17 +67,22 @@ object ChatThreads {
 
     fun newId(): String = java.util.UUID.randomUUID().toString()
 
-    /** Title from the first user message, truncated; falls back to date. */
+    /** Title from the first user message carrying text, truncated; falls
+     * back to the photo name when no user turn has words, to date when the
+     * thread has no user turns at all. */
     fun titleFor(messages: List<ChatMessage>): String {
-        val firstMsg = messages.firstOrNull { it.role == "user" }
-        val first = firstMsg?.content?.trim().orEmpty()
-        val photos = firstMsg?.attachments?.size ?: 0
-        if (first.isEmpty()) {
-            // An image-only opener has no words to title from: name the
-            // photos rather than leaving "New conversation" on a real chat.
-            if (photos > 0) return if (photos == 1) "Photo" else "$photos photos"
+        val userTurns = messages.filter { it.role == "user" }
+        val textMsg = userTurns.firstOrNull { it.content.isNotBlank() }
+        if (textMsg == null) {
+            // An image-only thread has no words to title from: name the
+            // opener's photos rather than leaving "New conversation" on a
+            // real chat.
+            val n = userTurns.firstOrNull()?.attachments?.size ?: 0
+            if (n > 0) return if (n == 1) "Photo" else "$n photos"
             return "New conversation"
         }
+        val first = textMsg.content.trim()
+        val photos = textMsg.attachments.size
         val oneLine = first.replace(titleWhitespace, " ")
         // Photo signal with the budget kept (#339): the marker reserves
         // its width first, so the row never exceeds 42 chars.

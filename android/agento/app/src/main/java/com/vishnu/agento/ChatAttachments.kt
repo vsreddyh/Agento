@@ -98,7 +98,10 @@ fun attachmentMarker(n: Int): String =
  * Text plus its photo marker, one spelling (#339): the wire history,
  * search haystack, and Markdown export all render photo turns this way,
  * so the next edit cannot fix two and miss one. Empty text yields the
- * bare marker; zero photos yields the text untouched.
+ * bare marker; zero photos yields the text untouched. The trim is
+ * display-intended: these three surfaces are reads, while the live
+ * last-turn wire part sends content raw (leading indentation of pasted
+ * code must survive there).
  */
 fun contentWithMarker(content: String, n: Int): String =
     if (n <= 0) content else (content.trim() + " " + attachmentMarker(n)).trim()

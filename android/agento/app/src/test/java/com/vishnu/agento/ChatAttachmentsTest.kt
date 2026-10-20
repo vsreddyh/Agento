@@ -61,6 +61,16 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun dataUriPinIgnoresStoredMime() {
+        // Fail-closed pin: a hand-edited thread file claiming image/png
+        // must still wire as image/jpeg (every payload is pick-time JPEG).
+        assertEquals(
+            "data:image/jpeg;base64,AAA=",
+            ChatAttachment(mimeType = "image/png", base64 = "AAA=").dataUri(),
+        )
+    }
+
+    @Test
     fun noAttachmentsIsBareString() {
         assertEquals("hi", messageContentJson("user", "hi", emptyList(), includeImages = true))
     }
@@ -172,6 +182,22 @@ class ChatAttachmentsTest {
             "2 photos",
             ChatThreads.titleFor(
                 listOf(ChatMessage("user", "  ", 0L, attachments = listOf(attachment(), attachment()))),
+            ),
+        )
+    }
+
+    @Test
+    fun photoOpenerWithLaterTextTitlesFromText() {
+        // The opener's photos lose the title to real words (#339): the
+        // switcher row understated text threads as "Photo" before this.
+        assertEquals(
+            "hello",
+            ChatThreads.titleFor(
+                listOf(
+                    ChatMessage("user", "", 0L, attachments = listOf(attachment())),
+                    ChatMessage("assistant", "hi", 1L),
+                    ChatMessage("user", "hello", 2L),
+                ),
             ),
         )
     }

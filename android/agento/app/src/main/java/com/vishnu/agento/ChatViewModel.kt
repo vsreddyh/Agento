@@ -847,8 +847,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * until the new turn's Done replaces it (doSend rebuilds from history).
      */
     fun retry() {
-        if (_state.value.streaming || !_state.value.ready) return
+        // Narrated before the guard (#339): the affordances are disabled
+        // while streaming/loading, but a gated tap with staged photos must
+        // still say the photos stay — never dead-tap.
         noteParkedPhotos("Retried")
+        if (_state.value.streaming || !_state.value.ready) return
         // messageHasContent, not content.isNotBlank (#318): an image-only
         // turn's text is blank and must still resend with its photos.
         val history = stripTrailingFragmentForResend(_state.value.messages)
@@ -1607,8 +1610,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Regenerates the last reply (#122, v1 replace semantics): drops the
      * trailing assistant message and resends the remaining history. */
     fun regenerate() {
-        if (_state.value.streaming || !_state.value.ready) return
+        // Same narrate-before-guard as retry() (#339).
         noteParkedPhotos("Regenerated")
+        if (_state.value.streaming || !_state.value.ready) return
         // Same image-only rule as retry() (#318).
         val msgs = _state.value.messages.filter { messageHasContent(it) }
         if (msgs.none { it.role == "user" }) return
@@ -1628,8 +1632,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * and sends (the stateless loop resends full history, so continuation
      * is a fresh turn — never presented as server-side resumption). */
     fun continueTurn() {
-        if (_state.value.streaming || !_state.value.ready) return
+        // Same narrate-before-guard as retry() (#339).
         noteParkedPhotos("Continued")
+        if (_state.value.streaming || !_state.value.ready) return
         val msgs = _state.value.messages
         val last = msgs.lastOrNull()
         if (last?.role != "assistant" || !last.interrupted) return

@@ -92,6 +92,7 @@ import com.mikepenz.markdown.m3.Markdown
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.collect
@@ -141,8 +142,18 @@ private fun AttachmentThumb(
         Triple("s$slot", base64.length, base64.take(64) + base64.takeLast(64))
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { decodeThumbnail(base64) }.getOrNull()
+        // Explicit try/catch, not runCatching (#339): runCatching would
+        // swallow the producer's own CancellationException into a null
+        // placeholder — the same cancel-masking fixed inside
+        // decodeThumbnail must not be reintroduced at its call site.
+        value = try {
+            withContext(Dispatchers.IO) {
+                decodeThumbnail(base64)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
         }
     }
     // Local, not the delegate (#339): smart cast is impossible on a
