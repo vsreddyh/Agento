@@ -27,13 +27,16 @@ class TeachApiTest {
         val skill = parseTaughtSkill(o)!!
         assertEquals("s1", skill.id)
         assertEquals("weekly", skill.name)
-        val described = parseTaughtSkill(
-            JSONObject("""{"id":"x","description":"Send it via prompt."}"""),
-        )!!
-        assertEquals("Send it via prompt.", described.description)
         assertTrue(skill.isDraft())
         assertFalse(skill.isActive())
         assertFalse(skill.isTested())
+    }
+
+    @Test
+    fun `parseTaughtSkill reads description`() {
+        val o = JSONObject("""{"id":"x","description":"Send it via prompt."}""")
+        val described = parseTaughtSkill(o)!!
+        assertEquals("Send it via prompt.", described.description)
     }
 
     @Test

@@ -446,7 +446,12 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                                 loadTaught(chatApi.pathFor(profile))
                                             } catch (e: Exception) {
                                                 ensureActive()
-                                                composerError = e.message?.take(120) ?: "failed"
+                                                // Same guard as mutate: a failed save for
+                                                // the old profile must not surface on
+                                                // the new one.
+                                                if (path == chatApi.pathFor(profile)) {
+                                                    composerError = e.message?.take(120) ?: "failed"
+                                                }
                                             } finally {
                                                 composerBusy = false
                                             }

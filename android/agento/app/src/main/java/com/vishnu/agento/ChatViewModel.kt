@@ -533,6 +533,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
+            // Rechecked, not captured: a profile switch mid-save must not
+            // write the old profile's draft, it just answers done.
+            if (path != api.pathFor(tab)) {
+                withContext(Dispatchers.Main) { done(null, false) }
+                return@launch
+            }
             // Source links the draft to its thread: the review surface
             // shows where the procedure came from.
             val result = teachApi.createDraft(path, name.trim(), description.trim(), body, source = "thread:$id")
