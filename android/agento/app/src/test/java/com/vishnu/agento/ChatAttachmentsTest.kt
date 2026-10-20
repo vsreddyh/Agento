@@ -209,10 +209,10 @@ class ChatAttachmentsTest {
 
     @Test
     fun photoOpenerWithLaterTextTitlesFromText() {
-        // The opener's photos lose the title to real words (#339): the
-        // switcher row understated text threads as "Photo" before this.
+        // The opener's photos lose the title to real words, but the suffix
+        // still signals the thread holds photos (#339: max-of scan).
         assertEquals(
-            "hello",
+            "hello [photo]",
             ChatThreads.titleFor(
                 listOf(
                     ChatMessage("user", "", 0L, attachments = listOf(attachment())),
