@@ -796,11 +796,12 @@ internal fun ChatScreen(
     // Monotonic cue-key counter (#317):
     // plain holder, not state — only the milestone effect touches it, so
     // publishing would recompose the whole screen once per cue for
-    // bookkeeping the toggle() key needs. Never resets within one activity
-    // lifetime: toggle() needs a key no still-playing cue holds, and a
-    // reset could collide with one. (Rotation drops remember(tab), which is
-    // safe because onDispose stops TTS — no cue survives to collide.)
-    val cueKeys = remember(tab) { CueKeys() }
+    // bookkeeping the toggle() key needs. Global, not per-tab: TTS is
+    // hoisted at activity level, so per-tab counters restarting at 0 would
+    // collide — toggle() on a live key stops instead of speaking. Never
+    // resets within the activity lifetime (rotation drops it, which is safe
+    // because onDispose stops TTS — no cue survives to collide).
+    val cueKeys = remember { CueKeys() }
     // Detector bookkeeping (#317):
     // plain holder, not state — only the driver effect writes it in the
     // steady state, and the effect keys drive restarts. Declared up here
@@ -853,6 +854,15 @@ internal fun ChatScreen(
     DisposableEffect(tab) {
         onDispose {
             interrupt.stop(); liveRec.destroy(); tts.stop()
+            // Same reset discipline as endLive (#317): the stopped recorder
+            // must not leave the holder claiming "running" (else no restart
+            // on return), a stale barge claim must not reroute the next
+            // stream end, and the bumped generation retires in-flight
+            // detector triggers so none leak into the other tab.
+            detectCtl.running = false
+            detectCtl.phase = -1
+            bargeCancel = false
+            liveGen.incrementAndGet()
             // #107: leaving the tab ends the session silently. A rotation
             // recreates the activity (isChangingConfigurations) and keeps
             // the "ended on rotation" notice; a plain tab switch clears it
