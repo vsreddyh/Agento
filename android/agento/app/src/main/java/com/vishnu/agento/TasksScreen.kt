@@ -39,15 +39,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 /** Fixed task statuses (#55). Order here is the default sort order:
- * Ongoing → Paused → Todo → Done. */
-internal val TASK_STATUSES = listOf("Ongoing", "Paused", "Todo", "Done")
+ * Ongoing → Testing → Blocked → Paused → Todo → Done. */
+internal val TASK_STATUSES = listOf("Ongoing", "Testing", "Blocked", "Paused", "Todo", "Done")
 
 internal fun taskRank(status: String): Int =
-    TASK_STATUSES.indexOf(status).let { if (it < 0) 2 else it }
+    TASK_STATUSES.indexOf(status).let { if (it < 0) TASK_STATUSES.indexOf("Todo") else it }
 
 /** Maps legacy free-text statuses onto the fixed set (#55). */
 internal fun normalizeStatus(raw: String): String = when (raw.trim().lowercase(Locale.ROOT)) {
     "doing", "ongoing", "in progress", "in_progress" -> "Ongoing"
+    "testing", "test", "tests", "qa", "in testing" -> "Testing"
+    "blocked", "block", "stuck", "on hold" -> "Blocked"
     "paused", "pause", "pasued" -> "Paused"
     "done", "complete", "completed" -> "Done"
     else -> "Todo"
@@ -111,7 +113,9 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     fun cycleStatus(t: ServerProject): String {
         val next = when (normalizeStatus(t.status)) {
             "Todo" -> "Ongoing"
-            "Ongoing" -> "Paused"
+            "Ongoing" -> "Testing"
+            "Testing" -> "Blocked"
+            "Blocked" -> "Paused"
             "Paused" -> "Done"
             else -> "Todo"
         }

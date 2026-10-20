@@ -1,7 +1,7 @@
 // Package projects: MongoDB-backed project board for the agent.
 //
 // Collection: projects. One doc per project with name, status (Todo |
-// Ongoing | Paused | Done), note, createdAt, updatedAt. Projects are
+// Ongoing | Testing | Blocked | Paused | Done), note, createdAt, updatedAt. Projects are
 // permanent (no TTL, no retention pruning) and shared with the app's
 // Projects tab over /api/projects (see cmd/health-api/main.go) and the
 // project-manager MCP server (see cmd/project-manager/main.go).
@@ -32,7 +32,7 @@ const (
 )
 
 // Statuses is the fixed project lifecycle (same set as the app board).
-var Statuses = []string{"Todo", "Ongoing", "Paused", "Done"}
+var Statuses = []string{"Todo", "Ongoing", "Testing", "Blocked", "Paused", "Done"}
 
 // StoreError is the domain error: servers catch it and return {ok: false, error}.
 type StoreError struct{ Msg string }
@@ -89,7 +89,7 @@ func CheckStatus(raw string) (string, error) {
 			return s, nil
 		}
 	}
-	return "", fail("status must be Todo|Ongoing|Paused|Done, got '%s'", raw)
+	return "", fail("status must be Todo|Ongoing|Testing|Blocked|Paused|Done, got '%s'", raw)
 }
 
 func toDoc(doc bson.M) map[string]any {
@@ -209,7 +209,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	if v, ok := fields["status"]; ok {
 		st, ok := v.(string)
 		if !ok {
-			return nil, fail("status must be Todo|Ongoing|Paused|Done")
+			return nil, fail("status must be Todo|Ongoing|Testing|Blocked|Paused|Done")
 		}
 		st, err := CheckStatus(st)
 		if err != nil {
