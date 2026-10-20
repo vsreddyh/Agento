@@ -164,6 +164,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private val runsApi = RunsApi(app)
     private val approvalsApi = ApprovalsApi(app)
     private val memoryApi = MemoryApi(app)
+    private val teachApi = TeachApi(app)
     private val serverApi = ServerApi(app)
     private val appCtx: Application = app
 
@@ -498,6 +499,29 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 updatedAt = it.updatedAt,
                 count = it.messages.size,
             )
+        }
+    }
+
+    /** Saves a thread's transcript as a skill draft for review in Skills.
+     * Nothing runs from it: drafts are inert until reviewed, tested and
+     * activated. [done] receives null on success or a code-only error. */
+    fun saveThreadAsSkill(id: String, name: String, description: String, done: (String?) -> Unit) {
+        val body = exportMarkdown(id)
+        if (body.isBlank()) {
+            done("Conversation is empty.")
+            return
+        }
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = teachApi.createDraft(path, name.trim(), description.trim(), body)
+            withContext(Dispatchers.Main) {
+                if (_state.value.path != path) return@withContext
+                done(
+                    if (result.isSuccess) null
+                    else "Couldn't save draft" +
+                        (ApprovalsApi.httpCode(result.exceptionOrNull()?.message)?.let { " (HTTP $it)" } ?: "") + ".",
+                )
+            }
         }
     }
 

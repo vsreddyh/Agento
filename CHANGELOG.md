@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.9.0]
+- **Teach the agent: save procedures as skills** (#314). Any conversation
+  can become a draft skill from its menu ("Save as skill") — the transcript
+  lands in the **Skills** tab's "Taught by you" section for review. Edit the
+  procedure, run a **test** to see the transcript, then **activate** it (the
+  server refuses untested activations) so the model loads it from the next
+  start. **Schedule** turns a tested skill into a cron routine carrying a
+  copy of the reviewed text, with the scheduler's run history and pause. The
+  Skills inventory also marks taught rows, and drafts never steer a turn.
+
 ## [5.8.0]
 - **Per-profile memory: the agent remembers what you tell it** (#315). The
   agent can save a durable fact — a preference, a format rule, a correction

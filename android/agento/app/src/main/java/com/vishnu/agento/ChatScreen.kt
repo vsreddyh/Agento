@@ -134,6 +134,9 @@ internal fun ChatTab(
     }
     var showModel by remember { mutableStateOf(false) }
     var showThreads by remember { mutableStateOf(false) }
+    // Thread id awaiting skill naming (#314): the dialog collects a name +
+    // description, then the transcript becomes a draft for review in Skills.
+    var savingSkillId by remember { mutableStateOf<String?>(null) }
     val toasts = remember(scope) { ToastCenter(scope) }
     // #64: never show raw "not set" — the header shows the model name when
     // configured and a setup prompt otherwise.
@@ -181,6 +184,7 @@ internal fun ChatTab(
                 vm.deleteThread(it)
                 toasts.toast("Conversation deleted.", ToastKind.Success)
             },
+            onSaveSkill = { savingSkillId = it },
             onExport = { id ->
                 val text = vm.exportMarkdown(id)
                 if (text.isNotEmpty()) {
@@ -201,6 +205,71 @@ internal fun ChatTab(
             onChanged = { vm.refreshConfig(); onConfigChanged() },
             onClose = { showModel = false })
     }
+    val savingId = savingSkillId
+    if (savingId != null) {
+        var skillName by remember(savingId) { mutableStateOf("") }
+        var skillDescription by remember(savingId) { mutableStateOf("") }
+        var saving by remember(savingId) { mutableStateOf(false) }
+        var saveError by remember(savingId) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { savingSkillId = null },
+            title = { Text("Save as skill") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "The transcript becomes a draft for review in Skills — " +
+                            "nothing runs until you review, test and activate it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (saveError.isNotBlank()) {
+                        Text(
+                            saveError,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        )
+                    }
+                    OutlinedTextField(
+                        value = skillName,
+                        onValueChange = { skillName = it },
+                        label = { Text("Name (lowercase, hyphens)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                    OutlinedTextField(
+                        value = skillDescription,
+                        onValueChange = { skillDescription = it },
+                        label = { Text("Description") },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        saving = true
+                        saveError = ""
+                        vm.saveThreadAsSkill(savingId, skillName, skillDescription) { err ->
+                            saving = false
+                            if (err == null) {
+                                savingSkillId = null
+                                toasts.toast("Draft saved — review it in Skills.", ToastKind.Success)
+                            } else {
+                                saveError = err
+                            }
+                        }
+                    },
+                    enabled = !saving && skillName.isNotBlank() && skillDescription.isNotBlank(),
+                ) {
+                    Text(if (saving) "Saving…" else "Save draft")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { savingSkillId = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 /** Conversation switcher: search, jump, rename, delete, export. */
@@ -216,6 +285,7 @@ internal fun ThreadSheet(
     onRename: (String, String) -> Unit,
     onDelete: (String) -> Unit,
     onExport: (String) -> Unit,
+    onSaveSkill: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
@@ -293,6 +363,10 @@ internal fun ThreadSheet(
                                         DropdownMenuItem(
                                             text = { Text("Share / export") },
                                             onClick = { menu = false; onExport(t.id) },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Save as skill") },
+                                            onClick = { menu = false; onSaveSkill(t.id) },
                                         )
                                         DropdownMenuItem(
                                             text = { Text("Delete") },

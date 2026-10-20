@@ -102,9 +102,34 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var skillsError by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
+    // Taught skills (#314): user procedures with a draft → test → activate
+    // lifecycle, managed here (the inventory above stays read-only).
+    var taught by remember { mutableStateOf<List<TaughtSkill>>(emptyList()) }
+    var taughtError by remember { mutableStateOf("") }
+    var managing by remember { mutableStateOf<TaughtSkill?>(null) }
+    var managingError by remember { mutableStateOf("") }
+    var managingBusy by remember { mutableStateOf(false) }
+    var testOutput by remember { mutableStateOf("") }
+    var composing by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+    var newDescription by remember { mutableStateOf("") }
+    var newBody by remember { mutableStateOf("") }
     // Cancelled + replaced on every load() so a stale response can't
     // win; only the latest job may clear busy.
     var loadJob by remember { mutableStateOf<Job?>(null) }
+
+    fun loadTaught(path: String) {
+        // One call carries every row the review surface needs; failures
+        // keep old rows behind the section error, never a wipe.
+        taughtError = ""
+        scope.launch {
+            val tr = TeachApi(context).listSkills(path)
+            taughtError = tr.exceptionOrNull()?.let {
+                "Taught skills unavailable (${it.message?.take(60) ?: "error"})."
+            } ?: ""
+            tr.getOrNull()?.let { taught = it }
+        }
+    }
 
     fun load() {
         loadJob?.cancel()
@@ -112,6 +137,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         skillsError = ""
         loaded = false
         val path = ChatApi(context).pathFor(profile)
+        loadTaught(path)
         var job: Job? = null
         job = scope.launch {
             try {
@@ -130,6 +156,27 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             }
         }
         loadJob = job
+    }
+
+    /** Runs one taught-skill write, then reloads the section when it
+     * succeeds. Errors name the write, never the body; the dialog stays
+     * open with its context so a failure does not eat the edit. */
+    fun mutate(action: suspend (TeachApi, String) -> Any?) {
+        val path = ChatApi(context).pathFor(profile)
+        managingBusy = true
+        managingError = ""
+        scope.launch {
+            try {
+                action(TeachApi(context), path)
+                ensureActive()
+                loadTaught(path)
+            } catch (e: Exception) {
+                ensureActive()
+                managingError = e.message?.take(120) ?: "failed"
+            } finally {
+                managingBusy = false
+            }
+        }
     }
 
     LaunchedEffect(Unit) { load() }
@@ -261,8 +308,182 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             HintLine("No skills match this search.")
                         }
                     }
+                    // ── Taught by you (#314) ──
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Taught by you",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { composing = !composing }) {
+                                Text(if (composing) "Cancel" else "New")
+                            }
+                        }
+                    }
+                    if (taughtError.isNotBlank()) {
+                        item {
+                            ErrorCard(raw = taughtError, onRetry = {
+                                loadTaught(ChatApi(context).pathFor(profile))
+                            })
+                        }
+                    }
+                    if (composing) {
+                        item {
+                            OutlinedTextField(
+                                value = newName,
+                                onValueChange = { newName = it },
+                                label = { Text("Name (lowercase, hyphens)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        item {
+                            OutlinedTextField(
+                                value = newDescription,
+                                onValueChange = { newDescription = it },
+                                label = { Text("Description") },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        item {
+                            OutlinedTextField(
+                                value = newBody,
+                                onValueChange = { newBody = it },
+                                label = { Text("Procedure") },
+                                minLines = 3,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        val n = newName
+                                        val d = newDescription
+                                        val b = newBody
+                                        managingBusy = true
+                                        managingError = ""
+                                        scope.launch {
+                                            try {
+                                                val api = TeachApi(context)
+                                                val path = ChatApi(context).pathFor(profile)
+                                                api.createDraft(path, n.trim(), d.trim(), b.trim())
+                                                ensureActive()
+                                                newName = ""
+                                                newDescription = ""
+                                                newBody = ""
+                                                composing = false
+                                                loadTaught(path)
+                                            } catch (e: Exception) {
+                                                ensureActive()
+                                                managingError = e.message?.take(120) ?: "failed"
+                                            } finally {
+                                                managingBusy = false
+                                            }
+                                        }
+                                    },
+                                    enabled = !managingBusy && newName.isNotBlank() && newBody.isNotBlank(),
+                                ) {
+                                    Text(if (managingBusy) "Saving…" else "Save draft")
+                                }
+                            }
+                        }
+                        if (managingError.isNotBlank() && managing == null) {
+                            item {
+                                Text(
+                                    managingError,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                    }
+                    if (taught.isEmpty() && taughtError.isBlank()) {
+                        item {
+                            HintLine("Nothing taught yet — save a thread from chat, or write one here.")
+                        }
+                    }
+                    items(taught, key = { "t:" + it.id }) { t ->
+                        Card(
+                            onClick = {
+                                managing = t
+                                managingError = ""
+                                testOutput = ""
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(t.name.ifBlank { "?" }, style = MaterialTheme.typography.bodyLarge)
+                                    if (t.description.isNotBlank()) {
+                                        Text(
+                                            t.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                                Text(
+                                    t.status.ifBlank { "?" } + if (t.isTested()) "" else " · untested",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (t.isActive()) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+    // The open row re-resolves by id on every recomposition: reloads land
+    // new objects, and the dialog must show the fresh status/body, not the
+    // tapped snapshot.
+    val open = managing?.let { m -> taught.firstOrNull { it.id == m.id } ?: m }
+    if (open != null) {
+        TeachDialog(
+            skill = open,
+            testOutput = testOutput,
+            acting = managingBusy,
+            error = managingError,
+            onSaveEdit = { name, description, body ->
+                mutate { api, path ->
+                    api.updateSkill(path, open.id, name = name, description = description, body = body)
+                }
+            },
+            onTest = { input ->
+                testOutput = ""
+                mutate { api, path ->
+                    testOutput = api.testSkill(path, open.id, input).getOrThrow()
+                }
+            },
+            onActivate = {
+                mutate { api, path -> api.activateSkill(path, open.id) }
+            },
+            onDisable = {
+                mutate { api, path -> api.disableSkill(path, open.id) }
+            },
+            onPromote = { schedule, name ->
+                mutate { api, path -> api.promoteSkill(path, open.id, schedule, name) }
+            },
+            onDelete = {
+                val id = open.id
+                mutate { api, path -> api.deleteSkill(path, id) }
+                managing = null
+            },
+            onClose = { managing = null },
+        )
     }
 }
