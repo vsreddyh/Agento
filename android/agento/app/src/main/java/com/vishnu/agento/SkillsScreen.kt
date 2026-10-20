@@ -212,7 +212,11 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 loadTaught(chatApi.pathFor(profile))
             } catch (e: Exception) {
                 ensureActive()
-                managingError = e.message?.take(120) ?: "failed"
+                // Same guard as success: a failed write for the old profile
+                // must not surface on the new one either.
+                if (path == chatApi.pathFor(profile)) {
+                    managingError = e.message?.take(120) ?: "failed"
+                }
             } finally {
                 managingBusy = false
             }
@@ -221,6 +225,8 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
 
     /** Successful saves, consumed by the dialog to collapse its editor. */
     var editSaves by remember { mutableStateOf(0) }
+    /** Successful schedules: the dialog clears its cron fields on each. */
+    var promoteSaves by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) { load() }
 
@@ -364,7 +370,10 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             )
                             TextButton(onClick = {
                                 composing = !composing
-                                if (composing) composerError = ""
+                                if (composing) {
+                                    composerError = ""
+                                    composerNotice = ""
+                                }
                             }) {
                                 Text(if (composing) "Cancel" else "New")
                             }
@@ -416,6 +425,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                         val b = newBody.trim()
                                         composerBusy = true
                                         composerError = ""
+                                        composerNotice = ""
                                         scope.launch {
                                             try {
                                                 val path = chatApi.pathFor(profile)
@@ -517,6 +527,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         TeachDialog(
             skill = open,
             editSaves = editSaves,
+            promoteSaves = promoteSaves,
             testOutput = testOutput,
             acting = managingBusy,
             error = managingError,
@@ -553,7 +564,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             onPromote = { schedule, name ->
                 mutate(
                     action = { api, path -> api.promoteSkill(path, open.id, schedule, name) },
-                    onSuccess = { testOutput = "" },
+                    onSuccess = { testOutput = ""; promoteSaves++ },
                 )
             },
             onDelete = {

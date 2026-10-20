@@ -41,6 +41,9 @@ internal fun TeachDialog(
     /** Successful saves from the screen: each increment collapses an open
      * editor, so a saved edit never lingers over fresh rows. */
     editSaves: Int = 0,
+    /** Successful schedules: each increment clears the cron fields, so a
+     * stale schedule never meets the next tap. */
+    promoteSaves: Int = 0,
     onSaveEdit: (String, String, String) -> Unit,
     onTest: (String) -> Unit,
     onActivate: () -> Unit,
@@ -64,6 +67,12 @@ internal fun TeachDialog(
     // typing.
     LaunchedEffect(editSaves) {
         if (editSaves > 0) editing = false
+    }
+    LaunchedEffect(promoteSaves) {
+        if (promoteSaves > 0) {
+            schedule = ""
+            promoteName = ""
+        }
     }
     AlertDialog(
         // No dismiss mid-write: the error has nowhere to render once the
@@ -286,14 +295,7 @@ internal fun TeachDialog(
                                     horizontalArrangement = Arrangement.End,
                                 ) {
                                     TextButton(
-                                        // Cleared on tap, not on success: a cron
-                                        // string is cheap to retype, and a stale
-                                        // schedule must not meet the next tap.
-                                        onClick = {
-                                            onPromote(schedule.trim(), promoteName.trim())
-                                            schedule = ""
-                                            promoteName = ""
-                                        },
+                                        onClick = { onPromote(schedule.trim(), promoteName.trim()) },
                                         enabled = !acting && schedule.trim().isNotBlank(),
                                     ) {
                                         Text(if (acting) "Scheduling…" else "Schedule")

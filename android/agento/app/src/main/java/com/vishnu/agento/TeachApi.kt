@@ -162,7 +162,9 @@ class TeachApi(context: Context) {
         }
     }
 
-    /** Edits name/description/body. Null fields are left alone. */
+    /** Edits name/description/body. Null fields are left alone; empty
+     * strings overwrite and fail server-side (the dialog requires all three
+     * non-blank, so it never sends one). */
     suspend fun updateSkill(
         path: String,
         id: String,
