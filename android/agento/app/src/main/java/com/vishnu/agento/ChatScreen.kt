@@ -112,6 +112,15 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 /**
+ * Head/tail content sample for thumbnail keys (#339): a true prefix/suffix
+ * pair on normal payloads, the whole string when it fits — so the sample
+ * invariant (prefix + suffix, no overlap) holds exactly at every size
+ * instead of double-counting tiny payloads.
+ */
+private fun String.sampleKey(half: Int): String =
+    if (length <= half * 2) this else take(half) + takeLast(half)
+
+/**
  * One staged or sent photo (#318): the remembered ~256px thumbnail, or an
  * icon placeholder when the payload won't decode (a corrupt payload
  * degrades to a missing thumbnail, never a crash).
@@ -138,9 +147,9 @@ private fun AttachmentThumb(
     // bitmap") — ~256px thumbnails are GC-cheap, and prompt freeing is
     // not worth a crash.
     val thumbKey = if (stableId.isNotEmpty()) {
-        Triple(stableId, base64.length, base64.take(32) + base64.takeLast(32))
+        Triple(stableId, base64.length, base64.sampleKey(32))
     } else {
-        Triple("s$slot", base64.length, base64.take(64) + base64.takeLast(64))
+        Triple("s$slot", base64.length, base64.sampleKey(64))
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
         // Explicit try/catch, not runCatching (#339): runCatching would
@@ -242,7 +251,9 @@ internal fun ChatTab(
     var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
     // Confirm dialog before the Settings escape hatch (#339): auto-opening
     // Settings on every tap would surprise-navigate on accidental taps.
-    var showCameraSettings by remember { mutableStateOf(false) }
+    // Saveable like the camera path (rotation must not lose the dialog),
+    // and closed on thread switch with the rest of the transient UI below.
+    var showCameraSettings by rememberSaveable { mutableStateOf(false) }
     // True while a camera batch is decoding (#339): launchCamera's
     // delete-previous must skip a file with an in-flight decode, or a
     // rapid re-tap deletes it mid-read and turns a good capture into a
@@ -1142,11 +1153,14 @@ internal fun ChatScreen(
     // this a thread switch leaves it open over the new thread's composer.
     // The draft text clears with them: opening the editor always overwrites
     // it, but a stale draft from the old thread must not linger in state.
+    // The camera Settings dialog closes too: it belongs to the old
+    // thread's Take-photo tap, not the new composer.
     LaunchedEffect(state.threadId) {
         editingIndex = null
         editDraft = ""
         confirmReplace = null
         showAttachMenu = false
+        showCameraSettings = false
     }
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -2336,10 +2350,12 @@ internal fun ChatScreen(
                                                 // but Replace/Fork resends the
                                                 // turn's photos with it — say so,
                                                 // or an edit to "thanks" silently
-                                                // resends images.
-                                                if (msg.attachments.isNotEmpty()) {
+                                                // resends images. Counted wired
+                                                // so blanks claim nothing.
+                                                val wired = msg.attachments.wiredPhotos()
+                                                if (wired.isNotEmpty()) {
                                                     HintLine(
-                                                        attachmentMarker(msg.attachments.size) +
+                                                        attachmentMarker(wired.size) +
                                                             " — resends with the edited text.",
                                                     )
                                                 }
@@ -2354,8 +2370,9 @@ internal fun ChatScreen(
                                                     // send() supports — the VM
                                                     // still refuses empty
                                                     // text-only resends.
+                                                    // Wired count, like the hint.
                                                     val canResend = editDraft.isNotBlank() ||
-                                                        msg.attachments.isNotEmpty()
+                                                        msg.attachments.wiredPhotos().isNotEmpty()
                                                     Button(
                                                         onClick = {
                                                             if (dropsTurns) {
@@ -2382,8 +2399,12 @@ internal fun ChatScreen(
                                                 // Sent photos (#318) render above the
                                                 // text; an image-only turn shows no
                                                 // "…" placeholder — the thumbnails
-                                                // ARE the message.
-                                                if (msg.attachments.isNotEmpty()) {
+                                                // ARE the message. Counted wired
+                                                // (#339): blanks render nothing,
+                                                // and the text fallback below
+                                                // keys on the same count.
+                                                val wiredBubble = msg.attachments.wiredPhotos()
+                                                if (wiredBubble.isNotEmpty()) {
                                                     Row(
                                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                     ) {
@@ -2402,7 +2423,7 @@ internal fun ChatScreen(
                                                         Spacer(modifier = Modifier.height(4.dp))
                                                     }
                                                 }
-                                                if (msg.content.isNotBlank() || msg.attachments.isEmpty()) {
+                                                if (msg.content.isNotBlank() || wiredBubble.isEmpty()) {
                                                     SelectionContainer {
                                                         Text(
                                                             msg.content.ifEmpty { "…" },

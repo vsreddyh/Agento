@@ -76,16 +76,17 @@ object ChatThreads {
         if (textMsg == null) {
             // An image-only thread has no words to title from: name the
             // opener's photos rather than leaving "New conversation" on a
-            // real chat.
-            val n = userTurns.firstOrNull()?.attachments?.size ?: 0
+            // real chat. Counted wired like every other signal (#339).
+            val n = userTurns.firstOrNull()?.attachments?.wiredPhotos()?.size ?: 0
             if (n > 0) return if (n == 1) "Photo" else "$n photos"
             return "New conversation"
         }
         val first = textMsg.content.trim()
         // Suffix from the LARGEST photo turn (#339), not the first: a
         // 1-photo turn followed by a 2-photo turn holds a 2-photo turn,
-        // and the signal should say so.
-        val photos = userTurns.maxOfOrNull { it.attachments.size } ?: 0
+        // and the signal should say so. Counted wired so blanks never
+        // title a thread.
+        val photos = userTurns.maxOfOrNull { it.attachments.wiredPhotos().size } ?: 0
         val oneLine = first.replace(titleWhitespace, " ")
         // Photo signal with the budget kept (#339): the marker reserves
         // its width first, so the row never exceeds 42 chars. avail == 0

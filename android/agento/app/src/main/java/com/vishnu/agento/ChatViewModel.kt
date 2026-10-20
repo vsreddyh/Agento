@@ -395,8 +395,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             pending = "",
             // Staged photos die with the text draft (#339): the composer
             // belongs to the thread being left, and a parked photo firing
-            // into the wrong thread is a silent mis-send.
+            // into the wrong thread is a silent mis-send. The notice dies
+            // with them: a cap toast triggered on the old thread must not
+            // render over the new composer's first paint.
             pendingAttachments = emptyList(),
+            notice = "",
             activeTools = emptyList(),
             activeToolLabel = "",
             serverTokens = null,
@@ -464,8 +467,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 pending = "",
                 // Staged photos die with the text draft (#339): the composer
                 // belongs to the thread being left, and a parked photo firing
-                // into the wrong thread is a silent mis-send.
+                // into the wrong thread is a silent mis-send. The notice dies
+                // with them (same leak as switchThread above).
                 pendingAttachments = emptyList(),
+                notice = "",
                 activeTools = emptyList(),
                 activeToolLabel = "",
                 serverTokens = null,
@@ -530,8 +535,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             messages = emptyList(), error = "", streaming = false, pending = parked,
             // Staged photos die with the draft like every other thread
             // change (#339): a New with a parked photo must not fire it
-            // into the fresh thread.
+            // into the fresh thread. The notice dies with them.
             pendingAttachments = emptyList(),
+            notice = "",
             threads = summaries(), threadId = threadId,
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
@@ -587,8 +593,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = kept,
                 // Same staged-photos-die-with-the-draft rule as the other
-                // thread changes above (#339).
+                // thread changes above (#339). The notice dies with them.
                 pendingAttachments = emptyList(),
+                notice = "",
                 serverTokens = null, queued = "",
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
@@ -614,8 +621,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     t.messages.any {
                         // Photo threads are findable by "photo" (#318): their
                         // images are payloads with no searchable text. One
-                        // marker spelling shared with export + wire (#339).
-                        contentWithMarker(it.content, it.attachments.size)
+                        // marker spelling shared with export + wire (#339),
+                        // counted wired so blanks never claim a photo.
+                        contentWithMarker(it.content, it.attachments.wiredPhotos().size)
                             .lowercase(java.util.Locale.ROOT).contains(q)
                     }
                 )
@@ -710,8 +718,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val who = if (m.role == "user") "You" else "Assistant"
             // Photos are payloads, not text: the marker keeps the export
             // honest about turns whose content is an image (#318). Shared
-            // spelling with search + wire (#339).
-            val marker = contentWithMarker(m.content.trim(), m.attachments.size)
+            // spelling with search + wire, counted wired (#339).
+            val marker = contentWithMarker(m.content.trim(), m.attachments.wiredPhotos().size)
             sb.append("**$who:** $marker\n\n")
             if (m.role != "user" && (m.tools.isNotEmpty() || m.skills.isNotEmpty())) {
                 // Backticked so a tool/skill name can never break the export's
@@ -1687,7 +1695,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Empty text is allowed only onto photos (#339): stripping the
         // words off a photo+text turn yields the image-only shape send()
         // supports — while an empty text-only resend stays refused.
-        if (clean.isEmpty() && msgs[index].attachments.isEmpty()) return
+        // Counted wired: blanks are not photos.
+        if (clean.isEmpty() && msgs[index].attachments.wiredPhotos().isEmpty()) return
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
@@ -1717,8 +1726,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val clean = text.trim()
         val msgs = _state.value.messages
         if (index !in msgs.indices || msgs[index].role != "user") return
-        // Same empty-text rule as Replace above (#339).
-        if (clean.isEmpty() && msgs[index].attachments.isEmpty()) return
+        // Same empty-text rule as Replace above (#339), counted wired.
+        if (clean.isEmpty() && msgs[index].attachments.wiredPhotos().isEmpty()) return
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)

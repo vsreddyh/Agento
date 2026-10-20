@@ -41,6 +41,15 @@ data class ChatAttachment(
     val id: String = "",
 )
 
+/**
+ * Attachments that actually wire (#339): blank payloads (hand-edited
+ * threads, writer bugs) count as no attachment everywhere — the wire
+ * filter, display markers, titles, and search must all agree, or a blank
+ * wires as bare text while the UI claims a photo.
+ */
+fun List<ChatAttachment>.wiredPhotos(): List<ChatAttachment> =
+    filter { it.base64.isNotBlank() }
+
 /** Max photos per turn (#318). Two is the acceptance bar (two images in one
  * turn render and reach the agent); the cap keeps the wire body under the
  * gateway's 4 MiB limit (see the invariant test in [ChatAttachmentsTest]). */
@@ -154,7 +163,7 @@ fun messageContentJson(
     // attachment for wire purposes (an image-only turn of blanks falls
     // back to bare text, which the server refuses with its named
     // blank-turn error instead of a corrupt image part).
-    val images = attachments.filter { it.base64.isNotBlank() }
+    val images = attachments.wiredPhotos()
     if (role != "user" || images.isEmpty() || !includeImages) {
         // Stripped earlier photo turns stay honest (#339): the server
         // prompts with the trailing turn alone, but any other reader of

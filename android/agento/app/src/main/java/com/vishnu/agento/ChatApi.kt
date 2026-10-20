@@ -623,9 +623,10 @@ class ChatApi(context: Context) {
         if (wireSizeExceeded(rawBytes)) {
             // Phrased for what's actually in the turn (#339): a long
             // text-only thread trips the same cap with zero photos, and
-            // "remove a photo" would send it hunting for one.
+            // "remove a photo" would send it hunting for one. Counted
+            // wired, like the wire filter itself.
             val hasPhotos = lastUserIdx >= 0 &&
-                messages[lastUserIdx].attachments.isNotEmpty()
+                messages[lastUserIdx].attachments.wiredPhotos().isNotEmpty()
             trySend(
                 ChatEvent.Error(
                     "Couldn't send: this turn is about ${formatBytes(rawBytes.toLong())} " +
