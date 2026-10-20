@@ -300,7 +300,11 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			// path around the gate: a lenient server would run a call the
 			// policy never saw. Deny it, audit why, and answer Pi when
 			// there is an id to answer.
-			r.log.Printf("denying unparseable tools/call: %s", truncateFrame(line))
+			// No frame bytes: this is the one path where structured Redact
+			// cannot run, and stderr outlives the 90-day audit TTL. Method +
+			// shape is enough to triage; the audit row carries the event.
+			r.log.Printf("denying unparseable tools/call (id=%t, %d bytes)",
+				hasReplyID(env.ID), len(line))
 			r.auditAsync("(malformed)", map[string]any{}, approvals.DispositionDenied,
 				"relay_protocol: tools/call params could not be parsed; failed closed", "")
 			if hasReplyID(env.ID) {
@@ -615,7 +619,10 @@ func idKey(raw json.RawMessage) string {
 	dec.UseNumber()
 	var v any
 	if err := dec.Decode(&v); err != nil {
-		return s
+		// Garbage is not a replyable id: only well-formed strings and numbers
+		// pair. Tracking raw bytes here would let malformed input create
+		// pending entries the normal contract rejects.
+		return ""
 	}
 	switch t := v.(type) {
 	case string:
@@ -840,13 +847,4 @@ func rpcError(id json.RawMessage, code int, message string) []byte {
 		})
 	}
 	return b
-}
-
-// truncateFrame bounds a frame for a log line.
-func truncateFrame(b []byte) string {
-	const max = 200
-	if len(b) <= max {
-		return string(b)
-	}
-	return string(b[:max]) + "…"
 }

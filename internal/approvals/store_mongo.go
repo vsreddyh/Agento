@@ -60,7 +60,10 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 		{
 			// Leading expiresAt, not status: the common app poll has no status
 			// filter, so a status-led compound would be unusable for it. The
-			// status-filtered query still walks this index.
+			// status-filtered query still walks this index. Under ESR the range
+			// on the leading field means the createdAt sort is in-memory — fine
+			// at ListCap=100 over a TTL-bounded set; the index still removes
+			// the COLLSCAN and the expired rows.
 			Keys: bson.D{
 				{Key: "expiresAt", Value: 1},
 				{Key: "createdAt", Value: -1},
@@ -87,15 +90,6 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 				{Key: "at", Value: -1},
 			},
 			Options: options.Index().SetName("audit_server_tool_at"),
-		},
-		{
-			// The unfiltered trail is the other common read; leading expiresAt
-			// keeps it off a COLLSCAN once the collection is non-trivial.
-			Keys: bson.D{
-				{Key: "expiresAt", Value: 1},
-				{Key: "at", Value: -1},
-			},
-			Options: options.Index().SetName("audit_expiry_at"),
 		},
 	})
 	return err
@@ -303,7 +297,10 @@ func (s *MongoStore) MarkInterrupted(ctx context.Context, at time.Time) (int64, 
 	}
 	// createdAt < at, not just status=pending: a Create landing between the
 	// delete and this update belongs to this startup, not the dead one, and
-	// expiring it would kill a live hold's row.
+	// expiring it would kill a live hold's row. Both stamps are wall clock from
+	// processes on this one host (the relay and gateway share the stack), so a
+	// skew is an NTP fault, not a supported deployment; ObjectID time would be
+	// the next step if the two ever ran on different clocks.
 	res, err := s.approvals.UpdateMany(ctx,
 		bson.M{
 			"status":    string(StatusPending),
