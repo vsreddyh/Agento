@@ -177,6 +177,12 @@ var gatedTools = map[string]map[string]bool{
 // None of today's tools take passwords, but arguments are persisted for 90
 // days and rendered in the app, so anything named like a credential is masked
 // by rule rather than by audit of each tool's schema.
+//
+// The recursion covers map[string]any and []any — the shapes encoding/json
+// produces for tool arguments. A caller that builds typed maps itself
+// (map[string]string, []string) is outside that contract and must convert to
+// the JSON shapes first; those values fall through the default branch
+// unredacted rather than being guessed at by reflection.
 func Redact(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return map[string]any{}

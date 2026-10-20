@@ -54,6 +54,12 @@ approval fatigue, not safety. The table is complete by contract
 (`TestPolicyTableIsComplete` fails when a server gains an unclassified
 tool), and reads never gate. Unknown servers and unknown tools hold.
 
+A gated `tools/call` **notification** (no `id`) is denied inline instead of
+parked: nothing is waiting for it, so an approval card would promise a
+released turn that does not exist. The deny is audited like any other, with
+the reason stated. Allowed notifications forward normally and audit at
+forward time, since there is no response to observe.
+
 ### State in Mongo, memory fallback
 
 `approvals` (15-minute TTL) and `audit_log` (90-day TTL) in the shared
@@ -81,9 +87,13 @@ audit row, retained for 90 days, and that is the record to query.
 
 `GET /api/approvals` (pending list), `POST .../approve|deny` (decision lands
 exactly once; races after expiry 409), `GET /api/audit` (trail). Approvals
-carry tool + redacted args + time — no credentials, no run linkage (the
-relay cannot know the conversation; Pi spawns servers once, not per turn).
-The app polls; a decision is a verb on an id. Secrets hygiene from the
+carry tool + redacted args + time — no credentials, no run linkage (the relay
+cannot know the conversation; Pi spawns servers once, not per turn). The app
+polls; a decision is a verb on an id, never a pasted body. `decided_by` is the
+constant `"app"`: this deployment has one shared `PASSWORD`, so there is
+exactly one principal to attribute a decision to. Per-user attribution arrives
+with per-user auth, and until then the field should be read as "decided from
+the app", not as an audit-grade user id. Secrets hygiene from the
 issue stands: passwords/2FA never go through chat; the take-over path
 belongs to #312.
 

@@ -89,6 +89,10 @@ func (s *MongoStore) CreateApproval(ctx context.Context, a Approval) error {
 	}
 	if _, err := s.approvals.InsertOne(ctx, a); err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
+			// Ids are ObjectIDs, so this is a retry, not a collision. A line
+			// still matters: "created" and "already existed" are different
+			// facts to a triager reading one hold's story.
+			s.logf("approvals: ignored duplicate create for %s", a.ID)
 			return nil
 		}
 		return NewStoreError("approval create failed: "+err.Error(), true)

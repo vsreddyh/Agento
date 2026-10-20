@@ -9,7 +9,7 @@ state (see `.gitignore`).
 | path | committed | purpose |
 |---|---|---|
 | `settings.json` | yes | Pi's own knobs — tool selection, retry, cache warming. **Not** personality. |
-| `mcp.json` | yes | the five in-repo Go MCP servers: miser-money, cookbook, health-check, task-manager, project-manager. |
+| `mcp.json` | yes | the six in-repo Go MCP servers: miser-money, cookbook, health-check, task-manager, project-manager, notes. |
 | `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all of them. |
 | `profiles/<name>/AGENTS.md` | yes | one per profile (`chat` only since #289). Each profile's own instructions and personality. |
 | `profiles/<name>/skills/` | yes | Per-profile skills. **Not discovered as laid out** — see the profile-skills finding below; loaded by an explicit `--skill` path per profile. |
@@ -40,7 +40,7 @@ even for an untrusted directory. Treat the content of one as untrusted input.
 **calls `die` if any server fails to connect**. That check only became active when
 this PR added `mcp.json`, so the pi service must carry:
 
-- `MONGODB_URI` and `MONGODB_DB` — every one of the five servers opens the shared
+- `MONGODB_URI` and `MONGODB_DB` — every one of the six servers opens the shared
   Atlas database on startup and fails to connect without them
 - `OPENCODE_API_KEY` — already enforced by the entrypoint
 
@@ -568,7 +568,7 @@ reclaims:
 | `session.extensionRunnerRef.current` | **unpopulated** for SDK sessions, so the event cannot be raised by hand |
 | shared loader across children | corrupts MCP: 43 tools → 23, servers dying |
 
-Measured cost of the in-process route: **five processes stranded per delegation**,
+Measured cost of the in-process route: **six processes stranded per delegation**,
 accumulating for the life of the container. A process is reaped by
 `RpcClient.stop()`, which SIGTERMs the CLI and the CLI closes its own MCP clients on
 the way out — **0 processes left behind**, measured across repeated delegations.

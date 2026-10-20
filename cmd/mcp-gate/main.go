@@ -40,6 +40,11 @@ const maxLineBytes = 32 << 20
 // pollInterval is how often a held call re-reads its approval.
 const pollInterval = 2 * time.Second
 
+// pendingCap bounds unanswered allowed calls retained for auditing. Real
+// traffic is one turn at a time per profile, so reaching this means a server
+// stopped answering; the cap keeps that failure from becoming a leak.
+const pendingCap = 256
+
 // storeTimeout bounds one approvals-store call. Mongo's server-selection
 // budget is longer than this on a wedged cluster, and every one of these calls
 // sits on a traffic path: a create on a Pi request, a poll between polls, an
@@ -112,12 +117,11 @@ type relay struct {
 
 	mu sync.Mutex
 	// pending holds allowed calls until their response arrives, so the
-	// response can be audited with the request's args. An entry whose server
-	// never answers stays for the life of the relay — bounded in practice by
-	// one turn at a time per profile (Pi serialises turns per process) and by
-	// the server answering every request it accepted. A sweep would need a
-	// clock per entry to stay useful; the field it would read is gone rather
-	// than kept as decoration.
+	// response can be audited with the request's args. Bounded by
+	// pendingCap: a server that accepts a call and never answers must not
+	// grow this map for the life of the relay (Pi spawns servers once). The
+	// eviction is by request time, so the entry lost is the oldest
+	// unanswered one — the call least likely to still produce a response.
 	pending map[string]*callState
 	// holds cancels parked waits at teardown, so a Pi disconnect does not
 	// leave approvals pending that nothing will ever decide.
@@ -130,6 +134,7 @@ type relay struct {
 type callState struct {
 	name string
 	args map[string]any
+	at   time.Time
 }
 
 func (r *relay) run(
@@ -222,20 +227,30 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 		}
 		if !approvals.NeedsApproval(r.server, params.Name, params.Arguments) {
 			redacted := approvals.Redact(params.Arguments)
-			id := string(env.ID)
-			if id == "" || id == "null" {
+			if !hasReplyID(env.ID) {
 				// A call with no id gets no response to observe, so its allow
 				// row is written here. track() would no-op and the call would
 				// forward with no audit entry, which is the one hole in
 				// "every proxied call is recorded".
 				r.audit(params.Name, redacted, approvals.DispositionAllow, "", "")
 			} else {
-				r.track(id, params.Name, redacted)
+				r.track(env.ID, params.Name, redacted)
 			}
 			if err := r.writeChild(line); err != nil {
 				r.log.Printf("write to server failed: %v", err)
 				return err
 			}
+			continue
+		}
+		if !hasReplyID(env.ID) {
+			// Nothing is waiting on a notification: approving it later could
+			// not release a turn, and parking it would show an approval card
+			// for a call whose result nobody receives. Fail closed now and
+			// record why; the allow path above still forwards notifications.
+			r.log.Printf("denying gated notification %s/%s: no reply id", r.server, params.Name)
+			r.audit(params.Name, approvals.Redact(params.Arguments),
+				approvals.DispositionDenied,
+				"gated notification has no reply id; failed closed", "")
 			continue
 		}
 		// One goroutine per held call. Unbounded by construction, but bounded
@@ -250,7 +265,6 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 // holdCall parks one sensitive call until a human decides, then forwards it
 // or answers Pi with a tool error. Only this call waits; the pumps flow on.
 func (r *relay) holdCall(line []byte, env envelope, params callParams) {
-	id := string(env.ID)
 	redacted := approvals.Redact(params.Arguments)
 	a := approvals.Approval{
 		ID:     approvals.NewID(),
@@ -340,7 +354,7 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 				// Track redacted: the pending map lives until the response
 				// arrives, and raw args must not sit in it. Audit redacts
 				// again — same output, safe in-memory copy.
-				r.track(id, params.Name, redacted)
+				r.track(env.ID, params.Name, redacted)
 				if werr := r.writeChild(line); werr != nil {
 					// Approved but undeliverable: the audit row must say so,
 					// or a reader sees "approved" while Pi never got an
@@ -380,7 +394,7 @@ func (r *relay) pumpChildToPi(childOut io.Reader) error {
 		}
 		var env envelope
 		if json.Unmarshal(line, &env) == nil && len(env.ID) > 0 {
-			if st := r.take(string(env.ID)); st != nil {
+			if st := r.take(env.ID); st != nil {
 				r.auditResponse(st, line)
 			}
 		}
@@ -431,22 +445,58 @@ func (r *relay) audit(tool string, args map[string]any, disp approvals.Dispositi
 	}
 }
 
-func (r *relay) track(id, name string, args map[string]any) {
-	if id == "" || id == "null" {
+// idKey canonicalises a JSON-RPC id for pairing a call with its response.
+// Raw bytes are not enough: a server may re-encode what it echoed ("1" as
+// "1.0", whitespace around it), and byte-equality would then miss the
+// response and silently drop its audit row. Decoding and re-encoding both
+// sides normalises them. Ids in practice are small integers or short strings,
+// so the float64 round-trip is not a precision concern for pairing; an
+// unparseable id falls back to its trimmed bytes rather than vanishing.
+func idKey(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return ""
+	}
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		return s
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return s
+	}
+	return string(b)
+}
+
+func (r *relay) track(id json.RawMessage, name string, args map[string]any) {
+	key := idKey(id)
+	if key == "" {
 		return
 	}
 	r.mu.Lock()
-	r.pending[id] = &callState{name: name, args: args}
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	if len(r.pending) >= pendingCap {
+		var oldestKey string
+		var oldest time.Time
+		for k, st := range r.pending {
+			if oldestKey == "" || st.at.Before(oldest) {
+				oldestKey, oldest = k, st.at
+			}
+		}
+		delete(r.pending, oldestKey)
+		r.log.Printf("pending call table full: evicted unanswered id %s", oldestKey)
+	}
+	r.pending[key] = &callState{name: name, args: args, at: time.Now()}
 }
 
-func (r *relay) take(id string) *callState {
-	if id == "" || id == "null" {
+func (r *relay) take(id json.RawMessage) *callState {
+	key := idKey(id)
+	if key == "" {
 		return nil
 	}
 	r.mu.Lock()
-	st := r.pending[id]
-	delete(r.pending, id)
+	st := r.pending[key]
+	delete(r.pending, key)
 	r.mu.Unlock()
 	return st
 }
@@ -454,20 +504,24 @@ func (r *relay) take(id string) *callState {
 func (r *relay) writeChild(line []byte) error {
 	r.childMu.Lock()
 	defer r.childMu.Unlock()
-	if _, err := r.childIn.Write(line); err != nil {
-		return err
-	}
-	_, err := r.childIn.Write([]byte("\n"))
-	return err
+	return writeFrame(r.childIn, line)
 }
 
 func (r *relay) writePi(line []byte) error {
 	r.outMu.Lock()
 	defer r.outMu.Unlock()
-	if _, err := r.out.Write(line); err != nil {
-		return err
-	}
-	_, err := r.out.Write([]byte("\n"))
+	return writeFrame(r.out, line)
+}
+
+// writeFrame writes one newline-terminated frame with a single Write. Two
+// writes under the same lock were safe against interleaving but could leave a
+// half frame if the second failed, and a partial frame is unrecoverable for
+// the reader.
+func writeFrame(w io.Writer, line []byte) error {
+	frame := make([]byte, len(line)+1)
+	copy(frame, line)
+	frame[len(line)] = '\n'
+	_, err := w.Write(frame)
 	return err
 }
 
@@ -494,13 +548,7 @@ func readLine(rd *bufio.Reader) ([]byte, error) {
 // notification carries no id (or explicit null) and gets no reply by
 // JSON-RPC spec: writing one back is a stray frame the client never asked
 // for. The audit row is written either way.
-func hasReplyID(id json.RawMessage) bool {
-	switch strings.TrimSpace(string(id)) {
-	case "", "null":
-		return false
-	}
-	return true
-}
+func hasReplyID(id json.RawMessage) bool { return idKey(id) != "" }
 
 // rpcError builds a JSON-RPC error reply preserving the caller's id bytes.
 func rpcError(id json.RawMessage, code int, message string) []byte {

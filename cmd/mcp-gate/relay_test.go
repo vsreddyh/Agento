@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -191,10 +192,10 @@ func TestAllowForwardsAndAudits(t *testing.T) {
 	r.childIn = &bufWriter{}
 	line, env, params := callLine(`3`, "list_notes", `{}`)
 	// Forward path of pumpPiToChild, minus the pump: track + write.
-	r.track(string(env.ID), params.Name, params.Arguments)
+	r.track(env.ID, params.Name, params.Arguments)
 	r.writeChild(line)
 	// A canned result coming back audits clean.
-	r.take(string(env.ID))
+	r.take(env.ID)
 	r.audit(params.Name, params.Arguments, approvals.DispositionAllow, "", "")
 	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
 	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionAllow {
@@ -274,41 +275,59 @@ func TestAllowNotificationIsAudited(t *testing.T) {
 	}
 }
 
-// A gated notification (tools/call with no id) still holds and audits, but
-// gets no reply frame: JSON-RPC notifications are not answered.
-func TestGatedNotificationGetsNoReply(t *testing.T) {
+// A gated notification (tools/call with no id) cannot release anything, so
+// it fails closed inline: no hold, no approval card, no reply frame, and a
+// denied audit row saying why.
+func TestGatedNotificationFailsClosed(t *testing.T) {
 	store := approvals.NewMemoryStore()
 	out, child := &bufWriter{}, &bufWriter{}
 	r := testRelay(store)
 	r.out = out
 	r.childIn = child
-	r.waitFor = 60 * time.Millisecond
-	r.pollFor = 10 * time.Millisecond
 
-	raw := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"delete_note","arguments":{"id":"abc"}}}`
-	var env envelope
-	if err := json.Unmarshal([]byte(raw), &env); err != nil {
-		t.Fatal(err)
-	}
-	var params callParams
-	if err := json.Unmarshal(env.Params, &params); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan struct{})
-	go func() { defer close(done); r.holdCall([]byte(raw), env, params) }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("notification hold did not time out")
+	line := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"delete_note","arguments":{"id":"abc"}}}` + "\n"
+	if err := r.pumpPiToChild(strings.NewReader(line)); err != nil {
+		t.Fatalf("pump: %v", err)
 	}
 	if out.String() != "" {
 		t.Fatalf("notification got a reply: %q", out.String())
 	}
 	if child.String() != "" {
-		t.Fatalf("expired notification reached the child: %q", child.String())
+		t.Fatalf("gated notification reached the child: %q", child.String())
+	}
+	if list, _ := store.ListApprovals(context.Background(), approvals.ApprovalFilter{}); len(list) != 0 {
+		t.Fatalf("notification parked an approval card: %+v", list)
 	}
 	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
-	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionExpired {
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionDenied {
 		t.Fatalf("audit = %+v", audit)
+	}
+}
+
+// A server may re-encode the id it echoes; pairing must survive that or the
+// allowed call's audit row is silently lost.
+func TestTakeNormalisesIdEncoding(t *testing.T) {
+	r := testRelay(approvals.NewMemoryStore())
+	r.track(json.RawMessage(`1`), "list_notes", map[string]any{})
+	if st := r.take(json.RawMessage(`1.0`)); st == nil {
+		t.Fatal("1 and 1.0 did not pair")
+	}
+	r.track(json.RawMessage(` "abc" `), "list_notes", map[string]any{})
+	if st := r.take(json.RawMessage(`"abc"`)); st == nil {
+		t.Fatal("whitespace-padded id did not pair")
+	}
+}
+
+// The pending table is bounded even when a server never answers.
+func TestPendingTableIsBounded(t *testing.T) {
+	r := testRelay(approvals.NewMemoryStore())
+	for i := 0; i < pendingCap+50; i++ {
+		r.track(json.RawMessage(strconv.Itoa(i)), "list_notes", map[string]any{})
+	}
+	r.mu.Lock()
+	n := len(r.pending)
+	r.mu.Unlock()
+	if n != pendingCap {
+		t.Fatalf("pending = %d, want %d", n, pendingCap)
 	}
 }
