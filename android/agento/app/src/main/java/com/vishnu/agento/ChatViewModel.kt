@@ -550,7 +550,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val parked = when {
             s.queued.isBlank() -> ""
             s.pending.isBlank() -> s.queued
-            else -> "${s.pending.trimEnd()} ${s.queued}"
+            else -> "${s.pending.trimEnd()} ${s.queued.trimStart()}"
         }
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = parked,
@@ -608,7 +608,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val kept = when {
                 d.queued.isBlank() -> ""
                 d.pending.isBlank() -> d.queued
-                else -> "${d.pending.trimEnd()} ${d.queued}"
+                else -> "${d.pending.trimEnd()} ${d.queued.trimStart()}"
             }
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
@@ -841,10 +841,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // Queued text concatenates when the composer is occupied
             // (#339): same rule as newConversation/deleteThread — a stop
             // must not eat queued text either, whichever field it lands in.
+            // Trimmed at the JOINT only: either side alone rides verbatim
+            // (pasted-code indentation included), but the concatenation
+            // gap itself normalizes to one space.
             pending = when {
                 queued.isBlank() -> livePending
                 livePending.isBlank() -> queued
-                else -> "${livePending.trimEnd()} $queued"
+                else -> "${livePending.trimEnd()} ${queued.trimStart()}"
             },
         )
         // Persist the stopped partial so the interrupted flag (and the

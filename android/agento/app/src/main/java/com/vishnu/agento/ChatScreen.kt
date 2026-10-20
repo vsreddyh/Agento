@@ -437,8 +437,15 @@ internal fun ChatTab(
         }
     }
     fun launchCamera() {
-        // (Camera-less guard lives in requestCamera, the single entry —
-        // hardware is refused before any permission prompt.)
+        // Hardware gate, idempotent (#339): requestCamera refuses first so
+        // no permission prompt fires on camera-less devices, and the same
+        // guard holds AT the launch so a future direct call refuses
+        // identically instead of reintroducing permission-before-refusal.
+        // Cheap (one PackageManager call), silent on the pass path.
+        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            vm.notify("No camera on this device — use Choose photos instead.", ToastKind.Info)
+            return
+        }
         val dir = File(context.cacheDir, "camera")
         // Checked, not assumed (#339): full storage fails mkdirs, and a
         // bare TakePicture failure (ok=false) would leave the user with

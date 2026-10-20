@@ -115,6 +115,22 @@ fun attachmentMarker(n: Int): String =
 fun contentWithMarker(content: String, n: Int): String =
     if (n <= 0) content else (content.trim() + " " + attachmentMarker(n)).trim()
 
+/**
+ * Verbatim twin of [contentWithMarker] for the wire history path (#339):
+ * same marker rule, no trim — history text rides exactly as typed
+ * (pasted-code indentation included) with only the marker appended.
+ * Kept as a named helper (not an inline) so the two spellings stay
+ * visibly paired and the next edit can't silently re-split them.
+ */
+fun contentWithMarkerVerbatim(content: String, n: Int): String =
+    if (n <= 0) {
+        content
+    } else if (content.isBlank()) {
+        attachmentMarker(n)
+    } else {
+        content + " " + attachmentMarker(n)
+    }
+
 /** True when the message carries anything the agent should see. Text-only
  * checks (`content.isNotBlank()`) drop image-only turns from resends and
  * resume, so every history filter must use this instead. Counted wired
@@ -169,15 +185,10 @@ fun messageContentJson(
         // Stripped earlier photo turns stay honest (#339): the server
         // prompts with the trailing turn alone, but any other reader of
         // this history should see that photos were here — not a blank.
-        // Verbatim text + appended marker (NOT the trimming helper): the
-        // helper trims for display surfaces, while history text rides
-        // exactly as typed — pasted-code indentation included.
+        // Verbatim twin (NOT the trimming helper): history rides exactly
+        // as typed, marker only appended.
         if (role == "user" && images.isNotEmpty() && !includeImages) {
-            return if (content.isBlank()) {
-                attachmentMarker(images.size)
-            } else {
-                content + " " + attachmentMarker(images.size)
-            }
+            return contentWithMarkerVerbatim(content, images.size)
         }
         // Assistant turns never stage photos: the marker rule above is
         // user-only by construction, and a bare return here keeps a
@@ -403,18 +414,21 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     }
                 }
                 val (tw, th) = downscaledSize(bitmap.width, bitmap.height)
-                // Opaque white fill (#339): JPEG has no alpha channel, so a
-                // transparent screenshot/icon would otherwise flatten onto
-                // black. Unconditional — a no-op blit for opaque photos,
-                // honest whites for transparent ones.
-                val opaque = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-                android.graphics.Canvas(opaque).apply {
-                    drawColor(android.graphics.Color.WHITE)
-                    drawBitmap(bitmap, 0f, 0f, null)
-                }
-                if (opaque !== bitmap) {
-                    bitmap.recycle()
-                    bitmap = opaque
+                // Opaque white fill, only when needed (#339): JPEG has no
+                // alpha channel, so a transparent screenshot/icon would
+                // otherwise flatten onto black. hasAlpha()-gated — opaque
+                // camera photos (the common case) skip the second full-size
+                // bitmap + blit entirely.
+                if (bitmap.hasAlpha()) {
+                    val opaque = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+                    android.graphics.Canvas(opaque).apply {
+                        drawColor(android.graphics.Color.WHITE)
+                        drawBitmap(bitmap, 0f, 0f, null)
+                    }
+                    if (opaque !== bitmap) {
+                        bitmap.recycle()
+                        bitmap = opaque
+                    }
                 }
                 if (bitmap.width != tw || bitmap.height != th) {
                     val scaled = Bitmap.createScaledBitmap(bitmap, tw, th, true)
@@ -426,11 +440,13 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 for (quality in listOf(80, 60)) {
                     val out = ByteArrayOutputStream()
                     // Peak note (#339): bitmap (~10 MB at 1568px) + out bytes
-                    // + base64 string co-exist here, and the q60 retry
-                    // reallocates out while bitmap stays live — bounded and
-                    // send-path-only (like the read transient above), but
-                    // the real hump, so a future "optimization" of the
-                    // buffer alone would miss it.
+                    // + base64 string co-exist here, plus the transient
+                    // opaque fill above when the source had alpha (two
+                    // full-size bitmaps live until its recycle) — and the
+                    // q60 retry reallocates out while bitmap stays live.
+                    // Bounded and send-path-only (like the read transient
+                    // above), but the real hump, so a future "optimization"
+                    // of the buffer alone would miss it.
                     // Checked, not assumed (#339): a false return leaves
                     // out empty, and an empty candidate would pass the cap
                     // as a zero-byte "photo" — silent corrupt payload wired

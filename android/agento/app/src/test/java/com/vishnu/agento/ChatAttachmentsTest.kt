@@ -209,6 +209,17 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun verbatimMarkerPreservesWhitespace() {
+        // Wire twin: indentation rides verbatim, marker only appended.
+        assertEquals("  code", contentWithMarkerVerbatim("  code", 0))
+        assertEquals(
+            "  code [1 photo attached]",
+            contentWithMarkerVerbatim("  code", 1),
+        )
+        assertEquals("[1 photo attached]", contentWithMarkerVerbatim("   ", 1))
+    }
+
+    @Test
     fun photoOnlyThreadTitlesNamePhotos() {
         assertEquals(
             "Photo",
