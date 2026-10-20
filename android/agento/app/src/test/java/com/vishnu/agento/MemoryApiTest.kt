@@ -46,7 +46,6 @@ class MemoryApiTest {
         assertEquals("a%20b", MemoryApi.encode("a b"))
         assertEquals("a%2Fb", MemoryApi.encode("a/b"))
     }
-}
 
     @Test
     fun `parseMemoryList pins leniency`() {
@@ -72,3 +71,4 @@ class MemoryApiTest {
         assertTrue(list.topics.isEmpty())
         assertEquals(0, parseMemoryList("not json").items.size)
     }
+}
