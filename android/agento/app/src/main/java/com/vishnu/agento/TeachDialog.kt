@@ -135,7 +135,7 @@ internal fun TeachDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.End,
                             ) {
-                                TextButton(onClick = { editing = false }) { Text("Cancel") }
+                                TextButton(onClick = { editing = false }, enabled = !acting) { Text("Cancel") }
                                 TextButton(
                                     // Trimmed like every other writer: "   "
                                     // passes isNotBlank but sends "".
@@ -184,7 +184,16 @@ internal fun TeachDialog(
                                 horizontalArrangement = Arrangement.End,
                             ) {
                                 TextButton(
-                                    onClick = { editing = true },
+                                    // Seed at open time: a background reload
+                                    // mid-edit must never wipe typing, but a
+                                    // reopened editor shows the fresh row,
+                                    // not pre-save text.
+                                    onClick = {
+                                        name = skill.name
+                                        description = skill.description
+                                        body = skill.body
+                                        editing = true
+                                    },
                                     enabled = !acting,
                                 ) {
                                     Text("Edit")
@@ -276,7 +285,14 @@ internal fun TeachDialog(
                                     horizontalArrangement = Arrangement.End,
                                 ) {
                                     TextButton(
-                                        onClick = { onPromote(schedule.trim(), promoteName.trim()) },
+                                        // Cleared on tap, not on success: a cron
+                                        // string is cheap to retype, and a stale
+                                        // schedule must not meet the next tap.
+                                        onClick = {
+                                            onPromote(schedule.trim(), promoteName.trim())
+                                            schedule = ""
+                                            promoteName = ""
+                                        },
                                         enabled = !acting && schedule.trim().isNotBlank(),
                                     ) {
                                         Text(if (acting) "Scheduling…" else "Schedule")
@@ -309,7 +325,7 @@ internal fun TeachDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onClose) { Text("Close") }
+            TextButton(onClick = onClose, enabled = !acting) { Text("Close") }
         },
     )
 }

@@ -200,7 +200,9 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 action(teachApi, path).getOrThrow()
                 ensureActive()
                 onSuccess()
-                loadTaught(path)
+                // Fresh path, not the tap-time one: a profile switch
+                // mid-write must reload where the user looks now.
+                loadTaught(chatApi.pathFor(profile))
             } catch (e: Exception) {
                 ensureActive()
                 managingError = e.message?.take(120) ?: "failed"
@@ -353,7 +355,10 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                 style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier.weight(1f),
                             )
-                            TextButton(onClick = { composing = !composing }) {
+                            TextButton(onClick = {
+                                composing = !composing
+                                if (composing) composerError = ""
+                            }) {
                                 Text(if (composing) "Cancel" else "New")
                             }
                         }
@@ -409,16 +414,17 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                                 val path = chatApi.pathFor(profile)
                                                 val (_, clipped) = teachApi.createDraft(path, n, d, b, source = "skills-screen").getOrThrow()
                                                 ensureActive()
+                                                // Fields always clear: keeping them invites
+                                                // a second tap duplicating the draft.
+                                                // The clip hint lives outside the
+                                                // composer gate below, so closing
+                                                // never hides it.
+                                                newName = ""
+                                                newDescription = ""
+                                                newBody = ""
+                                                composing = false
                                                 if (clipped) {
-                                                    // Keep the composer open with its text:
-                                                    // closing would hide the clip hint
-                                                    // this branch exists to show.
                                                     composerError = "Saved, but the text clipped at the length cap."
-                                                } else {
-                                                    newName = ""
-                                                    newDescription = ""
-                                                    newBody = ""
-                                                    composing = false
                                                 }
                                                 loadTaught(path)
                                             } catch (e: Exception) {
@@ -439,14 +445,17 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                 }
                             }
                         }
-                        if (composerError.isNotBlank()) {
-                            item {
-                                Text(
-                                    composerError,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
+                    }
+                    // Outside the composer gate: a clip hint or failure must
+                    // survive the composer closing, or success hides its own
+                    // notice.
+                    if (composerError.isNotBlank()) {
+                        item {
+                            Text(
+                                composerError,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
                         }
                     }
                     if (taught.isEmpty() && taughtError.isBlank()) {
