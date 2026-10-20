@@ -206,6 +206,9 @@ type session struct {
 	// waits instead of launching a second Chromium.
 	starting bool
 	ready    chan struct{}
+	// launchErr carries a failed launch to concurrent waiters so they
+	// report the cause instead of a generic failure.
+	launchErr error
 	// lastUse is written in get() under the sessions lock; evictIdle reads
 	// it under the same lock. Never touched from tool handlers directly.
 	lastUse time.Time
@@ -320,6 +323,11 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if !s.started {
+			// The real error, not a generic concurrent-launch failure:
+			// the waiter retries or reports the same cause.
+			if s.launchErr != nil {
+				return nil, s.launchErr
+			}
 			return nil, fmt.Errorf("concurrent browser launch failed")
 		}
 		return s.browser, nil
@@ -336,6 +344,7 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 	close(s.ready)
 	s.starting = false
 	if berr != nil {
+		s.launchErr = berr
 		return nil, berr
 	}
 	s.alloc, s.cancel, s.browserCancel, s.browser, s.started = balloc, bcancel, btabCancel, bctx, true
@@ -520,10 +529,12 @@ func main() {
 			}
 			// Own budgets per step, like evidence: location, title and
 			// text each get 30s instead of sharing one deadline.
-			url, err := runStep(bctx, func(ctx context.Context) (string, error) {
+			// pageURL, not url: net/url stays usable in these closures
+			// for any next edit that needs to parse.
+			pageURL, err := runStep(bctx, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx, chromedp.Location())
 			})
-			if err == nil && (url == "" || url == "about:blank") {
+			if err == nil && (pageURL == "" || pageURL == "about:blank") {
 				return result(map[string]any{"ok": false, "error": "no page yet: browser_goto first"})
 			}
 			if err != nil {
@@ -553,7 +564,7 @@ func main() {
 				truncated = true
 			}
 			return result(map[string]any{
-				"ok": true, "url": url, "title": title,
+				"ok": true, "url": pageURL, "title": title,
 				"text": text, "truncated": truncated,
 			})
 		})
@@ -607,7 +618,7 @@ func main() {
 			// slow page that spends the whole budget on the read would
 			// flake the full-page screenshot — exactly the long pages
 			// evidence exists for.
-			url, err := runStep(bctx, func(ctx context.Context) (string, error) {
+			pageURL, err := runStep(bctx, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx, chromedp.Location())
 			})
 			if err != nil {
@@ -647,11 +658,11 @@ func main() {
 			if utf8.RuneCountInString(note) > MaxNote {
 				note = strings.TrimSpace(string([]rune(note)[:MaxNote]))
 			}
-			md := "# " + orDefault(title, url) + "\n\n"
+			md := "# " + orDefault(title, pageURL) + "\n\n"
 			if note != "" {
 				md += note + "\n\n"
 			}
-			md += "Source: " + url + "\n\n" + text + "\n"
+			md += "Source: " + pageURL + "\n\n" + text + "\n"
 			files := map[string]string{}
 			for name, data := range map[string][]byte{
 				"shot.png": buf, "page.md": []byte(md),
@@ -663,7 +674,7 @@ func main() {
 				files[name] = p
 			}
 			meta, _ := json.Marshal(map[string]any{
-				"profile": profile, "url": url, "title": title,
+				"profile": profile, "url": pageURL, "title": title,
 				"at": time.Now().UnixMilli(), "note": note,
 			})
 			mp := filepath.Join(dir, "meta.json")

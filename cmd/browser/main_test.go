@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"os"
 	"strings"
 	"testing"
 )
@@ -79,6 +80,48 @@ func TestCollapseLines(t *testing.T) {
 	got := collapseLines("  hello  \n\n   \nworld\n\n")
 	if got != "hello\n\nworld" {
 		t.Fatalf("collapse = %q", got)
+	}
+}
+
+func TestEvidenceDirUnique(t *testing.T) {
+	oldExports, oldProfile := exports, profile
+	defer func() { exports, profile = oldExports, oldProfile }()
+	exports = t.TempDir() + "/browser"
+	profile = "chat"
+	seen := map[string]bool{}
+	for i := 0; i < 5; i++ {
+		d, err := evidenceDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[d] {
+			t.Fatalf("duplicate evidence dir %q", d)
+		}
+		seen[d] = true
+	}
+}
+
+func TestSessionsRejectUnsafeProfile(t *testing.T) {
+	ss := &sessions{byProfile: map[string]*session{}}
+	if _, err := ss.get("../x"); err == nil {
+		t.Fatal("unsafe profile accepted")
+	}
+	if _, err := ss.get("chat"); err != nil {
+		t.Fatalf("valid profile rejected: %v", err)
+	}
+}
+
+func TestEvictIdleTearsDown(t *testing.T) {
+	ss := &sessions{byProfile: map[string]*session{}}
+	s := &session{dir: t.TempDir()}
+	ss.byProfile["old"] = s
+	// lastUse zero value is ancient: eviction must take it.
+	ss.evictIdle()
+	if _, ok := ss.byProfile["old"]; ok {
+		t.Fatal("idle session survived eviction")
+	}
+	if _, err := os.Stat(s.dir); !os.IsNotExist(err) {
+		t.Fatalf("idle session dir survived: %v", err)
 	}
 }
 

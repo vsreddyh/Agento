@@ -141,6 +141,10 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer target.Close()
+	// One deadline for write + read + copy: the dial budget is spent, and a
+	// hung origin must not pin this handler and connection past it. The
+	// relay documents the same bounded-by-traffic rule for tunnels.
+	target.SetDeadline(time.Now().Add(60 * time.Second))
 	// Rewrite to origin-form for the upstream server, preserving everything
 	// else about the client's request — except hop-by-hop headers, which
 	// describe this hop, not the next one (RFC 7230 6.1), and proxy
