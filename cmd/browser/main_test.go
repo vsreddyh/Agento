@@ -99,6 +99,13 @@ func TestEvidenceDirUnique(t *testing.T) {
 			t.Fatalf("duplicate evidence dir %q", d)
 		}
 		seen[d] = true
+		// Make the dir real: without this the test passes on the counter
+		// alone and would miss a regression to second-precision
+		// timestamps. Creating each dir pins the no-overwrite property —
+		// a repeat timestamp+counter must still yield a fresh path.
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
