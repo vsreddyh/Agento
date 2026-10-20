@@ -32,6 +32,7 @@ import (
 	"agento/internal/cronjobs"
 	"agento/internal/memory"
 	"agento/internal/runs"
+	"agento/internal/teach"
 	"context"
 	"errors"
 	"fmt"
@@ -106,7 +107,7 @@ func run() error {
 		client, err := pi.Start(ctx, pi.Options{
 			Bin: piBin,
 			Dir: dir,
-			Args: append(
+			Args: append(append(
 				[]string{"--model", defaultModel, "--session-dir", filepath.Join(agentDir, "sessions")},
 				// Per-profile skills, named explicitly.
 				//
@@ -124,6 +125,11 @@ func run() error {
 				// still start. No count of which profiles have skills, because that
 				// goes stale the moment someone adds one.
 				skillArgs(profileSkillDir(dir))...,
+			),
+				// Taught skills (#314): the runtime dir materialized from
+				// Mongo. skillArgs is nil when it holds no valid skill, so
+				// a profile with nothing taught starts unchanged.
+				skillArgs(teach.RuntimeDir(agentDir, profile))...,
 			),
 			// Env replaces rather than merges, so the parent environment is copied
 			// explicitly — setting it to just the provider key would leave the child
@@ -322,6 +328,57 @@ func run() error {
 		cancelIndex()
 	}
 
+	// Taught skills (#314). Same database, sibling collection. Without
+	// Mongo the routes still work from an in-process store, but activation
+	// cannot survive a restart and the materialized files are the only copy
+	// Pi ever sees — so an activation here would silently un-teach on the
+	// next boot. Log that plainly rather than silently degrade.
+	var teachStore teach.Store
+	if store, err := teach.FromEnv(); err != nil {
+		logger.Printf("teach: falling back to in-process (activations do not survive restart): %v", err)
+		teachStore = teach.NewMemoryStore()
+	} else {
+		teachStore = store
+		store.Logf = logger.Printf
+		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+		if err := store.EnsureIndexes(indexCtx); err != nil {
+			logger.Printf("teach: index setup failed: %v", err)
+		}
+		cancelIndex()
+	}
+
+	// The test-fire runner is the cron runner's sibling, not its child: it
+	// needs the same key and model but no job store, so a Mongo-less stack
+	// still answers "no runner" honestly instead of failing open.
+	var teachRunner gateway.TeachRunner
+	if key := strings.TrimSpace(os.Getenv("OPENCODE_API_KEY")); key != "" {
+		runner := &cronjobs.BareClient{
+			APIKey: key,
+			Model:  envOr("PI_CRON_MODEL", "mimo-v2.6-flash"),
+		}
+		teachRunner = runner.Run
+	} else {
+		logger.Printf("teach: no OPENCODE_API_KEY, skill tests unavailable")
+	}
+
+	// Startup reconcile: Mongo is the source of truth, the runtime dir is a
+	// cache. A deploy wipes the container filesystem, so without this the
+	// first boot after an activation would start Pi skill-less.
+	for _, profile := range profiles {
+		matCtx, cancelMat := context.WithTimeout(ctx, 10*time.Second)
+		skills, err := teachStore.List(matCtx, profile)
+		cancelMat()
+		if err != nil {
+			logger.Printf("teach: startup list failed for %s: %v", profile, err)
+			continue
+		}
+		if n, err := teach.Materialize(teach.RuntimeDir(agentDir, profile), skills); err != nil {
+			logger.Printf("teach: startup materialize failed for %s: %v", profile, err)
+		} else if n > 0 {
+			logger.Printf("teach: materialized %d skill(s) for %s", n, profile)
+		}
+	}
+
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")
 	if _, ok := agents[defaultProfile]; !ok {
 		// Fall back to the first profile that actually STARTED, not the first one
@@ -338,7 +395,7 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, memoryStore, logger.Printf), agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, memoryStore, teachStore, teachRunner, logger.Printf), agents)
 	if err != nil {
 		return err
 	}
@@ -538,7 +595,7 @@ func skillArgs(skillsDir string) []string {
 // InventoryTimeout line left every test green, because the test exercised secondsEnv
 // directly and never the wiring. A budget that cannot be shown to reach its field is
 // not configurable in any useful sense.
-func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, memoryStore memory.Store, logf func(string, ...any)) gateway.Config {
+func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, memoryStore memory.Store, teachStore teach.Store, teachRunner gateway.TeachRunner, logf func(string, ...any)) gateway.Config {
 	return gateway.Config{
 		Password: password,
 		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
@@ -561,6 +618,14 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStor
 		ApprovalStore: approvalStore,
 		// Per-profile memory, owned by run() for the same reason.
 		MemoryStore: memoryStore,
+		// Taught skills, owned by run() for the same reason. The runner is
+		// the cron runner's sibling (same key/model, no job store); the
+		// materializer closes over the agent dir to reach the runtime tree.
+		TeachStore:  teachStore,
+		TeachRunner: teachRunner,
+		TeachMaterialize: func(profile string, skills []teach.Skill) (int, error) {
+			return teach.Materialize(teach.RuntimeDir(agentDir, profile), skills)
+		},
 		// Each budget is configurable for the same reason: the right value depends on
 		// the host, and changing it should not mean rebuilding the binary.
 		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),

@@ -18,6 +18,7 @@ import (
 	"agento/internal/crashlog"
 	"agento/internal/memory"
 	"agento/internal/runs"
+	"agento/internal/teach"
 )
 
 var (
@@ -131,6 +132,21 @@ type Config struct {
 	// main sets a Mongo store when the database is reachable.
 	MemoryStore memory.Store
 
+	// TeachStore is the per-profile taught-skills store (#314). Nil means an
+	// in-process store: the routes still work, but skills die with the
+	// process and activation cannot survive it. main sets a Mongo store when
+	// the database is reachable.
+	TeachStore teach.Store
+
+	// TeachRunner runs one prompt through the bare model client for skill
+	// test fires. Nil means the test route answers 502.
+	TeachRunner TeachRunner
+
+	// TeachMaterialize reconciles one profile's runtime skill dir with its
+	// active skills. Nil means no materialization (tests, binaries without
+	// an agent dir): the routes still work, but Pi never loads the files.
+	TeachMaterialize func(profile string, skills []teach.Skill) (int, error)
+
 	// Logf receives operational messages. Nil discards them.
 	Logf func(format string, args ...any)
 }
@@ -195,6 +211,9 @@ type Server struct {
 	// profile: one store holds every profile's items.
 	memory memory.Store
 
+	// teach backs the taught-skills routes. Scoped by profile like memory.
+	teach teach.Store
+
 	// mcpServers is the configured MCP server set, read once at startup. Empty when
 	// there is no agent directory or no readable mcp.json, which is a valid state.
 	mcpServers []string
@@ -238,6 +257,10 @@ func New(cfg Config, agents map[string]Agent) (*Server, error) {
 	s.memory = cfg.MemoryStore
 	if s.memory == nil {
 		s.memory = memory.NewMemoryStore()
+	}
+	s.teach = cfg.TeachStore
+	if s.teach == nil {
+		s.teach = teach.NewMemoryStore()
 	}
 
 	// Read once, here, rather than per request. mcp.json is fixed for the life of
@@ -549,6 +572,13 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// scopes every read and write to the profile this request resolved to.
 	if rest == "api/memory" || strings.HasPrefix(rest, "api/memory/") {
 		s.handleMemory(w, r, rest, profile)
+		return
+	}
+
+	// Taught skills (#314). Per profile like memory: every verb scopes to
+	// the resolved profile.
+	if rest == "api/skills" || strings.HasPrefix(rest, "api/skills/") {
+		s.handleTeach(w, r, rest, profile)
 		return
 	}
 

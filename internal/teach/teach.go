@@ -1,0 +1,166 @@
+package teach
+
+import (
+	"context"
+	"regexp"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
+// A user-taught skill (#314): a procedure saved from the app, reviewed and
+// test-run before it may steer turns or schedules.
+//
+// Storage model (see docs/adr/0004-taught-skills.md): Mongo
+// (taught_skills) is the source of truth; the gateway materializes ACTIVE
+// skills as SKILL.md files under a runtime dir for Pi's --skill flag. Git
+// never sees them: committed pi/skills/* and taught skills meet only in the
+// v1/skills list and on the model via separate --skill roots.
+
+const (
+	// SkillsCollection holds taught skills.
+	SkillsCollection = "taught_skills"
+	// ListCap bounds one list response.
+	ListCap = 100
+	// MaxDescription bounds a skill description in runes (frontmatter line).
+	MaxDescription = 500
+	// MaxBody bounds a skill body in runes. Procedures need room; the file
+	// is still small next to a prompt.
+	MaxBody = 20000
+	// MaxTestText bounds a stored test transcript in runes.
+	MaxTestText = 4000
+)
+
+// Status is a skill's lifecycle. Drafts are inert: review, edit and test
+// happen before activate, and only active skills materialize or promote.
+type Status string
+
+const (
+	StatusDraft    Status = "draft"
+	StatusActive   Status = "active"
+	StatusDisabled Status = "disabled"
+)
+
+// Valid reports whether s is a status this package knows.
+func (s Status) Valid() bool {
+	return s == StatusDraft || s == StatusActive || s == StatusDisabled
+}
+
+// Skill is one taught procedure.
+type Skill struct {
+	ID          string `bson:"_id" json:"id"`
+	Profile     string `bson:"profile" json:"profile"`
+	Name        string `bson:"name" json:"name"`
+	Description string `bson:"description" json:"description"`
+	Body        string `bson:"body" json:"body"`
+	Status      Status `bson:"status" json:"status"`
+	// Source names where the draft came from (e.g. a thread id), if anywhere.
+	Source   string `bson:"source" json:"source"`
+	TestedAt int64  `bson:"testedAt" json:"tested_at"`
+	// TestText is the last test transcript, clipped. The writer saw the full
+	// output at test time; this is the record, not the signal.
+	TestText  string `bson:"testText" json:"test_text"`
+	CreatedAt int64  `bson:"createdAt" json:"created_at"`
+	UpdatedAt int64  `bson:"updatedAt" json:"updated_at"`
+}
+
+// Update carries the mutable fields of an edit. Nil means "leave alone".
+type Update struct {
+	Name        *string
+	Description *string
+	Body        *string
+}
+
+// Store is the persistence surface. *MongoStore and *MemoryStore implement
+// it; the gateway routes and pi-gateway wiring share one.
+type Store interface {
+	Create(ctx context.Context, s Skill) (Skill, error)
+	Get(ctx context.Context, id, profile string) (Skill, error)
+	Update(ctx context.Context, id, profile string, u Update) (Skill, error)
+	Delete(ctx context.Context, id, profile string) error
+	List(ctx context.Context, profile string) ([]Skill, error)
+	// SetStatus moves one skill along its lifecycle. Activating an untested
+	// skill fails: review/test before run is the contract, not a UI hint.
+	SetStatus(ctx context.Context, id, profile string, st Status) (Skill, error)
+	// RecordTest stores a test transcript and stamps the skill tested.
+	RecordTest(ctx context.Context, id, profile string, at int64, text string) (Skill, error)
+}
+
+// StoreError is the domain error the HTTP layer maps onto status codes.
+type StoreError struct {
+	Msg      string
+	NotFound bool
+	Upstream bool
+}
+
+func (e *StoreError) Error() string { return e.Msg }
+
+// NewStoreError builds a caller-facing store error.
+func NewStoreError(msg string, upstream bool) *StoreError {
+	return &StoreError{Msg: msg, Upstream: upstream}
+}
+
+// nameRe is the skill-name rule: filesystem-safe (it becomes a directory),
+// Pi-command-safe, lowercase. Checked in the stores and the gateway alike.
+var nameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
+
+// ValidName reports whether a raw name is a usable skill name.
+func ValidName(raw string) bool {
+	return nameRe.MatchString(strings.TrimSpace(raw))
+}
+
+// CleanDescription trims a description and bounds it by runes.
+func CleanDescription(d string) string {
+	t := collapseWS(d)
+	if utf8.RuneCountInString(t) > MaxDescription {
+		t = strings.TrimSpace(string([]rune(t)[:MaxDescription]))
+	}
+	return t
+}
+
+// CleanBody trims a body and bounds it by runes.
+func CleanBody(b string) string {
+	t := strings.TrimSpace(strings.ReplaceAll(b, "\x00", ""))
+	if utf8.RuneCountInString(t) > MaxBody {
+		t = strings.TrimSpace(string([]rune(t)[:MaxBody]))
+	}
+	return t
+}
+
+// clipRunes bounds free text stored alongside a record (test transcripts).
+func clipRunes(s string, max int) string {
+	if utf8.RuneCountInString(s) > max {
+		return strings.TrimSpace(string([]rune(s)[:max]))
+	}
+	return s
+}
+
+func collapseWS(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// RenderSKILL renders the SKILL.md Pi loads: frontmatter in the same shape
+// as the committed skills, then the procedure body verbatim.
+func RenderSKILL(s Skill) string {
+	var b strings.Builder
+	b.WriteString("---\nname: " + s.Name + "\n")
+	b.WriteString("description: \"" + yamlEscape(s.Description) + "\"\n")
+	b.WriteString("---\n\n")
+	b.WriteString(s.Body + "\n")
+	return b.String()
+}
+
+func yamlEscape(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	return strings.ReplaceAll(s, "\"", "\\\"")
+}
+
+// NewID returns a hex ObjectID: the Mongo _id and the id the app edits.
+func NewID() string {
+	return primitive.NewObjectID().Hex()
+}
+
+// nowMillis is the clock, one call per operation.
+func nowMillis() int64 { return time.Now().UnixMilli() }

@@ -15,6 +15,10 @@ docker/.env
 # ────────────────────────────────────────────────────────
 run/
 
+# Taught-skill materialization (#314): Mongo is the source of truth, this
+# tree is a cache rebuilt on every gateway start. Never committed.
+pi/.runtime/
+
 # ────────────────────────────────────────────────────────
 # Workspace (per-bot cwd, host-only)
 # ────────────────────────────────────────────────────────

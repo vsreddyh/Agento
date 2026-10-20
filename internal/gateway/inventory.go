@@ -35,6 +35,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"agento/internal/teach"
 )
 
 // modelOption is one provider row in the app's picker.
@@ -232,6 +234,39 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request, h *agentHa
 		}
 		return skills[i].Name < skills[j].Name
 	})
+
+	// Taught skills (#314) ride along: the store rows Pi has not loaded
+	// (drafts, or active skills added since Pi started) still belong on the
+	// Skills tab — the tab is the review surface, not just the loaded set.
+	// Disabled skills stay hidden: stopping must read as gone. A name
+	// collision with a Pi-loaded skill keeps Pi's row (the model sees that
+	// one); the taught row's description names the conflict instead.
+	if taught, err := s.teach.List(ctx, h.profile); err == nil {
+		seen := make(map[string]bool, len(skills))
+		for _, sk := range skills {
+			seen[strings.ToLower(sk.Name)] = true
+		}
+		for _, t := range taught {
+			if t.Status == teach.StatusDisabled || seen[strings.ToLower(t.Name)] {
+				continue
+			}
+			skills = append(skills, skillInfo{
+				Name:        bounded(t.Name),
+				Description: bounded(t.Description),
+				Enabled:     t.Status == teach.StatusActive,
+				Scope:       "taught",
+			})
+		}
+		sort.Slice(skills, func(i, j int) bool {
+			li, lj := strings.ToLower(skills[i].Name), strings.ToLower(skills[j].Name)
+			if li != lj {
+				return li < lj
+			}
+			return skills[i].Name < skills[j].Name
+		})
+	} else {
+		s.cfg.Logf("gateway: taught skills list failed for %s: %v", h.profile, err)
+	}
 
 	// A bare array, which is the first shape the app's rootArray tries. An empty
 	// result is a valid empty page, not an error — the app shows "Nothing listed".
