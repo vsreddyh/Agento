@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -153,6 +154,15 @@ internal fun ChatTab(
         onApprove = { vm.decideApproval(it, true) },
         onDeny = { vm.decideApproval(it, false) },
         onRefreshApprovals = vm::refreshApprovals,
+        onMemory = vm::openMemory,
+        onCloseMemory = vm::closeMemory,
+        onConfirmMemory = vm::confirmMemory,
+        onEditMemory = vm::editMemory,
+        onDeleteMemory = vm::deleteMemory,
+        onToggleMemoryPause = vm::toggleMemoryPause,
+        onCreateMemory = vm::createMemory,
+        onForgetMemory = vm::forgetMemory,
+        onRefreshMemory = vm::refreshMemory,
         onNew = vm::newConversation, onRetry = vm::retry,
         onRegenerate = vm::regenerate, onContinue = vm::continueTurn,
         onReplace = vm::replaceAndResend, onFork = vm::forkAndResend,
@@ -571,6 +581,15 @@ internal fun ChatScreen(
     onApprove: (String) -> Unit = {},
     onDeny: (String) -> Unit = {},
     onRefreshApprovals: () -> Unit = {},
+    onMemory: () -> Unit = {},
+    onCloseMemory: () -> Unit = {},
+    onConfirmMemory: (String) -> Unit = {},
+    onEditMemory: (String, String, String) -> Unit = { _, _, _ -> },
+    onDeleteMemory: (String) -> Unit = {},
+    onToggleMemoryPause: (String, Boolean) -> Unit = { _, _ -> },
+    onCreateMemory: (String, String) -> Unit = { _, _ -> },
+    onForgetMemory: () -> Unit = {},
+    onRefreshMemory: () -> Unit = {},
     onNew: () -> Unit,
     onRetry: () -> Unit,
     onRegenerate: () -> Unit = {},
@@ -974,6 +993,23 @@ internal fun ChatScreen(
                             enabled = state.ready,
                         ) {
                             Icon(Icons.Filled.Approval, contentDescription = "Approvals")
+                        }
+                    }
+                    // Memory (#315): learned facts. Badged with pending
+                    // proposals awaiting review; always enabled once ready —
+                    // memory is per-profile, not per-thread.
+                    BadgedBox(
+                        badge = {
+                            if (state.pendingMemoryCount > 0) {
+                                Badge { Text(pendingCountLabel(state.pendingMemoryCount)) }
+                            }
+                        },
+                    ) {
+                        IconButton(
+                            onClick = onMemory,
+                            enabled = state.ready,
+                        ) {
+                            Icon(Icons.Filled.Psychology, contentDescription = "Memory")
                         }
                     }
                     // Auto-read: speak each finished reply aloud.
@@ -1620,6 +1656,27 @@ internal fun ChatScreen(
                 onDeny = onDeny,
                 onRefresh = onRefreshApprovals,
                 onClose = onCloseApprovals,
+            )
+        }
+        // Per-profile memory (#315): proposals to confirm, rows to edit or
+        // delete, topic pause toggles, and a composer for user items.
+        if (state.showMemory) {
+            MemoryDialog(
+                items = state.memoryItems,
+                paused = state.memoryPaused,
+                topics = state.memoryTopics,
+                warnings = state.memoryWarnings,
+                loading = state.memoryLoading,
+                error = state.memoryError,
+                acting = state.actingMemory,
+                onConfirm = onConfirmMemory,
+                onEdit = onEditMemory,
+                onDelete = onDeleteMemory,
+                onTogglePause = onToggleMemoryPause,
+                onCreate = onCreateMemory,
+                onForget = onForgetMemory,
+                onRefresh = onRefreshMemory,
+                onClose = onCloseMemory,
             )
         }
     }

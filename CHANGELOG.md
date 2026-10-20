@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.8.0]
+- **Per-profile memory: the agent remembers what you tell it** (#315). The
+  agent can save a durable fact — a preference, a format rule, a correction
+  — and it lands **pending** in a new **Memory** screen (badged while
+  proposals await review). Confirm it and the next turn carries it; edit or
+  delete it and the next answer reflects that. Topics pause individually
+  (kept on screen, skipped at injection), **Forget all** wipes items but
+  keeps pauses, and your own entries save confirmed with no review loop. The
+  prompt shows what the screen shows: confirmed, unpaused items only.
+
 ## [5.7.0]
 - **Approval gates: sensitive agent actions pause for your decision**
   (#313). Money writes, deletes, archives and destructive rewrites no longer

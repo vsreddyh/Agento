@@ -86,6 +86,20 @@ data class ChatUiState(
     /** Approval ids with a decision in flight: cards disable their buttons
      * so a double tap cannot fire two decisions. */
     val decidingApprovals: Set<String> = emptySet(),
+    /** Memory sheet for learned facts (#315): pending proposals to confirm,
+     * confirmed rows to edit/delete, topic pause toggles, and a composer. */
+    val showMemory: Boolean = false,
+    val memoryItems: List<MemoryItem> = emptyList(),
+    val memoryPaused: List<String> = emptyList(),
+    val memoryTopics: List<String> = emptyList(),
+    val memoryWarnings: List<String> = emptyList(),
+    val memoryLoading: Boolean = false,
+    val memoryError: String = "",
+    /** Pending proposals right now: badges the memory entry. */
+    val pendingMemoryCount: Int = 0,
+    /** Memory ids with a write in flight: their buttons disable so a double
+     * tap cannot fire two writes. */
+    val actingMemory: Set<String> = emptySet(),
 )
 
 /** Device-observed usage for one conversation thread, summed from
@@ -149,6 +163,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private val api = ChatApi(app)
     private val runsApi = RunsApi(app)
     private val approvalsApi = ApprovalsApi(app)
+    private val memoryApi = MemoryApi(app)
     private val serverApi = ServerApi(app)
     private val appCtx: Application = app
 
@@ -287,6 +302,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         runsJob?.cancel()
         stopApprovalWatch()
         retargetApprovals()
+        retargetMemory()
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
@@ -351,6 +367,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             runsJob?.cancel()
             stopApprovalWatch()
             retargetApprovals()
+            retargetMemory()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(target.messages),
                 threads = summaries(),
@@ -401,6 +418,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         runsJob?.cancel()
         stopApprovalWatch()
         retargetApprovals()
+        retargetMemory()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = "",
             threads = summaries(), threadId = threadId,
@@ -442,6 +460,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             runsJob?.cancel()
             stopApprovalWatch()
             retargetApprovals()
+            retargetMemory()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
@@ -909,6 +928,179 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (_state.value.showApprovals) refreshApprovals()
     }
 
+    /** Opens the memory sheet and loads items + pauses + topics (#315). */
+    fun openMemory() {
+        if (!_state.value.ready) return
+        // Drop stale rows up front: the first paint is the spinner, never
+        // the previous session's items.
+        _state.value = _state.value.copy(
+            showMemory = true, memoryError = "", memoryWarnings = emptyList(),
+            memoryItems = emptyList(), memoryPaused = emptyList(),
+            memoryTopics = emptyList(),
+        )
+        refreshMemory()
+    }
+
+    fun closeMemory() {
+        // A load that lands after close only wastes a call and its rows are
+        // cleared on the next open; cancel it anyway.
+        memoryJob?.cancel()
+        memoryJob = null
+        _state.value = _state.value.copy(showMemory = false)
+    }
+
+    /** Single-flight memory load: a newer open or manual refresh cancels
+     * the older one, so stale rows can never land. */
+    private var memoryJob: Job? = null
+
+    /** Reloads the memory sheet. Failures keep the old rows and report
+     * inside the sheet (never the chat banner). A [notice] survives a
+     * successful load (e.g. "already confirmed"). */
+    fun refreshMemory(notice: String? = null) {
+        val path = _state.value.path
+        _state.value = _state.value.copy(memoryLoading = true)
+        memoryJob?.cancel()
+        memoryJob = viewModelScope.launch(Dispatchers.IO) {
+            // One call carries items + pauses + topics: the screen's three
+            // views of the same rows, so there is no half to reconcile.
+            val list = memoryApi.listMemory(path)
+            withContext(Dispatchers.Main) {
+                val failedCode = ApprovalsApi.httpCode(list.exceptionOrNull()?.message)
+                val loadErr = if (list.isFailure) {
+                    "Couldn't load memory" +
+                        (failedCode?.let { " (HTTP $it)" } ?: "") + "."
+                } else {
+                    ""
+                }
+                val rows = list.getOrNull()
+                _state.value = _state.value.copy(
+                    memoryItems = rows?.items ?: _state.value.memoryItems,
+                    memoryPaused = rows?.paused ?: _state.value.memoryPaused,
+                    memoryTopics = rows?.topics ?: _state.value.memoryTopics,
+                    memoryWarnings = rows?.warnings ?: emptyList(),
+                    memoryLoading = false,
+                    memoryError = listOf(notice.orEmpty(), loadErr)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" "),
+                    pendingMemoryCount = rows?.items?.count { it.isPending() }
+                        ?: _state.value.pendingMemoryCount,
+                )
+            }
+        }
+    }
+
+    /** Runs one memory write with its button disabled, then reloads the
+     * sheet when it is still open. Errors name the HTTP code, never the
+     * body; failures keep the old rows. */
+    private val acting = mutableSetOf<String>()
+
+    private fun actOnMemory(id: String, action: suspend (String) -> Result<*>) {
+        // Both the add here and the remove below run on Main (UI taps and
+        // the Main-confined completion), so a plain set is safe; moving
+        // either side off Main needs a lock.
+        if (id.isBlank() || !acting.add(id)) return
+        _state.value = _state.value.copy(actingMemory = acting.toSet())
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = action(path)
+            withContext(Dispatchers.Main) {
+                acting.remove(id)
+                _state.value = _state.value.copy(actingMemory = acting.toSet())
+                val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
+                if (result.isFailure) {
+                    _state.value = _state.value.copy(
+                        memoryError = "Memory update failed" +
+                            (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
+                    )
+                } else if (_state.value.showMemory) {
+                    refreshMemory()
+                }
+            }
+        }
+    }
+
+    /** Confirms a pending proposal: it joins the next turn's prompt. */
+    fun confirmMemory(id: String) =
+        actOnMemory(id) { path -> memoryApi.updateMemory(path, id, status = "confirmed") }
+
+    /** Deletes one item: it is gone from the next turn. */
+    fun deleteMemory(id: String) =
+        actOnMemory(id) { path -> memoryApi.deleteMemory(path, id) }
+
+    /** Saves an edit to text and/or topic. */
+    fun editMemory(id: String, text: String, topic: String) =
+        actOnMemory(id) { path -> memoryApi.updateMemory(path, id, text = text, topic = topic) }
+
+    /** Pauses or resumes one topic. Paused items stay on screen; they are
+     * simply not injected into turns. */
+    fun toggleMemoryPause(topic: String, paused: Boolean) =
+        actOnMemory("topic:$topic") { path -> memoryApi.setTopicPaused(path, topic, paused) }
+
+    /** Writes a user item: confirmed on arrival, no review loop for the
+     * person whose memory it is. A clipped save reports it in-sheet. */
+    fun createMemory(topic: String, text: String) {
+        if (text.isBlank()) {
+            _state.value = _state.value.copy(memoryError = "Text is required.")
+            return
+        }
+        val key = "new"
+        if (!acting.add(key)) return
+        _state.value = _state.value.copy(actingMemory = acting.toSet())
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = memoryApi.createMemory(path, topic.ifBlank { "general" }, text.trim())
+            withContext(Dispatchers.Main) {
+                acting.remove(key)
+                _state.value = _state.value.copy(actingMemory = acting.toSet())
+                val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
+                if (result.isFailure) {
+                    _state.value = _state.value.copy(
+                        memoryError = "Couldn't save memory" +
+                            (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
+                    )
+                } else if (_state.value.showMemory) {
+                    val truncated = result.getOrNull()?.second == true
+                    refreshMemory(
+                        if (truncated) "Saved, but the text clipped at the length cap." else null,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Forgets every item for the profile. Pauses survive (policy, not
+     * memory). Two-tap in the sheet; this is the second tap. */
+    fun forgetMemory() {
+        val key = "forget"
+        if (!acting.add(key)) return
+        _state.value = _state.value.copy(actingMemory = acting.toSet())
+        val path = _state.value.path
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = memoryApi.forgetMemory(path)
+            withContext(Dispatchers.Main) {
+                acting.remove(key)
+                _state.value = _state.value.copy(actingMemory = acting.toSet())
+                val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
+                if (result.isFailure) {
+                    _state.value = _state.value.copy(
+                        memoryError = "Couldn't forget memory" +
+                            (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
+                    )
+                } else if (_state.value.showMemory) {
+                    refreshMemory("Forgot ${result.getOrNull() ?: 0} item(s). Pauses kept.")
+                }
+            }
+        }
+    }
+
+    /** A thread/profile change retires any memory load started under the
+     * old path, reopening the sheet against the new one. */
+    private fun retargetMemory() {
+        memoryJob?.cancel()
+        memoryJob = null
+        if (_state.value.showMemory) refreshMemory()
+    }
+
     /**
      * Reattaches an app-killed turn (#311): a trailing user message plus a
      * live server run with the same prompt means resending streams the
@@ -1075,6 +1267,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         runsJob?.cancel()
         stopApprovalWatch()
         retargetApprovals()
+        retargetMemory()
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
