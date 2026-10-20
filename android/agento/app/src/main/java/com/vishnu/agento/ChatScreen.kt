@@ -390,9 +390,14 @@ internal fun ChatTab(
         val unique = uris.distinct()
         // Cap toast here covers pre-truncation overflow; the loop below
         // re-checks room per pick (concurrent batches can only shrink it).
+        // Duplicates collapse silently into one copy — said out loud when
+        // nothing else was: picking the same photo 3x with room to spare
+        // stages 1 with no other toast, which reads as 2 lost picks.
         val overCap = unique.size > slots
         if (overCap) {
             vm.notify(capRefused(), ToastKind.Info)
+        } else if (unique.size < uris.size) {
+            vm.notify("Duplicate photos attached once.", ToastKind.Info)
         }
         // Hoisted ABOVE the launch (#339): the resolver is all the batch
         // needs, and declaring it inside would still capture the Activity
@@ -548,7 +553,10 @@ internal fun ChatTab(
             vm.notify("No camera on this device — use Choose photos instead.", ToastKind.Info)
             return
         }
-        val dir = File(context.cacheDir, "camera")
+        // Application context for the dir (#339): the tap handler must not
+        // resolve cacheDir on the Activity — same leak class as the sweep
+        // and batch fixes (a File crosses forward, never the Activity).
+        val dir = File(context.applicationContext.cacheDir, "camera")
         // Checked, not assumed (#339): full storage fails mkdirs, and a
         // bare TakePicture failure (ok=false) would leave the user with
         // no hint why no camera appeared. State notice, not a composition

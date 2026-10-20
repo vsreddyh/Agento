@@ -563,9 +563,12 @@ fun decodeThumbnail(base64: String): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        // Long counter like the full-size loop (#339): same overflow
-        // discipline everywhere sampling runs (toInt only at the
-        // inSampleSize handoff, where the value is provably small).
+        // Long counter like the full-size loop (#339): exits in ~12
+        // iterations on real headers (halving toward 256), so the toInt()
+        // at the inSampleSize handoff is provably small — an adversarial
+        // giant-dims header drives it furthest and still exits orders of
+        // magnitude below 2^31. Same overflow discipline everywhere
+        // sampling runs.
         var sample = 1L
         while (bounds.outWidth / sample > 256 ||
             bounds.outHeight / sample > 256

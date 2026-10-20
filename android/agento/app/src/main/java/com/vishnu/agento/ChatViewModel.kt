@@ -997,11 +997,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         ToastKind.Info,
                     )
                 }
-            } else if (photos.isNotEmpty()) {
+            } else if (photos.wiredPhotoCount() > 0) {
                 // Image-only tap while streaming (#339): nothing queues
                 // (the queue is text), so say the photos are waiting —
                 // otherwise the enabled send button looks dead. Info, same
-                // reasoning as above.
+                // reasoning as above. Counted wired like the gate above it.
                 notify(
                     "Still answering — photos stay staged and " +
                         "send with your next message.",
@@ -1016,13 +1016,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
         _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path, queued = "")
-        // Stored canonical (#339): whitespace-only text with photos
-        // normalizes to "" (the wire already sends images-only for it, the
-        // bubble already renders thumbs-only) — invisible whitespace must
-        // not persist through every round-trip.
+        // Stored canonical AND wired (#339): whitespace-only text with
+        // photos normalizes to "" (the wire already sends images-only for
+        // it, the bubble already renders thumbs-only) — invisible whitespace
+        // must not persist through every round-trip. Stored filtered, so a
+        // blank can never persist into thread JSON even if the invariant
+        // ever breaks upstream.
         val stored = if (text.isEmpty()) "" else rawText
         val history = _state.value.messages +
-            ChatMessage("user", stored, ChatThreads.now(), attachments = photos)
+            ChatMessage("user", stored, ChatThreads.now(), attachments = photos.wiredPhotos())
         _state.value = _state.value.copy(
             messages = history, pending = "", pendingAttachments = emptyList(),
             streaming = true, error = "",
@@ -1044,8 +1046,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // UI-unreachable — but !ready is reachable (streaming during load),
         // and an ungated return would dead-tap there.
         if (text.isEmpty() || !_state.value.ready) {
+            // Counted wired like send()'s gate (#339).
             if (!_state.value.ready &&
-                (text.isNotEmpty() || _state.value.pendingAttachments.isNotEmpty())
+                (text.isNotEmpty() || _state.value.pendingAttachments.wiredPhotoCount() > 0)
             ) {
                 notify("Conversations still loading — try again in a moment.", ToastKind.Info)
             }
