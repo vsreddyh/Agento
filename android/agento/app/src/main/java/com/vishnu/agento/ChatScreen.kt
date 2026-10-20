@@ -975,8 +975,17 @@ internal fun ChatScreen(
     }
     /** Begins (or resumes) the live session: kill turn, arm, listen. */
     fun startLive() {
+        // Model first (#317): the on-screen Start gates on state.ready and
+        // the widget/auto paths must share it — arming with nothing to send
+        // to just drops the first utterance (send() returns early !ready).
+        if (!state.ready) {
+            toasts.toast("Choose a model to start.", ToastKind.Error)
+            return
+        }
         if (!liveRec.available()) {
-            endLive("Voice recognition unavailable on this device.")
+            // No session to retire: toast and return directly — endLive()
+            // would cut a non-live readout via tts.stop() as collateral.
+            toasts.toast("Voice recognition unavailable on this device.", ToastKind.Error)
             return
         }
         // Permission first (#317): the kills below are destructive and the
@@ -985,9 +994,10 @@ internal fun ChatScreen(
         // next tap retries via the permission-launcher path.
         micArmed = interrupt.hasPermission(context)
         if (!micArmed) {
-            // No permission, no loop: falling through would listen once,
-            // fatal, and end — flash-then-die with two toasts.
-            endLive("Live mode needs microphone access.")
+            // No permission, no loop — and no endLive(): there is no session
+            // to retire, and it would cut a non-live readout as collateral.
+            // Stay out and say why; the next tap retries via the launcher.
+            toasts.toast("Live mode needs microphone access.", ToastKind.Error)
             return
         }
         // Mid-turn entry (#317): capture before onStop() clears
