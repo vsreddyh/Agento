@@ -199,10 +199,12 @@ class TeachApi(context: Context) {
         if (input.isNotBlank()) req.put("input", input)
         call("POST", "$path/api/skills/${ApprovalsApi.encode(id)}/test", req).mapCatching {
             // Missing output is unparseable, not empty: a 200 without the
-            // transcript must fail rather than show a blank test.
-            parseObject(checkOk(it).body).optString("output", "__missing__")
-                .takeUnless { it == "__missing__" }
-                ?: throw RuntimeException("response had no output")
+            // transcript must fail rather than show a blank test. has()
+            // rather than a sentinel default: a real output could spell
+            // anything.
+            val root = parseObject(checkOk(it).body)
+            if (!root.has("output")) throw RuntimeException("response had no output")
+            root.optString("output", "")
         }
     }
 

@@ -123,6 +123,11 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // Hoisted alongside the api: pathFor is pure config, and every
     // construction builds an OkHttpClient for nothing.
     val chatApi = remember { ChatApi(context) }
+    val serverApi = remember { ServerApi(context) }
+    // Composer writes track their own busy flag: sharing managingBusy with
+    // the dialog would disable Edit/Activate/Test on every composer save
+    // and vice versa.
+    var composerBusy by remember { mutableStateOf(false) }
 
     /** Taught load with the same single-flight + path guard as load(): a
      * profile switch mid-flight must not land old rows on the new path. */
@@ -161,7 +166,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         var job: Job? = null
         job = scope.launch {
             try {
-                val sr = ServerApi(context).listSkills(path)
+                val sr = serverApi.listSkills(path)
                 // A cancel landing mid-await must not leave stale state.
                 ensureActive()
                 if (loadJob == job) {
@@ -502,7 +507,11 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             onTest = { input ->
                 testOutput = ""
                 mutate(action = { api, path ->
-                    api.testSkill(path, open.id, input).onSuccess { testOutput = it }
+                    // Blank output is a ran-empty signal, not a not-run one:
+                    // without the marker the two are indistinguishable.
+                    api.testSkill(path, open.id, input).onSuccess {
+                        testOutput = it.ifBlank { "(no output)" }
+                    }
                 })
             },
             onActivate = {

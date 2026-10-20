@@ -65,4 +65,9 @@ class TeachApiTest {
         val empty = parseSkillList("""{"skills":[]}""")!!
         assertTrue(empty.isEmpty())
     }
+
+    @Test
+    fun `parseSkillList fails missing key instead of wiping`() {
+        assertNull(parseSkillList("""{"nope":[]}"""))
+    }
 }

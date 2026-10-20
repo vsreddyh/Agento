@@ -274,7 +274,12 @@ internal fun ChatTab(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { savingSkillId = null }) { Text("Cancel") }
+                TextButton(
+                    onClick = { savingSkillId = null },
+                    enabled = !saving,
+                ) {
+                    Text("Cancel")
+                }
             },
         )
     }
