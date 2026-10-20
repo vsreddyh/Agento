@@ -491,6 +491,7 @@ internal fun ChatTab(
                 ToastKind.Info,
             )
         },
+        hasStagedPhotos = { vm.pendingAttachmentCount() > 0 },
     )
     // Camera permanently denied (#339): the request UI never shows again,
     // so the dialog — not an auto-open — offers the Settings escape hatch.
@@ -1063,6 +1064,10 @@ internal fun ChatScreen(
      * parks in the composer for a confirming tap instead of auto-sending
      * with the photos. */
     onLiveStagedPhotos: () -> Unit = {},
+    /** Live read of staged-photo state (#339): the listener closure must
+     * not use the composition snapshot (recomposition lag), so ChatTab
+     * supplies the ViewModel read directly. */
+    hasStagedPhotos: () -> Boolean = { false },
     autoLiveGen: Int = 0,
 ) {
     val listState = rememberLazyListState()
@@ -1438,12 +1443,12 @@ internal fun ChatScreen(
                     endLive()
                 } else {
                     silentRounds = 0
-                    // Staging reads come from the VM, not the snapshot
+                    // Staging reads come from the callback, not the snapshot
                     // (#339): the composition state can lag by a
                     // recomposition, and a stale-empty read here takes the
                     // auto-send branch — the exact wrong-image send the
                     // gate exists to prevent.
-                    val staged = vm.pendingAttachmentCount() > 0
+                    val staged = hasStagedPhotos()
                     // Append when photos are staged (#339): the confirming
                     // tap comes later, so each sentence must accumulate like
                     // the one-shot mic path below — replacing would discard
