@@ -160,6 +160,20 @@ func NormalizeTopic(topic string) string {
 	return t
 }
 
+// UsableTopic reports whether a raw topic string names a real topic. Empty
+// and punctuation-only strings would silently normalise to DefaultTopic and
+// re-categorise the item; a topic that already spells general passes. Both
+// writers (POST and PUT) enforce this so create is not lenient where update
+// is strict.
+func UsableTopic(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false
+	}
+	return NormalizeTopic(raw) != DefaultTopic ||
+		strings.EqualFold(trimmed, DefaultTopic)
+}
+
 // CleanText trims an item's text and bounds it by runes. Empty text is
 // rejected by the stores; this only normalises.
 func CleanText(text string) string {
@@ -207,7 +221,10 @@ func PromptBlock(items []Item, paused []string) string {
 		if isPaused[topic] {
 			continue
 		}
-		line := "- (" + topic + ") " + text + "\n"
+		// One item, one line: an embedded newline could spoof the closing
+		// tag the byte budget works to guarantee. The screen keeps the
+		// multiline text; the prompt carries it flattened.
+		line := "- (" + topic + ") " + strings.ReplaceAll(strings.ReplaceAll(text, "\r", ""), "\n", " ") + "\n"
 		// The header and the closing tag count against the budget: a block
 		// cut before its terminator would read as instructions running on.
 		// Skip-and-continue, not break: one long item must not starve every

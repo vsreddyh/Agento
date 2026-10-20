@@ -238,4 +238,25 @@ func TestMemoryEmptyTopicAndNullPaused(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("topic general: %d, want 200 (%s)", rec.Code, rec.Body)
 	}
+	// The create path enforces the same topic rule as the update path.
+	for _, topic := range []string{`---`, `   `} {
+		rec := do(t, srv, http.MethodPost, "/api/memory",
+			`{"topic":`+strconv.Quote(topic)+`,"text":"hi"}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("create topic %q: %d, want 400 (%s)", topic, rec.Code, rec.Body)
+		}
+	}
+	// An edit past MaxText clips and says so, like a create.
+	long := strings.Repeat("z", memory.MaxText+10)
+	rec = do(t, srv, http.MethodPut, "/api/memory/"+id, `{"text":`+strconv.Quote(long)+`}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("long edit: %d, want 200 (%s)", rec.Code, rec.Body)
+	}
+	if truncated, _ := decodeBody(t, rec)["truncated"].(bool); !truncated {
+		t.Fatalf("long edit response missing truncated=true (%s)", rec.Body)
+	}
+	// A trailing slash does not change the verb.
+	if rec := do(t, srv, http.MethodPost, "/api/memory/forget/", ""); rec.Code != http.StatusOK {
+		t.Fatalf("forget/: %d, want 200 (%s)", rec.Code, rec.Body)
+	}
 }

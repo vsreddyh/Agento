@@ -84,13 +84,20 @@ func (s *MemoryStore) Update(_ context.Context, id, profile string, u Update) (I
 	if !ok || it.Profile != profile {
 		return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
 	}
+	// A no-op edit is rejected, not timestamped: UpdatedAt must mean
+	// something changed, and the gateway 400s {} first, but the store is the
+	// backstop for direct callers.
+	if u.Text == nil && u.Topic == nil && u.Status == nil {
+		return Item{}, NewStoreError("memory update needs text, topic or status", false)
+	}
 	if u.Text != nil {
 		// Same invariant as Create: an edit must not blank an item. The
 		// gateway 400s this first, but the store is the backstop.
-		if text := CleanText(*u.Text); text == "" {
+		text := CleanText(*u.Text)
+		if text == "" {
 			return Item{}, NewStoreError("memory item needs text", false)
 		}
-		it.Text = CleanText(*u.Text)
+		it.Text = text
 	}
 	if u.Topic != nil {
 		it.Topic = NormalizeTopic(*u.Topic)

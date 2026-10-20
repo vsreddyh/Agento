@@ -108,13 +108,17 @@ func (s *MongoStore) Get(ctx context.Context, id, profile string) (Item, error) 
 // carries the profile: one query authorises and writes, and a foreign id
 // reads as NotFound instead of costing a Get-then-write pair.
 func (s *MongoStore) Update(ctx context.Context, id, profile string, u Update) (Item, error) {
+	if u.Text == nil && u.Topic == nil && u.Status == nil {
+		return Item{}, NewStoreError("memory update needs text, topic or status", false)
+	}
 	set := bson.M{"updatedAt": time.Now().UnixMilli()}
 	if u.Text != nil {
 		// Same invariant as Create; see MemoryStore.Update.
-		if text := CleanText(*u.Text); text == "" {
+		text := CleanText(*u.Text)
+		if text == "" {
 			return Item{}, NewStoreError("memory item needs text", false)
 		}
-		set["text"] = CleanText(*u.Text)
+		set["text"] = text
 	}
 	if u.Topic != nil {
 		set["topic"] = NormalizeTopic(*u.Topic)
@@ -178,9 +182,11 @@ func (s *MongoStore) List(ctx context.Context, f Filter) ([]Item, error) {
 	if limit <= 0 || limit > ListCap {
 		limit = ListCap
 	}
+	// createdAt desc, _id desc: the memory backend breaks same-millisecond
+	// ties the same way, so Atlas and dev return one ordering contract.
 	cur, err := s.items.Find(ctx, q,
 		options.Find().
-			SetSort(bson.D{{Key: "createdAt", Value: -1}}).
+			SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}).
 			SetLimit(int64(limit)))
 	if err != nil {
 		return nil, NewStoreError("memory list failed: "+err.Error(), true)

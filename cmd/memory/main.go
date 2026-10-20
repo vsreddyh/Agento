@@ -156,6 +156,8 @@ func main() {
 			}
 			f.Limit = in.Limit
 			if f.Limit == 0 {
+				// Small on purpose: the agent gets a working set, while the
+				// screen lists up to ListCap for its topic list.
 				f.Limit = 50
 			}
 			items, err := store.List(ctx, f)

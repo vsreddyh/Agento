@@ -69,6 +69,9 @@ func memoryCtx(r *http.Request) (context.Context, context.CancelFunc) {
 func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request, rest, profile string) {
 	path := strings.TrimPrefix(rest, "api/memory")
 	path = strings.TrimPrefix(path, "/")
+	// Tolerate one trailing slash, like the runs verbs: /api/memory/forget/
+	// is forget, not an id lookup for "forget/".
+	path = strings.TrimSuffix(path, "/")
 
 	switch {
 	case path == "":
@@ -244,6 +247,11 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 		if err := decodeJSONBody(w, r, &body); err != nil {
 			return
 		}
+		if !memory.UsableTopic(body.Topic) {
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "topic",
+				memoryTopicError(body.Topic))
+			return
+		}
 		trimmed := strings.TrimSpace(body.Text)
 		text := memory.CleanText(body.Text)
 		if text == "" {
@@ -297,23 +305,18 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 	}
 	upd := memory.Update{}
 	if body.Topic != nil {
-		// An empty or punctuation-only topic would silently normalise to
-		// "general" (NormalizeTopic's Trim(t,"-") fallback) and
-		// re-categorise the item; reject it instead. A topic that already
-		// spells general passes through; "--general--" does not, on
-		// purpose — accepting anything that normalises to general would
-		// also accept every punctuation-only string, which is exactly
-		// the silent re-categorisation this rejects.
-		if strings.TrimSpace(*body.Topic) == "" ||
-			(memory.NormalizeTopic(*body.Topic) == memory.DefaultTopic &&
-				!strings.EqualFold(strings.TrimSpace(*body.Topic), memory.DefaultTopic)) {
+		if !memory.UsableTopic(*body.Topic) {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "topic",
-				"topic must contain a letter or digit")
+				memoryTopicError(*body.Topic))
 			return
 		}
 		upd.Topic = body.Topic
 	}
+	// trimmedText feeds the truncation signal in the response: an edit
+	// pasting past MaxText clips like a create, and the writer should know.
+	trimmedText := ""
 	if body.Text != nil {
+		trimmedText = strings.TrimSpace(*body.Text)
 		text := memory.CleanText(*body.Text)
 		if text == "" {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "text",
@@ -348,7 +351,11 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 		memoryError(w, err)
 		return
 	}
-	writeJSONResponse(w, http.StatusOK, map[string]any{"item": memoryWire(it)})
+	// Same truncated contract as POST and save_memory.
+	writeJSONResponse(w, http.StatusOK, map[string]any{
+		"item":      memoryWire(it),
+		"truncated": upd.Text != nil && it.Text != trimmedText,
+	})
 }
 
 // memoryFilter applies the collection's status/topic/limit views to one
@@ -372,6 +379,16 @@ func memoryFilter(all []memory.Item, f memory.Filter) []memory.Item {
 		}
 	}
 	return out
+}
+
+// memoryTopicError tells the caller what is actually wrong: an empty or
+// punctuation-only topic has nothing usable in it, while "--general--" does
+// have letters but would still be stored as "general".
+func memoryTopicError(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return "topic must contain a letter or digit"
+	}
+	return "topic is not usable (it would be stored as \"" + memory.DefaultTopic + "\")"
 }
 
 // memoryTopics unions item topics with paused ones, sorted by first seen.
