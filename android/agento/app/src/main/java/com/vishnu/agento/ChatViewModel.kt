@@ -370,6 +370,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             threadId = id,
             error = "",
             pending = "",
+            // Staged photos die with the text draft (#339): the composer
+            // belongs to the thread being left, and a parked photo firing
+            // into the wrong thread is a silent mis-send.
+            pendingAttachments = emptyList(),
             activeTools = emptyList(),
             activeToolLabel = "",
             serverTokens = null,
@@ -435,6 +439,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 threadId = id,
                 error = "",
                 pending = "",
+                // Staged photos die with the text draft (#339): the composer
+                // belongs to the thread being left, and a parked photo firing
+                // into the wrong thread is a silent mis-send.
+                pendingAttachments = emptyList(),
                 activeTools = emptyList(),
                 activeToolLabel = "",
                 serverTokens = null,
@@ -459,7 +467,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = api.pathFor(tab)
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
-            pending = "", streaming = true, error = "", queued = "",
+            pending = "",
+            // Staged photos die with the text draft (#339): the composer
+            // belongs to the thread being left, and a parked photo firing
+            // into the wrong thread is a silent mis-send.
+            pendingAttachments = emptyList(), streaming = true, error = "", queued = "",
         )
         doSend(msgs, path, provider, model, effort)
         return true
@@ -525,6 +537,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = "",
+                // Same staged-photos-die-with-the-draft rule as the other
+                // thread changes above (#339).
+                pendingAttachments = emptyList(),
                 serverTokens = null, queued = "",
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
@@ -1512,7 +1527,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path, queued = "",
         )
-        val history = msgs.take(index) + ChatMessage("user", clean, ChatThreads.now())
+        // The edited turn keeps its photos (#339): resending the new text
+        // without them would silently narrow the turn the user composed.
+        val history = msgs.take(index) +
+            ChatMessage("user", clean, ChatThreads.now(), attachments = msgs[index].attachments)
         _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }
@@ -1529,7 +1547,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
-        val forked = msgs.take(index) + ChatMessage("user", clean, ChatThreads.now())
+        // Same photo-carry rule as Replace above (#339): the forked turn is
+        // the edited turn, photos included.
+        val forked = msgs.take(index) +
+            ChatMessage("user", clean, ChatThreads.now(), attachments = msgs[index].attachments)
         val fresh = ChatThread(
             id = ChatThreads.newId(),
             updatedAt = ChatThreads.now(),

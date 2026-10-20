@@ -172,23 +172,36 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // EXIF orientation (#339 review): BitmapFactory ignores it, so a
             // portrait phone photo would stage and send sideways. The
             // framework reader needs no extra dependency (minSdk 28 > 24).
-            val rotation = resolver.openInputStream(uri)?.use { stream ->
+            // Flips included: front-camera selfies commonly carry
+            // FLIP_HORIZONTAL/TRANSVERSE, which a rotation-only mapping
+            // would leave mirrored.
+            val orientation = resolver.openInputStream(uri)?.use { stream ->
                 runCatching {
-                    when (
-                        ExifInterface(stream).getAttributeInt(
-                            ExifInterface.TAG_ORIENTATION,
-                            ExifInterface.ORIENTATION_NORMAL,
-                        )
-                    ) {
-                        ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-                        ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-                        ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-                        else -> 0f
-                    }
-                }.getOrDefault(0f)
-            } ?: 0f
-            if (rotation != 0f) {
-                val matrix = Matrix().apply { postRotate(rotation) }
+                    ExifInterface(stream).getAttributeInt(
+                        ExifInterface.TAG_ORIENTATION,
+                        ExifInterface.ORIENTATION_NORMAL,
+                    )
+                }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+            } ?: ExifInterface.ORIENTATION_NORMAL
+            // Null means no transform: transposes and flips compose a mirror
+            // via negative scale, which createBitmap applies directly.
+            val matrix: Matrix? = when (orientation) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> Matrix().apply { postRotate(90f) }
+                ExifInterface.ORIENTATION_ROTATE_180 -> Matrix().apply { postRotate(180f) }
+                ExifInterface.ORIENTATION_ROTATE_270 -> Matrix().apply { postRotate(270f) }
+                ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> Matrix().apply { preScale(-1f, 1f) }
+                ExifInterface.ORIENTATION_FLIP_VERTICAL -> Matrix().apply { preScale(1f, -1f) }
+                ExifInterface.ORIENTATION_TRANSPOSE -> Matrix().apply {
+                    postRotate(90f)
+                    postScale(-1f, 1f)
+                }
+                ExifInterface.ORIENTATION_TRANSVERSE -> Matrix().apply {
+                    postRotate(270f)
+                    postScale(-1f, 1f)
+                }
+                else -> null
+            }
+            if (matrix != null) {
                 val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
                 // Referential on purpose: equality is referential for Bitmaps,
                 // and only a new instance may recycle the old one.

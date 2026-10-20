@@ -2268,7 +2268,10 @@ internal fun ChatScreen(
         val confirm = confirmReplace
         if (confirm != null) {
             val (idx, text) = confirm
-            val dropped = state.messages.drop(idx + 1).count { it.content.isNotBlank() }
+            // Content, not text (#339): image-only turns count as dropped
+            // turns, like the dropsTurns gate above — otherwise the dialog
+            // reports "drops 0 later messages" while discarding photos.
+            val dropped = state.messages.drop(idx + 1).count { messageHasContent(it) }
             AlertDialog(
                 onDismissRequest = { confirmReplace = null },
                 title = { Text("Resend from edited message?") },
