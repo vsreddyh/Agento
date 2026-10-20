@@ -148,6 +148,7 @@ class ChatAttachmentsTest {
     fun blankPayloadsAreNotWired() {
         // Fail-closed: an empty base64 (hand-edited thread, writer bug)
         // counts as no attachment — never a data:image/jpeg;base64, part.
+        // Ragged payloads (bad length/alphabet) filter the same way.
         assertEquals(
             WireContent.Text("hi"),
             messageContentJson(
@@ -156,6 +157,15 @@ class ChatAttachmentsTest {
                 includeImages = true,
             ),
         )
+        assertEquals(
+            WireContent.Text("hi"),
+            messageContentJson(
+                "user", "hi",
+                listOf(ChatAttachment(base64 = "!!!not-base64!!!")),
+                includeImages = true,
+            ),
+        )
+        // Mixed: the blank drops, the valid image still wires (text + 1).
         val out = messageContentJson(
             "user", "hi",
             listOf(ChatAttachment(base64 = ""), attachment("AAA=")),

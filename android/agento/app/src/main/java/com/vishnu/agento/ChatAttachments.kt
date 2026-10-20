@@ -60,8 +60,28 @@ fun List<ChatAttachment>.wiredPhotoCount(): Int =
 /** Single source of truth for the wired predicate (#339): both helpers
  * above delegate here, so the next edit that changes what counts (e.g.
  * trimming whitespace-only payloads) cannot silently re-split the
- * wire/display/cap contract. */
+ * wire/display/cap contract. Blank-only: decode-validity (ragged alphabet,
+ * bad padding) is checked at the wire filter, not here — a full or even
+ * regex validation per call would run on search keystrokes, while sends
+ * (the only place validity matters) are rare. */
 private fun ChatAttachment.isWired(): Boolean = base64.isNotBlank()
+
+/** Decode-validity for the wire filter (#339): blank payloads never reach
+ * here (isWired), but a hand-edited ragged payload (bad length, non-base64
+ * alphabet) must not emit `data:...;base64,<ragged>` into an image_url
+ * part — the gateway would 400 what should be a client-side named shape.
+ * Alphabet scan, no decode: runs per send, never per keystroke. */
+private fun isDecodableBase64(s: String): Boolean {
+    if (s.isEmpty() || s.length % 4 != 0) return false
+    for (c in s) {
+        if (c != '=' && c != '+' && c != '/' &&
+            c !in 'A'..'Z' && c !in 'a'..'z' && c !in '0'..'9'
+        ) {
+            return false
+        }
+    }
+    return true
+}
 
 /** Wired payloads with their staged indices (#339): the strip renders
  * wired but removes by staged slot, so it needs both — without
@@ -236,8 +256,11 @@ fun messageContentJson(
     // part the gateway would feed Pi. Empty payloads count as no
     // attachment for wire purposes (an image-only turn of blanks falls
     // back to bare text, which the server refuses with its named
-    // blank-turn error instead of a corrupt image part).
-    val images = attachments.wiredPhotos()
+    // blank-turn error instead of a corrupt image part). Ragged payloads
+    // (bad length/alphabet) filter here too — validity is send-frequency,
+    // so the alphabet scan lives at the wire, never in the hot-path
+    // isWired() predicate.
+    val images = attachments.wiredPhotos().filter { isDecodableBase64(it.base64) }
     if (role != "user" || images.isEmpty() || !includeImages) {
         // Stripped earlier photo turns stay honest (#339): the server
         // prompts with the trailing turn alone, but any other reader of
@@ -614,11 +637,10 @@ fun decodeThumbnail(base64: String): Bitmap? {
     // propagate (produceState restart on recompose), never collapse into
     // the null placeholder path like a corrupt payload does.
     return try {
-        // Gated like the stage path (#339): thumbnails decode whatever is
-        // in storage, so a hand-edited multi-MB payload would otherwise
-        // decode unbounded per visible row — over-cap reads null straight
-        // to the placeholder instead.
-        if (base64.length > MAX_IMAGE_BASE64_CHARS) return null
+        // Gated on decoded size, not raw length (#339): base64Bytes
+        // excludes framing whitespace the raw length counts, so a wrapped
+        // hand-edited payload gates on what decode will actually read.
+        if (base64Bytes(base64) > MAX_IMAGE_BASE64_CHARS * 3L / 4L) return null
         // DEFAULT on decode is deliberate asymmetry with the NO_WRAP encode
         // above: encode must not emit newlines (data URIs are single-line),
         // while decode stays lenient toward payloads written by older builds.
