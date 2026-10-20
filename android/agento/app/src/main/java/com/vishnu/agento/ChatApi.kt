@@ -582,8 +582,9 @@ class ChatApi(context: Context) {
         // on Main). The network hop below already runs on IO; the build
         // joins it. Returns body + measured bytes; preflight + request
         // stay in producer context below (trySend/close live there).
+        // lastUserIdx hoisted here: cheap role scan, read on both sides.
+        val lastUserIdx = messages.indexOfLast { it.role == "user" }
         val (body, rawBytes) = withContext(Dispatchers.IO) {
-            val lastUserIdx = messages.indexOfLast { it.role == "user" }
             val payload = JSONObject()
             // An explicit provider/model is always sent; blanks are omitted
             // (legacy configs predate required selection).
@@ -605,7 +606,6 @@ class ChatApi(context: Context) {
             // text and the body stays bounded however long the thread gets.
             // Exhaustive when: the sealed return forces both shapes handled —
             // a bare String put would misrender a Multipart as a JSON string.
-            // (lastUserIdx hoisted above the IO block — also read below.)
             for ((i, m) in messages.withIndex()) {
                 val content = messageContentJson(m.role, m.content, m.attachments, includeImages = i == lastUserIdx)
                 val wire: Any = when (content) {
@@ -632,16 +632,11 @@ class ChatApi(context: Context) {
             // Scoped pair (#339): raw falls out of scope with this block
             // instead of living in the closure for the whole upload — one
             // copy freed for the slow-upload seconds, leaving body alone
-            // with the request. Both declared INSIDE (an earlier revision
-            // scoped only the build while raw stayed reachable outside,
-            // which retained the string it claimed to free).
-            val measured = run {
-                val raw = payload.toString()
-                val built = raw.toRequestBody(JSON)
-                built to built.contentLength()
-            }
-            val body = measured.first
-            val rawBytes = measured.second
+            // with the request. Block value is the pair (an earlier
+            // revision ended on val declarations, which return Unit).
+            val raw = payload.toString()
+            val built = raw.toRequestBody(JSON)
+            built to built.contentLength()
         }
         if (wireSizeExceeded(rawBytes)) {
             // Phrased for what's actually measured (#339): rawBytes is the
