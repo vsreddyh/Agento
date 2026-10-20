@@ -179,7 +179,9 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 val buf = ByteArray(8192)
                 var total = 0L
                 // A 0 return is legal but progress-less (#339): bail after
-                // a streak instead of spinning on a stuck provider stream.
+                // a streak instead of spinning on a stuck provider stream —
+                // as a READ failure ("moved or deleted"), not a silent
+                // truncation that decodes into a bogus "not a photo" error.
                 var zeroStreak = 0
                 while (true) {
                     val n = stream.read(buf)
@@ -188,7 +190,11 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     // truncate the file into a bogus "not readable" error.
                     if (n < 0) break
                     if (n == 0) {
-                        if (++zeroStreak > 100) break
+                        if (++zeroStreak > 100) {
+                            throw IllegalArgumentException(
+                                "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
+                            )
+                        }
                         continue
                     }
                     zeroStreak = 0

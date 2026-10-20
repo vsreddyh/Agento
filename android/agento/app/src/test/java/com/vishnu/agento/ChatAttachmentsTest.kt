@@ -74,6 +74,17 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun nonUserWithAttachmentsIsBareString() {
+        // Fail-closed asymmetry, pinned: assistant turns never stage
+        // photos, so a hypothetical attachments payload there must not
+        // widen the wire shape — bare content, no marker, no parts.
+        assertEquals(
+            "hi",
+            messageContentJson("assistant", "hi", listOf(attachment()), includeImages = false),
+        )
+    }
+
+    @Test
     fun earlierTurnsRideAsTextWithMarker() {
         assertEquals(
             "earlier [1 photo attached]",

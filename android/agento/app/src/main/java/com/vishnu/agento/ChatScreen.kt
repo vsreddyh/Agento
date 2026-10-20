@@ -194,6 +194,17 @@ internal fun ChatTab(
     // description, then the transcript becomes a draft for review in Skills.
     var savingSkillId by remember { mutableStateOf<String?>(null) }
     val toasts = remember(scope) { ToastCenter(scope) }
+    // Startup sweep (#339): a process kill between the TakePicture write
+    // and the decode leaves a capture with no owner — per-batch finally
+    // covers cancel/leave-tab, not death. The cache dir holds ONLY these
+    // captures, so clearing it here bounds the litter to zero with no
+    // bookkeeping. Once per composition-creation, not per recomposition.
+    LaunchedEffect(Unit) {
+        runCatching {
+            context.cacheDir.resolve("camera").takeIf { it.exists() }?.listFiles()
+                ?.forEach { runCatching { it.delete() } }
+        }
+    }
     // Photo attachments (#318): gallery picks need no permission (the picker
     // returns read access to just the chosen images); the camera needs
     // CAMERA plus a FileProvider Uri staged before TakePicture launches.
@@ -240,6 +251,10 @@ internal fun ChatTab(
             )
         }
         scope.launch(Dispatchers.IO) {
+            // Hoisted once (#339): the closure below runs for the whole
+            // batch, and capturing the Activity would leak it across a
+            // rotation — the resolver is all the batch needs.
+            val appContext = context.applicationContext
             try {
                 for (u in take) {
                     // Re-check room per pick (#339): two rapid batches both
@@ -259,7 +274,8 @@ internal fun ChatTab(
                     // Application context, not the Activity (#339): rotation
                     // mid-decode would otherwise leak the old Activity for
                     // the rest of the batch. The resolver is all this needs.
-                    val result = prepareAttachment(context.applicationContext, u)
+                    // Hoisted above the launch — the closure never sees it.
+                    val result = prepareAttachment(appContext, u)
                     withContext(Dispatchers.Main) {
                         // State notices, not composition toasts (#339): a
                         // decode failure must survive rotation like the cap

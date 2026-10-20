@@ -615,7 +615,9 @@ class ChatApi(context: Context) {
         // body already fully in memory, exact where a char count lies for
         // non-ASCII history. Charset explicit: the platform default is
         // UTF-8 in practice, but only the explicit arg makes the
-        // exactness the comment claims a contract.
+        // exactness the comment claims a contract. Transient peak is ~2x
+        // the body (UTF-16 string + byte copy, ~10 MB at the cap) —
+        // send-path only, never per-frame, so no steady-state cost.
         val rawBytes = raw.toByteArray(Charsets.UTF_8).size
         if (wireSizeExceeded(rawBytes)) {
             trySend(
