@@ -37,6 +37,15 @@ data class ChatAttachment(
  * gateway's 4 MiB limit (see the invariant test in [ChatAttachmentsTest]). */
 const val MAX_IMAGES_PER_TURN = 2
 
+/**
+ * Single wording for the whole per-turn cap family (#339): tap-time
+ * refusal, tap-time excess, mid-batch exhaustion, and the ViewModel
+ * backstop all say exactly this with Info styling — nothing failed, the
+ * cap held, so neither the words nor the styling may disagree by path.
+ */
+fun capRefused(): String =
+    "At most $MAX_IMAGES_PER_TURN photos per turn — extra photos were dropped."
+
 /** Longest side after downscale, px. A 1568px JPEG at quality 80 is
  * typically 150–600 KB — legible for the agent, small on the wire. */
 const val MAX_IMAGE_SIDE_PX = 1568
@@ -197,9 +206,13 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     // truncate the file into a bogus "not readable" error.
                     if (n < 0) break
                     if (n == 0) {
+                        // A stall, not a deletion (#339): 100 consecutive
+                        // 0-reads is a stuck provider stream, where retrying
+                        // the same Uri may succeed — so this says try again
+                        // instead of sending the user off to re-pick.
                         if (++zeroStreak > 100) {
                             throw IllegalArgumentException(
-                                "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
+                                "Couldn't finish reading that photo — try again.",
                             )
                         }
                         continue
@@ -271,7 +284,11 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 // TRANSVERSE = 270° + horizontal mirror). The Bitmap path is
                 // JVM-untestable by design (stubbed android.jar), so the
                 // reference — not a test — is what pins this; do not "simplify"
-                // the mirror cases into pure rotations.
+                // the mirror cases into pure rotations. Pinned matrix, all 8
+                // values (#339): 1=identity, 2=flip-H, 3=rot180, 4=flip-V,
+                // 5=transpose(rot90+flip-H), 6=rot90, 7=transverse(rot270+flip-H),
+                // 8=rot270 — pre vs post picks which side of the rotation the
+                // mirror lands on, which is exactly the 5-vs-7 distinction.
                 val matrix: Matrix? = when (orientation) {
                     ExifInterface.ORIENTATION_ROTATE_90 -> Matrix().apply { postRotate(90f) }
                     ExifInterface.ORIENTATION_ROTATE_180 -> Matrix().apply { postRotate(180f) }

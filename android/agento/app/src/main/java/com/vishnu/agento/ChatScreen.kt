@@ -122,11 +122,14 @@ private fun AttachmentThumb(
     // low-end scroll, so produceState moves it to IO (placeholder shows
     // until it lands) and awaitDispose recycles on change/unmount.
     val thumbKey = Triple(base64.length, base64.hashCode(), slot)
+    // No manual recycle (#339): awaitDispose { recycle() } can pull pixels
+    // from under a late outgoing draw ("trying to use a recycled bitmap").
+    // ~256px thumbnails are GC-cheap via the native allocation registry —
+    // prompt freeing is not worth a crash class.
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
         value = withContext(Dispatchers.IO) {
             runCatching { decodeThumbnail(base64) }.getOrNull()
         }
-        awaitDispose { runCatching { value?.takeUnless { it.isRecycled }?.recycle() } }
     }
     // Local, not the delegate (#339): smart cast is impossible on a
     // delegated property, so snapshot it once per composition.
@@ -258,9 +261,8 @@ internal fun ChatTab(
         // lost on rotation while a state notice survives it.
         val slots = MAX_IMAGES_PER_TURN - state.pendingAttachments.size
         if (slots <= 0) {
-            vm.notify(
-                "At most $MAX_IMAGES_PER_TURN photos per turn — remove one first.",
-            )
+            // One cap string + Info, shared with the backstop (#339).
+            vm.notify(capRefused(), ToastKind.Info)
             // Same leak as above: refusal skips the body, so the capture
             // is deleted here, not in finally.
             runCatching { cleanup?.takeIf { it.exists() }?.delete() }
@@ -269,19 +271,14 @@ internal fun ChatTab(
         }
         val take = uris.take(slots)
         if (take.size < uris.size) {
-            vm.notify(
-                // One string + Info for the whole cap family (#339): the
-                // mid-batch exhaustion below says exactly this — nothing
-                // failed, the cap held, so no Error styling either.
-                "At most $MAX_IMAGES_PER_TURN photos per turn — extra photos were dropped.",
-                ToastKind.Info,
-            )
+            vm.notify(capRefused(), ToastKind.Info)
         }
+        // Hoisted ABOVE the launch (#339): the resolver is all the batch
+        // needs, and declaring it inside would still capture the Activity
+        // in the closure until that line runs — narrowing the leak, not
+        // removing it.
+        val appContext = context.applicationContext
         scope.launch(Dispatchers.IO) {
-            // Hoisted once (#339): the closure below runs for the whole
-            // batch, and capturing the Activity would leak it across a
-            // rotation — the resolver is all the batch needs.
-            val appContext = context.applicationContext
             try {
                 for (u in take) {
                     // Re-check room per pick (#339): two rapid batches both
@@ -291,18 +288,14 @@ internal fun ChatTab(
                     val room = withContext(Dispatchers.Main) { vm.hasAttachmentRoom() }
                     if (!room) {
                         withContext(Dispatchers.Main) {
-                            vm.notify(
-                                "At most $MAX_IMAGES_PER_TURN photos per turn — " +
-                                    "extra photos were dropped.",
-                                ToastKind.Info,
-                            )
+                            vm.notify(capRefused(), ToastKind.Info)
                         }
                         break
                     }
-                    // Application context, not the Activity (#339): rotation
-                    // mid-decode would otherwise leak the old Activity for
-                    // the rest of the batch. The resolver is all this needs.
-                    // Hoisted above the launch — the closure never sees it.
+                    // Application context, hoisted above the launch (#339):
+                    // the closure never sees the Activity, so no rotation
+                    // can leak it for the batch. The resolver is all this
+                    // needs.
                     val result = prepareAttachment(appContext, u)
                     withContext(Dispatchers.Main) {
                         // State notices, not composition toasts (#339): a

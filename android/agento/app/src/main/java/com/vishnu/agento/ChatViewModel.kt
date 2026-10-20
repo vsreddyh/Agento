@@ -286,21 +286,23 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * Stages picked photos in the composer (#318). Capped defensively at
      * [MAX_IMAGES_PER_TURN] — the picker already takes only free slots, so
      * the notice below fires only if a caller bypasses it. Excess photos
-     * are dropped with a notice, never silently.
+     * are dropped with a notice, never silently. One string + Info for the
+     * whole cap family (#339): the UI paths say exactly this — nothing
+     * failed, the cap held, so no Error styling anywhere.
      */
     fun addPendingAttachments(items: List<ChatAttachment>) {
         if (items.isEmpty()) return
         val cur = _state.value.pendingAttachments
         val room = MAX_IMAGES_PER_TURN - cur.size
         if (room <= 0) {
-            notify("At most $MAX_IMAGES_PER_TURN photos per turn — remove one first.")
+            notify(capRefused(), ToastKind.Info)
             return
         }
         val take = items.take(room)
         val dropped = items.size - take.size
         _state.value = _state.value.copy(pendingAttachments = cur + take)
         if (dropped > 0) {
-            notify("At most $MAX_IMAGES_PER_TURN photos per turn — $dropped dropped.")
+            notify(capRefused(), ToastKind.Info)
         }
     }
 
