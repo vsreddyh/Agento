@@ -51,7 +51,14 @@ data class ChatAttachment(
  * canonicalizes (whitespace stripped, undecodable blanked) — so by the
  * time anything calls this, wrapped-or-ragged payloads are already gone.
  * Any future reader bypassing load() (backup import, debug share) must
- * canonicalize first or re-split the contract.
+ * canonicalize first or re-split the contract. Decodability specifically
+ * is LOAD-guaranteed, not predicate-guaranteed (#339): isWired() stays
+ * blank-only (hot paths must not pay the alphabet scan), while the wire
+ * filter asserts isDecodableBase64 per send — the two agree because load
+ * blanked the ragged, not because the predicate checks it. An in-memory
+ * construction bypassing load (unit-built ChatMessage, a future receiver
+ * like TaskInstructReceiver) re-splits them: ragged counts as a photo in
+ * display but wires as bare text.
  */
 fun List<ChatAttachment>.wiredPhotos(): List<ChatAttachment> =
     filter { it.isWired() }
@@ -141,6 +148,11 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
         if (isDecodableBase64(a.base64)) {
             a
         } else if (a.base64.length > MAX_RAW_BASE64_CHARS) {
+            a.copy(base64 = "")
+        } else if (a.base64.all { it.isWhitespace() }) {
+            // All-whitespace just under the ceiling (#339): blank without
+            // building the ~N-char filtered copy to discover it — the exact
+            // adversarial shape the ceiling exists for, allocation-free.
             a.copy(base64 = "")
         } else {
             val stripped = a.base64.filterNot { c -> c.isWhitespace() }
@@ -424,7 +436,12 @@ fun base64Bytes(base64: String): Long {
  * instead of printing a cross-unit "1000 KB" in a named limit error.
  * Negative input renders "unknown size" (#339): the preflight phrases
  * unknown length separately today, but the next caller passing a raw
- * contentLength() must not print "-1 B" in a user-visible string. */
+ * contentLength() must not print "-1 B" in a user-visible string.
+ * Decimal SI throughout (1000-based KB/MB), while the backstop it sits
+ * under is the gateway's 4 MiB (1024-based) body cap (#339): the units
+ * differ by ~5%, deliberately conservative — 3.5 M bytes refuses well
+ * below 4 MiB either way, so the sentence pairs a smaller SI number
+ * against a larger binary cap and can never under-refuse. */
 fun formatBytes(bytes: Long): String {
     if (bytes < 0) return "unknown size"
     if (bytes < 1_000L) return "$bytes B"

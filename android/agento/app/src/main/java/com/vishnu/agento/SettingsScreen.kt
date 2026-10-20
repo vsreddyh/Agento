@@ -816,6 +816,17 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                             out.write(b, off, len)
                             written += len
                         }
+                        // Pinned explicitly (#339): the 3-arg form is what
+                        // counts, and single-arg write(ByteArray) only
+                        // counts via FilterOutputStream's delegation to it —
+                        // a future wrapper-base swap (or a direct
+                        // opened.write(bytes) added later) would silently
+                        // undercount and suppress the large-backup warning.
+                        // Overriding here makes the count independent of
+                        // delegation behavior.
+                        override fun write(b: ByteArray) {
+                            write(b, 0, b.size)
+                        }
                     }
                     java.io.OutputStreamWriter(counting, Charsets.UTF_8).use { w ->
                         var off = 0

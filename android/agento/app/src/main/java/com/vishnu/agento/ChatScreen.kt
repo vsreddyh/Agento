@@ -143,10 +143,10 @@ private fun AttachmentThumb(
     label: String,
     modifier: Modifier = Modifier,
     // Legacy-only (#339): the stable-id key ignores this — it exists
-    // solely for the id == "" fallback, so both call sites always pass
-    // it. Do NOT re-add slot to the stable key: that reintroduces the
-    // shift-reload the UUID fixed.
-    slot: Int = 0,
+    // solely for the id == "" fallback. Named legacySlot (not slot) so
+    // the stable path can't accidentally consume it: re-adding it to the
+    // stable key would reintroduce the shift-reload the UUID fixed.
+    legacySlot: Int = 0,
     stableId: String = "",
 ) {
     // Identity without walking the payload (#339): the per-pick UUID is
@@ -174,7 +174,7 @@ private fun AttachmentThumb(
         // different pre-id photos with same length + same head/tail CAN
         // alias here (no crash, no placeholder — just the wrong thumb).
         // Self-aging as old threads turn over; new picks never land here.
-        Triple("s$slot", base64.length, base64.sampleKey(64))
+        Triple("s$legacySlot", base64.length, base64.sampleKey(64))
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
         // Explicit try/catch, not runCatching (#339): runCatching would
@@ -2358,7 +2358,7 @@ internal fun ChatScreen(
                                             label = "Staged photo ${w + 1} of " +
                                                 "${stagedSlots.size}",
                                             modifier = Modifier.size(64.dp),
-                                            slot = i,
+                                            legacySlot = i,
                                             stableId = a.id,
                                         )
                                         // Standard 48dp target (#339): a scanner
@@ -2820,7 +2820,7 @@ internal fun ChatScreen(
                                                                 label = "Attached photo ${ai + 1} of " +
                                                                     "${wiredBubble.size}",
                                                                 modifier = Modifier.size(120.dp),
-                                                                slot = ai,
+                                                                legacySlot = ai,
                                                                 stableId = a.id,
                                                             )
                                                         }
