@@ -160,7 +160,7 @@ func (m *MemoryStore) Audit(_ context.Context, e AuditEntry) error {
 	// Same 90-day contract as Mongo: the cap below is a memory bound, not the
 	// retention policy.
 	if e.ExpiresAt.IsZero() {
-		e.ExpiresAt = time.Now().Add(AuditTTL)
+		e.ExpiresAt = m.now().Add(AuditTTL)
 	}
 	m.audit[e.ID] = e
 	// Memory is bounded like the runs fallback: oldest-first past cap.
@@ -192,12 +192,13 @@ func (m *MemoryStore) ListAudit(_ context.Context, f AuditFilter) ([]AuditEntry,
 	if limit <= 0 || limit > ListCap {
 		limit = ListCap
 	}
-	now := time.Now()
+	now := m.now()
 	out := make([]AuditEntry, 0, len(m.audit))
-	for _, e := range m.audit {
-		// Lazy drop, like approvals: TTL is the contract, the sweep is the
-		// implementation detail Mongo's TTL monitor would otherwise hide.
-		if !e.ExpiresAt.IsZero() && !e.ExpiresAt.After(now) {
+	for id, e := range m.audit {
+		// Lazy drop, like approvals: a long-lived fallback must not keep rows
+		// its own list refuses to show.
+		if expired(now, e.ExpiresAt) {
+			delete(m.audit, id)
 			continue
 		}
 		if f.Server != "" && e.Server != f.Server {

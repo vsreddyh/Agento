@@ -240,7 +240,9 @@ func ScrubError(msg string) string {
 		msg = re.ReplaceAllString(msg, "[redacted]")
 	}
 	if utf8.RuneCountInString(msg) > MaxAuditError {
-		msg = string([]rune(msg)[:MaxAuditError])
+		// Keep the marker INSIDE the cap and make the cut visible: a silently
+		// truncated message reads as a complete one to the app.
+		msg = string([]rune(msg)[:MaxAuditError-1]) + "…"
 	}
 	return msg
 }

@@ -109,11 +109,17 @@ not "someone else decided", and the app refreshes rather than attributing an
 action to another user. In the audit trail, `disposition=allowed` with a
 non-empty `error` means the tool ran and returned an error: `error != ""` is
 the tool-level failure signal, so a reader can separate "ran and failed" from
-"never ran" without parsing the payload. The exception is a `relay_`-prefixed
-error, which marks a row the relay wrote about a call it could not observe
-(currently `relay_evicted`, when an unanswered entry left the pending table at
-its cap); those never reached the tool, so a filter for tool failures must
-exclude the prefix. Secrets hygiene from the
+"never ran" without parsing the payload.
+
+A `relay_`-prefixed error marks a decision the relay made itself, not one a
+tool or a human made: `relay_protocol` (unparseable `tools/call`),
+`relay_notification` (gated call with no reply id), `relay_store` (store
+unavailable) and `relay_evicted` (unanswered row left the pending table at its
+cap). They never reached the tool, so a tool-failure filter must exclude the
+prefix — and `denied` **without** the prefix means a human said no. The same
+convention applies to the synthetic tool name `(malformed)`: it is the audit
+entry for a frame the relay could not parse, and the app may show it as such
+rather than as a real tool. Secrets hygiene from the
 issue stands: passwords/2FA never go through chat; the take-over path
 belongs to #312.
 

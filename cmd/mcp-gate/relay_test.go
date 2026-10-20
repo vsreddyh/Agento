@@ -78,6 +78,25 @@ func waitForApproval(t *testing.T, store approvals.Store) approvals.Approval {
 	return approvals.Approval{}
 }
 
+// waitForAudit polls for n rows: notification-path audits are deliberately
+// async (the pump must not stall on the store), so they land shortly after the
+// frame is handled.
+func waitForAudit(t *testing.T, store approvals.Store, n int) []approvals.AuditEntry {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		audit, err := store.ListAudit(context.Background(), approvals.AuditFilter{})
+		if err == nil && len(audit) >= n {
+			return audit
+		}
+		if time.Now().After(deadline) {
+			audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
+			t.Fatalf("audit rows = %d, want %d", len(audit), n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // A gated call holds, and an approval releases the exact bytes to the child.
 func TestHoldApproveForwards(t *testing.T) {
 	store := approvals.NewMemoryStore()
@@ -273,10 +292,7 @@ func TestAllowNotificationIsAudited(t *testing.T) {
 	if err := r.pumpPiToChild(strings.NewReader(line)); err != nil {
 		t.Fatalf("pump: %v", err)
 	}
-	audit, err := store.ListAudit(context.Background(), approvals.AuditFilter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	audit := waitForAudit(t, store, 1)
 	if len(audit) != 1 {
 		t.Fatalf("audit rows = %d, want 1", len(audit))
 	}
@@ -308,7 +324,7 @@ func TestGatedNotificationFailsClosed(t *testing.T) {
 	if list, _ := store.ListApprovals(context.Background(), approvals.ApprovalFilter{}); len(list) != 0 {
 		t.Fatalf("notification parked an approval card: %+v", list)
 	}
-	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	audit := waitForAudit(t, store, 1)
 	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionDenied {
 		t.Fatalf("audit = %+v", audit)
 	}
@@ -416,7 +432,7 @@ func TestMalformedToolsCallFailsClosed(t *testing.T) {
 	if !strings.Contains(out.String(), "could not be parsed") {
 		t.Fatalf("Pi got no error: %q", out.String())
 	}
-	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	audit := waitForAudit(t, store, 1)
 	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionDenied ||
 		audit[0].Tool != "(malformed)" {
 		t.Fatalf("audit = %+v", audit)

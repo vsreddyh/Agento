@@ -281,8 +281,8 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			// policy never saw. Deny it, audit why, and answer Pi when
 			// there is an id to answer.
 			r.log.Printf("denying unparseable tools/call: %s", truncateFrame(line))
-			r.audit("(malformed)", map[string]any{}, approvals.DispositionDenied,
-				"tools/call params could not be parsed; failed closed", "")
+			r.auditAsync("(malformed)", map[string]any{}, approvals.DispositionDenied,
+				"relay_protocol: tools/call params could not be parsed; failed closed", "")
 			if hasReplyID(env.ID) {
 				if werr := r.writePi(rpcError(env.ID, -32602,
 					"tools/call params could not be parsed; failed closed")); werr != nil {
@@ -298,7 +298,7 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 				// row is written here. track() would no-op and the call would
 				// forward with no audit entry, which is the one hole in
 				// "every proxied call is recorded".
-				r.audit(params.Name, redacted, approvals.DispositionAllow, "", "")
+				r.auditAsync(params.Name, redacted, approvals.DispositionAllow, "", "")
 			} else {
 				r.track(env.ID, params.Name, redacted)
 			}
@@ -314,9 +314,9 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			// for a call whose result nobody receives. Fail closed now and
 			// record why; the allow path above still forwards notifications.
 			r.log.Printf("denying gated notification %s/%s: no reply id", r.server, params.Name)
-			r.audit(params.Name, approvals.Redact(params.Arguments),
+			r.auditAsync(params.Name, approvals.Redact(params.Arguments),
 				approvals.DispositionDenied,
-				"gated notification has no reply id; failed closed", "")
+				"relay_notification: gated notification has no reply id; failed closed", "")
 			continue
 		}
 		// One goroutine per held call. Unbounded by construction, but bounded
@@ -356,7 +356,8 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 				r.log.Printf("write to Pi failed: %v", werr)
 			}
 		}
-		r.audit(params.Name, redacted, approvals.DispositionDenied, "approval store unavailable", "")
+		r.auditAsync(params.Name, redacted, approvals.DispositionDenied,
+			"relay_store: approval store unavailable; failed closed", "")
 		return
 	}
 	if !r.store.Shared() {
@@ -582,6 +583,15 @@ func idKey(raw json.RawMessage) string {
 		// object) is malformed: fail closed by not pairing or replying to it.
 		return ""
 	}
+}
+
+// auditAsync keeps the frame pump moving. These paths are notifications and
+// malformed calls with nothing waiting on a response: a wedged store must not
+// head-of-line-block the next frame for the 5s store bound. Audit failures are
+// logged inside audit(), so a lost row is never silent.
+func (r *relay) auditAsync(tool string, args map[string]any,
+	disp approvals.Disposition, errMsg, approvalID string) {
+	go r.audit(tool, args, disp, errMsg, approvalID)
 }
 
 func (r *relay) track(id json.RawMessage, name string, args map[string]any) {
