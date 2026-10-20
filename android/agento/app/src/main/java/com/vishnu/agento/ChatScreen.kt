@@ -311,8 +311,10 @@ internal fun ChatTab(
     // turn the returning capture into a "moved or deleted" error.
     // Hoisted above the effect (#339): the sweep must not dereference
     // the Activity at all — not even for the resolve line — so the
-    // effect closure never holds it, even briefly.
+    // effect closure never holds it, even briefly. Rotation state hoists
+    // with it: the effect branches on the boolean below, never the cast.
     val appCacheDir = context.applicationContext.cacheDir
+    val sweepingAfterRotation = (context as? Activity)?.isChangingConfigurations == true
     LaunchedEffect(Unit) {
         // Off-main (#339): directory listing + deletes are disk IO, and
         // this effect runs on every first composition including post-rotation.
@@ -327,9 +329,10 @@ internal fun ChatTab(
         // to clear it — 30 min of "already open" on the crashed device.
         // A fresh process has no outstanding intent by construction; a
         // rotation recreates with isChangingConfigurations, so only the
-        // former clears here.
+        // former clears here (read from the hoisted boolean above — the
+        // effect itself never touches the Activity).
         val keep = cameraPath
-        if ((context as? Activity)?.isChangingConfigurations != true) {
+        if (!sweepingAfterRotation) {
             cameraPendingSince = 0L
         }
         // Application context for the dir (#339): the IO closure below

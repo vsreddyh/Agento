@@ -1811,12 +1811,22 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Carry-only by design: the editor offers no drop-photos affordance
         // (a second feature), and the HintLine + confirm clause say the
         // photos resend — so the behavior is visible, not silent.
+        // Stored verbatim like send() (#339): trim gates blankness, the
+        // turn keeps indentation — with the same whitespace-only
+        // normalization to "". Carried wired: a blank in a hand-edited
+        // source turn must not ride along to disagree with the wired
+        // dialog count.
         // Staged composer photos are deliberately NOT cleared here (unlike
         // send()): send() clears because the staged photos WERE sent, while
         // this sends the edited turn's carried photos — wiping the
         // composer's unrelated staging would destroy user input.
         val history = msgs.take(index) +
-            ChatMessage("user", clean, ChatThreads.now(), attachments = msgs[index].attachments)
+            ChatMessage(
+                "user",
+                if (clean.isEmpty()) "" else text,
+                ChatThreads.now(),
+                attachments = msgs[index].attachments.wiredPhotos(),
+            )
         _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }
@@ -1840,10 +1850,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
         // Same photo-carry rule as Replace above (#339): the forked turn is
-        // the edited turn, photos included. Composer staging survives here
+        // the edited turn, photos included — stored verbatim like send(),
+        // carried wired like Replace. Composer staging survives here
         // too, for the same reason stated there — it is unrelated input.
         val forked = msgs.take(index) +
-            ChatMessage("user", clean, ChatThreads.now(), attachments = msgs[index].attachments)
+            ChatMessage(
+                "user",
+                if (clean.isEmpty()) "" else text,
+                ChatThreads.now(),
+                attachments = msgs[index].attachments.wiredPhotos(),
+            )
         val fresh = ChatThread(
             id = ChatThreads.newId(),
             updatedAt = ChatThreads.now(),
@@ -2335,14 +2351,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // this, so hand it back to the composer instead of stranding it.
         // Concatenated when occupied (#339): displacing the live draft
         // would drop typed text — the reverse of parkQueued's contract.
-        // Verbatim both sides: the hand-back is a composer restore, not a
-        // send, so no blankness gate applies — queued text was non-blank
-        // when parked (send() gates it).
+        // Verbatim both sides like the fire path: the hand-back is a
+        // composer restore, and a whitespace-only queue normalizes to ""
+        // exactly as a firing one would (send() gates it non-blank, so
+        // this is symmetry insurance, not a live path).
         if (!_state.value.ready) {
             val live = _state.value.pending
+            val restore = if (raw.trim().isEmpty()) "" else raw
             _state.value = _state.value.copy(
                 queued = "",
-                pending = if (live.isBlank()) raw else "${live.trimEnd()} ${raw.trimStart()}",
+                pending = when {
+                    live.isBlank() -> restore
+                    restore.isEmpty() -> live
+                    else -> "${live.trimEnd()} ${restore.trimStart()}"
+                },
             )
             return
         }
