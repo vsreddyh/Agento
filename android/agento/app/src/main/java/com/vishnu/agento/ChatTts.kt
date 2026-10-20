@@ -35,6 +35,12 @@ class ChatTts(context: Context) {
      * arrived while TTS was down. */
     val readyFlow: StateFlow<Boolean> = _ready
     @Volatile private var failed = false
+    // NOTE: read-clear-speak in the init callback is NOT atomic vs toggle()'s
+    // write below — a toggle() landing between the read and the clear is
+    // overwritten-then-cleared, losing one utterance. Accepted: only the reply
+    // path can hit it (pre-ready cues early-return on ttsReady), it needs the
+    // toggle to land in the init-completion instant, and the next turn
+    // re-speaks. Do not assume race-free here.
     @Volatile private var pending: Pair<String, String>? = null
     /** Utterance ID of the last queued chunk; only its completion clears state. */
     @Volatile private var lastUtteranceId = ""

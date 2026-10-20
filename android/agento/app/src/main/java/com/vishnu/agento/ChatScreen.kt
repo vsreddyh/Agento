@@ -1177,7 +1177,11 @@ internal fun ChatScreen(
                 // task unmonitored until the next transition. Wait one
                 // mic-release beat, then retry once — a phase change cancels
                 // this effect first, and a session reset flips detectCtl
-                // phase, so a stale retry can't arm a dead phase. No stop()
+                // phase, so a stale retry can't arm a dead phase. NOTE: the
+                // delay never gates the re-listen below — any transition that
+                // would make it fire (readout/streaming/mode flip) also
+                // flips an effect key via detectPhase and cancels this delay
+                // first; if the delay completes, the gate reads unchanged. No stop()
                 // precedes the retry: failed starts return before the job is
                 // assigned, and start() reports true only for an already
                 // active job, so a second stop() would only race the
