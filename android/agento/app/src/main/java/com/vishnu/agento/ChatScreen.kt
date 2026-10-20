@@ -866,8 +866,9 @@ internal fun ChatScreen(
             // milestone set is retired too: a turn settling while away never
             // runs the stream-end retire, so a kept set would suppress the
             // next turn's first cue for repeated tools. On a mid-turn return
-            // this only re-arms diffing — the next change still names just
-            // the latest delta, so nothing already heard repeats.
+            // the restarted effect re-announces the latest tool once — a
+            // one-line orientation cue, not a replay — and diffing resumes
+            // from the full set.
             detectCtl.running = false
             detectCtl.phase = -1
             bargeCancel = false
