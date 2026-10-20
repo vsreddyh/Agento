@@ -21,6 +21,16 @@ func TestPublicIPRejectsNonPublic(t *testing.T) {
 			t.Fatalf("publicIP(%s) = false", raw)
 		}
 	}
+	// Version-proof deny ranges: CGNAT, TEST-NET and reserved must not
+	// depend on the Go release's IsPrivate table.
+	for _, raw := range []string{
+		"100.64.0.1", "192.0.2.1", "198.51.100.1", "203.0.113.1",
+		"192.0.0.1", "240.0.0.1",
+	} {
+		if publicIP(net.ParseIP(raw)) {
+			t.Fatalf("publicIP(%s) = true", raw)
+		}
+	}
 }
 
 func TestCheckURLShapes(t *testing.T) {
@@ -28,8 +38,11 @@ func TestCheckURLShapes(t *testing.T) {
 		name, url string
 		ok        bool
 	}{
-		{"https", "https://example.com/", true},
-		{"http", "http://example.com/a?b=c", true},
+		// Literal IPs, not example.com: the positive cases must not need
+		// live DNS (offline CI, sandboxed runners, hijacked resolvers).
+		{"https", "https://93.184.216.34/", true},
+		{"http", "http://93.184.216.34/a?b=c", true},
+		{"uppercase scheme", "HTTPS://93.184.216.34/", true},
 		{"empty", "", false},
 		{"no scheme", "example.com", false},
 		{"file", "file:///etc/passwd", false},
@@ -70,6 +83,10 @@ func TestCollapseLines(t *testing.T) {
 }
 
 func TestEvidenceDirShape(t *testing.T) {
+	// Globals restored: tests share the process, and a later test must not
+	// inherit these values.
+	oldExports, oldProfile := exports, profile
+	defer func() { exports, profile = oldExports, oldProfile }()
 	exports = "/exports/browser"
 	profile = "chat"
 	dir, err := evidenceDir()

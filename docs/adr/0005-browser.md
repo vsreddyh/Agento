@@ -38,14 +38,33 @@ form interaction.**
   or CDP-attached mode exists. Unattended purchasing is out of scope with
   or without forms.
 
-### SSRF is fenced before Chromium dials
+### SSRF is fenced per connection, not per URL
 
 The container shares a network with cloud metadata and local services, and
 a URL can read as harmless text while resolving somewhere it must not go.
 `checkURL` allows only http(s) without credentials and refuses every
-non-public resolution: loopback, RFC 1918, link-local (169.254.169.254),
-multicast, unspecified and reserved. The approval sheet never sees these —
-they fail in the server with the reason attached.
+non-public resolution — but that only covers the first URL. Redirects,
+meta-refreshes and DNS rebindings would walk around a check-then-use gate,
+so every byte Chromium sends goes through an in-process CONNECT/forward
+proxy that re-resolves and re-checks per connection: loopback, RFC 1918,
+CGNAT, TEST-NET, link-local (169.254.169.254), multicast, unspecified and
+reserved ranges, each pinned by test rather than inherited from the Go
+release's tables. HTTPS travels as opaque tunnels (hostnames only, never
+plaintext). The approval sheet never sees refused targets — they fail in
+the server with the reason attached.
+
+### Accepted blast radius
+
+Headless Chromium runs as container root with `--no-sandbox` (the sandbox
+refuses uid 0) and JavaScript enabled on attacker-controlled pages, with
+writable mounts on `../pi` and `../exports` and read-only SSH keys. A
+renderer exploit reaches all of that. Accepted because the alternative —
+no browser capability — is the feature not existing; not accepted
+blindly: navigation itself is human-approved per domain, non-public
+targets never dial, evidence writes are jailed to `browser/` with generated
+names, and disabling JS or adding a seccomp profile stays open as
+hardening. Evidence has no quota cap (full-page PNGs accumulate): disk
+pressure on `../exports` is a follow-up, not this PR.
 
 ### The navigation log is the audit trail
 

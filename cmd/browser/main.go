@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -80,7 +81,9 @@ func checkURL(raw string) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bad url: %v", err)
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	// Lowercased: url.Parse preserves case and "HTTPS://x" would otherwise
+	// fail closed with a confusing message about a scheme that looks right.
+	if scheme := strings.ToLower(u.Scheme); scheme != "http" && scheme != "https" {
 		return nil, fmt.Errorf("only http and https urls are allowed, not %q", u.Scheme)
 	}
 	if u.User != nil {
@@ -102,19 +105,43 @@ func checkURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
+// denyCIDRs is the explicit no-browse list. Method checks (IsPrivate and
+// friends) depend on the Go version's tables — CGNAT and TEST-NET entries
+// arrived late — so the ranges that matter are spelled out and pinned by
+// TestPublicIPRejectsNonPublic instead of inherited.
+var denyCIDRs = []string{
+	"127.0.0.0/8", "::1/128",
+	"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+	"100.64.0.0/10",
+	"169.254.0.0/16", "fe80::/10",
+	"224.0.0.0/4", "ff00::/8",
+	"0.0.0.0/8", "192.0.0.0/24",
+	"192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24",
+	"240.0.0.0/4",
+	"fc00::/7",
+}
+
+func inDenyList(ip net.IP) bool {
+	// Normalize first: an IPv4-mapped IPv6 address must match the v4
+	// ranges, not slip past them in 16-byte form.
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	for _, cidr := range denyCIDRs {
+		if _, net, err := net.ParseCIDR(cidr); err == nil && net.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // publicIP reports whether ip is a safe navigation target: global unicast
-// minus everything the container must not browse — loopback, private RFC
-// 1918, link-local (cloud metadata lives at 169.254.169.254), multicast,
-// unspecified and reserved ranges.
+// minus the explicit deny list above.
 func publicIP(ip net.IP) bool {
 	if !ip.IsGlobalUnicast() {
 		return false
 	}
-	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
-		return false
-	}
-	return true
+	return !inDenyList(ip)
 }
 
 // safeName keeps generated path segments inside their directory: the profile
@@ -132,13 +159,22 @@ func jailPath(base, name string) (string, error) {
 // session is one profile's persistent browser: one context, one page at a
 // time, cookies and storage surviving across turns in the profile dir.
 type session struct {
-	mu      sync.Mutex
-	alloc   context.Context
-	cancel  context.CancelFunc
-	browser context.Context
-	started bool
-	dir     string
-	shots   int
+	mu     sync.Mutex
+	alloc  context.Context
+	cancel context.CancelFunc
+	// browserCancel stops the tab context. Stored, not dropped: a session
+	// that is ever torn down (idle prune, future close tool) cancels its
+	// own context instead of leaking the tab.
+	browserCancel context.CancelFunc
+	browser       context.Context
+	started       bool
+	dir           string
+	shots         int
+	// proxyLn serves the filtering proxy for this session's Chromium. One
+	// listener per session (not one global): the check needs no per-profile
+	// state today, but a listener dying with its session keeps the failure
+	// domain obvious in the log.
+	proxyLn net.Listener
 }
 
 // sessions keys browser sessions by profile. The MCP server is one process
@@ -148,6 +184,9 @@ type sessions struct {
 	byProfile map[string]*session
 	agentDir  string
 	chrome    string
+	// lastPrune throttles the lazy prune below: every tool call passes
+	// through get, and a directory walk per call would be pure overhead.
+	lastPrune time.Time
 }
 
 func (ss *sessions) get(profile string) *session {
@@ -157,6 +196,12 @@ func (ss *sessions) get(profile string) *session {
 	if !ok {
 		s = &session{dir: filepath.Join(ss.agentDir, ".runtime", "browser", profile)}
 		ss.byProfile[profile] = s
+	}
+	// Startup prune covers fresh boots; this covers months-old processes
+	// (the server lives as long as Pi keeps it spawned). One walk a day.
+	if time.Since(ss.lastPrune) > 24*time.Hour {
+		ss.lastPrune = time.Now()
+		go pruneSessions(filepath.Join(ss.agentDir, ".runtime", "browser"))
 	}
 	return s
 }
@@ -174,6 +219,15 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 	if err := os.MkdirAll(ctxDir, 0o755); err != nil {
 		return nil, fmt.Errorf("session dir: %v", err)
 	}
+	// Every byte through the filtering proxy: re-validated per connection,
+	// so redirects and DNS rebindings face the same gate as the first URL.
+	// Ephemeral loopback port, closed never (process-lifetime server), and
+	// <-loopback bypass removal so even localhost goes through the check.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("proxy listen: %v", err)
+	}
+	go http.Serve(ln, &filteringProxy{check: publicIP})
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(chrome),
 		// Headless: there is no display in the container, and a headed
@@ -185,10 +239,19 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 		// before the first navigation with no line explaining why.
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-gpu", true),
+		// /dev/shm is small under podman/docker and full-page screenshots
+		// are exactly the workload that crashes with "session deleted"
+		// without this.
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.ProxyServer("http://"+ln.Addr().String()),
+		chromedp.Flag("proxy-bypass-list", "<-loopback>"),
 		chromedp.UserDataDir(ctxDir),
 	)
+	// alloc is rooted at Background deliberately: the server is a
+	// process-lifetime stdio process, and the browser must outlive any one
+	// tool call's timeout. Process exit tears everything down at once.
 	alloc, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	browser, _ := chromedp.NewContext(alloc)
+	browser, browserCancel := chromedp.NewContext(alloc)
 	// Prove launch now, not on the first approved navigation: a missing
 	// chromium binary must fail the tool call that needs it, loudly, rather
 	// than parking an approval for a browser that can never start.
@@ -196,7 +259,8 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 		cancel()
 		return nil, fmt.Errorf("chromium launch failed: %v", err)
 	}
-	s.alloc, s.cancel, s.browser, s.started = alloc, cancel, browser, true
+	s.alloc, s.cancel, s.browserCancel, s.browser, s.started = alloc, cancel, browserCancel, browser, true
+	s.proxyLn = ln
 	// Resume the shot counter past restarts so evidence never overwrites.
 	entries, _ := os.ReadDir(s.dir)
 	for _, e := range entries {
@@ -209,6 +273,10 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 }
 
 func (s *session) shotPath() string {
+	// Locked: two concurrent screenshots for one profile must not share a
+	// counter value and overwrite each other's PNG.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.shots++
 	return filepath.Join(s.dir, fmt.Sprintf("shot-%03d.png", s.shots))
 }
@@ -297,6 +365,9 @@ func main() {
 			readCtx, cancel := context.WithTimeout(bctx, readTimeout)
 			defer cancel()
 			url, err := chromedp.Run(readCtx, chromedp.Location())
+			if err == nil && (url == "" || url == "about:blank") {
+				return result(map[string]any{"ok": false, "error": "no page yet: browser_goto first"})
+			}
 			if err != nil {
 				return fail(fmt.Errorf("read failed: %v", err))
 			}
@@ -448,7 +519,9 @@ func collapseLines(s string) string {
 // exports root. The clock value is generated, never client-supplied, and the
 // profile passed the safe-name gate at startup.
 func evidenceDir() (string, error) {
-	name := profile + "-" + time.Now().UTC().Format("20060102-150405")
+	// Millisecond precision: two saves in the same second must not share
+	// a dir and silently overwrite each other's shot.png.
+	name := profile + "-" + time.Now().UTC().Format("20060102-150405.000")
 	// exports already ends in /browser (default /exports/browser): the
 	// timestamped dir hangs directly under it, never nested twice.
 	return jailPath(exports, name)

@@ -3,16 +3,16 @@ module agento
 go 1.26
 
 require (
+	github.com/chromedp/chromedp v0.21.0
+	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	go.mongodb.org/mongo-driver v1.17.6
 )
 
 require (
 	github.com/chromedp/cdproto v0.157.8 // indirect
-	github.com/chromedp/chromedp v0.21.0 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
