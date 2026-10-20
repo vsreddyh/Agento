@@ -798,17 +798,40 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // export holds thread files wholesale, payloads
                     // included, so photo-heavy threads make for slow
                     // restores — worth one line when large, silent when not.
-                    val bytes = SettingsBackup.export(context).toString(2).toByteArray()
-                    context.contentResolver.openOutputStream(uri)?.use { out ->
-                        out.write(bytes)
-                    } ?: throw IllegalStateException("Could not open the selected file for writing")
-                    bytes.size
+                    // Streamed in chunks, not via toByteArray(): the pretty
+                    // string (~2x the bytes as UTF-16) must exist to write
+                    // at all, but the duplicate byte[] copy is avoidable —
+                    // count bytes while streaming instead, so the peak is
+                    // the string plus one 64 KB window.
+                    val text = SettingsBackup.export(context).toString(2)
+                    var written = 0L
+                    val opened = context.contentResolver.openOutputStream(uri)
+                        ?: throw IllegalStateException("Could not open the selected file for writing")
+                    val counting = object : java.io.FilterOutputStream(opened) {
+                        override fun write(b: Int) {
+                            out.write(b)
+                            written++
+                        }
+                        override fun write(b: ByteArray, off: Int, len: Int) {
+                            out.write(b, off, len)
+                            written += len
+                        }
+                    }
+                    java.io.OutputStreamWriter(counting, Charsets.UTF_8).use { w ->
+                        var off = 0
+                        while (off < text.length) {
+                            val end = minOf(off + 65536, text.length)
+                            w.write(text, off, end - off)
+                            off = end
+                        }
+                    }
+                    written
                 }
             }
             status = result.fold(
                 onSuccess = { size ->
                     if (size > BACKUP_LARGE_BYTES) {
-                        Toasts.EXPORTED + " Large backup (${formatBytes(size.toLong())}) — " +
+                        Toasts.EXPORTED + " Large backup (${formatBytes(size)}) — " +
                             "photo threads make restores slow."
                     } else {
                         Toasts.EXPORTED

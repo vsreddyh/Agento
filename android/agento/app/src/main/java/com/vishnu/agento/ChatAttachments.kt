@@ -80,7 +80,12 @@ private fun ChatAttachment.isWired(): Boolean = base64.isNotBlank()
  * wrapped-or-ragged payloads and the hot paths never need this check.
  * Padding is positional, not counted: `=` is legal only as the last ≤2
  * chars — `=AAA`, `A=A=`, `AB=C` all fail — since a bare count would pass
- * interior padding straight into the corrupt part this exists to prevent. */
+ * interior padding straight into the corrupt part this exists to prevent.
+ * Standard alphabet only (`+/`, never URL-safe `-_`): the encoder emits
+ * standard base64 exclusively, so a `-_` payload is foreign input and
+ * fail-closed blanks it — a future share path emitting URL-safe must
+ * normalize first, or its photos will wire as text-only with no marker
+ * (silent-looking data loss, by this design on purpose). */
 internal fun isDecodableBase64(s: String): Boolean {
     if (s.isEmpty() || s.length % 4 != 0) return false
     var paddingStarted = false
@@ -118,11 +123,12 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
  */
 fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachment> =
     attachments.map { a ->
-        // Fast path first (#339): the app only ever writes clean payloads,
-        // so prove-no-whitespace + validity check runs allocation-free on
-        // the common path — the stripping copy below runs solely for
+        // Single-walk fast path (#339): isDecodableBase64 already rejects
+        // whitespace, so no separate none{isWhitespace} proof walk — clean
+        // payloads (everything this app writes) validate allocation-free
+        // and return untouched; the stripping copy below runs solely for
         // payloads that actually need it (hand-edited or legacy).
-        if (a.base64.none { it.isWhitespace() } && isDecodableBase64(a.base64)) {
+        if (isDecodableBase64(a.base64)) {
             a
         } else {
             val stripped = a.base64.filterNot { c -> c.isWhitespace() }
@@ -200,6 +206,21 @@ fun ChatAttachment.dataUri(): String {
 fun attachmentMarker(n: Int): String =
     if (n == 1) "[1 photo attached]" else "[$n photos attached]"
 
+/** Trailing user-typed marker lookalike (#339): `[N photo(s) attached]$`. */
+private val literalMarker = Regex("""\[(\d+ photos?) attached\]$""")
+
+/**
+ * Backslash-escapes a user-typed trailing marker lookalike (#339): a user
+ * who literally types `[1 photo attached]` would otherwise render
+ * `"<typed> [1 photo attached]"`, indistinguishable from a real photo
+ * turn on text surfaces. The escape keeps the typed text visible
+ * (Markdown renders `\[` as `[`) while marking it as typed, not produced.
+ * The wire parts stay authoritative — this only disambiguates the hint,
+ * never the send.
+ */
+private fun escapeLiteralMarker(content: String): String =
+    literalMarker.replace(content) { m -> "\\" + m.value }
+
 /**
  * Text plus its photo marker for trim-tolerant surfaces (#339): search
  * matching ignores surrounding whitespace, so this trims. (Export and
@@ -210,7 +231,8 @@ fun attachmentMarker(n: Int): String =
  * the surface matches (trim) or reproduces (preserve).
  */
 fun contentWithMarker(content: String, n: Int): String =
-    if (n <= 0) content else (content.trim() + " " + attachmentMarker(n)).trim()
+    if (n <= 0) content
+    else (escapeLiteralMarker(content.trim()) + " " + attachmentMarker(n)).trim()
 
 /**
  * Verbatim twin of [contentWithMarker] for the wire history path (#339):
@@ -220,7 +242,7 @@ fun contentWithMarker(content: String, n: Int): String =
  * visibly paired and the next edit can't silently re-split them.
  * Trim/preserve split, stated once: export uses this too (reproducing
  * what the agent saw); search uses the trimming twin (matching is
- * trim-tolerant).
+ * trim-tolerant). A literal trailing lookalike escapes like the twin.
  */
 fun contentWithMarkerVerbatim(content: String, n: Int): String =
     if (n <= 0) {
@@ -228,7 +250,7 @@ fun contentWithMarkerVerbatim(content: String, n: Int): String =
     } else if (content.isBlank()) {
         attachmentMarker(n)
     } else {
-        content + " " + attachmentMarker(n)
+        escapeLiteralMarker(content) + " " + attachmentMarker(n)
     }
 
 /** True when the message carries anything the agent should see. Text-only
@@ -718,7 +740,15 @@ fun decodeThumbnail(base64: String): Bitmap? {
         // Gated on decoded size, not raw length (#339): base64Bytes
         // excludes framing whitespace the raw length counts, so a wrapped
         // hand-edited payload gates on what decode will actually read.
-        if (base64Bytes(base64) > MAX_IMAGE_BASE64_CHARS * 3L / 4L) return null
+        // O(1) fast path first: decoded bytes never exceed raw chars, so a
+        // raw length at/below the cap skips the full scan — clean payloads
+        // (always ≤ cap by the staging invariant) pay zero walk, and only
+        // over-length raws run the precise measure for the wrapped edge.
+        if (base64.length > MAX_IMAGE_BASE64_CHARS &&
+            base64Bytes(base64) > MAX_IMAGE_BASE64_CHARS * 3L / 4L
+        ) {
+            return null
+        }
         // DEFAULT on decode is deliberate asymmetry with the NO_WRAP encode
         // above: encode must not emit newlines (data URIs are single-line),
         // while decode stays lenient toward payloads written by older builds.

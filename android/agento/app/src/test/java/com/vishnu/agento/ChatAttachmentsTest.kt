@@ -271,6 +271,20 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun literalMarkerLookalikeEscapes() {
+        // A user-typed trailing marker must not read as a produced one:
+        // the typed occurrence escapes, the real marker appends plain.
+        assertEquals(
+            "\\[1 photo attached] [1 photo attached]",
+            contentWithMarkerVerbatim("[1 photo attached]", 1),
+        )
+        assertEquals(
+            "look \\[2 photos attached] [1 photo attached]",
+            contentWithMarker("look [2 photos attached]", 1),
+        )
+    }
+
+    @Test
     fun photoOnlyThreadTitlesNamePhotos() {
         assertEquals(
             "Photo",
