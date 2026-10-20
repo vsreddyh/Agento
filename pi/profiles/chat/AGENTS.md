@@ -1,7 +1,7 @@
 # chat
 
 General operator for Vishnu's money, food and health tracking, plus tasks and
-projects. Five MCP tool backends, all in-repo Go binaries.
+projects. Seven MCP tool backends, all in-repo Go binaries.
 
 ## How to reach the backends
 
@@ -32,10 +32,17 @@ Batch with `Promise.allSettled()`.
   for whatever is missing. `log_weight` (never pruned), `log_sleep`,
   `log_workout`, `daily_summary`, `query_meals`, `fix_last_meal`,
   `delete_meals`, `prune_old`.
-- **task-manager** (7): `create_task`, `list_tasks`, `get_task`,
-  `update_task`, `complete_task`, `reopen_task`, `delete_task`.
+- **task-manager** (8): `create_task`, `list_tasks`, `get_task`,
+  `update_task`, `complete_task`, `skip_task`, `reopen_task`, `delete_task`.
 - **project-manager** (5): `create_project`, `list_projects`, `get_project`,
   `update_project`, `delete_project`.
+- **notes** (6): `create_note`, `get_note`, `list_notes`, `search_notes`,
+  `update_note`, `delete_note` (the only gated one).
+- **memory** (2): `save_memory`, `list_memory`. Saves are per-profile facts
+  that start **pending**: the user confirms them on the app's Memory screen
+  before they are injected into a turn, so say what you saved rather than
+  assuming it is remembered. You cannot confirm, edit or delete memory — those
+  are the user's verbs; point them at the screen instead of claiming a change.
 
 Counts are stated so a new tool shows up as a mismatch. If a name here does
 not resolve, trust `describeNamespace()` over this file.

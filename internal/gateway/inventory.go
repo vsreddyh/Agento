@@ -35,6 +35,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
+
+	"agento/internal/teach"
 )
 
 // modelOption is one provider row in the app's picker.
@@ -75,6 +78,10 @@ type skillInfo struct {
 	Enabled     bool   `json:"enabled"`
 	Path        string `json:"path,omitempty"`
 	Scope       string `json:"scope,omitempty"`
+	// Status survives only on taught rows (draft/active): Pi-loaded skills
+	// leave it empty, and the app distinguishes draft from active by it
+	// rather than by convention.
+	Status string `json:"status,omitempty"`
 }
 
 // toolsetInfo is one row in the app's MCP page. `tools` is omitted rather than
@@ -232,6 +239,49 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request, h *agentHa
 		}
 		return skills[i].Name < skills[j].Name
 	})
+
+	// Taught skills (#314) ride along: the store rows Pi has not loaded
+	// (drafts, or active skills added since Pi started) still belong on the
+	// Skills tab — the tab is the review surface, not just the loaded set.
+	// Disabled skills stay hidden: stopping must read as gone. A name
+	// collision with a Pi-loaded skill keeps Pi's row silently (the model
+	// sees that one, so the tab mirrors it); the taught row waits until the
+	// committed skill is renamed or removed.
+	// Its own budget, not the Pi call's leftovers: under a slow Pi the
+	// taught rows must not vanish intermittently from their own review tab.
+	tctx, tcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer tcancel()
+	if taught, err := s.teach.List(tctx, h.profile); err == nil {
+		seen := make(map[string]bool, len(skills))
+		for _, sk := range skills {
+			seen[strings.ToLower(sk.Name)] = true
+		}
+		for _, t := range taught {
+			// Same gate as Materialize: the tab must never show a skill Pi
+			// will never load. A hand-edited invalid name stays visible
+			// in /api/skills (its own review surface) but not here.
+			if t.Status == teach.StatusDisabled || seen[strings.ToLower(t.Name)] ||
+				!teach.ValidName(t.Name) {
+				continue
+			}
+			skills = append(skills, skillInfo{
+				Name:        bounded(t.Name),
+				Description: bounded(t.Description),
+				Enabled:     t.Status == teach.StatusActive,
+				Scope:       "taught",
+				Status:      string(t.Status),
+			})
+		}
+		sort.Slice(skills, func(i, j int) bool {
+			li, lj := strings.ToLower(skills[i].Name), strings.ToLower(skills[j].Name)
+			if li != lj {
+				return li < lj
+			}
+			return skills[i].Name < skills[j].Name
+		})
+	} else {
+		s.cfg.Logf("gateway: taught skills list failed for %s: %v", h.profile, err)
+	}
 
 	// A bare array, which is the first shape the app's rootArray tries. An empty
 	// result is a valid empty page, not an error — the app shows "Nothing listed".

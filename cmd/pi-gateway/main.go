@@ -27,9 +27,12 @@
 package main
 
 import (
+	"agento/internal/approvals"
 	"agento/internal/crashlog"
 	"agento/internal/cronjobs"
+	"agento/internal/memory"
 	"agento/internal/runs"
+	"agento/internal/teach"
 	"context"
 	"errors"
 	"fmt"
@@ -41,6 +44,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -81,6 +85,60 @@ func run() error {
 	logger := log.New(os.Stderr, "[gateway] ", log.LstdFlags|log.Lmsgprefix)
 	logger.Printf("profiles: %s", strings.Join(profiles, ", "))
 
+	// Taught skills (#314), opened before Pi starts: the runtime dir must
+	// hold this boot's files before the first --skill argument points at
+	// it, or a fresh deploy boots skill-less. Same database, sibling
+	// collection. Two degraded modes, both logged: an immediate open failure
+	// serves an in-process store (activations die with the process), while a
+	// lazy open failure — unreachable Mongo surfacing at first use — 502s
+	// the routes with the cause in the log instead.
+	var teachStore teach.Store
+	if store, err := teach.FromEnv(); err != nil {
+		logger.Printf("teach: falling back to in-process (activations do not survive restart): %v", err)
+		teachStore = teach.NewMemoryStore()
+	} else {
+		teachStore = store
+		// Background, not the signal ctx: it does not exist yet this early
+		// in startup, and these are bounded one-shot calls anyway.
+		indexCtx, cancelIndex := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := store.EnsureIndexes(indexCtx); err != nil {
+			logger.Printf("teach: index setup failed: %v", err)
+		}
+		cancelIndex()
+	}
+
+	// Startup reconcile runs here, not later, for the reason above: Mongo
+	// is the source of truth and the runtime dir is its cache. Profiles
+	// reconcile concurrently under one shared budget: serial 10s Lists would
+	// add 10s of boot per slow profile.
+	{
+		matCtx, cancelMat := context.WithTimeout(context.Background(), 10*time.Second)
+		var matWG sync.WaitGroup
+		for _, profile := range profiles {
+			matWG.Add(1)
+			go func(profile string) {
+				defer matWG.Done()
+				skills, err := teachStore.List(matCtx, profile)
+				if err != nil {
+					logger.Printf("teach: startup list failed for %s: %v", profile, err)
+					return
+				}
+				n, skipped, err := teach.Materialize(teach.RuntimeDir(agentDir, profile), skills)
+				if err != nil {
+					logger.Printf("teach: startup materialize failed for %s: %v", profile, err)
+				}
+				if n > 0 {
+					logger.Printf("teach: materialized %d skill(s) for %s", n, profile)
+				}
+				if len(skipped) > 0 {
+					logger.Printf("teach: skipped unrenderable skill(s) for %s: %v", profile, skipped)
+				}
+			}(profile)
+		}
+		matWG.Wait()
+		cancelMat()
+	}
+
 	// Crash files live under the bind-mounted agent dir, so they survive
 	// container restarts (#290). Self-cleaning: files older than the TTL
 	// are deleted here, at startup, and after each write.
@@ -101,28 +159,37 @@ func run() error {
 	for _, profile := range profiles {
 		dir := filepath.Join(profileDir, profile)
 
+		// Pi args build in two steps because Go allows only one spread per
+		// append call: the committed skills first, then the taught-skills
+		// runtime dir (nil when it holds no valid skill, so a profile with
+		// nothing taught starts unchanged).
+		piArgs := append(
+			[]string{"--model", defaultModel, "--session-dir", filepath.Join(agentDir, "sessions")},
+			// Per-profile skills, named explicitly.
+			//
+			// Pi does NOT discover a bare skills/ directory in the working
+			// directory. Measured with one distinctly-named skill per candidate
+			// location and PI_CODING_AGENT_DIR set: <agent-dir>/skills/ is found,
+			// <cwd>/skills/ is not, and <cwd>/.agents/skills/ is not either
+			// (project resources need trust, which a headless RPC session never
+			// grants). So --skill <path> is the only route to skills that differ
+			// per profile, and it is repeatable.
+			//
+			// Only added when the profile has at least one valid skill (a subdirectory
+			// containing a SKILL.md): passing --skill at a path with no skill in it
+			// is at best inert and at worst an error, and a skill-less profile must
+			// still start. No count of which profiles have skills, because that
+			// goes stale the moment someone adds one.
+			skillArgs(profileSkillDir(dir))...,
+		)
+		piArgs = append(piArgs,
+			skillArgs(teach.RuntimeDir(agentDir, profile))...,
+		)
+
 		client, err := pi.Start(ctx, pi.Options{
-			Bin: piBin,
-			Dir: dir,
-			Args: append(
-				[]string{"--model", defaultModel, "--session-dir", filepath.Join(agentDir, "sessions")},
-				// Per-profile skills, named explicitly.
-				//
-				// Pi does NOT discover a bare skills/ directory in the working
-				// directory. Measured with one distinctly-named skill per candidate
-				// location and PI_CODING_AGENT_DIR set: <agent-dir>/skills/ is found,
-				// <cwd>/skills/ is not, and <cwd>/.agents/skills/ is not either
-				// (project resources need trust, which a headless RPC session never
-				// grants). So --skill <path> is the only route to skills that differ
-				// per profile, and it is repeatable.
-				//
-				// Only added when the profile has at least one valid skill (a subdirectory
-				// containing a SKILL.md): passing --skill at a path with no skill in it
-				// is at best inert and at worst an error, and a skill-less profile must
-				// still start. No count of which profiles have skills, because that
-				// goes stale the moment someone adds one.
-				skillArgs(profileSkillDir(dir))...,
-			),
+			Bin:  piBin,
+			Dir:  dir,
+			Args: piArgs,
 			// Env replaces rather than merges, so the parent environment is copied
 			// explicitly — setting it to just the provider key would leave the child
 			// without PATH and the exec failure would look unrelated.
@@ -133,7 +200,16 @@ func run() error {
 			// anything the agent runs, including tool output.
 			Env: pi.EnvWith(
 				pi.EnvironOrOs(withoutEnv(os.Environ(), "PASSWORD")),
-				map[string]string{"PI_CODING_AGENT_DIR": agentDir},
+				map[string]string{
+					"PI_CODING_AGENT_DIR": agentDir,
+					// The memory MCP server is one binary shared by every
+					// profile, so the profile has to travel with the process:
+					// Pi spawns its MCP servers as children, which inherit
+					// this environment. Without it the memory server would
+					// guess a profile and write one profile's facts into
+					// another's store (#315).
+					"AGENTO_PROFILE": profile,
+				},
 			),
 			ReadyTimeout: readyTimeout,
 		})
@@ -260,6 +336,71 @@ func run() error {
 		cancelMark()
 	}
 
+	// Approval gates + audit trail (#313). Same database, sibling
+	// collections to runs. Without it the gateway answers approvals from
+	// memory, and the relay falls back independently too — but a decision
+	// then needs a SHARED store: with no Mongo the relay's pending row is
+	// invisible to the gateway, so every gated call waits out its hold and
+	// expires by design (Store.Shared documents the same contract).
+	var approvalStore approvals.Store
+	if store, err := approvals.FromEnv(); err != nil {
+		logger.Printf("approvals: falling back to in-memory: %v", err)
+		mem := approvals.NewMemoryStore()
+		mem.Logf = logger.Printf
+		approvalStore = mem
+	} else {
+		approvalStore = store
+		store.Logf = logger.Printf
+		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+		if err := store.EnsureIndexes(indexCtx); err != nil {
+			logger.Printf("approvals: index setup failed (records will not auto-expire): %v", err)
+		}
+		cancelIndex()
+		// A restart orphans the relay that owned every pending wait.
+		// Expire them before serving so the list never shows a pending row
+		// nothing will ever decide.
+		markCtx, cancelMark := context.WithTimeout(ctx, 10*time.Second)
+		if n, err := store.MarkInterrupted(markCtx, time.Now()); err != nil {
+			logger.Printf("approvals: could not expire pending rows: %v", err)
+		} else if n > 0 {
+			logger.Printf("approvals: marked %d pending row(s) expired after restart", n)
+		}
+		cancelMark()
+	}
+
+	// Memory (#315). Same database, sibling collections. Without Mongo the
+	// routes still work from an in-process store, but nothing survives a
+	// restart and the memory MCP server (a separate process) cannot see it —
+	// so an agent-proposed item would be invisible to the screen that has to
+	// confirm it. Log that plainly rather than silently degrade.
+	var memoryStore memory.Store
+	if store, err := memory.FromEnv(); err != nil {
+		logger.Printf("memory: falling back to in-process (not durable, agent proposals not shared): %v", err)
+		memoryStore = memory.NewMemoryStore()
+	} else {
+		memoryStore = store
+		store.Logf = logger.Printf
+		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+		if err := store.EnsureIndexes(indexCtx); err != nil {
+			logger.Printf("memory: index setup failed: %v", err)
+		}
+		cancelIndex()
+	}
+
+	// The test-fire runner is the cron runner's sibling, not its child: it
+	// needs the same key and model but no job store, so a Mongo-less stack
+	// still answers "no runner" honestly instead of failing open.
+	var teachRunner gateway.TeachRunner
+	if key := strings.TrimSpace(os.Getenv("OPENCODE_API_KEY")); key != "" {
+		runner := &cronjobs.BareClient{
+			APIKey: key,
+			Model:  envOr("PI_CRON_MODEL", "mimo-v2.6-flash"),
+		}
+		teachRunner = runner.Run
+	} else {
+		logger.Printf("teach: no OPENCODE_API_KEY, skill tests unavailable")
+	}
+
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")
 	if _, ok := agents[defaultProfile]; !ok {
 		// Fall back to the first profile that actually STARTED, not the first one
@@ -276,7 +417,7 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, logger.Printf), agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, memoryStore, teachStore, teachRunner, logger.Printf), agents)
 	if err != nil {
 		return err
 	}
@@ -476,7 +617,7 @@ func skillArgs(skillsDir string) []string {
 // InventoryTimeout line left every test green, because the test exercised secondsEnv
 // directly and never the wiring. A budget that cannot be shown to reach its field is
 // not configurable in any useful sense.
-func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, logf func(string, ...any)) gateway.Config {
+func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, memoryStore memory.Store, teachStore teach.Store, teachRunner gateway.TeachRunner, logf func(string, ...any)) gateway.Config {
 	return gateway.Config{
 		Password: password,
 		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
@@ -495,6 +636,18 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStor
 		// Resumable run history, owned by run(): it needs env and the
 		// startup reconciliation that marks dead runs interrupted.
 		RunStore: runStore,
+		// Approval + audit stores, owned by run() for the same reason.
+		ApprovalStore: approvalStore,
+		// Per-profile memory, owned by run() for the same reason.
+		MemoryStore: memoryStore,
+		// Taught skills, owned by run() for the same reason. The runner is
+		// the cron runner's sibling (same key/model, no job store); the
+		// materializer closes over the agent dir to reach the runtime tree.
+		TeachStore:  teachStore,
+		TeachRunner: teachRunner,
+		TeachMaterialize: func(profile string, skills []teach.Skill) (int, []string, error) {
+			return teach.Materialize(teach.RuntimeDir(agentDir, profile), skills)
+		},
 		// Each budget is configurable for the same reason: the right value depends on
 		// the host, and changing it should not mean rebuilding the binary.
 		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),

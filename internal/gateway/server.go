@@ -14,8 +14,11 @@ import (
 	"sync"
 	"time"
 
+	"agento/internal/approvals"
 	"agento/internal/crashlog"
+	"agento/internal/memory"
 	"agento/internal/runs"
+	"agento/internal/teach"
 )
 
 var (
@@ -116,6 +119,34 @@ type Config struct {
 	// memory. main sets a Mongo store when the database is reachable.
 	RunStore runs.Store
 
+	// ApprovalStore persists gate approvals and the audit trail (#313). Nil
+	// means an in-memory store. The relay (cmd/mcp-gate) opens the same
+	// collections from its own process via the shared MONGODB_URI/MONGODB_DB
+	// pair; both sides fall back to memory independently when Mongo is
+	// unreachable.
+	ApprovalStore approvals.Store
+
+	// MemoryStore is the per-profile memory store (#315). Nil means an
+	// in-process store: the routes still work, but items do not survive a
+	// restart and the memory MCP server (a separate process) cannot see them.
+	// main sets a Mongo store when the database is reachable.
+	MemoryStore memory.Store
+
+	// TeachStore is the per-profile taught-skills store (#314). Nil means an
+	// in-process store: the routes still work, but skills die with the
+	// process and activation cannot survive it. main sets a Mongo store when
+	// the database is reachable.
+	TeachStore teach.Store
+
+	// TeachRunner runs one prompt through the bare model client for skill
+	// test fires. Nil means the test route answers 502.
+	TeachRunner TeachRunner
+
+	// TeachMaterialize reconciles one profile's runtime skill dir with its
+	// active skills. Nil means no materialization (tests, binaries without
+	// an agent dir): the routes still work, but Pi never loads the files.
+	TeachMaterialize func(profile string, skills []teach.Skill) (written int, skipped []string, err error)
+
 	// Logf receives operational messages. Nil discards them.
 	Logf func(format string, args ...any)
 }
@@ -172,6 +203,17 @@ type Server struct {
 	// profile's one-turn-at-a-time rule is still enforced by its turnMu.
 	runs *runManager
 
+	// approvals serves the gate decision and audit reads. Stateless: the
+	// relay polls the store, so every gateway process answers identically.
+	approvals approvals.Store
+
+	// memory backs the memory routes and the per-turn prompt prefix. Scoped by
+	// profile: one store holds every profile's items.
+	memory memory.Store
+
+	// teach backs the taught-skills routes. Scoped by profile like memory.
+	teach teach.Store
+
 	// mcpServers is the configured MCP server set, read once at startup. Empty when
 	// there is no agent directory or no readable mcp.json, which is a valid state.
 	mcpServers []string
@@ -208,6 +250,18 @@ func New(cfg Config, agents map[string]Agent) (*Server, error) {
 		mux:      http.NewServeMux(),
 	}
 	s.runs = newRunManager(cfg.RunStore, cfg.Logf)
+	s.approvals = cfg.ApprovalStore
+	if s.approvals == nil {
+		s.approvals = approvals.NewMemoryStore()
+	}
+	s.memory = cfg.MemoryStore
+	if s.memory == nil {
+		s.memory = memory.NewMemoryStore()
+	}
+	s.teach = cfg.TeachStore
+	if s.teach == nil {
+		s.teach = teach.NewMemoryStore()
+	}
 
 	// Read once, here, rather than per request. mcp.json is fixed for the life of
 	// the process: the entrypoint runs `pi mcp list` at boot and refuses to start if
@@ -500,6 +554,31 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// alias: jobs stay fire-and-forget, runs are observable and steerable.
 	if rest == "api/runs" || strings.HasPrefix(rest, "api/runs/") {
 		s.handleRuns(w, r, rest)
+		return
+	}
+
+	// Approval gates + audit trail (#313). A sibling of the above: the relay
+	// holds sensitive tool calls, the app decides them here.
+	if rest == "api/approvals" || strings.HasPrefix(rest, "api/approvals/") {
+		s.handleApprovals(w, r, rest)
+		return
+	}
+	if rest == "api/audit" || strings.HasPrefix(rest, "api/audit/") {
+		s.handleAudit(w, r, rest)
+		return
+	}
+
+	// Memory (#315). Per profile, unlike the two globals above: the handler
+	// scopes every read and write to the profile this request resolved to.
+	if rest == "api/memory" || strings.HasPrefix(rest, "api/memory/") {
+		s.handleMemory(w, r, rest, profile)
+		return
+	}
+
+	// Taught skills (#314). Per profile like memory: every verb scopes to
+	// the resolved profile.
+	if rest == "api/skills" || strings.HasPrefix(rest, "api/skills/") {
+		s.handleTeach(w, r, rest, profile)
 		return
 	}
 
