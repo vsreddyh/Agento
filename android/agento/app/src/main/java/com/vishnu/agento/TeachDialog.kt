@@ -131,8 +131,10 @@ internal fun TeachDialog(
                             ) {
                                 TextButton(onClick = { editing = false }) { Text("Cancel") }
                                 TextButton(
-                                    onClick = { onSaveEdit(name, description, body) },
-                                    enabled = !acting && name.isNotBlank() && body.isNotBlank(),
+                                    // Trimmed like every other writer: "   "
+                                    // passes isNotBlank but sends "".
+                                    onClick = { onSaveEdit(name.trim(), description.trim(), body.trim()) },
+                                    enabled = !acting && name.trim().isNotBlank() && body.trim().isNotBlank(),
                                 ) {
                                     Text(if (acting) "Saving…" else "Save")
                                 }
@@ -259,8 +261,8 @@ internal fun TeachDialog(
                                     horizontalArrangement = Arrangement.End,
                                 ) {
                                     TextButton(
-                                        onClick = { onPromote(schedule, promoteName) },
-                                        enabled = !acting && schedule.isNotBlank(),
+                                        onClick = { onPromote(schedule.trim(), promoteName.trim()) },
+                                        enabled = !acting && schedule.trim().isNotBlank(),
                                     ) {
                                         Text(if (acting) "Scheduling…" else "Schedule")
                                     }
