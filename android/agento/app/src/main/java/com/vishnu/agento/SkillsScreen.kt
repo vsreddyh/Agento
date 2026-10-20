@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -211,6 +212,9 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 // mid-write must reload where the user looks now.
                 loadTaught(chatApi.pathFor(profile))
             } catch (e: Exception) {
+                // Cancellation is not failure: rethrow before the guard so
+                // a cancelled write never surfaces as an error row.
+                if (e is CancellationException) throw e
                 ensureActive()
                 // Same guard as success: a failed write for the old profile
                 // must not surface on the new one either.
@@ -450,6 +454,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                                 }
                                                 loadTaught(chatApi.pathFor(profile))
                                             } catch (e: Exception) {
+                                                if (e is CancellationException) throw e
                                                 ensureActive()
                                                 // Same guard as mutate: a failed save for
                                                 // the old profile must not surface on
