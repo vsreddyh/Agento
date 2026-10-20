@@ -52,6 +52,45 @@ internal fun parseMemoryItem(o: JSONObject): MemoryItem? {
     )
 }
 
+internal fun parseMemoryList(body: String): MemoryList {
+    val root = runCatching { JSONObject(body) }.getOrNull()
+    if (root == null) {
+        runCatching { Log.w("MemoryApi", "unparseable memory body: ${body.take(120)}") }
+        return MemoryList()
+    }
+    val items = mutableListOf<MemoryItem>()
+    var dropped = 0
+    val arr = root.optJSONArray("items")
+    if (arr != null) {
+        for (i in 0 until arr.length()) {
+            val row = parseMemoryItem(arr.optJSONObject(i) ?: continue)
+            if (row == null) {
+                dropped++
+                continue
+            }
+            items.add(row)
+        }
+    }
+    if (dropped > 0) {
+        runCatching { Log.w("MemoryApi", "dropped $dropped id-less memory row(s)") }
+    }
+    // paused encodes as [] on a fresh profile (never null per contract),
+    // but a missing key still reads as empty rather than failing. Blank
+    // entries (null/non-string JSON) are skipped: they would render as
+    // empty toggle buttons and can never address a real topic.
+    fun stringsOf(key: String): List<String> {
+        val out = mutableListOf<String>()
+        root.optJSONArray(key)?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val v = arr.optString(i, "").trim()
+                if (v.isNotBlank()) out.add(v)
+            }
+        }
+        return out
+    }
+    return MemoryList(items, stringsOf("paused"), stringsOf("topics"), stringsOf("warnings"))
+}
+
 /**
  * Client over the gateway's memory API (same bearer auth as chat, served
  * through the proxy's /p/ route — always call with the profile path).
@@ -115,7 +154,9 @@ class MemoryApi(context: Context) {
         }
     }
 
-    /** Non-200 is an error naming the code, never the body. */
+    /** Non-200 is an error. The message carries a body snippet for logs;
+     * the UI names the code only (parsed via ApprovalsApi.httpCode), never
+     * pasted server text. */
     private fun checkOk(it: CallResult): CallResult {
         if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
         return it
@@ -202,42 +243,4 @@ class MemoryApi(context: Context) {
         }.map { }
     }
 
-    private fun parseMemoryList(body: String): MemoryList {
-        val root = runCatching { JSONObject(body) }.getOrNull()
-        if (root == null) {
-            runCatching { Log.w("MemoryApi", "unparseable memory body: ${body.take(120)}") }
-            return MemoryList()
-        }
-        val items = mutableListOf<MemoryItem>()
-        var dropped = 0
-        val arr = root.optJSONArray("items")
-        if (arr != null) {
-            for (i in 0 until arr.length()) {
-                val row = parseMemoryItem(arr.optJSONObject(i) ?: continue)
-                if (row == null) {
-                    dropped++
-                    continue
-                }
-                items.add(row)
-            }
-        }
-        if (dropped > 0) {
-            runCatching { Log.w("MemoryApi", "dropped $dropped id-less memory row(s)") }
-        }
-        // paused encodes as [] on a fresh profile (never null per contract),
-        // but a missing key still reads as empty rather than failing.
-        val paused = mutableListOf<String>()
-        root.optJSONArray("paused")?.let { p ->
-            for (i in 0 until p.length()) paused.add(p.optString(i, ""))
-        }
-        val topics = mutableListOf<String>()
-        root.optJSONArray("topics")?.let { t ->
-            for (i in 0 until t.length()) topics.add(t.optString(i, ""))
-        }
-        val warnings = mutableListOf<String>()
-        root.optJSONArray("warnings")?.let { w ->
-            for (i in 0 until w.length()) warnings.add(w.optString(i, ""))
-        }
-        return MemoryList(items, paused, topics, warnings)
-    }
 }

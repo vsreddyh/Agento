@@ -46,7 +46,9 @@ internal fun MemoryDialog(
     onEdit: (String, String, String) -> Unit,
     onDelete: (String) -> Unit,
     onTogglePause: (String, Boolean) -> Unit,
-    onCreate: (String, String) -> Unit,
+    /** onSaved fires only on success: the composer clears then, so a failed
+     * save keeps the typed text alongside the error. */
+    onCreate: (String, String, () -> Unit) -> Unit,
     onForget: () -> Unit,
     onRefresh: () -> Unit,
     onClose: () -> Unit,
@@ -68,7 +70,9 @@ internal fun MemoryDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
                 ) {
-                    TextButton(onClick = onRefresh) { Text("Refresh") }
+                    TextButton(onClick = onRefresh, enabled = !loading) {
+                        Text(if (loading) "Loading…" else "Refresh")
+                    }
                 }
                 if (error.isNotBlank()) {
                     Text(
@@ -179,7 +183,7 @@ internal fun MemoryDialog(
                                     modifier = Modifier.padding(top = 4.dp),
                                 )
                             }
-                            items(topics.chunked(2)) { pair ->
+                            items(topics.chunked(2), key = { it.joinToString("|") }) { pair ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -248,9 +252,10 @@ internal fun MemoryDialog(
                                 }
                                 TextButton(
                                     onClick = {
-                                        onCreate(newTopic, newText)
-                                        newTopic = ""
-                                        newText = ""
+                                        onCreate(newTopic, newText) {
+                                            newTopic = ""
+                                            newText = ""
+                                        }
                                     },
                                     enabled = newText.isNotBlank() && !busy,
                                 ) {

@@ -587,7 +587,7 @@ internal fun ChatScreen(
     onEditMemory: (String, String, String) -> Unit = { _, _, _ -> },
     onDeleteMemory: (String) -> Unit = {},
     onToggleMemoryPause: (String, Boolean) -> Unit = { _, _ -> },
-    onCreateMemory: (String, String) -> Unit = { _, _ -> },
+    onCreateMemory: (String, String, () -> Unit) -> Unit = { _, _, _ -> },
     onForgetMemory: () -> Unit = {},
     onRefreshMemory: () -> Unit = {},
     onNew: () -> Unit,

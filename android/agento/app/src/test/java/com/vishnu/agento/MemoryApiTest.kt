@@ -47,3 +47,28 @@ class MemoryApiTest {
         assertEquals("a%2Fb", MemoryApi.encode("a/b"))
     }
 }
+
+    @Test
+    fun `parseMemoryList pins leniency`() {
+        val body = """{"items":[
+            {"id":"m1","topic":"work","text":"t1","status":"confirmed"},
+            {"status":"pending"},
+            {"id":"m2","topic":"","text":"","status":"pending"}
+            ],"paused":["health",null,42],"topics":["work"],"warnings":[]}"""
+        val list = parseMemoryList(body)
+        assertEquals(2, list.items.size)
+        assertEquals("m1", list.items[0].id)
+        assertEquals("m2", list.items[1].id)
+        assertEquals(listOf("health"), list.paused)
+        assertEquals(listOf("work"), list.topics)
+        assertTrue(list.warnings.isEmpty())
+    }
+
+    @Test
+    fun `parseMemoryList tolerates missing keys`() {
+        val list = parseMemoryList("""{"items":[]}""")
+        assertTrue(list.items.isEmpty())
+        assertTrue(list.paused.isEmpty())
+        assertTrue(list.topics.isEmpty())
+        assertEquals(0, parseMemoryList("not json").items.size)
+    }

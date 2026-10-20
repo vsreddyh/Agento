@@ -236,6 +236,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 ready = true,
             )
             refreshServerTotals()
+            // Pending proposals badge without opening the sheet: one light
+            // list at launch, then again on every retarget below.
+            pollMemoryCount(api.pathFor(tab))
             // App-killed turn recovery (#311): an unanswered user tail with
             // a live server run resends into the existing run.
             maybeResume(threadId, ChatThreads.toUi(active.messages))
@@ -943,10 +946,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     fun closeMemory() {
         // A load that lands after close only wastes a call and its rows are
-        // cleared on the next open; cancel it anyway.
+        // cleared on the next open; cancel it anyway and drop the spinner so
+        // a cancelled load cannot leave a stale true behind.
         memoryJob?.cancel()
         memoryJob = null
-        _state.value = _state.value.copy(showMemory = false)
+        _state.value = _state.value.copy(showMemory = false, memoryLoading = false)
     }
 
     /** Single-flight memory load: a newer open or manual refresh cancels
@@ -977,7 +981,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     memoryItems = rows?.items ?: _state.value.memoryItems,
                     memoryPaused = rows?.paused ?: _state.value.memoryPaused,
                     memoryTopics = rows?.topics ?: _state.value.memoryTopics,
-                    memoryWarnings = rows?.warnings ?: emptyList(),
+                    memoryWarnings = rows?.warnings ?: _state.value.memoryWarnings,
                     memoryLoading = false,
                     memoryError = listOf(notice.orEmpty(), loadErr)
                         .filter { it.isNotBlank() }
@@ -1027,18 +1031,38 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun deleteMemory(id: String) =
         actOnMemory(id) { path -> memoryApi.deleteMemory(path, id) }
 
-    /** Saves an edit to text and/or topic. */
-    fun editMemory(id: String, text: String, topic: String) =
-        actOnMemory(id) { path -> memoryApi.updateMemory(path, id, text = text, topic = topic) }
+    /** Saves an edit to text and/or topic. Trims like create: a
+     * whitespace-only edit is a validation error here, not a server 400,
+     * and an emptied topic keeps the old one instead of re-categorising to
+     * general by silence. */
+    fun editMemory(id: String, text: String, topic: String) {
+        val clean = text.trim()
+        if (clean.isBlank()) {
+            _state.value = _state.value.copy(memoryError = "Text is required.")
+            return
+        }
+        val keepTopic = topic.trim()
+        actOnMemory(id) { path ->
+            memoryApi.updateMemory(
+                path, id, text = clean,
+                topic = keepTopic.ifBlank { null },
+            )
+        }
+    }
 
     /** Pauses or resumes one topic. Paused items stay on screen; they are
-     * simply not injected into turns. */
-    fun toggleMemoryPause(topic: String, paused: Boolean) =
+     * simply not injected into turns. A blank topic has no route (PUT
+     * …/topics/ is a 404), so it never fires. */
+    fun toggleMemoryPause(topic: String, paused: Boolean) {
+        if (topic.isBlank()) return
         actOnMemory("topic:$topic") { path -> memoryApi.setTopicPaused(path, topic, paused) }
+    }
 
     /** Writes a user item: confirmed on arrival, no review loop for the
-     * person whose memory it is. A clipped save reports it in-sheet. */
-    fun createMemory(topic: String, text: String) {
+     * person whose memory it is. A clipped save reports it in-sheet. The
+     * composer clears via [onSaved]: on failure the typed text stays so the
+     * error does not eat it. */
+    fun createMemory(topic: String, text: String, onSaved: () -> Unit = {}) {
         if (text.isBlank()) {
             _state.value = _state.value.copy(memoryError = "Text is required.")
             return
@@ -1060,6 +1084,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     )
                 } else if (_state.value.showMemory) {
                     val truncated = result.getOrNull()?.second == true
+                    onSaved()
                     refreshMemory(
                         if (truncated) "Saved, but the text clipped at the length cap." else null,
                     )
@@ -1094,11 +1119,28 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     /** A thread/profile change retires any memory load started under the
-     * old path, reopening the sheet against the new one. */
+     * old path, reopening the sheet against the new one. The badge count
+     * refreshes regardless: pending proposals must badge on launch and on
+     * switch, not only after the first open. */
     private fun retargetMemory() {
         memoryJob?.cancel()
         memoryJob = null
         if (_state.value.showMemory) refreshMemory()
+        pollMemoryCount(_state.value.path)
+    }
+
+    /** Light pending-proposal count for the badge, without touching rows.
+     * Mirrors pollApprovalCount: failures keep the old count, and a stale
+     * poll never lands on a new path. */
+    private fun pollMemoryCount(path: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val n = memoryApi.listMemory(path)
+                .getOrNull()?.items?.count { it.isPending() } ?: return@launch
+            withContext(Dispatchers.Main) {
+                if (_state.value.path != path) return@withContext
+                _state.value = _state.value.copy(pendingMemoryCount = n)
+            }
+        }
     }
 
     /**
