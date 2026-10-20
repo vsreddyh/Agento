@@ -65,6 +65,19 @@ class ApprovalsApiTest {
     }
 
     @Test
+    fun `relativeAgo and waitingLabel name ages and clamp skew`() {
+        val now = 10_000_000L
+        assertEquals("", relativeAgo(0, now))
+        assertEquals("just now", relativeAgo(now + 5_000, now))
+        assertEquals("2m ago", relativeAgo(now - 120_000, now))
+        assertEquals("2h ago", relativeAgo(now - 2 * 3_600_000, now))
+        assertEquals("3d ago", relativeAgo(now - 3 * 86_400_000, now))
+        assertEquals("just now", waitingLabel(now, now))
+        assertEquals("2m waiting", waitingLabel(now - 120_000, now))
+        assertEquals("", waitingLabel(0, now))
+    }
+
+    @Test
     fun `encode keeps ids exact and httpCode names the code`() {
         assertEquals("a%20b", ApprovalsApi.encode("a b"))
         assertEquals("abc", ApprovalsApi.encode("abc"))

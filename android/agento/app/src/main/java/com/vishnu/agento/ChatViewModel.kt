@@ -773,6 +773,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     fun closeApprovals() {
+        // A load that lands after close only wastes a call and its rows are
+        // cleared on the next open; cancel it anyway.
+        approvalsJob?.cancel()
+        approvalsJob = null
         _state.value = _state.value.copy(showApprovals = false)
     }
 
@@ -884,6 +888,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val n = approvalsApi.listApprovals(path, status = "pending", limit = 100)
             .getOrNull()?.size ?: return
         withContext(Dispatchers.Main) {
+            // Stale poll (profile switched mid-flight): the old profile's
+            // count must not land on the new one.
+            if (_state.value.path != path) return@withContext
             _state.value = _state.value.copy(pendingApprovalCount = n)
         }
     }

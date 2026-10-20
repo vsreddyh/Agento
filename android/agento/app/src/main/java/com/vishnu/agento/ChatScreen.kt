@@ -81,6 +81,11 @@ import com.mikepenz.markdown.m3.Markdown
 import java.util.Locale
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+
+/** Pending count as both the badge and the banner show it: one cap, one
+ * wording, so the two can never disagree above 99. */
+private fun pendingCountLabel(count: Int): String = if (count > 99) "99+" else "$count"
+
 /** Builds the Chat ViewModel so the single tab keeps isolated history. */
 class ChatViewModelFactory(
     internal val app: android.app.Application,
@@ -960,12 +965,7 @@ internal fun ChatScreen(
                     BadgedBox(
                         badge = {
                             if (state.pendingApprovalCount > 0) {
-                                Badge {
-                                    Text(
-                                        if (state.pendingApprovalCount > 99) "99+"
-                                        else "${state.pendingApprovalCount}",
-                                    )
-                                }
+                                Badge { Text(pendingCountLabel(state.pendingApprovalCount)) }
                             }
                         },
                     ) {
@@ -1062,7 +1062,7 @@ internal fun ChatScreen(
                                     liveRegion = LiveRegionMode.Polite
                                 },
                             ) {
-                                Text("Approval needed (${state.pendingApprovalCount})")
+                                Text("Approval needed (${pendingCountLabel(state.pendingApprovalCount)})")
                             }
                         }
                     }

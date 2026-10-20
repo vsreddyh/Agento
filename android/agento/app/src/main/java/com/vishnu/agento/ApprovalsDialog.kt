@@ -13,22 +13,42 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+
+/** A clock that ticks every 30s while the sheet is open, so "2m waiting"
+ * advances instead of freezing at the composition instant. */
+@Composable
+private fun rememberNowTick(): Long {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    return now
+}
 
 /** How long an approval has waited: "just now" then "2m waiting". */
-private fun waitingLabel(createdAt: Long): String {
-    val age = relativeAgo(createdAt)
+internal fun waitingLabel(createdAt: Long, now: Long): String {
+    val age = relativeAgo(createdAt, now)
     return if (age.isEmpty() || age == "just now") age else "${age.removeSuffix(" ago")} waiting"
 }
 
 /** Millis instant as "just now / Nm ago / Nh ago / Nd ago", "" when unknown.
  * Future instants clamp to "just now": clock skew is not a time machine. */
-private fun relativeAgo(at: Long): String {
+internal fun relativeAgo(at: Long, now: Long): String {
     if (at <= 0) return ""
-    val s = (System.currentTimeMillis() - at) / 1000
+    val s = (now - at) / 1000
     return when {
         s < 60 -> "just now"
         s < 3600 -> "${s / 60}m ago"
@@ -64,6 +84,7 @@ internal fun ApprovalsDialog(
         onDismissRequest = onClose,
         title = { Text("Approvals") },
         text = {
+            val now = rememberNowTick()
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -115,7 +136,7 @@ internal fun ApprovalsDialog(
                                     )
                                     // Age, oldest-first triage: a gate held since
                                     // the turn started is the one to answer.
-                                    val waiting = waitingLabel(approval.createdAt)
+                                    val waiting = waitingLabel(approval.createdAt, now)
                                     if (waiting.isNotEmpty()) {
                                         Text(
                                             waiting,
@@ -172,7 +193,7 @@ internal fun ApprovalsDialog(
                             }
                             items(auditRows.take(20), key = { it.id }) { row ->
                                 Column(modifier = Modifier.fillMaxWidth()) {
-                                    val whenText = relativeAgo(row.at)
+                                    val whenText = relativeAgo(row.at, now)
                                     Text(
                                         "${row.server} · ${row.tool} · ${row.disposition.ifBlank { "?" }}" +
                                             (if (whenText.isNotEmpty()) " · $whenText" else ""),
