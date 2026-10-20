@@ -48,13 +48,19 @@ data class ChatAttachment(
  * wires as bare text while the UI claims a photo.
  */
 fun List<ChatAttachment>.wiredPhotos(): List<ChatAttachment> =
-    filter { it.base64.isNotBlank() }
+    filter { it.isWired() }
 
 /** Count-only twin of [wiredPhotos] for hot paths (#339): search runs per
  * message per keystroke and titles render per turn — a `count {}` avoids
  * the throwaway list `filter {}` allocates without changing the contract. */
 fun List<ChatAttachment>.wiredPhotoCount(): Int =
-    count { it.base64.isNotBlank() }
+    count { it.isWired() }
+
+/** Single source of truth for the wired predicate (#339): both helpers
+ * above delegate here, so the next edit that changes what counts (e.g.
+ * trimming whitespace-only payloads) cannot silently re-split the
+ * wire/display/cap contract. */
+private fun ChatAttachment.isWired(): Boolean = base64.isNotBlank()
 
 /** Max photos per turn (#318). Two is the acceptance bar (two images in one
  * turn render and reach the agent); the cap keeps the wire body under the
@@ -276,15 +282,15 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
     withContext(Dispatchers.IO) {
         runCatching {
             val resolver = context.contentResolver
-            // One bounded read, three uses (#339): bounds + pixels + EXIF
-            // previously opened the Uri 3×, which re-fetches cloud picker
-            // URIs (Google Photos) twice for nothing. Everything below
-            // decodes from these bytes instead of the stream. The closing
-            // toByteArray() copies once more (transient ~2x actual size —
-            // single-digit MB for real photos; the 32 MB ceiling only
-            // binds adversarial inputs that fail JPEG validation right
-            // after), which beats re-reading cloud URIs twice.
-            val bytes = resolver.openInputStream(uri)?.use { stream ->
+            // Scoped read+decode (#339): bounds, sample, pixels, and EXIF
+            // all run inside this block from one bounded read, so `bytes`
+            // falls out of scope before rotation/scale/compress — the
+            // source buffer is GC-eligible before the real hump instead of
+            // living through it. (Previously: 3× stream opens re-fetched
+            // cloud URIs; then one read held through compress. This keeps
+            // the single read and drops the retention.)
+            val decoded = run {
+                val bytes = resolver.openInputStream(uri)?.use { stream ->
                 // Pre-sized 1 MB (#339): the default 32-byte buffer doubles
                 // its way to 32 MB (~64 MB transient at the top copy), and
                 // real photos land within an order of this anyway.
@@ -358,10 +364,31 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 sample *= 2
             }
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-            var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            val fresh = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
                 ?: throw NamedAttachError(
                     "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
                 )
+                // EXIF orientation (#339 review): BitmapFactory ignores it, so a
+                // portrait phone photo would stage and send sideways. The
+                // framework reader needs no extra dependency (minSdk 28 > 24).
+                // Flips included: front-camera selfies commonly carry
+                // FLIP_HORIZONTAL/TRANSVERSE, which a rotation-only mapping
+                // would leave mirrored.
+                val orient = runCatching {
+                    // use{} like every other stream here (#339): close is a
+                    // no-op on a byte-array stream, but the hygiene is the
+                    // same shape as the resolver reads above it.
+                    java.io.ByteArrayInputStream(bytes).use {
+                        ExifInterface(it).getAttributeInt(
+                            ExifInterface.TAG_ORIENTATION,
+                            ExifInterface.ORIENTATION_NORMAL,
+                        )
+                    }
+                }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+                fresh to orient
+            }
+            var bitmap = decoded.first
+            val orientation = decoded.second
             // One try/finally from here down (#339): rotation, scaling and
             // compression each allocate or throw, and any throw must recycle
             // the live bitmap — the recycle-before-reassign lines cover the
@@ -375,23 +402,6 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             var encoded: String? = null
             var lastSize = 0
             try {
-                // EXIF orientation (#339 review): BitmapFactory ignores it, so a
-                // portrait phone photo would stage and send sideways. The
-                // framework reader needs no extra dependency (minSdk 28 > 24).
-                // Flips included: front-camera selfies commonly carry
-                // FLIP_HORIZONTAL/TRANSVERSE, which a rotation-only mapping
-                // would leave mirrored.
-                val orientation = runCatching {
-                    // use{} like every other stream here (#339): close is a
-                    // no-op on a byte-array stream, but the hygiene is the
-                    // same shape as the resolver reads above it.
-                    java.io.ByteArrayInputStream(bytes).use {
-                        ExifInterface(it).getAttributeInt(
-                            ExifInterface.TAG_ORIENTATION,
-                            ExifInterface.ORIENTATION_NORMAL,
-                        )
-                    }
-                }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
                 // Null means no transform: transposes and flips compose a mirror
                 // via negative scale, which createBitmap applies directly.
                 // Mapping follows the EXIF orientation semantics (CIPA DC-008 /
@@ -463,11 +473,11 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     // opaque fill above when the source had alpha (two
                     // full-size bitmaps live until its recycle) — and the
                     // q60 retry reallocates out while bitmap stays live.
-                    // Plus the source `bytes` buffer itself, alive from the
-                    // read until decode returns (up to 32 MB adversarial,
-                    // single-digit MB real). Bounded and send-path-only
-                    // (like the read transient above), but the real hump,
-                    // so a future "optimization" of the buffer alone would
+                    // The source `bytes` buffer is NOT part of this hump:
+                    // it falls out of scope with the read+decode block
+                    // above, so it is GC-eligible before bitmap work.
+                    // Bounded and send-path-only, but the real hump, so a
+                    // future "optimization" of the buffer alone would
                     // miss it.
                     // Checked, not assumed (#339): a false return leaves
                     // out empty, and an empty candidate would pass the cap

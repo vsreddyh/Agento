@@ -947,7 +947,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (_state.value.streaming) {
             if (text.isNotEmpty()) {
                 if (_state.value.queued.isBlank()) {
-                    _state.value = _state.value.copy(pending = "", queued = text)
+                    // Queued verbatim like the direct send (#339): trim
+                    // gates blankness, the stored turn keeps indentation —
+                    // a code paste queued mid-stream must fire identical to
+                    // the same paste sent idle.
+                    _state.value = _state.value.copy(pending = "", queued = rawText)
                     // Same narrowing note as the branches around it (#339):
                     // the queued fire is text-only, so staged photos park —
                     // said here too, not just for the image-only tap. Info:
@@ -2303,19 +2307,23 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * parked instead of firing into the new turn). */
     private fun flushQueued(doneGen: Int) {
         if (doneGen != sendGen) return
-        val q = _state.value.queued.trim()
-        // A newer turn started mid-flush: keep the queue for its Done
-        // rather than firing into the live request.
-        if (q.isEmpty() || _state.value.streaming) return
+        // Raw queued text, trimmed gate (#339): the fire stores verbatim
+        // like the direct send, so a mid-stream code paste keeps its
+        // indentation — trim decides blankness only.
+        val raw = _state.value.queued
+        if (raw.trim().isEmpty() || _state.value.streaming) return
         // Not ready (connectivity flap): no future Done is coming to fire
         // this, so hand it back to the composer instead of stranding it.
         // Concatenated when occupied (#339): displacing the live draft
         // would drop typed text — the reverse of parkQueued's contract.
+        // Verbatim both sides: the hand-back is a composer restore, not a
+        // send, so no blankness gate applies — queued text was non-blank
+        // when parked (send() gates it).
         if (!_state.value.ready) {
             val live = _state.value.pending
             _state.value = _state.value.copy(
                 queued = "",
-                pending = if (live.isBlank()) q else "${live.trimEnd()} ${q.trimStart()}",
+                pending = if (live.isBlank()) raw else "${live.trimEnd()} ${raw.trimStart()}",
             )
             return
         }
@@ -2326,7 +2334,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = api.pathFor(tab)
         _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path)
         val history = _state.value.messages +
-            ChatMessage("user", q, ChatThreads.now())
+            ChatMessage("user", raw, ChatThreads.now())
         // The queued fire is text-only by design (see send()), so staged
         // photos stay parked — said out loud (#339), because a silent
         // text-only send after staging photos reads as a dropped attach.

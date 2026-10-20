@@ -71,15 +71,23 @@ object ChatThreads {
      * back to the photo name when no user turn has words, to date when the
      * thread has no user turns at all. */
     fun titleFor(messages: List<ChatMessage>): String {
-        val userTurns = messages.filter { it.role == "user" }
-        val textMsg = userTurns.firstOrNull { it.content.isNotBlank() }
+        // Single pass (#339): first text turn + largest photo count in one
+        // walk — this runs per title render and per switcher-search filter
+        // pass over up to 200-message threads, so two full walks per call
+        // is churn worth avoiding.
+        var textMsg: ChatMessage? = null
+        var maxPhotos = 0
+        for (m in messages) {
+            if (m.role != "user") continue
+            maxPhotos = maxOf(maxPhotos, m.attachments.wiredPhotoCount())
+            if (textMsg == null && m.content.isNotBlank()) textMsg = m
+        }
         if (textMsg == null) {
             // An image-only thread has no words to title from: name the
             // LARGEST photo turn (#339), like the suffix below — a 1-photo
             // opener followed by a 2-photo turn holds a 2-photo turn.
             // Counted wired like every other signal.
-            val n = userTurns.maxOfOrNull { it.attachments.wiredPhotoCount() } ?: 0
-            if (n > 0) return if (n == 1) "Photo" else "$n photos"
+            if (maxPhotos > 0) return if (maxPhotos == 1) "Photo" else "$maxPhotos photos"
             return "New conversation"
         }
         val first = textMsg.content.trim()
@@ -87,7 +95,7 @@ object ChatThreads {
         // 1-photo turn followed by a 2-photo turn holds a 2-photo turn,
         // and the signal should say so. Counted wired so blanks never
         // title a thread.
-        val photos = userTurns.maxOfOrNull { it.attachments.wiredPhotoCount() } ?: 0
+        val photos = maxPhotos
         val oneLine = first.replace(titleWhitespace, " ")
         // Photo signal with the budget kept (#339): the marker reserves
         // its width first, so the row never exceeds 42 chars. avail == 0

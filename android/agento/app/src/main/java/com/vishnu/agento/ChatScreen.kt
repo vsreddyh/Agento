@@ -17,6 +17,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -285,10 +286,13 @@ internal fun ChatTab(
     // will ever clear it), so staleness bounds it — an intent older than
     // the bound is treated as dead and the launch proceeds.
     var cameraPendingSince by rememberSaveable { mutableStateOf(0L) }
-    /** True while a camera intent launched recently enough to still return. */
+    /** True while a camera intent launched recently enough to still return.
+     * Monotonic clock (#339): wall-clock jumps (user-set time, NTP slew)
+     * would age a 1-minute-old intent into a 31-minute-old one and reopen
+     * the overwrite — or future-date it and stick the gate. */
     fun isCameraPending(): Boolean =
         cameraPendingSince != 0L &&
-            System.currentTimeMillis() - cameraPendingSince < CAMERA_PENDING_STALE_MS
+            SystemClock.elapsedRealtime() - cameraPendingSince < CAMERA_PENDING_STALE_MS
     // Startup sweep (#339): a process kill between the TakePicture write
     // and the decode leaves a capture with no owner — per-batch finally
     // covers cancel/leave-tab, not death. The cache dir holds ONLY these
@@ -306,7 +310,16 @@ internal fun ChatTab(
         // captures only the resulting File — so no rotation can leak the
         // Activity through this effect. Same class as the batch decode,
         // fixed the same way.
+        // Fresh-process gate reset (#339): a kill while the camera app is
+        // foreground restores a fresh pending timestamp with no callback
+        // to clear it — 30 min of "already open" on the crashed device.
+        // A fresh process has no outstanding intent by construction; a
+        // rotation recreates with isChangingConfigurations, so only the
+        // former clears here.
         val keep = cameraPath
+        if ((context as? Activity)?.isChangingConfigurations != true) {
+            cameraPendingSince = 0L
+        }
         val sweepDir = context.cacheDir.resolve("camera")
         withContext(Dispatchers.IO) {
             runCatching {
@@ -543,8 +556,19 @@ internal fun ChatTab(
         cameraPath = file.absolutePath
         // Armed before launch, cleared in the callback (#339): the gate at
         // the top of this function makes overlapping intents impossible.
-        cameraPendingSince = System.currentTimeMillis()
-        cameraLauncher.launch(uri)
+        // Guarded: if launch() itself throws (no camera activity to
+        // resolve, broken FileProvider on an odd OEM), no callback ever
+        // fires — so the gate resets, the path nulls, and the orphan file
+        // deletes here instead of sticking the gate till the stale bound.
+        cameraPendingSince = SystemClock.elapsedRealtime()
+        runCatching {
+            cameraLauncher.launch(uri)
+        }.onFailure {
+            cameraPendingSince = 0L
+            cameraPath = null
+            runCatching { file.takeIf { it.exists() }?.delete() }
+            vm.notify("Couldn't start the camera.")
+        }
     }
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
