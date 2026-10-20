@@ -156,11 +156,11 @@ class MemoryApi(context: Context) {
         }
     }
 
-    /** Non-200 is an error. The message carries a body snippet for logs;
-     * the UI names the code only (parsed via ApprovalsApi.httpCode), never
-     * pasted server text. */
+    /** Non-200 is an error naming the code only: the snippet stays out of
+     * the message because bodies carry memory text (PII) that must not reach
+     * logcat or crash reports. Callers needing the body read it at debug. */
     private fun checkOk(it: CallResult): CallResult {
-        if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
+        if (it.code != 200) throw RuntimeException("HTTP ${it.code}")
         return it
     }
 

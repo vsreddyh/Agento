@@ -973,7 +973,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             val list = memoryApi.listMemory(path)
             withContext(Dispatchers.Main) {
                 // Stale load (path changed mid-flight): old-profile rows
-                // must not land on the new profile.
+                // must not land on the new profile. Loading clears first so
+                // the guard never leaves a stuck spinner behind.
+                _state.value = _state.value.copy(memoryLoading = false)
                 if (_state.value.path != path) return@withContext
                 val failedCode = ApprovalsApi.httpCode(list.exceptionOrNull()?.message)
                 val loadErr = if (list.isFailure) {
@@ -988,10 +990,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     memoryPaused = rows?.paused ?: _state.value.memoryPaused,
                     memoryTopics = rows?.topics ?: _state.value.memoryTopics,
                     memoryWarnings = rows?.warnings ?: _state.value.memoryWarnings,
-                    memoryLoading = false,
-                    memoryError = listOf(notice.orEmpty(), loadErr)
-                        .filter { it.isNotBlank() }
-                        .joinToString(" "),
+                    memoryError = if (list.isFailure) {
+                        // The write succeeded; only the reload failed. The
+                        // notice must not read as a failed write.
+                        loadErr
+                    } else {
+                        listOf(notice.orEmpty(), loadErr)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" ")
+                    },
                     pendingMemoryCount = rows?.items?.count { it.isPending() }
                         ?: _state.value.pendingMemoryCount,
                 )
@@ -1012,9 +1019,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     ) {
         // Both the add here and the remove below run on Main (UI taps and
         // the Main-confined completion), so a plain set is safe; moving
-        // either side off Main needs a lock. Item ids share the set with
-        // "topic:…"/"new"/"forget", so they are namespaced: an id literally
-        // equal to "new" must not block the composer.
+        // either side off Main needs a lock. Keys are namespaced —
+        // "id:…" for items, "id:topic:…" for pauses — so an item id literally
+        // equal to "new" or "topic:x" can never collide with the bare "new",
+        // "forget" or topic keys.
         val key = "id:$id"
         if (id.isBlank() || !acting.add(key)) return
         _state.value = _state.value.copy(actingMemory = acting.toSet())
@@ -1165,8 +1173,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private fun pollMemoryCount(path: String) {
         viewModelScope.launch(Dispatchers.IO) {
             // Pending-only page, like the approvals poll: counting needs no
-            // rows, pauses or topics.
-            val n = memoryApi.listMemory(path, status = "pending", limit = 100)
+            // rows, pauses or topics. Same limit as the sheet so the badge
+            // and the header cannot disagree past 100 pending.
+            val n = memoryApi.listMemory(path, status = "pending", limit = 200)
                 .getOrNull()?.items?.size ?: return@launch
             withContext(Dispatchers.Main) {
                 if (_state.value.path != path) return@withContext

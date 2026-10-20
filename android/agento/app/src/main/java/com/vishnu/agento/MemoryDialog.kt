@@ -14,6 +14,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,7 +41,9 @@ internal fun MemoryDialog(
     warnings: List<String>,
     loading: Boolean,
     error: String,
-    /** Ids (and "topic:…"/"new"/"forget" keys) with a write in flight. */
+    /** Write keys in flight — "id:\u2026" for items, "id:topic:\u2026" for
+     * pauses, bare "new"/"forget" for the composer and wipe. A listed key
+     * disables its buttons so a double tap cannot fire two writes. */
     acting: Set<String> = emptySet(),
     onConfirm: (String) -> Unit,
     /** onSaved fires only on success: the editor collapses then, so a failed
@@ -61,6 +64,10 @@ internal fun MemoryDialog(
     var newTopic by remember { mutableStateOf("") }
     var newText by remember { mutableStateOf("") }
     var forgetArmed by remember { mutableStateOf(false) }
+    // Arming is strictly one-shot: any new rows (manual refresh or a
+    // background reload landing) disarm, so a stale arm can never meet a
+    // later tap and wipe without its second confirm.
+    LaunchedEffect(items) { forgetArmed = false }
     val pending = items.filter { it.isPending() }
     val confirmed = items.filter { !it.isPending() }
     AlertDialog(
@@ -194,7 +201,7 @@ internal fun MemoryDialog(
                                 ) {
                                     for (topic in pair) {
                                         val isPaused = topic in paused
-                                        val busy = "topic:$topic" in acting
+                                        val busy = "id:topic:$topic" in acting
                                         TextButton(
                                             onClick = { onTogglePause(topic, !isPaused) },
                                             enabled = !busy,
