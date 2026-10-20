@@ -159,6 +159,10 @@ func (m *MemoryStore) Audit(_ context.Context, e AuditEntry) error {
 	}
 	m.audit[e.ID] = e
 	// Memory is bounded like the runs fallback: oldest-first past cap.
+	// The scan is O(n) per insert once full (n = 10*ListCap). This fallback is
+	// for tests and the brief window before Mongo is reachable, not the
+	// sustained path; a heap would be more code for a store that is not meant
+	// to carry production traffic.
 	for len(m.audit) > 10*ListCap {
 		oldest, oldestAt := "", int64(0)
 		first := true

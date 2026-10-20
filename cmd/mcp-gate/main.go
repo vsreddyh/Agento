@@ -116,6 +116,10 @@ type relay struct {
 	out     io.Writer
 	childIn io.Writer
 
+	// holdWG tracks detached hold goroutines. run waits on it (bounded) at
+	// teardown so an expiry/deny audit write is not cut off by process exit.
+	holdWG sync.WaitGroup
+
 	mu sync.Mutex
 	// pending holds allowed calls until their response arrives, so the
 	// response can be audited with the request's args. Bounded by
@@ -154,7 +158,10 @@ func (r *relay) run(
 	if err != nil {
 		return err
 	}
-	child.Stderr = os.Stderr
+	// One process-wide stderr, but each child chunk carries the relay's
+	// prefix: six relays share the container log, and a bare child line with
+	// no server name is unattributable.
+	child.Stderr = &prefixWriter{w: os.Stderr, prefix: "mcp-gate[" + r.server + "] child "}
 	if err := child.Start(); err != nil {
 		return err
 	}
@@ -183,6 +190,20 @@ func (r *relay) run(
 	// blocked reader is abandoned on the exit path, which is safe because
 	// the process is leaving.
 	cancelHolds()
+	// Holds record their own expiry after the cancel, and this process exits
+	// as soon as run returns — without a join, the teardown audit row (the
+	// one case the relay specifically promises to record) is cut off mid-write.
+	// Bounded: a wedged store must not hold shutdown open forever.
+	holdsDone := make(chan struct{})
+	go func() {
+		r.holdWG.Wait()
+		close(holdsDone)
+	}()
+	select {
+	case <-holdsDone:
+	case <-time.After(2 * storeTimeout):
+		r.log.Printf("shutdown: held calls still recording after %s; continuing", 2*storeTimeout)
+	}
 	stop()
 	child.Wait()
 	return err
@@ -259,7 +280,11 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 		// agent call at a time, and each hold ends at waitFor regardless. A
 		// semaphore here would queue sensitive calls behind each other for no
 		// gain the turn's own serialisation does not already give.
-		go r.holdCall(line, env, params)
+		r.holdWG.Add(1)
+		go func() {
+			defer r.holdWG.Done()
+			r.holdCall(line, env, params)
+		}()
 	}
 }
 
@@ -304,6 +329,9 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 	r.holds[a.ID] = unhold
 	r.mu.Unlock()
 	defer func() {
+		// unhold releases this hold's child context on the normal path; the
+		// map entry is what teardown cancels.
+		unhold()
 		r.mu.Lock()
 		delete(r.holds, a.ID)
 		r.mu.Unlock()
@@ -341,7 +369,10 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 			}
 			return
 		case <-ticker.C:
-			pollCtx, cancelPoll := context.WithTimeout(context.Background(), storeTimeout)
+			// The poll observes teardown; expire below deliberately does
+			// NOT — it runs because teardown happened and must be able to
+			// write that fact.
+			pollCtx, cancelPoll := context.WithTimeout(holdCtx, storeTimeout)
 			got, err := r.store.GetApproval(pollCtx, a.ID)
 			cancelPoll()
 			if err != nil {
@@ -475,17 +506,17 @@ func idKey(raw json.RawMessage) string {
 		return s
 	}
 	switch t := v.(type) {
+	case string:
+		return "s:" + t
 	case json.Number:
 		if r, ok := new(big.Rat).SetString(t.String()); ok {
 			return "n:" + r.RatString()
 		}
 		return "n:" + t.String()
 	default:
-		b, err := json.Marshal(v)
-		if err != nil {
-			return s
-		}
-		return string(b)
+		// JSON-RPC ids are string, number or null. Anything else (a bool, an
+		// object) is malformed: fail closed by not pairing or replying to it.
+		return ""
 	}
 }
 
@@ -544,6 +575,22 @@ func (r *relay) writePi(line []byte) error {
 	r.outMu.Lock()
 	defer r.outMu.Unlock()
 	return writeFrame(r.out, line)
+}
+
+// prefixWriter labels another process's stderr with the relay's server name.
+// It is deliberately not line-buffered: a child that writes a partial line
+// still gets the prefix on that chunk, which is what makes the first chunk
+// attributable when a server crashes mid-line.
+type prefixWriter struct {
+	w      io.Writer
+	prefix string
+}
+
+func (p *prefixWriter) Write(b []byte) (int, error) {
+	if _, err := p.w.Write(append([]byte(p.prefix), b...)); err != nil {
+		return 0, err
+	}
+	return len(b), nil
 }
 
 // writeFrame writes one newline-terminated frame with a single Write. Two

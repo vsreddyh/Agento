@@ -99,8 +99,11 @@ func (s Status) Valid() bool {
 // relay at all — see the ADR's threat note.
 func NeedsApproval(server, tool string, args map[string]any) bool {
 	// Dry runs only count: both prune tools default dry_run=true, and a
-	// counting call changes nothing whatever server it names.
-	if tool == "prune_old" && isDryRun(args) {
+	// counting call changes nothing. Scoped to the two servers that have the
+	// tool: an unclassified "prune_old" elsewhere must not inherit a free
+	// pass from a name match.
+	if tool == "prune_old" &&
+		(server == "miser-money" || server == "health-check") && isDryRun(args) {
 		return false
 	}
 	gated, ok := gatedTools[server]
@@ -224,6 +227,7 @@ func isSecretKey(k string) bool {
 	for _, sub := range []string{
 		"password", "passwd", "pwd", "passcode", "secret", "token",
 		"2fa", "otp", "api_key", "apikey", "private_key", "credential",
+		"auth", "bearer", "cookie", "session", "access_key", "accesskey",
 	} {
 		if strings.Contains(k, sub) {
 			return true

@@ -93,7 +93,16 @@ polls; a decision is a verb on an id, never a pasted body. `decided_by` is the
 constant `"app"`: this deployment has one shared `PASSWORD`, so there is
 exactly one principal to attribute a decision to. Per-user attribution arrives
 with per-user auth, and until then the field should be read as "decided from
-the app", not as an audit-grade user id. Secrets hygiene from the
+the app", not as an audit-grade user id.
+
+Two response-code contracts the app relies on. Reading an expired row is a
+**404** — it is no longer in the live queue — while deciding that same row is a
+**409**: the decision arrived after the hold ended. The 409 means "too late",
+not "someone else decided", and the app refreshes rather than attributing an
+action to another user. In the audit trail, `disposition=allowed` with a
+non-empty `error` means the tool ran and returned an error: `error != ""` is
+the tool-level failure signal, so a reader can separate "ran and failed" from
+"never ran" without parsing the payload. Secrets hygiene from the
 issue stands: passwords/2FA never go through chat; the take-over path
 belongs to #312.
 
