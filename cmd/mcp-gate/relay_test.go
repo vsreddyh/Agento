@@ -316,6 +316,19 @@ func TestTakeNormalisesIdEncoding(t *testing.T) {
 	if st := r.take(json.RawMessage(`"abc"`)); st == nil {
 		t.Fatal("whitespace-padded id did not pair")
 	}
+	r.track(json.RawMessage(`1e3`), "list_notes", map[string]any{})
+	if st := r.take(json.RawMessage(`1000`)); st == nil {
+		t.Fatal("1e3 and 1000 did not pair")
+	}
+	// Above 2^53 a float64 round-trip would merge these two ids; exact
+	// rationals must keep them apart.
+	r.track(json.RawMessage(`9007199254740993`), "list_notes", map[string]any{})
+	if st := r.take(json.RawMessage(`9007199254740992`)); st != nil {
+		t.Fatal("distinct large ids paired with each other")
+	}
+	if st := r.take(json.RawMessage(`9007199254740993`)); st == nil {
+		t.Fatal("large id did not pair with itself")
+	}
 }
 
 // The pending table is bounded even when a server never answers.

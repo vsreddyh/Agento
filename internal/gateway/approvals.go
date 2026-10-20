@@ -147,8 +147,8 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 			"unknown path "+bounded(r.URL.Path))
 		return
 	}
-	// Run ids are ObjectIDs; anything longer matches nothing. Same no-oracle
-	// 404 contract as the runs routes.
+	// Approval ids are ObjectIDs; anything longer matches nothing. Same
+	// no-oracle 404 contract as the runs routes.
 	if len(id) > maxApprovalIDLen || strings.ContainsRune(id, 0) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown approval")
@@ -176,7 +176,7 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 		return
 	case "":
 		apiError(w, http.StatusMethodNotAllowed, "invalid_request_error", "",
-			"GET /api/approvals/{id} is not served; list and decide instead")
+			"no verb on /api/approvals/{id}; decide via /api/approvals/{id}/approve or /deny")
 		return
 	}
 	apiError(w, http.StatusNotFound, "invalid_request_error", "",

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"os"
 	"os/exec"
 	"strings"
@@ -448,24 +449,39 @@ func (r *relay) audit(tool string, args map[string]any, disp approvals.Dispositi
 // idKey canonicalises a JSON-RPC id for pairing a call with its response.
 // Raw bytes are not enough: a server may re-encode what it echoed ("1" as
 // "1.0", whitespace around it), and byte-equality would then miss the
-// response and silently drop its audit row. Decoding and re-encoding both
-// sides normalises them. Ids in practice are small integers or short strings,
-// so the float64 round-trip is not a precision concern for pairing; an
-// unparseable id falls back to its trimmed bytes rather than vanishing.
+// response and silently drop its audit row.
+//
+// Numbers are canonicalised as exact rationals, not through float64: two ids
+// above 2^53 (9007199254740993 and 9007199254740992) both round to the same
+// float and would share one pending entry, pairing one call's response with
+// another's args. UseNumber plus big.Rat keeps integer ids exact and still
+// makes "1", "1.0" and "1e0" the same key. Strings are re-marshalled for
+// whitespace/escape normalisation. An unparseable id falls back to its
+// trimmed bytes rather than vanishing.
 func idKey(raw json.RawMessage) string {
 	s := strings.TrimSpace(string(raw))
 	if s == "" || s == "null" {
 		return ""
 	}
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
 	var v any
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
+	if err := dec.Decode(&v); err != nil {
 		return s
 	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return s
+	switch t := v.(type) {
+	case json.Number:
+		if r, ok := new(big.Rat).SetString(t.String()); ok {
+			return "n:" + r.RatString()
+		}
+		return "n:" + t.String()
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return s
+		}
+		return string(b)
 	}
-	return string(b)
 }
 
 func (r *relay) track(id json.RawMessage, name string, args map[string]any) {
@@ -473,20 +489,29 @@ func (r *relay) track(id json.RawMessage, name string, args map[string]any) {
 	if key == "" {
 		return
 	}
+	var evicted *callState
+	var evictedKey string
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if len(r.pending) >= pendingCap {
-		var oldestKey string
 		var oldest time.Time
 		for k, st := range r.pending {
-			if oldestKey == "" || st.at.Before(oldest) {
-				oldestKey, oldest = k, st.at
+			if evictedKey == "" || st.at.Before(oldest) {
+				evictedKey, oldest = k, st.at
 			}
 		}
-		delete(r.pending, oldestKey)
-		r.log.Printf("pending call table full: evicted unanswered id %s", oldestKey)
+		evicted = r.pending[evictedKey]
+		delete(r.pending, evictedKey)
 	}
 	r.pending[key] = &callState{name: name, args: args, at: time.Now()}
+	r.mu.Unlock()
+	// Outside the lock: the logger is I/O, and the audit can block on a store
+	// call. Losing the entry must not also lose the record of the call, so
+	// the eviction writes its own allow row with the reason.
+	if evicted != nil {
+		r.log.Printf("pending call table full: evicted unanswered id %s", evictedKey)
+		go r.audit(evicted.name, evicted.args, approvals.DispositionAllow,
+			"evicted unanswered at the pending cap; response not observed", "")
+	}
 }
 
 func (r *relay) take(id json.RawMessage) *callState {

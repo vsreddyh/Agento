@@ -213,6 +213,12 @@ func redactValue(v any) any {
 	}
 }
 
+// isSecretKey reports whether an argument key names a credential.
+//
+// Substring matching is deliberate and deliberately over-broad: a
+// hypothetical "tokenizer" arg is masked too. Over-redacting an audit row is
+// the safe direction; missing a credential is not, and the cost of a false
+// positive is one unreadable argument name.
 func isSecretKey(k string) bool {
 	k = strings.ToLower(k)
 	for _, sub := range []string{
