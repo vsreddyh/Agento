@@ -211,7 +211,9 @@ func TestMemoryMarkInterrupted(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	n, err := m.MarkInterrupted(ctx, now)
+	// at is the restart instant: the rows above were created before it, so the
+	// same scope Mongo uses (createdAt < at) must still expire them.
+	n, err := m.MarkInterrupted(ctx, now.Add(time.Second))
 	if err != nil || n != 1 {
 		t.Fatalf("marked %d, err %v", n, err)
 	}
@@ -221,6 +223,20 @@ func TestMemoryMarkInterrupted(t *testing.T) {
 	}
 	if _, err := m.GetApproval(ctx, old.ID); err == nil {
 		t.Fatal("expired row should be deleted, not flipped")
+	}
+
+	// A row created after the restart instant belongs to this process and
+	// must survive the sweep.
+	m2 := NewMemoryStore()
+	late := Approval{ID: NewID(), Server: "notes", Tool: "delete_note"}
+	if err := m2.CreateApproval(ctx, late); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := m2.MarkInterrupted(ctx, time.Now().Add(-time.Hour)); err != nil || n != 0 {
+		t.Fatalf("marked %d late rows, err %v", n, err)
+	}
+	if got, err := m2.GetApproval(ctx, late.ID); err != nil || got.Status != StatusPending {
+		t.Fatalf("late row = %+v, %v; want still pending", got, err)
 	}
 }
 

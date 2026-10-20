@@ -243,14 +243,17 @@ func (m *MemoryStore) ListAudit(_ context.Context, f AuditFilter) ([]AuditEntry,
 	return out, nil
 }
 
-// MarkInterrupted expires every pending row: a restart orphans the relay
-// that owned the wait, and a "pending" row nobody reads would lie until TTL.
+// MarkInterrupted expires pending rows that predate the restart: a restart
+// orphans the relay that owned their wait, and a "pending" row nobody reads
+// would lie until TTL. Rows created at/after `at` belong to this process's
+// startup (the single-process case makes that rare, but the scope mirrors
+// Mongo so a Create landing mid-sweep is not expired by a dead owner).
 func (m *MemoryStore) MarkInterrupted(_ context.Context, at time.Time) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var n int64
 	for id, a := range m.approvals {
-		if a.Status != StatusPending {
+		if a.Status != StatusPending || a.CreatedAt >= at.UnixMilli() {
 			continue
 		}
 		if expired(at, a.ExpiresAt) {
