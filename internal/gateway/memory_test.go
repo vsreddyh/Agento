@@ -264,6 +264,14 @@ func TestMemoryEmptyTopicAndNullPaused(t *testing.T) {
 	if truncated, _ := decodeBody(t, rec)["truncated"].(bool); !truncated {
 		t.Fatalf("long edit response missing truncated=true (%s)", rec.Body)
 	}
+	// A malformed body must not wipe the store: forget takes no body, but a
+	// client bug caught on every other write should not succeed here.
+	if rec := do(t, srv, http.MethodPost, "/api/memory/forget", `{oops`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("forget garbage: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if n := len(decodeBody(t, do(t, srv, http.MethodGet, "/api/memory", ""))["items"].([]any)); n != 1 {
+		t.Fatalf("items after refused forget = %d, want 1", n)
+	}
 	// A trailing slash does not change the verb.
 	if rec := do(t, srv, http.MethodPost, "/api/memory/forget/", ""); rec.Code != http.StatusOK {
 		t.Fatalf("forget/: %d, want 200 (%s)", rec.Code, rec.Body)

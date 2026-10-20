@@ -48,7 +48,6 @@ func prepareSave(profile string, in saveMemoryInput) (memory.Item, bool, string)
 	if !memory.UsableTopic(in.Topic) {
 		return memory.Item{}, false, memory.TopicError(in.Topic)
 	}
-	trimmed := strings.TrimSpace(in.Text)
 	text := memory.CleanText(in.Text)
 	if text == "" {
 		return memory.Item{}, false, "text is required: one durable thing the user said"
@@ -62,7 +61,7 @@ func prepareSave(profile string, in saveMemoryInput) (memory.Item, bool, string)
 		Text:    text,
 		Source:  memory.SourceAgent,
 		Status:  memory.StatusPending,
-	}, text != trimmed, ""
+	}, memory.Clipped(in.Text), ""
 }
 
 // prepareList maps one list_memory call into a store filter or a

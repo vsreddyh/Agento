@@ -587,6 +587,12 @@ const spawnSubagent = defineTool({
 		const timeoutMs = resolveTimeout(params.timeoutSeconds);
 		const thinking = resolveThinking(params.thinking, ctx.thinkingLevel);
 
+		// No explicit env: the child inherits process.env, including the
+		// AGENTO_PROFILE the gateway sets on the Pi child. The memory MCP
+		// server scopes save_memory by that variable, so subagent saves land
+		// in this profile. If a future Pi version sanitises the child env,
+		// subagent saves would silently fall back to the default profile —
+		// pass AGENTO_PROFILE explicitly then.
 		const client = new RpcClient({
 			cliPath: cliPath(),
 			cwd,

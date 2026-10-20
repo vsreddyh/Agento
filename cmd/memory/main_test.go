@@ -24,6 +24,11 @@ func TestPrepareSave(t *testing.T) {
 		t.Fatal("short text reported truncated")
 	}
 
+	// A NUL byte is stripped, not a truncation: the signal means length was
+	// lost, matching CleanText vs Clipped.
+	if _, truncated, errMsg := prepareSave("chat", saveMemoryInput{Topic: "fact", Text: "a\x00b"}); errMsg != "" || truncated {
+		t.Fatalf("NUL-short save: truncated=%v err=%q", truncated, errMsg)
+	}
 	long, truncated, errMsg := prepareSave("chat", saveMemoryInput{Topic: "fact", Text: strings.Repeat("z", memory.MaxText+10)})
 	if errMsg != "" || !truncated {
 		t.Fatalf("long save: truncated=%v err=%q", truncated, errMsg)

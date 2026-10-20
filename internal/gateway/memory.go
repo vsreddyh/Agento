@@ -87,6 +87,16 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request, rest, prof
 		if !requireMethod(w, r, http.MethodPost, "/api/memory/forget") {
 			return
 		}
+		// Forget takes no body, but a malformed one must not wipe 200 rows:
+		// every other write validates first, and a client bug caught
+		// everywhere else should not succeed here destructively. Only a
+		// declared length is checked: chunked (-1) with no body must not
+		// 400 a legitimate forget.
+		if r.ContentLength > 0 {
+			if err := decodeJSONBody(w, r, &struct{}{}); err != nil {
+				return
+			}
+		}
 		ctx, cancel := memoryCtx(r)
 		defer cancel()
 		n, err := s.memory.DeleteAll(ctx, profile)
@@ -278,8 +288,10 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 				memory.TopicError(body.Topic))
 			return
 		}
-		trimmed := strings.TrimSpace(body.Text)
 		text := memory.CleanText(body.Text)
+		// Clipped, not merely trimmed/stripped: the signal means length was
+		// lost, matching save_memory.
+		truncated := memory.Clipped(body.Text)
 		if text == "" {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "text",
 				"text is required")
@@ -310,7 +322,7 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 		// quietly stored less.
 		writeJSONResponse(w, http.StatusOK, map[string]any{
 			"item":      memoryWire(it),
-			"truncated": text != trimmed,
+			"truncated": truncated,
 		})
 		return
 	default:
@@ -338,11 +350,11 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 		}
 		upd.Topic = body.Topic
 	}
-	// trimmedText feeds the truncation signal in the response: an edit
+	// truncatedText feeds the truncation signal in the response: an edit
 	// pasting past MaxText clips like a create, and the writer should know.
-	trimmedText := ""
+	truncatedText := false
 	if body.Text != nil {
-		trimmedText = strings.TrimSpace(*body.Text)
+		truncatedText = memory.Clipped(*body.Text)
 		text := memory.CleanText(*body.Text)
 		if text == "" {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "text",
@@ -380,7 +392,7 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 	// Same truncated contract as POST and save_memory.
 	writeJSONResponse(w, http.StatusOK, map[string]any{
 		"item":      memoryWire(it),
-		"truncated": upd.Text != nil && it.Text != trimmedText,
+		"truncated": upd.Text != nil && truncatedText,
 	})
 }
 
