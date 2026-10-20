@@ -76,8 +76,8 @@ So, from the measured totals:
 That is a large drop from the previous guidance, which asked for 2/3/5 GB against a
 ~1.06 GiB measured stack. The reason is structural, not tuning: the agent host is now one
 Node container with three `pi` processes, where it used to be a Python-runtime image with
-a bundled headless browser. **If your workload starts using the browser toolset, re-measure** — nothing in
-this stack ships chromium any more, so a browser-using turn will cost more than the
+a bundled headless browser. **If your workload starts using the browser toolset, re-measure** — the
+image ships chromium again since #312, so a browser-using turn costs more than the
 figures above and the delta is not something this document can predict.
 
 Add ~2 GB swap as a spike buffer — and on the **1 GB minimum tier that swap is
@@ -92,7 +92,8 @@ touched.
 
 Two other numbers that changed and should be flagged rather than quietly replaced: the old
 disk table assumed the agent image carried **headless chromium for Playwright** (that was
-~3.0 GB of image on its own; the current image is 911 MB and ships no browser at all), and
+~3.0 GB of image on its own; the pre-#312 image was 911 MB with no browser, and #312
+puts chromium back, so re-measure image size before sizing disk), and
 it put volumes and writable layers at ~0.5 GB where they now measure **under 1 MB**.
 
 ## How to re-measure this

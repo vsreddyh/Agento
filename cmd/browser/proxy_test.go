@@ -63,9 +63,10 @@ func TestProxyRefusesLoopbackByDefault(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer backend.Close()
 	u, _ := url.Parse(backend.URL)
+	psrv := httptest.NewServer(proxy)
+	defer psrv.Close()
 
-	conn, err := net.Dial("tcp", strings.TrimPrefix(
-		httptest.NewServer(proxy).URL, "http://"))
+	conn, err := net.Dial("tcp", strings.TrimPrefix(psrv.URL, "http://"))
 	if err != nil {
 		t.Fatal(err)
 	}

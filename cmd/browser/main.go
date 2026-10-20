@@ -83,9 +83,13 @@ func checkURL(raw string) (*url.URL, error) {
 	}
 	// Lowercased: url.Parse preserves case and "HTTPS://x" would otherwise
 	// fail closed with a confusing message about a scheme that looks right.
-	if scheme := strings.ToLower(u.Scheme); scheme != "http" && scheme != "https" {
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
 		return nil, fmt.Errorf("only http and https urls are allowed, not %q", u.Scheme)
 	}
+	// Normalize in place: what the gate approved is byte-identical to what
+	// Chromium dials and what the audit log records.
+	u.Scheme = scheme
 	// Web ports only: the approval gate is per-domain, not per-port, and a
 	// https://host:22/ URL would otherwise buy a raw TCP tunnel the human
 	// never approved as anything but a web page.
@@ -131,14 +135,29 @@ var denyCIDRs = []string{
 	"fc00::/7",
 }
 
+// denyNets is denyCIDRs parsed once at init: per-connection parsing would
+// burn cycles on the hot path, and a typo'd CIDR must fail loud at startup,
+// not silently skip per connection.
+var denyNets = func() []net.IPNet {
+	out := make([]net.IPNet, 0, len(denyCIDRs))
+	for _, cidr := range denyCIDRs {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic("browser: bad deny CIDR " + cidr + ": " + err.Error())
+		}
+		out = append(out, *n)
+	}
+	return out
+}()
+
 func inDenyList(ip net.IP) bool {
 	// Normalize first: an IPv4-mapped IPv6 address must match the v4
 	// ranges, not slip past them in 16-byte form.
 	if v4 := ip.To4(); v4 != nil {
 		ip = v4
 	}
-	for _, cidr := range denyCIDRs {
-		if _, net, err := net.ParseCIDR(cidr); err == nil && net.Contains(ip) {
+	for _, n := range denyNets {
+		if n.Contains(ip) {
 			return true
 		}
 	}
@@ -241,8 +260,9 @@ func (ss *sessions) evictIdle() {
 			continue
 		}
 		log.Printf("browser: evicting idle session %s", profile)
+		// Explicit unlock at iteration end, not defer: N defers would hold
+		// every evicted session's lock until the function returns.
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		if s.browserCancel != nil {
 			s.browserCancel()
 		}
@@ -255,6 +275,7 @@ func (ss *sessions) evictIdle() {
 		if s.dir != "" {
 			os.RemoveAll(s.dir)
 		}
+		s.mu.Unlock()
 		delete(ss.byProfile, profile)
 	}
 }
@@ -424,12 +445,17 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
-			navCtx, cancel := context.WithTimeout(bctx, navTimeout)
-			defer cancel()
-			if err := chromedp.Do(navCtx, chromedp.Navigate(u.String())); err != nil {
+			// Own budgets per step, like read and evidence: a slow
+			// navigation must not starve the title read that proves where
+			// it landed.
+			if err := runStepVoid(bctx, func(ctx context.Context) error {
+				return chromedp.Do(ctx, chromedp.Navigate(u.String()))
+			}); err != nil {
 				return fail(fmt.Errorf("navigation failed: %v", err))
 			}
-			title, err := chromedp.Run(navCtx, chromedp.Title())
+			title, err := runStep(bctx, func(ctx context.Context) (string, error) {
+				return chromedp.Run(ctx, chromedp.Title())
+			})
 			if err != nil {
 				return fail(fmt.Errorf("title read failed: %v", err))
 			}
@@ -601,6 +627,15 @@ func runStep[T any](bctx context.Context, fn func(context.Context) (T, error)) (
 	ctx, cancel := context.WithTimeout(bctx, readTimeout)
 	defer cancel()
 	return fn(ctx)
+}
+
+// runStepVoid is runStep for error-only actions (navigations): same budget,
+// no value to thread through.
+func runStepVoid(bctx context.Context, fn func(context.Context) error) error {
+	_, err := runStep(bctx, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, fn(ctx)
+	})
+	return err
 }
 
 func orDefault(s, fallback string) string {

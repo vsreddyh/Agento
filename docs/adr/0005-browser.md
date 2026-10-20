@@ -80,7 +80,9 @@ diverge from it; retention's pruning covers the same collections.
   profile behind a single-flight gate — one slow Chromium start holds the
   others, accepted for v1 because launches are seconds and rare.
 - Extracted text: 12k runes per read (response says when it clipped).
-- Session TTL: 30 days idle, pruned lazily at server start.
+- Session TTL: 30 days idle. Pruned at server start (stray dirs) and
+  evicted daily-lazily in use (live Chromium + listener + dir go together);
+  a restart never finds anything the evictor would have taken.
 - Evidence: PNG + markdown + meta per save; no size cap beyond the page
   itself, and full-page screenshots of long pages are large by nature.
 
