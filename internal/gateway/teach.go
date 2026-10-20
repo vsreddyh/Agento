@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"agento/internal/cronjobs"
 	"agento/internal/teach"
 )
 
@@ -383,6 +384,9 @@ func (s *Server) handleSkillTest(w http.ResponseWriter, r *http.Request, profile
 	// while memory (which ignores ctx) stayed green in tests.
 	recCtx, recCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer recCancel()
+	// TestedAt is minted here, not in the store: the gateway owns the test
+	// instant the way deciders own theirs, and the store records it
+	// verbatim (store tests pin the value; here it is wall clock).
 	sk, err = s.teach.RecordTest(recCtx, id, profile, time.Now().UnixMilli(), text)
 	if err != nil {
 		teachError(w, err)
@@ -426,8 +430,13 @@ func (s *Server) handleSkillPromote(w http.ResponseWriter, r *http.Request, prof
 		return
 	}
 	if sk.Status != teach.StatusActive || sk.TestedAt == 0 {
-		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
-			"only a tested, active skill can run on schedule: review and test it first")
+		// Name the actual missing step: a tested-but-disabled skill was
+		// reviewed and tested, just deliberately stopped.
+		msg := "only a tested, active skill can run on schedule: activate it first"
+		if sk.TestedAt == 0 {
+			msg = "only a tested, active skill can run on schedule: review and test it first"
+		}
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "", msg)
 		return
 	}
 	if s.cfg.CronJobs == nil {
@@ -439,7 +448,17 @@ func (s *Server) handleSkillPromote(w http.ResponseWriter, r *http.Request, prof
 	// route enforces: clip it like every other free-text label.
 	name := teach.ClipLabel(body.Name)
 	if name == "" {
-		name = sk.Name
+		// SafeName, like the prompt prefix below: a hand-edited stored
+		// name must not ride raw into the job.
+		name = teach.SafeName(sk)
+	}
+	// Validate the schedule before the store call: a parse failure is a
+	// caller bug (400), while a Create failure past this point is the
+	// store's problem (mapped below).
+	if _, err := cronjobs.Parse(body.Schedule); err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+			"bad schedule: "+bounded(err.Error()))
+		return
 	}
 	prompt := "Routine \"" + teach.SafeName(sk) + "\" (taught skill, profile " + profile + "). " +
 		"Follow the procedure below.\n\n" + teach.RenderSKILL(sk)
@@ -449,8 +468,21 @@ func (s *Server) handleSkillPromote(w http.ResponseWriter, r *http.Request, prof
 	defer createCancel()
 	job, err := s.cfg.CronJobs.Create(createCtx, name, prompt, body.Schedule, body.Delivery)
 	if err != nil {
-		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
-			bounded(err.Error()))
+		// cronjobs errors carry their own shape (NotFound/Upstream like
+		// teach errors): a Mongo outage at promote time is 502, not a
+		// "bad schedule" 400.
+		if se, ok := err.(*cronjobs.StoreError); ok {
+			switch {
+			case se.NotFound:
+				apiError(w, http.StatusNotFound, "invalid_request_error", "", bounded(se.Msg))
+			case se.Upstream:
+				apiError(w, http.StatusBadGateway, "upstream_error", "", bounded(se.Msg))
+			default:
+				apiError(w, http.StatusBadRequest, "invalid_request_error", "", bounded(se.Msg))
+			}
+		} else {
+			apiError(w, http.StatusBadGateway, "upstream_error", "", bounded(err.Error()))
+		}
 		return
 	}
 	writeJSONResponse(w, http.StatusOK, map[string]any{
