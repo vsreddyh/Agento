@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.8.0]
+- **Projects: Testing and Blocked phases.** The project board grows from
+  four statuses to six — Todo, Ongoing, **Testing**, **Blocked**, Paused,
+  Done — across the agent tools, the API, and the app's Projects tab
+  (filters, picker, status chips, tap-to-advance).
+- **Projects: long-press a card to edit.** Press-and-hold anywhere on a
+  project card opens the edit dialog (with haptic confirmation); the status
+  chip still tap-advances and the menu still holds Edit/Delete.
+
 ## [5.7.0]
 - **Approval gates: sensitive agent actions pause for your decision**
   (#313). Money writes, deletes, archives and destructive rewrites no longer

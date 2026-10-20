@@ -426,6 +426,8 @@ fun SectionCard(
 fun StatusChip(modifier: Modifier = Modifier, status: String, onClick: (() -> Unit)? = null) {
     val (container, content) = when (status) {
         "Ongoing" -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
+        "Testing" -> Color(0xFFD7E6FF) to Color(0xFF0B2E5E)
+        "Blocked" -> Color(0xFFFFDAD6) to Color(0xFF410002)
         "Paused" -> Color(0xFFFFE3B3) to Color(0xFF4A2C00)
         "Done" -> Color(0xFFCDEBC0) to Color(0xFF0B2E0E)
         else -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant

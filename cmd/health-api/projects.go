@@ -18,7 +18,7 @@ import (
 
 // listProjects serves the app's Projects screen: the user's projects from
 // the shared `projects` collection (the same rows the agent manages over
-// the project-manager MCP). `?status=Todo|Ongoing|Paused|Done|all`
+// the project-manager MCP). `?status=Todo|Ongoing|Testing|Blocked|Paused|Done|all`
 // (default all), `?search=` matches name/note, `?limit=` caps rows
 // (default 200, max 500).
 func listProjects(w http.ResponseWriter, r *http.Request) {

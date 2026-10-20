@@ -10,19 +10,19 @@ same validation — see `cmd/health-api/main.go`).
 | Tool | Purpose |
 |---|---|
 | `create_project` | Create a project. Required: name. Optional: status (defaults to Todo), note |
-| `list_projects` | List by status Todo/Ongoing/Paused/Done/all, or search name/note (limit caps rows, default 200). Every argument is optional |
+| `list_projects` | List by status Todo/Ongoing/Testing/Blocked/Paused/Done/all, or search name/note (limit caps rows, default 200). Every argument is optional |
 | `get_project` | Fetch one project by id |
 | `update_project` | Edit name/status/note. Only `id` is required — every other field is nil-safe, and an empty update returns `noop: true` |
 | `delete_project` | Permanently delete |
 
 ## Schema (MongoDB `hermes` DB)
 
-**`projects`** — `name` (required), `status` (Todo | Ongoing | Paused |
-Done), `note`, `createdAt`, `updatedAt` (bumped on every edit).
+**`projects`** — `name` (required), `status` (Todo | Ongoing | Testing |
+Blocked | Paused | Done), `note`, `createdAt`, `updatedAt` (bumped on every edit).
 
 ### Key invariants
 
-- **Fixed statuses:** only Todo/Ongoing/Paused/Done (case-insensitive on
+- **Fixed statuses:** only Todo/Ongoing/Testing/Blocked/Paused/Done (case-insensitive on
   write, stored canonical). Blank status defaults to Todo.
 - **Permanent:** no TTL, no retention pruning. Done means finished.
 - **Shared board:** the app's Projects tab reads/writes the same rows
