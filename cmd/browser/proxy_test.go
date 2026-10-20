@@ -82,6 +82,30 @@ func TestProxyRefusesLoopbackByDefault(t *testing.T) {
 	}
 }
 
+func TestProxyForwardRefusesLoopbackByDefault(t *testing.T) {
+	// The plain-HTTP forward path must enforce the production IP check
+	// too: its response bytes are observable, unlike CONNECT tunnels.
+	proxy := &filteringProxy{check: publicIP, allowPort: func(string) bool { return true }}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "must-not-reach")
+	}))
+	defer backend.Close()
+	u, _ := url.Parse(backend.URL)
+	psrv := httptest.NewServer(proxy)
+	defer psrv.Close()
+	pu, _ := url.Parse(psrv.URL)
+	fwd := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(pu)}}
+	resp, err := fwd.Get(u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("forward to loopback = %d %q, want 403", resp.StatusCode, body)
+	}
+}
+
 func TestProxyPortRule(t *testing.T) {
 	// Permissive IPs but default ports: an ephemeral test port must 403.
 	proxy := &filteringProxy{check: func(net.IP) bool { return true }}

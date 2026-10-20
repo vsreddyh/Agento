@@ -676,11 +676,11 @@ func main() {
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
 			}
+			// Created by evidenceDir (Mkdir + exist-retry): the path is
+			// fresh, so no MkdirAll here — an idempotent create would
+			// silently accept a colliding dir and clobber the earlier save.
 			dir, err := evidenceDir()
 			if err != nil {
-				return fail(err)
-			}
-			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return fail(err)
 			}
 			text = collapseLines(text)
@@ -772,8 +772,11 @@ func collapseLines(s string) string {
 	out := make([]string, 0, len(lines))
 	blank := false
 	for _, l := range lines {
-		if t := strings.TrimSpace(l); t != "" {
-			out = append(out, t)
+		// Preserve leading indentation: code blocks, ASCII tables and
+		// nested lists lose their structure if every line is TrimSpaced.
+		// Only trailing whitespace goes; blank runs still collapse to one.
+		if strings.TrimSpace(l) != "" {
+			out = append(out, strings.TrimRight(l, " \t\r"))
 			blank = false
 		} else if !blank && len(out) > 0 {
 			out = append(out, "")
@@ -804,11 +807,32 @@ func evidenceDir() (string, error) {
 	if len(p) > 24 {
 		p = p[:24] + "-" + fnv32(p)
 	}
-	name := p + "-" + time.Now().UTC().Format("20060102-150405.000") +
-		"-" + fmt.Sprintf("%06d", evSeq.Add(1)%1000000)
+	// The dir is created here with Mkdir, not MkdirAll at the call site:
+	// MkdirAll is idempotent, so a counter regression (wrap + clock
+	// step-back) would return an existing dir and silently clobber the
+	// earlier save. Mkdir fails on Exist and the loop retries with the next
+	// counter value, so a returned path is always fresh.
 	// exports already ends in /browser (default /exports/browser): the
 	// timestamped dir hangs directly under it, never nested twice.
-	return jailPath(exports, name)
+	if err := os.MkdirAll(exports, 0o755); err != nil {
+		return "", err
+	}
+	var last string
+	for i := 0; i < 10; i++ {
+		name := p + "-" + time.Now().UTC().Format("20060102-150405.000") +
+			"-" + fmt.Sprintf("%06d", evSeq.Add(1)%1000000)
+		d, err := jailPath(exports, name)
+		if err != nil {
+			return "", err
+		}
+		if err := os.Mkdir(d, 0o755); err == nil {
+			return d, nil
+		} else if !os.IsExist(err) {
+			return "", err
+		}
+		last = d
+	}
+	return "", fmt.Errorf("evidence dir collision, last tried %q", last)
 }
 
 // pruneSessions drops idle browser profiles: a context dir untouched for

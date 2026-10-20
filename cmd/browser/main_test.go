@@ -78,8 +78,10 @@ func TestJailPath(t *testing.T) {
 }
 
 func TestCollapseLines(t *testing.T) {
-	got := collapseLines("  hello  \n\n   \nworld\n\n")
-	if got != "hello\n\nworld" {
+	// Trailing whitespace goes, blank runs collapse, but leading
+	// indentation survives: code blocks and nested lists keep structure.
+	got := collapseLines("  hello  \n\n   \n    indented\nworld\n\n")
+	if got != "  hello\n\n    indented\nworld" {
 		t.Fatalf("collapse = %q", got)
 	}
 }
@@ -99,12 +101,23 @@ func TestEvidenceDirUnique(t *testing.T) {
 			t.Fatalf("duplicate evidence dir %q", d)
 		}
 		seen[d] = true
-		// Make the dir real: without this the test passes on the counter
-		// alone and would miss a regression to second-precision
-		// timestamps. Creating each dir pins the no-overwrite property —
-		// a repeat timestamp+counter must still yield a fresh path.
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		// evidenceDir creates the dir itself (Mkdir + exist-retry): it
+		// must exist on disk, so a second save can never land in it and
+		// clobber the first. Plant a sentinel and check the next call
+		// goes elsewhere — that is the no-overwrite property, not just
+		// name uniqueness.
+		if st, err := os.Stat(d); err != nil || !st.IsDir() {
+			t.Fatalf("evidence dir %q not created: %v", d, err)
+		}
+		if err := os.WriteFile(d+"/sentinel", []byte("first"), 0o644); err != nil {
 			t.Fatal(err)
+		}
+	}
+	// Every planted sentinel survives: no later call reused an earlier dir.
+	for d := range seen {
+		b, err := os.ReadFile(d + "/sentinel")
+		if err != nil || string(b) != "first" {
+			t.Fatalf("dir %q clobbered: %q %v", d, b, err)
 		}
 	}
 }

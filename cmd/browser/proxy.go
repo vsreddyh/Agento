@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -146,7 +147,9 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	// truncates mid-copy. Accepted for human-gated v1 (the dial budget above
 	// is the SSRF control; this is only liveness). Do not tighten it
 	// thinking it bounds headers alone.
-	target.SetDeadline(time.Now().Add(60 * time.Second))
+	if err := target.SetDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		log.Printf("browser: forward deadline not set: %v", err)
+	}
 	// Rewrite to origin-form for the upstream server, preserving everything
 	// else about the client's request — except hop-by-hop headers, which
 	// describe this hop, not the next one (RFC 7230 6.1), and proxy
