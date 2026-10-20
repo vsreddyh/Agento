@@ -1022,11 +1022,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     ) {
         // Both the add here and the remove below run on Main (UI taps and
         // the Main-confined completion), so a plain set is safe; moving
-        // either side off Main needs a lock. Keys are namespaced —
-        // "id:…" for items, "id:topic:…" for pauses — so an item id literally
-        // equal to "new" or "topic:x" can never collide with the bare "new",
-        // "forget" or topic keys.
-        val key = "id:$id"
+        // either side off Main needs a lock. Keys are namespaced per
+        // kind — "id:item:…" for rows, "id:topic:…" for pauses — so no item
+        // id, however adversarial ("new", "topic:x", "id:topic:y"), can
+        // collide with another key. Bare "new"/"forget" stay for the
+        // composer and the wipe, which address no row.
+        val key = if (id.startsWith("topic:")) "id:$id" else "id:item:$id"
         if (id.isBlank() || !acting.add(key)) return
         _state.value = _state.value.copy(actingMemory = acting.toSet())
         val path = _state.value.path
@@ -1035,6 +1036,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 acting.remove(key)
                 _state.value = _state.value.copy(actingMemory = acting.toSet())
+                // A profile/thread switch mid-write: the write landed on the
+                // old profile, so its success must not clear the new
+                // profile's composer, repaint the new rows, or badge the new
+                // path. Errors still report — a failed write failed.
+                if (_state.value.path != path) {
+                    if (result.isFailure) {
+                        val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
+                        _state.value = _state.value.copy(
+                            memoryError = "Memory update failed" +
+                                (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
+                        )
+                    }
+                    return@withContext
+                }
                 val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
                 if (result.isFailure) {
                     _state.value = _state.value.copy(
@@ -1111,6 +1126,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 acting.remove(key)
                 _state.value = _state.value.copy(actingMemory = acting.toSet())
+                // Same stale-path rule as actOnMemory: a switch mid-save
+                // must not clear the new profile's composer or repaint it.
+                if (_state.value.path != path) return@withContext
                 val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
                 if (result.isFailure) {
                     _state.value = _state.value.copy(
@@ -1144,6 +1162,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 acting.remove(key)
                 _state.value = _state.value.copy(actingMemory = acting.toSet())
+                if (_state.value.path != path) return@withContext
                 val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
                 if (result.isFailure) {
                     _state.value = _state.value.copy(

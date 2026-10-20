@@ -37,16 +37,21 @@ data class MemoryList(
 )
 
 /** One memory item parsed leniently: missing id means the row is dropped. */
+/** Strings only, like the list collector: optString would coerce a stray
+ * 42 into "42". Wrong-type fields read blank (a blank id drops the row). */
+internal fun optStr(o: JSONObject, key: String): String =
+    (o.opt(key) as? String)?.trim().orEmpty()
+
 internal fun parseMemoryItem(o: JSONObject): MemoryItem? {
-    val id = o.optString("id", "").trim()
+    val id = optStr(o, "id")
     if (id.isEmpty()) return null
     return MemoryItem(
         id = id,
-        profile = o.optString("profile", "").trim(),
-        topic = o.optString("topic", "").trim(),
-        text = o.optString("text", "").trim(),
-        source = o.optString("source", "").trim(),
-        status = o.optString("status", "").trim(),
+        profile = optStr(o, "profile"),
+        topic = optStr(o, "topic"),
+        text = optStr(o, "text"),
+        source = optStr(o, "source"),
+        status = optStr(o, "status"),
         createdAt = o.optLong("created_at", 0L),
         updatedAt = o.optLong("updated_at", 0L),
     )
@@ -55,7 +60,9 @@ internal fun parseMemoryItem(o: JSONObject): MemoryItem? {
 internal fun parseMemoryList(body: String): MemoryList {
     val root = runCatching { JSONObject(body) }.getOrNull()
     if (root == null) {
-        runCatching { Log.w("MemoryApi", "unparseable memory body: ${body.take(120)}") }
+        // Length only: the body is memory text (PII), same rationale as the
+        // code-only error messages.
+        runCatching { Log.w("MemoryApi", "unparseable memory body (${body.length} chars)") }
         return MemoryList()
     }
     val items = mutableListOf<MemoryItem>()
@@ -79,7 +86,7 @@ internal fun parseMemoryList(body: String): MemoryList {
         }
     }
     if (dropped > 0) {
-        runCatching { Log.w("MemoryApi", "dropped $dropped id-less memory row(s)") }
+        runCatching { Log.w("MemoryApi", "dropped $dropped undecodable memory row(s)") }
     }
     // paused encodes as [] on a fresh profile (never null per contract),
     // but a missing key still reads as empty rather than failing. Blank

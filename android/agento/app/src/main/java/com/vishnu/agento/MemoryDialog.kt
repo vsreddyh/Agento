@@ -41,9 +41,9 @@ internal fun MemoryDialog(
     warnings: List<String>,
     loading: Boolean,
     error: String,
-    /** Write keys in flight — "id:\u2026" for items, "id:topic:\u2026" for
-     * pauses, bare "new"/"forget" for the composer and wipe. A listed key
-     * disables its buttons so a double tap cannot fire two writes. */
+    /** Write keys in flight — "id:item:\u2026" for rows, "id:topic:\u2026"
+     * for pauses, bare "new"/"forget" for the composer and wipe. A listed
+     * key disables its buttons so a double tap cannot fire two writes. */
     acting: Set<String> = emptySet(),
     onConfirm: (String) -> Unit,
     /** onSaved fires only on success: the editor collapses then, so a failed
@@ -64,10 +64,11 @@ internal fun MemoryDialog(
     var newTopic by remember { mutableStateOf("") }
     var newText by remember { mutableStateOf("") }
     var forgetArmed by remember { mutableStateOf(false) }
-    // Arming is strictly one-shot: any new rows (manual refresh or a
-    // background reload landing) disarm, so a stale arm can never meet a
-    // later tap and wipe without its second confirm.
-    LaunchedEffect(items) { forgetArmed = false }
+    // Arming is strictly one-shot: every load (start and landing)
+    // disarms, so a stale arm can never meet a later tap and wipe without
+    // its second confirm. Keyed on loading as well as content: an
+    // identical-rows reload would otherwise not relaunch the effect.
+    LaunchedEffect(items, loading) { forgetArmed = false }
     val pending = items.filter { it.isPending() }
     val confirmed = items.filter { !it.isPending() }
     AlertDialog(
@@ -137,7 +138,7 @@ internal fun MemoryDialog(
                                     editTopic = editTopic,
                                     onEditText = { editText = it },
                                     onEditTopic = { editTopic = it },
-                                    busy = "id:${item.id}" in acting,
+                                    busy = "id:item:${item.id}" in acting,
                                     onStartEdit = {
                                         editingId = item.id
                                         editText = item.text
@@ -170,7 +171,7 @@ internal fun MemoryDialog(
                                     editTopic = editTopic,
                                     onEditText = { editText = it },
                                     onEditTopic = { editTopic = it },
-                                    busy = "id:${item.id}" in acting,
+                                    busy = "id:item:${item.id}" in acting,
                                     onStartEdit = {
                                         editingId = item.id
                                         editText = item.text
