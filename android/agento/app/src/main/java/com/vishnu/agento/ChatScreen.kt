@@ -278,11 +278,15 @@ internal fun ChatTab(
     LaunchedEffect(Unit) {
         // Off-main (#339): directory listing + deletes are disk IO, and
         // this effect runs on every first composition including post-rotation.
-        // The keep-path reads on Main (snapshot state stays on-thread).
+        // The keep-path reads on Main (snapshot state stays on-thread), and
+        // the dir resolves above the IO block (#339): the closure captures
+        // a File, never the Activity — same leak class as the batch decode,
+        // fixed the same way.
         val keep = cameraPath
+        val sweepDir = context.cacheDir.resolve("camera")
         withContext(Dispatchers.IO) {
             runCatching {
-                context.cacheDir.resolve("camera").takeIf { it.exists() }?.listFiles()
+                sweepDir.takeIf { it.exists() }?.listFiles()
                     ?.filter { it.absolutePath != keep }
                     ?.forEach { runCatching { it.delete() } }
             }
@@ -324,6 +328,10 @@ internal fun ChatTab(
         // Deduped at tap time (#339): a double-selected image otherwise
         // runs two full decodes and spends both turn slots on identical
         // payloads (distinct UUIDs, so not even the thumb keys alias).
+        // Uri-equality only: two Uris aliasing one image (re-pick across
+        // providers, cloud-picker aliases) still decode twice — exact
+        // dedupe would need a post-read content hash, i.e. decoding first,
+        // which is the cost dedupe exists to avoid.
         val unique = uris.distinct()
         val take = unique.take(slots)
         if (take.size < unique.size) {
@@ -375,8 +383,11 @@ internal fun ChatTab(
             } catch (e: CancellationException) {
                 // Cancelled mid-batch (tab left, #339): staged picks stay,
                 // undecoded ones vanish — said once, and only when something
-                // landed (an empty batch dying reports nothing). Immediately
-                // rethrown: swallowing cancel breaks structured concurrency.
+                // landed. Zero-landed abort stays silent by design: nothing
+                // changed for the user (composer exactly as left), and a
+                // toast firing on return would report a non-event.
+                // Immediately rethrown: swallowing cancel breaks structured
+                // concurrency.
                 if (landed > 0) {
                     withContext(Dispatchers.Main + NonCancellable) {
                         vm.notify(
@@ -419,6 +430,9 @@ internal fun ChatTab(
         // ok=false is cancel AND camera-error alike (indistinguishable by
         // contract), so silence is correct for cancels and merely quiet
         // for errors — a toast on every false would nag every backing-out.
+        // ok=true with a lost Uri is the third case (launcher restore miss):
+        // unreachable by construction, but a good capture deleted in
+        // silence would be the worst outcome — so it voices.
         if (ok && u != null) {
             cameraBusy = true
             processUris(listOf(u), f) {
@@ -434,6 +448,10 @@ internal fun ChatTab(
         } else {
             runCatching { f?.takeIf { it.exists() }?.delete() }
             cameraPath = null
+            // The third case above (ok + lost Uri): a capture deleted with
+            // no notice would be silent data loss, so the impossible edge
+            // voices while the cancel case stays silent.
+            if (ok) vm.notify("Couldn't keep that capture — try again.")
         }
     }
     fun launchCamera() {

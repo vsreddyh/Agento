@@ -144,6 +144,9 @@ fun messageHasContent(m: ChatMessage): Boolean =
  * bitmap work in [prepareAttachment] consumes this.
  */
 fun downscaledSize(w: Int, h: Int): Pair<Int, Int> {
+    // (0, 0) is unreachable via prepareAttachment (bounds <= 0 throws
+    // before this is called) — the zero here guards the pure unit and any
+    // future caller against feeding createScaledBitmap a sizable zero.
     if (w <= 0 || h <= 0) return 0 to 0
     val longest = maxOf(w, h)
     if (longest <= MAX_IMAGE_SIDE_PX) return w to h
