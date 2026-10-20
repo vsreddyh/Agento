@@ -498,7 +498,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             onTest = { input ->
                 testOutput = ""
                 mutate(action = { api, path ->
-                    testOutput = api.testSkill(path, open.id, input).getOrThrow()
+                    api.testSkill(path, open.id, input).onSuccess { testOutput = it }
                 })
             },
             onActivate = {
