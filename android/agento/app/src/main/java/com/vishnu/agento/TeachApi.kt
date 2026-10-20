@@ -136,6 +136,7 @@ class TeachApi(context: Context) {
         withContext(Dispatchers.IO) {
             call("GET", "$path/api/skills").mapCatching {
                 parseSkillList(parseObject(checkOk(it).body))
+                    ?: throw RuntimeException("unparseable response body")
             }
         }
 
