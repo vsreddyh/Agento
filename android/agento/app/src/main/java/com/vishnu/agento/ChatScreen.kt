@@ -340,6 +340,9 @@ internal fun ChatTab(
         // restores a non-null keep for the startup sweep — nulling it here
         // would let the sweep delete the file being read.
         cameraUri = null
+        // ok=false is cancel AND camera-error alike (indistinguishable by
+        // contract), so silence is correct for cancels and merely quiet
+        // for errors — a toast on every false would nag every backing-out.
         if (ok && u != null) {
             cameraBusy = true
             processUris(listOf(u), f) {
@@ -393,10 +396,14 @@ internal fun ChatTab(
         if (granted) {
             launchCamera()
         } else if (context.findActivity()?.let {
+                // Unknown (null Activity) defaults to Settings (#339):
+                // without an Activity there is no rationale UI to consult,
+                // and the re-toast branch would loop forever — the escape
+                // hatch must be the default, not the special case.
                 androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
                     it, Manifest.permission.CAMERA,
                 )
-            } == false
+            } != true
         ) {
             // Permanent denial ("Don't allow again"): the request UI will
             // never show again, so a re-toast loops forever (#339). The
@@ -1064,8 +1071,11 @@ internal fun ChatScreen(
     // Edit state belongs to one thread: a switch or a fresh thread closes it.
     // The attach menu closes too (#339): it is keyed on tab, so without
     // this a thread switch leaves it open over the new thread's composer.
+    // The draft text clears with them: opening the editor always overwrites
+    // it, but a stale draft from the old thread must not linger in state.
     LaunchedEffect(state.threadId) {
         editingIndex = null
+        editDraft = ""
         confirmReplace = null
         showAttachMenu = false
     }

@@ -182,6 +182,22 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun photoTextTitleCarriesSignal() {
+        assertEquals(
+            "look [photo]",
+            ChatThreads.titleFor(
+                listOf(ChatMessage("user", "look", 0L, attachments = listOf(attachment()))),
+            ),
+        )
+        assertEquals(
+            "look [2 photos]",
+            ChatThreads.titleFor(
+                listOf(ChatMessage("user", "look", 0L, attachments = listOf(attachment(), attachment()))),
+            ),
+        )
+    }
+
+    @Test
     fun storedRoundTripKeepsAttachments() {
         val msgs = listOf(
             ChatMessage("user", "", 1L, attachments = listOf(attachment("AAA="), attachment("BBB="))),

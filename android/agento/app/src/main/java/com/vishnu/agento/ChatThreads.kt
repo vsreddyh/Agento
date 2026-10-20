@@ -67,15 +67,18 @@ object ChatThreads {
     fun titleFor(messages: List<ChatMessage>): String {
         val firstMsg = messages.firstOrNull { it.role == "user" }
         val first = firstMsg?.content?.trim().orEmpty()
+        val photos = firstMsg?.attachments?.size ?: 0
         if (first.isEmpty()) {
             // An image-only opener has no words to title from: name the
             // photos rather than leaving "New conversation" on a real chat.
-            val n = firstMsg?.attachments?.size ?: 0
-            if (n > 0) return if (n == 1) "Photo" else "$n photos"
+            if (photos > 0) return if (photos == 1) "Photo" else "$photos photos"
             return "New conversation"
         }
         val oneLine = first.replace(Regex("\\s+"), " ")
-        return if (oneLine.length <= 42) oneLine else oneLine.take(41) + "…"
+        val base = if (oneLine.length <= 42) oneLine else oneLine.take(41) + "…"
+        // Photo+text openers carry the signal too (#339): the switcher row
+        // shows the thread has photos, matching search/export markers.
+        return if (photos == 0) base else if (photos == 1) "$base [photo]" else "$base [$photos photos]"
     }
 
     fun load(context: Context, tab: String): List<ChatThread> {

@@ -32,8 +32,8 @@ explicitly; keep the fail-closed part-type contract.**
   |---|---|---|
   | Photos per turn | 2 | picker takes free slots only; excess dropped with a toast |
   | Long side | 1568 px | downscaled at pick time, never refused |
-  | Per-photo base64 | ~1.5 M chars (~1.1 MB raw) | named toast (actual size + cap + "try a smaller crop") |
-  | Turn wire size | ~3.5 M bytes preflight | named send error ("remove a photo or start a new conversation") |
+  | Per-photo base64 | ~1.5 M chars (~1.1 MB raw) | named toast (actual size + cap + "pick a different photo") |
+  | Turn wire size | ~3.5 M bytes preflight | named send error, phrased for the turn ("remove a photo…" with photos, "shorten the thread…" without) |
 
   Two capped photos plus framing stay under the preflight with headroom
   (invariant test); the preflight sits below the gateway cap so a refusal
