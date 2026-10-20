@@ -167,13 +167,16 @@ func TestEvidenceDirShape(t *testing.T) {
 	// inherit these values.
 	oldExports, oldProfile := exports, profile
 	defer func() { exports, profile = oldExports, oldProfile }()
-	exports = "/exports/browser"
+	// Hermetic: evidenceDir creates on disk now, so the real /exports
+	// default would need root. The shape (jailed, profile-prefixed) is
+	// what this pins, not the production mount point.
+	exports = t.TempDir() + "/browser"
 	profile = "chat"
 	dir, err := evidenceDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(dir, "/exports/browser/chat-") {
+	if !strings.HasPrefix(dir, exports+"/chat-") {
 		t.Fatalf("dir = %q", dir)
 	}
 }
