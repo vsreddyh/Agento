@@ -303,11 +303,13 @@ internal fun ChatTab(
         // millisecond twice and point two captures at one file.
         val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
         val uri = runCatching {
-            // APPLICATION_ID, not packageName (#339): equal today (no
-            // flavors/suffixes — verified in build.gradle.kts), but an
-            // added .debug suffix would change applicationId while
-            // packageName stays put, breaking getUriForFile.
-            FileProvider.getUriForFile(context, "${BuildConfig.APPLICATION_ID}.fileprovider", file)
+            // packageName, not APPLICATION_ID (#339): BuildConfig is not
+            // generated in this module, and the two are identical while
+            // there are no flavors or applicationIdSuffixes (verified in
+            // build.gradle.kts) — the FileProvider authority in the
+            // manifest is ${applicationId}, same value. If a flavor or a
+            // .debug suffix ever lands, this call is the one that breaks.
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         }.getOrNull() ?: run {
             toasts.toast("Couldn't start the camera.", ToastKind.Error)
             return
