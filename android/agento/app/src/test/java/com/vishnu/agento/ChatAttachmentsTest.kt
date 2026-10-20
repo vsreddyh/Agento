@@ -188,6 +188,23 @@ class ChatAttachmentsTest {
         assertEquals(2, (out as WireContent.Multipart).parts.length())
     }
 
+    @Test
+    fun raggedPayloadPositionsRejected() {
+        // Padding is positional: interior '=' never wires, even with
+        // clean length and alphabet — the corrupt part stays out.
+        for (bad in listOf("=AAA", "A=A=", "AB=C", "A===")) {
+            assertEquals(
+                WireContent.Text("hi"),
+                messageContentJson("user", "hi", listOf(ChatAttachment(base64 = bad)), includeImages = true),
+            )
+        }
+        // Sanity: real paddings still wire.
+        assertTrue(
+            messageContentJson("user", "hi", listOf(attachment("AAA=")), includeImages = true)
+                is WireContent.Multipart,
+        )
+    }
+
     // Content rule + markers.
 
     @Test

@@ -46,7 +46,12 @@ data class ChatAttachment(
  * Attachments that actually wire (#339): blank payloads (hand-edited
  * threads, writer bugs) count as no attachment everywhere — the wire
  * filter, display markers, titles, and search must all agree, or a blank
- * wires as bare text while the UI claims a photo.
+ * wires as bare text while the UI claims a photo. Load-bearing assumption,
+ * stated once: every persisted read flows through load(), which
+ * canonicalizes (whitespace stripped, undecodable blanked) — so by the
+ * time anything calls this, wrapped-or-ragged payloads are already gone.
+ * Any future reader bypassing load() (backup import, debug share) must
+ * canonicalize first or re-split the contract.
  */
 fun List<ChatAttachment>.wiredPhotos(): List<ChatAttachment> =
     filter { it.isWired() }
@@ -72,14 +77,24 @@ private fun ChatAttachment.isWired(): Boolean = base64.isNotBlank()
  * part — the gateway would 400 what should be a client-side named shape.
  * Alphabet scan, no decode: runs per send, never per keystroke. Internal:
  * the persistence loader canonicalizes with this too, so memory holds no
- * wrapped-or-ragged payloads and the hot paths never need this check. */
+ * wrapped-or-ragged payloads and the hot paths never need this check.
+ * Padding is positional, not counted: `=` is legal only as the last ≤2
+ * chars — `=AAA`, `A=A=`, `AB=C` all fail — since a bare count would pass
+ * interior padding straight into the corrupt part this exists to prevent. */
 internal fun isDecodableBase64(s: String): Boolean {
     if (s.isEmpty() || s.length % 4 != 0) return false
-    for (c in s) {
-        if (c != '=' && c != '+' && c != '/' &&
-            c !in 'A'..'Z' && c !in 'a'..'z' && c !in '0'..'9'
-        ) {
-            return false
+    var paddingStarted = false
+    for ((i, c) in s.withIndex()) {
+        if (c == '=') {
+            if (i < s.length - 2) return false
+            paddingStarted = true
+        } else {
+            if (paddingStarted) return false
+            if (c != '+' && c != '/' &&
+                c !in 'A'..'Z' && c !in 'a'..'z' && c !in '0'..'9'
+            ) {
+                return false
+            }
         }
     }
     return true

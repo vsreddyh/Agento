@@ -298,6 +298,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      */
     fun addPendingAttachments(items: List<ChatAttachment>) {
         val wired = items.wiredPhotos()
+        // Silent by design, not a cap refusal (#339): blanks are not
+        // photos, so nothing was presented and nothing was dropped — a
+        // capRefused() toast here would misreport ("extra photos were
+        // dropped" with zero photos in play). Unreachable via UI
+        // (prepareAttachment throws instead of staging blanks).
         if (wired.isEmpty()) return
         val cur = _state.value.pendingAttachments
         // Counted wired (#339): cap slots are for photos that wire, so a

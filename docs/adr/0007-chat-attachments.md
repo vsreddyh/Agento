@@ -37,8 +37,11 @@ explicitly; keep the fail-closed part-type contract.**
   | Turn wire size | ~3.5 M bytes preflight | named send error, phrased for the turn ("remove a photo…" with photos, "shorten the thread…" without) |
 
   Two capped photos plus framing stay under the preflight with headroom
-  (invariant test); the preflight sits below the gateway cap so a refusal
-  is always the app's message, never an opaque 413.
+  on a short thread (invariant test); the preflight sits below the gateway
+  cap so a refusal is always the app's message, never an opaque 413. History
+  text is the variable: a 200-message thread carries unbounded kilobytes on
+  top of the photos, so a maxed-photo turn on a long thread trips the same
+  preflight by design (fail-closed refuse, conditionally phrased).
 - Wire: the conventional multipart array (`text` + `image_url` parts with
   base64 data URIs — the shape the gateway already parses), but ONLY on
   the last user turn in the request. The server prompts Pi with the
