@@ -1608,11 +1608,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // server's own text+images comparison — never misattaches.
             val imageOnlyTail = last.content.isBlank() &&
                 last.attachments.wiredPhotos().isNotEmpty()
-            val run = runs.firstOrNull {
+            // Newest match wins (#339): two image-only tails in rapid
+            // succession (retry killed + resent) can both be live — resume
+            // into the one still producing, not the older settling one.
+            val run = runs.filter {
                 !it.isTerminal() && it.conversationId == threadId &&
                     (promptMatches(last.content, it.prompt) ||
                         (imageOnlyTail && it.prompt.isBlank()))
-            } ?: return@launch
+            }.maxByOrNull { it.updatedAt } ?: return@launch
             // Bounded: re-clearing only loses the once-guard for threads long
             // dead, whose resend finds no live run and no-ops.
             withContext(Dispatchers.Main) {

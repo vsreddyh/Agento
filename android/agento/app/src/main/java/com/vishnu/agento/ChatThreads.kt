@@ -75,9 +75,10 @@ object ChatThreads {
         val textMsg = userTurns.firstOrNull { it.content.isNotBlank() }
         if (textMsg == null) {
             // An image-only thread has no words to title from: name the
-            // opener's photos rather than leaving "New conversation" on a
-            // real chat. Counted wired like every other signal (#339).
-            val n = userTurns.firstOrNull()?.attachments?.wiredPhotos()?.size ?: 0
+            // LARGEST photo turn (#339), like the suffix below — a 1-photo
+            // opener followed by a 2-photo turn holds a 2-photo turn.
+            // Counted wired like every other signal.
+            val n = userTurns.maxOfOrNull { it.attachments.wiredPhotos().size } ?: 0
             if (n > 0) return if (n == 1) "Photo" else "$n photos"
             return "New conversation"
         }

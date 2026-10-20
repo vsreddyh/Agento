@@ -405,6 +405,12 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 }
                 for (quality in listOf(80, 60)) {
                     val out = ByteArrayOutputStream()
+                    // Peak note (#339): bitmap (~10 MB at 1568px) + out bytes
+                    // + base64 string co-exist here, and the q60 retry
+                    // reallocates out while bitmap stays live — bounded and
+                    // send-path-only (like the read transient above), but
+                    // the real hump, so a future "optimization" of the
+                    // buffer alone would miss it.
                     // Checked, not assumed (#339): a false return leaves
                     // out empty, and an empty candidate would pass the cap
                     // as a zero-byte "photo" — silent corrupt payload wired

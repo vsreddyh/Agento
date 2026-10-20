@@ -331,6 +331,9 @@ internal fun ChatTab(
         // removing it.
         val appContext = context.applicationContext
         scope.launch(Dispatchers.IO) {
+            // Landed count for the cancel notice below: only a batch that
+            // staged something before dying has anything to report.
+            var landed = 0
             try {
                 for (u in take) {
                     // Re-check room per pick (#339): two rapid batches both
@@ -358,10 +361,31 @@ internal fun ChatTab(
                         // decode failure must survive rotation like the cap
                         // refusals do — same lifetime for every attach error.
                         result
-                            .onSuccess { vm.addPendingAttachments(listOf(it)) }
+                            .onSuccess {
+                                vm.addPendingAttachments(listOf(it))
+                                landed++
+                            }
                             .onFailure { vm.notify(it.message ?: "Couldn't attach that photo.") }
                     }
                 }
+            } catch (e: CancellationException) {
+                // Cancelled mid-batch (tab left, #339): staged picks stay,
+                // undecoded ones vanish — said once, and only when something
+                // landed (an empty batch dying reports nothing). Immediately
+                // rethrown: swallowing cancel breaks structured concurrency.
+                if (landed > 0) {
+                    withContext(Dispatchers.Main + NonCancellable) {
+                        vm.notify(
+                            if (landed == 1) {
+                                "Stopped staging photos — 1 photo kept in the composer."
+                            } else {
+                                "Stopped staging photos — $landed photos kept in the composer."
+                            },
+                            ToastKind.Info,
+                        )
+                    }
+                }
+                throw e
             } finally {
                 // In finally, not after the loop (#339 review): leaving the
                 // tab mid-decode cancels this coroutine, and a trailing
