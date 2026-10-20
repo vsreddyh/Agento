@@ -226,7 +226,7 @@ func TestMemoryEmptyTopicAndNullPaused(t *testing.T) {
 	create := do(t, srv, http.MethodPost, "/api/memory",
 		`{"topic":"health","text":"likes tea"}`)
 	id := decodeBody(t, create)["item"].(map[string]any)["id"].(string)
-	for _, topic := range []string{``, `---`, `   `} {
+	for _, topic := range []string{``, `---`, `   `, `a/b`} {
 		rec := do(t, srv, http.MethodPut, "/api/memory/"+id,
 			`{"topic":`+strconv.Quote(topic)+`}`)
 		if rec.Code != http.StatusBadRequest {

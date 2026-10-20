@@ -398,7 +398,9 @@ func memoryFilter(all []memory.Item, f memory.Filter) []memory.Item {
 	return out
 }
 
-// memoryTopics unions item topics with paused ones, sorted by first seen.
+// memoryTopics unions item topics with paused ones: paused first, then the
+// items newest-first. Paused-first is deliberate — the screen lists what it
+// can pause — not alphabetical, so do not "fix" the order.
 // The screen shows every topic it can pause, including one whose items were
 // just filtered out.
 func memoryTopics(items []memory.Item, paused []string) []string {

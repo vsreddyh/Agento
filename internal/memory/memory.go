@@ -48,7 +48,9 @@ const (
 	// MaxTopic bounds a topic name in runes.
 	MaxTopic = 32
 
-	// DefaultTopic is where an item with no usable topic lands.
+	// DefaultTopic is where a directly-stored item with no usable topic lands.
+	// The API writers are strict (empty is 400, not general), so this fallback
+	// only fires for store-level callers; the app must always send a topic.
 	DefaultTopic = "general"
 )
 
@@ -176,6 +178,11 @@ func UsableTopic(raw string) bool {
 	if trimmed == "" {
 		return false
 	}
+	// A slash would store fine but could never be paused: the pause route
+	// addresses topics as a path segment. Topics are labels, not paths.
+	if strings.Contains(trimmed, "/") {
+		return false
+	}
 	return NormalizeTopic(raw) != DefaultTopic ||
 		strings.EqualFold(trimmed, DefaultTopic)
 }
@@ -187,6 +194,9 @@ func UsableTopic(raw string) bool {
 func TopicError(raw string) string {
 	if strings.TrimSpace(raw) == "" {
 		return "topic must contain a letter or digit"
+	}
+	if strings.Contains(strings.TrimSpace(raw), "/") {
+		return "topic must not contain \"/\" (it could never be paused)"
 	}
 	return "topic is not usable (it would be stored as \"" + DefaultTopic + "\")"
 }

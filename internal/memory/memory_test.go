@@ -195,8 +195,23 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	if err := s.Delete(ctx, a.ID, "p"); err == nil {
 		t.Fatal("deleting a forgotten item should be NotFound")
 	}
+	// The 200-item cap is enforced on write: the 201st create fails instead
+	// of writing a row neither the screen nor the prompt can reach.
+	s2 := NewMemoryStore()
+	for i := 0; i < ListCap; i++ {
+		if _, err := s2.Create(ctx, Item{Profile: "p", Text: "item"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s2.Create(ctx, Item{Profile: "p", Text: "one too many"}); err == nil {
+		t.Fatal("201st create should fail")
+	}
 	// PausedTopics is a list, never null: the screen decodes it as an array.
 	if paused, _ := s.PausedTopics(ctx, "nobody"); paused == nil {
 		t.Fatal("fresh-profile paused topics encoded as null")
+	}
+	// An unknown status is a caller bug, not an empty list.
+	if _, err := s.List(ctx, Filter{Profile: "p", Status: Status("maybe")}); err == nil {
+		t.Fatal("unknown status should fail")
 	}
 }

@@ -48,8 +48,19 @@ func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
 	if i.Text == "" {
 		return Item{}, NewStoreError("memory item needs text", false)
 	}
+	// Same 200-item enforcement as Mongo: the 201st create fails instead
+	// of writing a row neither the screen nor the prompt can reach.
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var n int64
+	for _, it := range s.items {
+		if it.Profile == i.Profile {
+			n++
+		}
+	}
+	if n >= ListCap {
+		return Item{}, NewStoreError("memory is full for this profile: delete or forget items first", false)
+	}
 	if i.ID == "" {
 		i.ID = NewID()
 	}
@@ -71,6 +82,7 @@ func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
 
 // Get returns one item. Profile-scoped: a foreign id is NotFound.
 func (s *MemoryStore) Get(_ context.Context, id, profile string) (Item, error) {
+	profile = strings.TrimSpace(profile)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	it, ok := s.items[id]
@@ -83,6 +95,7 @@ func (s *MemoryStore) Get(_ context.Context, id, profile string) (Item, error) {
 // Update applies a partial edit. A foreign profile's id is NotFound, the
 // same 404 the gateway returns for a missing id.
 func (s *MemoryStore) Update(_ context.Context, id, profile string, u Update) (Item, error) {
+	profile = strings.TrimSpace(profile)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it, ok := s.items[id]
@@ -120,6 +133,7 @@ func (s *MemoryStore) Update(_ context.Context, id, profile string, u Update) (I
 
 // Delete removes one item. Profile-scoped like Update.
 func (s *MemoryStore) Delete(_ context.Context, id, profile string) error {
+	profile = strings.TrimSpace(profile)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it, ok := s.items[id]
@@ -132,6 +146,7 @@ func (s *MemoryStore) Delete(_ context.Context, id, profile string) error {
 
 // DeleteAll forgets one profile's items, keeping its paused topics.
 func (s *MemoryStore) DeleteAll(_ context.Context, profile string) (int64, error) {
+	profile = strings.TrimSpace(profile)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var n int64
@@ -148,8 +163,13 @@ func (s *MemoryStore) DeleteAll(_ context.Context, profile string) (int64, error
 // stable on purpose: an edit bumps UpdatedAt but does not re-float the item,
 // so the screen and the prompt see the same standing order.
 func (s *MemoryStore) List(_ context.Context, f Filter) ([]Item, error) {
+	f.Profile = strings.TrimSpace(f.Profile)
+	if f.Status != "" && !f.Status.Valid() {
+		return nil, NewStoreError("unknown memory status", false)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	// 0 is the Go zero value for "unspecified", not "no rows".
 	limit := f.Limit
 	if limit <= 0 || limit > ListCap {
 		limit = ListCap
@@ -183,7 +203,8 @@ func (s *MemoryStore) List(_ context.Context, f Filter) ([]Item, error) {
 
 // SetTopicPaused pauses or resumes one topic.
 func (s *MemoryStore) SetTopicPaused(_ context.Context, profile, topic string, paused bool) error {
-	if strings.TrimSpace(profile) == "" {
+	profile = strings.TrimSpace(profile)
+	if profile == "" {
 		return NewStoreError("memory topic needs a profile", false)
 	}
 	t := NormalizeTopic(topic)
@@ -203,6 +224,7 @@ func (s *MemoryStore) SetTopicPaused(_ context.Context, profile, topic string, p
 // PausedTopics returns the paused topics for a profile. Never nil: the app
 // screen reads paused as a list, and null is not a list.
 func (s *MemoryStore) PausedTopics(_ context.Context, profile string) ([]string, error) {
+	profile = strings.TrimSpace(profile)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []string{}

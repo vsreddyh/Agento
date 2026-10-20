@@ -79,6 +79,14 @@ func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
 	if i.Text == "" {
 		return Item{}, NewStoreError("memory item needs text", false)
 	}
+	// The 200-item cap is enforced, not just read: beyond it the oldest rows
+	// are invisible to both the screen and the prompt, so the 201st create
+	// fails instead of writing an unreachable row.
+	if n, err := s.items.CountDocuments(ctx, bson.M{"profile": i.Profile}); err != nil {
+		return Item{}, NewStoreError("memory count failed: "+err.Error(), true)
+	} else if n >= ListCap {
+		return Item{}, NewStoreError("memory is full for this profile: delete or forget items first", false)
+	}
 	now := time.Now().UnixMilli()
 	if i.CreatedAt == 0 {
 		i.CreatedAt = now
@@ -99,6 +107,7 @@ func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
 
 // Get returns one item. Profile-scoped like the writes.
 func (s *MongoStore) Get(ctx context.Context, id, profile string) (Item, error) {
+	profile = strings.TrimSpace(profile)
 	var it Item
 	if err := s.items.FindOne(ctx, bson.M{"_id": id, "profile": profile}).Decode(&it); err != nil {
 		if errors.Is(err, mongoDrv.ErrNoDocuments) {
@@ -113,6 +122,7 @@ func (s *MongoStore) Get(ctx context.Context, id, profile string) (Item, error) 
 // carries the profile: one query authorises and writes, and a foreign id
 // reads as NotFound instead of costing a Get-then-write pair.
 func (s *MongoStore) Update(ctx context.Context, id, profile string, u Update) (Item, error) {
+	profile = strings.TrimSpace(profile)
 	if u.Text == nil && u.Topic == nil && u.Status == nil {
 		return Item{}, NewStoreError("memory update needs text, topic or status", false)
 	}
@@ -150,6 +160,7 @@ func (s *MongoStore) Update(ctx context.Context, id, profile string, u Update) (
 // app should reload rather than believe a second delete did something.
 // Profile-scoped like Update.
 func (s *MongoStore) Delete(ctx context.Context, id, profile string) error {
+	profile = strings.TrimSpace(profile)
 	res, err := s.items.DeleteOne(ctx, bson.M{"_id": id, "profile": profile})
 	if err != nil {
 		return NewStoreError("memory delete failed: "+err.Error(), true)
@@ -163,6 +174,7 @@ func (s *MongoStore) Delete(ctx context.Context, id, profile string) error {
 // DeleteAll forgets every item for one profile. Paused topics survive: they
 // are the user's learning policy, not something they remembered.
 func (s *MongoStore) DeleteAll(ctx context.Context, profile string) (int64, error) {
+	profile = strings.TrimSpace(profile)
 	res, err := s.items.DeleteMany(ctx, bson.M{"profile": profile})
 	if err != nil {
 		return 0, NewStoreError("memory forget failed: "+err.Error(), true)
@@ -173,6 +185,12 @@ func (s *MongoStore) DeleteAll(ctx context.Context, profile string) (int64, erro
 // List returns matching items, newest-created first (stable order; see
 // MemoryStore.List).
 func (s *MongoStore) List(ctx context.Context, f Filter) ([]Item, error) {
+	// An unknown status is a caller bug, not an empty list: both writers
+	// validate first, but the store is the backstop, like the text invariant.
+	if f.Status != "" && !f.Status.Valid() {
+		return nil, NewStoreError("unknown memory status", false)
+	}
+	// 0 is the Go zero value for "unspecified", not "no rows".
 	q := bson.M{}
 	if p := strings.TrimSpace(f.Profile); p != "" {
 		q["profile"] = p
@@ -183,6 +201,7 @@ func (s *MongoStore) List(ctx context.Context, f Filter) ([]Item, error) {
 	if f.Status != "" {
 		q["status"] = f.Status
 	}
+	// 0 is the Go zero value for "unspecified", not "no rows".
 	limit := f.Limit
 	if limit <= 0 || limit > ListCap {
 		limit = ListCap
@@ -206,7 +225,8 @@ func (s *MongoStore) List(ctx context.Context, f Filter) ([]Item, error) {
 
 // SetTopicPaused pauses or resumes one topic for one profile.
 func (s *MongoStore) SetTopicPaused(ctx context.Context, profile, topic string, paused bool) error {
-	if strings.TrimSpace(profile) == "" {
+	profile = strings.TrimSpace(profile)
+	if profile == "" {
 		return NewStoreError("memory topic needs a profile", false)
 	}
 	t := NormalizeTopic(topic)
@@ -227,6 +247,7 @@ func (s *MongoStore) SetTopicPaused(ctx context.Context, profile, topic string, 
 // PausedTopics returns the paused topics for a profile, sorted: the memory
 // backend sorts too, so the screen sees one deterministic order per backend.
 func (s *MongoStore) PausedTopics(ctx context.Context, profile string) ([]string, error) {
+	profile = strings.TrimSpace(profile)
 	var doc struct {
 		Paused []string `bson:"paused"`
 	}
