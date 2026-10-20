@@ -32,6 +32,12 @@ data class ChatAttachment(
     val mimeType: String = "image/jpeg",
     /** Raw bytes as base64, no `data:` prefix — [dataUri] adds it for the wire. */
     val base64: String = "",
+    /** Stable per-pick id, minted at stage time (#339): thumbnail keys and
+     * any future per-photo identity use this, never the payload — so
+     * removing photo 0 doesn't re-key photo 1, and two identical picks
+     * never alias. Default empty so pre-id history still decodes (those
+     * fall back to a content-sample key). */
+    val id: String = "",
 )
 
 /** Max photos per turn (#318). Two is the acceptance bar (two images in one
@@ -177,8 +183,16 @@ fun formatBytes(bytes: Long): String {
 }
 
 /**
+ * Our own attach failures, typed so the toast mapping never depends on
+ * message wording (#339): [namedReadError] passes these (and the oversize
+ * IllegalStateException) through and remaps every system throwable to the
+ * generic unreadable-photo error. Rewording a message can't silently flip
+ * its bucket — only changing the type can, which the compiler sees.
+ */
+private class NamedAttachError(message: String) : IllegalArgumentException(message)
+
+/**
  * Maps a read failure onto the named error family (#339). Our own throws
- * (oversize, stall, unreadable — all starting "Couldn't"/"Photo"/"That")
  * pass through; system throwables (SecurityException on a revoked picker
  * grant, FileNotFoundException, provider errors) become the generic
  * unreadable-photo error. Raw publisher wording ("Permission Denial…")
@@ -186,16 +200,10 @@ fun formatBytes(bytes: Long): String {
  */
 private fun namedReadError(e: Throwable): Throwable {
     runCatching { Log.w("ChatAttachments", "photo read failed", e) }
-    val msg = e.message.orEmpty()
-    return if (msg.startsWith("Couldn't") || msg.startsWith("Photo too large") ||
-        msg.startsWith("That file")
-    ) {
-        e
-    } else {
-        IllegalArgumentException(
-            "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
-        )
-    }
+    return if (e is NamedAttachError || e is IllegalStateException) e
+    else NamedAttachError(
+        "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
+    )
 }
 
 /**
@@ -245,7 +253,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                         // instead of sending the user off to re-pick. Yields
                         // while spinning so a stuck stream doesn't burn CPU.
                         if (++zeroStreak > 100) {
-                            throw IllegalArgumentException(
+                            throw NamedAttachError(
                                 "Couldn't finish reading that photo — try again.",
                             )
                         }
@@ -268,13 +276,13 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     out.write(buf, 0, n)
                 }
                 out.toByteArray()
-            } ?: throw IllegalArgumentException(
+            } ?: throw NamedAttachError(
                 "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
             )
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                throw IllegalArgumentException(
+                throw NamedAttachError(
                     "That file isn't a readable photo — Agento attaches images only, not documents.",
                 )
             }
@@ -290,7 +298,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             }
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }
             var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-                ?: throw IllegalArgumentException(
+                ?: throw NamedAttachError(
                     "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
                 )
             // One try/finally from here down (#339): rotation, scaling and
@@ -375,7 +383,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     // as a zero-byte "photo" — silent corrupt payload wired
                     // as data:image/jpeg;base64, with no named error.
                     if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)) {
-                        throw IllegalArgumentException(
+                        throw NamedAttachError(
                             "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
                         )
                     }
@@ -401,7 +409,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     "${formatBytes(base64Bytes(MAX_IMAGE_BASE64_CHARS))}. " +
                     "Pick a different photo.",
             )
-            ChatAttachment(mimeType = "image/jpeg", base64 = final)
+            ChatAttachment(mimeType = "image/jpeg", base64 = final, id = java.util.UUID.randomUUID().toString())
         }.let { result ->
             // Remap system throwables onto the named family; ours pass
             // through untouched (see namedReadError).

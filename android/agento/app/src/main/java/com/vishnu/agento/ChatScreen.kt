@@ -121,17 +121,25 @@ private fun AttachmentThumb(
     label: String,
     modifier: Modifier = Modifier,
     slot: Int = 0,
+    stableId: String = "",
 ) {
-    // Keyed (length, hash, slot), not the string (#339): remember's
-    // equality check would memcmp ~1.5 M chars on every recomposition
-    // (hashCode walks once — the JVM caches it), and the slot keeps two
-    // identical payloads from aliasing one thumbnail. Decoded off-main:
-    // ~1 MB Base64.decode + decodeByteArray during composition janks
-    // low-end scroll, so produceState moves it to IO (placeholder shows
-    // until it lands). No manual recycle: it can pull pixels from under a
-    // late outgoing draw ("trying to use a recycled bitmap") — ~256px
-    // thumbnails are GC-cheap, and prompt freeing is not worth a crash.
-    val thumbKey = Triple(base64.length, base64.hashCode(), slot)
+    // Identity without walking the payload (#339): the per-pick UUID is
+    // stable across removes — slot is deliberately NOT in the key, so
+    // photo 1 keeps its thumbnail when photo 0 leaves (no re-decode, no
+    // flicker) — and distinct across identical picks (no aliasing). Length
+    // rides along so an ID collision still re-keys. Legacy payloads
+    // (id "") fall back to slot + a 128-char head/tail sample — cheap
+    // compares, no full-string walk. Decoded off-main: ~1 MB Base64.decode
+    // + decodeByteArray during composition janks low-end scroll, so
+    // produceState moves it to IO (placeholder shows until it lands). No
+    // manual recycle: it can pull pixels from under a late outgoing draw
+    // ("trying to use a recycled bitmap") — ~256px thumbnails are
+    // GC-cheap, and prompt freeing is not worth a crash.
+    val thumbKey = if (stableId.isNotEmpty()) {
+        stableId to base64.length
+    } else {
+        Triple("s$slot", base64.length, base64.take(64) + base64.takeLast(64))
+    }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
         value = withContext(Dispatchers.IO) {
             runCatching { decodeThumbnail(base64) }.getOrNull()
@@ -298,11 +306,15 @@ internal fun ChatTab(
                     // Re-check room per pick (#339): two rapid batches both
                     // snapshot free slots at tap time, so without this both
                     // decode fully and the loser drops AFTER the expensive
-                    // part. addPendingAttachments stays as backstop.
+                    // part. addPendingAttachments stays as backstop. Noisy
+                    // only when tap-time stayed quiet: if the tap already
+                    // toasted the cap, repeating it per pick nags.
                     val room = withContext(Dispatchers.Main) { vm.hasAttachmentRoom() }
                     if (!room) {
-                        withContext(Dispatchers.Main) {
-                            vm.notify(capRefused(), ToastKind.Info)
+                        if (take.size == uris.size) {
+                            withContext(Dispatchers.Main) {
+                                vm.notify(capRefused(), ToastKind.Info)
+                            }
                         }
                         break
                     }
@@ -1926,6 +1938,7 @@ internal fun ChatScreen(
                                                 "${state.pendingAttachments.size}",
                                             modifier = Modifier.size(64.dp),
                                             slot = i,
+                                            stableId = a.id,
                                         )
                                         // 24dp is an overlay exception to the
                                         // standard-48dp rule (#283): the target
@@ -2366,6 +2379,7 @@ internal fun ChatScreen(
                                                                     "${msg.attachments.size}",
                                                                 modifier = Modifier.size(120.dp),
                                                                 slot = ai,
+                                                                stableId = a.id,
                                                             )
                                                         }
                                                     }

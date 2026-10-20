@@ -45,6 +45,10 @@ data class ChatThread(
 
 private val threadJson = Json { ignoreUnknownKeys = true }
 
+/** Whitespace splitter for titles, hoisted (#339): compiled once, not on
+ * every title render and switcher-search filter pass. */
+private val titleWhitespace = Regex("\\s+")
+
 /**
  * Per-tab conversation persisted as JSON (`#17` history survival,
  * `#26` storage). One conversation per tab survives app restarts; +
@@ -74,7 +78,7 @@ object ChatThreads {
             if (photos > 0) return if (photos == 1) "Photo" else "$photos photos"
             return "New conversation"
         }
-        val oneLine = first.replace(Regex("\\s+"), " ")
+        val oneLine = first.replace(titleWhitespace, " ")
         // Photo signal with the budget kept (#339): the marker reserves
         // its width first, so the row never exceeds 42 chars.
         val suffix = if (photos == 0) "" else if (photos == 1) " [photo]" else " [$photos photos]"
