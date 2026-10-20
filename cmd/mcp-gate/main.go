@@ -213,7 +213,10 @@ func (r *relay) run(
 	// the budget scales with the number of parked holds, capped so a wedged
 	// store cannot hold shutdown open indefinitely. Concurrent holds are rare
 	// by design (one turn per profile), but the cap keeps the worst case
-	// bounded rather than proportional to traffic.
+	// bounded rather than proportional to traffic. Pre-close detached audits
+	// (auditWG) share this budget best-effort: they are bounded by one
+	// storeTimeout each, so a burst can push the join into the timeout branch,
+	// which logs rather than failing anything that still matters.
 	holdsDone := make(chan struct{})
 	go func() {
 		r.holdWG.Wait()
@@ -372,6 +375,12 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 
 // holdCall parks one sensitive call until a human decides, then forwards it
 // or answers Pi with a tool error. Only this call waits; the pumps flow on.
+//
+// The raw frame is retained for the whole hold on purpose: approve must
+// forward the exact bytes Pi sent (ids included), and re-encoding happens
+// nowhere else in the relay. A multi-MB arguments blob is therefore pinned for
+// up to waitFor; traffic is one turn per profile, so the bound is a single
+// frame, not a queue.
 func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 	redacted := approvals.Redact(params.Arguments)
 	a := approvals.Approval{

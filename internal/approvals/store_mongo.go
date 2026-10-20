@@ -58,14 +58,14 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 			Options: options.Index().SetExpireAfterSeconds(0).SetName("approvals_ttl"),
 		},
 		{
-			// ListApprovals filters status + expiresAt and sorts createdAt:
-			// without this it is a COLLSCAN on every app poll.
+			// Leading expiresAt, not status: the common app poll has no status
+			// filter, so a status-led compound would be unusable for it. The
+			// status-filtered query still walks this index.
 			Keys: bson.D{
-				{Key: "status", Value: 1},
 				{Key: "expiresAt", Value: 1},
 				{Key: "createdAt", Value: -1},
 			},
-			Options: options.Index().SetName("approvals_status_created"),
+			Options: options.Index().SetName("approvals_expiry_created"),
 		},
 	}); err != nil {
 		return err
@@ -87,6 +87,15 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 				{Key: "at", Value: -1},
 			},
 			Options: options.Index().SetName("audit_server_tool_at"),
+		},
+		{
+			// The unfiltered trail is the other common read; leading expiresAt
+			// keeps it off a COLLSCAN once the collection is non-trivial.
+			Keys: bson.D{
+				{Key: "expiresAt", Value: 1},
+				{Key: "at", Value: -1},
+			},
+			Options: options.Index().SetName("audit_expiry_at"),
 		},
 	})
 	return err

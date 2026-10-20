@@ -99,7 +99,7 @@ things about it are deliberate, and both were got wrong while writing it:
 
 Verified end to end in the real container (three-profile era; single-profile
 since #289 — kept as the method record): the entrypoint registers three repos as
-`safe.directory`, `pi mcp list` connects all six MCP servers (11/11/9/7/5/6), all
+`safe.directory`, `pi mcp list` connects all six MCP servers (11/11/9/8/5/6), all
 three profiles are discovered, `/healthz` answers 200, auth rejects both a missing
 and a wrong bearer token with 401, and each profile answers from its own
 `AGENTS.md`:
