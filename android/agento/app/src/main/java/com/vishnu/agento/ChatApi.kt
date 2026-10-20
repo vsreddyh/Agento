@@ -26,6 +26,11 @@ data class ChatMessage(
     val content: String,
     /** Epoch millis when the message was created; 0 = unknown (legacy). */
     val ts: Long = 0L,
+    /** Photos attached to this user turn (#318); empty on assistant turns
+     * and on every message written before attachments existed. Stored as
+     * bounded JPEG payloads (see ChatAttachments.kt) and sent as
+     * `image_url` parts on the last user turn only. */
+    val attachments: List<ChatAttachment> = emptyList(),
     /** Tool names the assistant used for this reply (persisted, [] = unknown). */
     val tools: List<String> = emptyList(),
     /** Skill names the assistant used for this reply (heuristic, see ServerApi). */
@@ -586,12 +591,38 @@ class ChatApi(context: Context) {
             )
         }
         val arr = JSONArray()
-        for (m in messages) {
-            arr.put(JSONObject().put("role", m.role).put("content", m.content))
+        // Only the trailing user turn keeps its photo parts (#318): the
+        // server prompts Pi with the last user turn alone and Pi holds
+        // history in its own session file, so earlier photo turns ride as
+        // text and the body stays bounded however long the thread gets.
+        val lastUserIdx = messages.indexOfLast { it.role == "user" }
+        for ((i, m) in messages.withIndex()) {
+            arr.put(
+                JSONObject().put("role", m.role).put(
+                    "content",
+                    messageContentJson(m.role, m.content, m.attachments, includeImages = i == lastUserIdx),
+                ),
+            )
         }
         payload.put("messages", arr)
         payload.put("stream", true)
-        val body = payload.toString().toRequestBody(JSON)
+        // Client-side preflight (#318): refuse an over-cap turn with a named,
+        // actionable error instead of sending it into the gateway's 4 MiB
+        // 413. Only reachable with photos today (per-photo caps bound each
+        // image); a long text thread tripping it gets the same message.
+        val raw = payload.toString()
+        if (wireSizeExceeded(raw.length)) {
+            trySend(
+                ChatEvent.Error(
+                    "Couldn't send: this turn is about ${formatBytes(raw.length.toLong())} " +
+                        "(limit about ${formatBytes(MAX_CHAT_WIRE_CHARS.toLong())}). " +
+                        "Remove a photo or start a new conversation.",
+                ),
+            )
+            close()
+            return@callbackFlow
+        }
+        val body = raw.toRequestBody(JSON)
         val reqBuilder = Request.Builder()
             .url("$base$path/v1/chat/completions")
             .header("Authorization", "Bearer ${password()}")

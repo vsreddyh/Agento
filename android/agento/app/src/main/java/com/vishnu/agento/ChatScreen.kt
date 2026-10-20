@@ -14,10 +14,13 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.*
@@ -44,6 +47,7 @@ import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MenuBook
@@ -63,6 +67,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -75,19 +82,55 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Pending count as both the badge and the banner show it: one cap, one
  * wording, so the two can never disagree above 99. */
 private fun pendingCountLabel(count: Int): String = if (count > 99) "99+" else "$count"
+
+/**
+ * One staged or sent photo (#318): the remembered ~256px thumbnail, or an
+ * icon placeholder when the payload won't decode (a corrupt payload
+ * degrades to a missing thumbnail, never a crash).
+ */
+@Composable
+private fun AttachmentThumb(
+    base64: String,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    val bmp = remember(base64) { runCatching { decodeThumbnail(base64) }.getOrNull() }
+    if (bmp != null) {
+        Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = label,
+            modifier = modifier.clip(RoundedCornerShape(8.dp)),
+            contentScale = ContentScale.Crop,
+        )
+    } else {
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Image, contentDescription = label)
+        }
+    }
+}
 
 /** Builds the Chat ViewModel so the single tab keeps isolated history. */
 class ChatViewModelFactory(
@@ -140,6 +183,115 @@ internal fun ChatTab(
     // description, then the transcript becomes a draft for review in Skills.
     var savingSkillId by remember { mutableStateOf<String?>(null) }
     val toasts = remember(scope) { ToastCenter(scope) }
+    // Photo attachments (#318): gallery picks need no permission (the picker
+    // returns read access to just the chosen images); the camera needs
+    // CAMERA plus a FileProvider Uri staged before TakePicture launches.
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    var cameraFile by remember { mutableStateOf<File?>(null) }
+    // One decode at a time, in pick order: each photo lands (or its named
+    // error toasts) as it finishes, so a slow second image never blocks the
+    // first one's thumbnail. Failures name the fix (too large, unreadable)
+    // rather than dropping the pick silently. [cleanup] is the camera's
+    // temp file for a capture batch (deleted once decoded; gallery Uris
+    // are not ours, so gallery batches pass none) — passed explicitly so
+    // a concurrent gallery batch can never delete a capture still decoding.
+    fun processUris(uris: List<Uri>, cleanup: File? = null) {
+        if (uris.isEmpty()) return
+        val slots = MAX_IMAGES_PER_TURN - state.pendingAttachments.size
+        if (slots <= 0) {
+            toasts.toast(
+                "At most $MAX_IMAGES_PER_TURN photos per turn — remove one first.",
+                ToastKind.Error,
+            )
+            return
+        }
+        val take = uris.take(slots)
+        if (take.size < uris.size) {
+            toasts.toast(
+                "Only the first ${take.size} photos attached " +
+                    "(at most $MAX_IMAGES_PER_TURN per turn).",
+                ToastKind.Info,
+            )
+        }
+        scope.launch(Dispatchers.IO) {
+            for (u in take) {
+                val result = prepareAttachment(context, u)
+                withContext(Dispatchers.Main) {
+                    result
+                        .onSuccess { vm.addPendingAttachments(listOf(it)) }
+                        .onFailure {
+                            toasts.toast(
+                                it.message ?: "Couldn't attach that photo.",
+                                ToastKind.Error,
+                            )
+                        }
+                }
+            }
+            // The camera capture has served its purpose once decoded into the
+            // staged payload: delete it so captures never litter the cache.
+            // Back on Main: snapshot state is main-thread only, and the
+            // delete pairs with the batch that created the file.
+            withContext(Dispatchers.Main) {
+                runCatching { cleanup?.takeIf { it.exists() }?.delete() }
+            }
+        }
+    }
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents(),
+    ) { uris -> processUris(uris) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture(),
+    ) { ok ->
+        val u = cameraUri
+        val f = cameraFile
+        cameraUri = null
+        cameraFile = null
+        if (ok && u != null) {
+            processUris(listOf(u), f)
+        } else {
+            runCatching { f?.takeIf { it.exists() }?.delete() }
+        }
+    }
+    fun launchCamera() {
+        val dir = File(context.cacheDir, "camera").apply { mkdirs() }
+        val file = File(dir, "capture-${System.currentTimeMillis()}.jpg")
+        val uri = runCatching {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        }.getOrNull() ?: run {
+            toasts.toast("Couldn't start the camera.", ToastKind.Error)
+            return
+        }
+        cameraUri = uri
+        cameraFile = file
+        cameraLauncher.launch(uri)
+    }
+    val cameraPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            launchCamera()
+        } else {
+            toasts.toast("Camera permission is needed to take photos.", ToastKind.Error)
+        }
+    }
+    fun requestCamera() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            launchCamera()
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+    // ViewModel notices (attach caps) surface as toasts, not the error
+    // banner: the banner's Retry resends a TURN, which is wrong for a
+    // staging problem. Consumed after showing so rotation never replays it.
+    LaunchedEffect(state.notice) {
+        if (state.notice.isNotEmpty()) {
+            toasts.toast(state.notice, ToastKind.Error)
+            vm.consumeNotice()
+        }
+    }
     // #64: never show raw "not set" — the header shows the model name when
     // configured and a setup prompt otherwise.
     val setupNeeded = state.model.isBlank() || state.provider.isBlank()
@@ -171,6 +323,9 @@ internal fun ChatTab(
         onNew = vm::newConversation, onRetry = vm::retry,
         onRegenerate = vm::regenerate, onContinue = vm::continueTurn,
         onReplace = vm::replaceAndResend, onFork = vm::forkAndResend,
+        onPickPhotos = { galleryLauncher.launch("image/*") },
+        onTakePhoto = ::requestCamera,
+        onRemovePhoto = vm::removePendingAttachment,
     )
     if (showThreads) {
         ThreadSheet(
@@ -703,6 +858,11 @@ internal fun ChatScreen(
     onContinue: () -> Unit = {},
     onReplace: (Int, String) -> Unit = { _, _ -> },
     onFork: (Int, String) -> Unit = { _, _ -> },
+    /** Photo attachments (#318): gallery picker, camera capture, and
+     * removing one staged photo. Wired by ChatTab (launchers live there). */
+    onPickPhotos: () -> Unit = {},
+    onTakePhoto: () -> Unit = {},
+    onRemovePhoto: (Int) -> Unit = {},
     autoLiveGen: Int = 0,
 ) {
     val listState = rememberLazyListState()
@@ -742,6 +902,9 @@ internal fun ChatScreen(
     var editingIndex by remember(tab) { mutableStateOf<Int?>(null) }
     var editDraft by remember(tab) { mutableStateOf("") }
     var confirmReplace by remember(tab) { mutableStateOf<Pair<Int, String>?>(null) }
+    // Photo attach menu (#318): gallery vs camera. Plain dialog state —
+    // the pickers themselves live in ChatTab (onPickPhotos/onTakePhoto).
+    var showAttachMenu by remember(tab) { mutableStateOf(false) }
     // Edit state belongs to one thread: a switch or a fresh thread closes it.
     LaunchedEffect(state.threadId) {
         editingIndex = null
@@ -1513,10 +1676,73 @@ internal fun ChatScreen(
                                 .padding(horizontal = 16.dp, vertical = 2.dp),
                         )
                     }
+                    // Staged photos (#318): thumbnails with per-photo remove.
+                    // They send with the next turn even when the turn has no
+                    // text; the count line states the per-turn cap up front.
+                    if (state.pendingAttachments.isNotEmpty()) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                state.pendingAttachments.forEachIndexed { i, a ->
+                                    Box {
+                                        AttachmentThumb(
+                                            base64 = a.base64,
+                                            label = "Staged photo ${i + 1} of " +
+                                                "${state.pendingAttachments.size}",
+                                            modifier = Modifier.size(64.dp),
+                                        )
+                                        // 24dp is an overlay exception to the
+                                        // standard-48dp rule (#283): the target
+                                        // sits ON a 64dp thumbnail, so a full
+                                        // 48dp button would cover the photo it
+                                        // removes. Content description kept.
+                                        IconButton(
+                                            onClick = { onRemovePhoto(i) },
+                                            modifier = Modifier.align(Alignment.TopEnd).size(24.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Close,
+                                                contentDescription = "Remove photo ${i + 1}",
+                                                modifier = Modifier.size(16.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            Text(
+                                "${state.pendingAttachments.size}/$MAX_IMAGES_PER_TURN photos — " +
+                                    "sent with your next message.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                        }
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        // Photo attachments (#318): gallery or camera, staged
+                        // thumbnails above, sent as image parts with the turn.
+                        // Stays live while streaming — staged photos park in
+                        // the composer until the next explicit send.
+                        Box {
+                            IconButton(onClick = { showAttachMenu = true }) {
+                                Icon(Icons.Filled.Add, contentDescription = "Attach photo")
+                            }
+                            DropdownMenu(
+                                expanded = showAttachMenu,
+                                onDismissRequest = { showAttachMenu = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Choose photos") },
+                                    onClick = { showAttachMenu = false; onPickPhotos() },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Take photo") },
+                                    onClick = { showAttachMenu = false; onTakePhoto() },
+                                )
+                            }
+                        }
                         OutlinedTextField(
                             value = state.pending,
                             onValueChange = onPending,
@@ -1599,7 +1825,11 @@ internal fun ChatScreen(
                         } else {
                             FilledIconButton(
                                 onClick = stopThen(onSend),
-                                enabled = state.pending.isNotBlank() && state.ready,
+                                // Photos send without text (#318): an
+                                // image-only turn is a real turn.
+                                enabled = (state.pending.isNotBlank() ||
+                                    state.pendingAttachments.isNotEmpty()) &&
+                                    state.ready,
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
                             }
@@ -1701,7 +1931,10 @@ internal fun ChatScreen(
                             val isLast = index == state.messages.lastIndex
                             // Replace resend drops turns when anything
                             // non-blank follows the edited message.
-                            val dropsTurns = state.messages.drop(index + 1).any { it.content.isNotBlank() }
+                            // Content includes photos (#318): dropping an
+                            // image-only turn without confirming is silent
+                            // data loss of the same class as text.
+                            val dropsTurns = state.messages.drop(index + 1).any { messageHasContent(it) }
                             // #52: proper conversational bubbles — user right, assistant left.
                             Box(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1854,11 +2087,34 @@ internal fun ChatScreen(
                                                     }
                                                 }
                                             } else {
-                                                SelectionContainer {
-                                                    Text(
-                                                        msg.content.ifEmpty { "…" },
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                    )
+                                                // Sent photos (#318) render above the
+                                                // text; an image-only turn shows no
+                                                // "…" placeholder — the thumbnails
+                                                // ARE the message.
+                                                if (msg.attachments.isNotEmpty()) {
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    ) {
+                                                        msg.attachments.forEachIndexed { ai, a ->
+                                                            AttachmentThumb(
+                                                                base64 = a.base64,
+                                                                label = "Attached photo ${ai + 1} of " +
+                                                                    "${msg.attachments.size}",
+                                                                modifier = Modifier.size(120.dp),
+                                                            )
+                                                        }
+                                                    }
+                                                    if (msg.content.isNotBlank()) {
+                                                        Spacer(modifier = Modifier.height(4.dp))
+                                                    }
+                                                }
+                                                if (msg.content.isNotBlank() || msg.attachments.isEmpty()) {
+                                                    SelectionContainer {
+                                                        Text(
+                                                            msg.content.ifEmpty { "…" },
+                                                            style = MaterialTheme.typography.bodyMedium,
+                                                        )
+                                                    }
                                                 }
                                             }
                                         } else {

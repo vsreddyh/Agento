@@ -8,12 +8,14 @@ import kotlinx.serialization.json.Json
 
 /** One persisted message (ChatMessage + timestamp; ts=0 reads as unknown).
  * tools/skills default empty so pre-visibility history reads as unknown;
- * token fields default zero so pre-usage history reads as unreported. */
+ * token fields default zero so pre-usage history reads as unreported;
+ * attachments default empty so pre-#318 history reads as text-only. */
 @Serializable
 data class StoredMessage(
     val role: String = "",
     val content: String = "",
     val ts: Long = 0L,
+    val attachments: List<ChatAttachment> = emptyList(),
     val tools: List<String> = emptyList(),
     val skills: List<String> = emptyList(),
     val prompt: Long = 0L,
@@ -63,8 +65,15 @@ object ChatThreads {
 
     /** Title from the first user message, truncated; falls back to date. */
     fun titleFor(messages: List<ChatMessage>): String {
-        val first = messages.firstOrNull { it.role == "user" }?.content?.trim().orEmpty()
-        if (first.isEmpty()) return "New conversation"
+        val firstMsg = messages.firstOrNull { it.role == "user" }
+        val first = firstMsg?.content?.trim().orEmpty()
+        if (first.isEmpty()) {
+            // An image-only opener has no words to title from: name the
+            // photos rather than leaving "New conversation" on a real chat.
+            val n = firstMsg?.attachments?.size ?: 0
+            if (n > 0) return if (n == 1) "Photo" else "$n photos"
+            return "New conversation"
+        }
         val oneLine = first.replace(Regex("\\s+"), " ")
         return if (oneLine.length <= 42) oneLine else oneLine.take(41) + "…"
     }
@@ -117,6 +126,7 @@ object ChatThreads {
                 role = it.role,
                 content = it.content,
                 ts = it.ts,
+                attachments = it.attachments,
                 tools = it.tools,
                 skills = it.skills,
                 prompt = it.prompt,
@@ -143,6 +153,7 @@ object ChatThreads {
                 role = it.role,
                 content = it.content,
                 ts = it.ts,
+                attachments = it.attachments,
                 tools = it.tools,
                 skills = it.skills,
                 prompt = it.prompt,

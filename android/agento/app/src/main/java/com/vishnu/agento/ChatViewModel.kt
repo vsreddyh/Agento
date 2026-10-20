@@ -38,6 +38,14 @@ data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val streaming: Boolean = false,
     val pending: String = "",
+    /** Photos staged in the composer for the next turn (#318). Cleared on
+     * send; parked untouched while streaming (a mid-turn send queues the
+     * text only — the photos wait for the next explicit send). */
+    val pendingAttachments: List<ChatAttachment> = emptyList(),
+    /** One-shot notice for the toast host (attach caps, drops). Set by the
+     * ViewModel, cleared by `consumeNotice()` after the UI shows it — the
+     * error banner is for failed TURNS (with Retry), never for this. */
+    val notice: String = "",
     val error: String = "",
     /** True once the persisted conversations finish loading; sends wait for it. */
     val ready: Boolean = false,
@@ -267,6 +275,49 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(pending = v)
     }
 
+    /**
+     * Stages picked photos in the composer (#318). Capped defensively at
+     * [MAX_IMAGES_PER_TURN] — the picker already takes only free slots, so
+     * the notice below fires only if a caller bypasses it. Excess photos
+     * are dropped with a notice, never silently.
+     */
+    fun addPendingAttachments(items: List<ChatAttachment>) {
+        if (items.isEmpty()) return
+        val cur = _state.value.pendingAttachments
+        val room = MAX_IMAGES_PER_TURN - cur.size
+        if (room <= 0) {
+            _state.value = _state.value.copy(
+                notice = "At most $MAX_IMAGES_PER_TURN photos per turn — remove one first.",
+            )
+            return
+        }
+        val take = items.take(room)
+        val dropped = items.size - take.size
+        _state.value = _state.value.copy(
+            pendingAttachments = cur + take,
+            notice = if (dropped > 0) {
+                "At most $MAX_IMAGES_PER_TURN photos per turn — $dropped dropped."
+            } else {
+                _state.value.notice
+            },
+        )
+    }
+
+    fun removePendingAttachment(index: Int) {
+        val cur = _state.value.pendingAttachments
+        if (index !in cur.indices) return
+        _state.value = _state.value.copy(
+            pendingAttachments = cur.filterIndexed { i, _ -> i != index },
+        )
+    }
+
+    /** Clears [ChatUiState.notice] after the toast host shows it. */
+    fun consumeNotice() {
+        if (_state.value.notice.isNotEmpty()) {
+            _state.value = _state.value.copy(notice = "")
+        }
+    }
+
     /** History rows: only threads with actual chats, newest first. */
     private fun summaries(): List<ThreadSummary> = threads
         .filter { it.messages.isNotEmpty() }
@@ -493,7 +544,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // Same untitled fallback as summaries() so "new
                 // conversation" finds threads without a custom title.
                 t.title.ifBlank { UNTITLED }.lowercase().contains(q) ||
-                    t.messages.any { it.content.lowercase().contains(q) }
+                    t.messages.any {
+                        // Photo threads are findable by "photo" (#318): their
+                        // images are payloads with no searchable text.
+                        val marker = if (it.attachments.isNotEmpty()) {
+                            " " + attachmentMarker(it.attachments.size)
+                        } else {
+                            ""
+                        }
+                        (it.content + marker).lowercase().contains(q)
+                    }
                 )
         }.map {
             ThreadSummary(
@@ -584,7 +644,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val sb = StringBuilder("# $title\n\n")
         for (m in t.messages) {
             val who = if (m.role == "user") "You" else "Assistant"
-            sb.append("**$who:** ${m.content.trim()}\n\n")
+            // Photos are payloads, not text: the marker keeps the export
+            // honest about turns whose content is an image (#318).
+            val marker = if (m.attachments.isNotEmpty()) " " + attachmentMarker(m.attachments.size) else ""
+            sb.append("**$who:** ${(m.content.trim() + marker).trim()}\n\n")
             if (m.role != "user" && (m.tools.isNotEmpty() || m.skills.isNotEmpty())) {
                 // Backticked so a tool/skill name can never break the export's
                 // Markdown; inner backticks are quoted first so the fence holds.
@@ -705,19 +768,27 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      */
     fun retry() {
         if (_state.value.streaming || !_state.value.ready) return
+        // messageHasContent, not content.isNotBlank (#318): an image-only
+        // turn's text is blank and must still resend with its photos.
         val history = stripTrailingFragmentForResend(_state.value.messages)
-            .filter { it.content.isNotBlank() }
+            .filter { messageHasContent(it) }
         if (history.none { it.role == "user" }) return
         doSend(history)
     }
 
     fun send() {
         val text = _state.value.pending.trim()
-        if (text.isEmpty() || !_state.value.ready) return
+        // Photos send with or without text (#318): an image-only turn is a
+        // real turn (the server treats blank text + images as non-blank).
+        val photos = _state.value.pendingAttachments
+        if ((text.isEmpty() && photos.isEmpty()) || !_state.value.ready) return
         // Queue-or-send (#122): the composer stays live while streaming —
         // a send mid-stream parks the text and auto-fires on Done, instead
         // of being swallowed by the streaming guard. First queued text wins;
-        // later sends wait for the composer (no silent overwrite).
+        // later sends wait for the composer (no silent overwrite). Photos
+        // stay parked in the composer throughout: the queued fire is text
+        // only, and silently attaching staged photos to a later turn would
+        // send images the user never confirmed for THAT turn.
         if (_state.value.streaming) {
             if (_state.value.queued.isBlank()) {
                 _state.value = _state.value.copy(pending = "", queued = text)
@@ -731,8 +802,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = api.pathFor(tab)
         _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path, queued = "")
         val history = _state.value.messages +
-            ChatMessage("user", text, ChatThreads.now())
-        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+            ChatMessage("user", text, ChatThreads.now(), attachments = photos)
+        _state.value = _state.value.copy(
+            messages = history, pending = "", pendingAttachments = emptyList(),
+            streaming = true, error = "",
+        )
         doSend(history, path, provider, model, effort)
     }
 
@@ -1312,7 +1386,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      */
     private fun maybeResume(threadId: String, messages: List<ChatMessage>) {
         val last = messages.lastOrNull() ?: return
-        if (last.role != "user" || last.content.isBlank()) return
+        // Image-only tails count (#318): their text is blank but the photos
+        // resend into the live run exactly like text (same conversation +
+        // same prompt text + same image signature reattaches server-side).
+        if (last.role != "user" || !messageHasContent(last)) return
         if (threadId in resumedThreads) return
         viewModelScope.launch(Dispatchers.IO) {
             val path = api.pathFor(tab)
@@ -1385,7 +1462,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * trailing assistant message and resends the remaining history. */
     fun regenerate() {
         if (_state.value.streaming || !_state.value.ready) return
-        val msgs = _state.value.messages.filter { it.content.isNotBlank() }
+        // Same image-only rule as retry() (#318).
+        val msgs = _state.value.messages.filter { messageHasContent(it) }
         if (msgs.none { it.role == "user" }) return
         val trimmed = if (msgs.lastOrNull()?.role == "assistant") msgs.dropLast(1) else msgs
         if (trimmed.none { it.role == "user" }) return

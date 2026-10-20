@@ -2,8 +2,11 @@
 <!-- FileProvider paths for the in-app updater (issue #6): downloaded release
      APKs live under cache/updates and are handed to the platform installer.
      Diagnostics reports (Settings → About) live under cache/diagnostics and
-     are shared out so failures are debuggable without adb. -->
+     are shared out so failures are debuggable without adb.
+     Chat camera captures (#318) stage under cache/camera and are deleted
+     once decoded into the composer's payload — never shared outside. -->
 <paths>
     <cache-path name="updates" path="updates/" />
     <cache-path name="diagnostics" path="diagnostics/" />
+    <cache-path name="camera" path="camera/" />
 </paths>

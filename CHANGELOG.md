@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.10.0]
+- **Chat photo attachments (#318).** The composer gains an attach menu:
+  pick up to two photos from the gallery or take one with the camera, add
+  text or send the photos alone. Photos are shrunk (1568px, JPEG) before
+  sending, ride as image parts with the turn, and render as thumbnails in
+  the thread. Oversized photos refuse with a named, actionable message
+  instead of a silent failure. Limits: 2 photos/turn, ~1.1 MB each after
+  shrinking; photo threads cost more on disk and in Settings backups (see
+  `docs/adr/0007-chat-attachments.md`). Documents stay unsupported — Pi
+  takes no file input, so unknown attachment types still refuse rather
+  than arrive half-parsed.
+
 ## [5.9.0]
 - **Live mode is a proper call (#317).** Talking over the agent now cuts
   the in-flight turn, not just the readout — the loop re-listens instead
