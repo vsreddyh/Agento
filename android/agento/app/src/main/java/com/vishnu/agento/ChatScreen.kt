@@ -975,11 +975,15 @@ internal fun ChatScreen(
     }
     /** Begins (or resumes) the live session: kill turn, arm, listen. */
     fun startLive() {
+        // Consume any pending start first (#317): every exit below returns
+        // before the old clear site, and a stuck true would auto-start a
+        // session on the next micArmed flip that nobody asked for.
+        pendingLiveStart = false
         // Model first (#317): the on-screen Start gates on state.ready and
         // the widget/auto paths must share it — arming with nothing to send
         // to just drops the first utterance (send() returns early !ready).
         if (!state.ready) {
-            toasts.toast("Choose a model to start.", ToastKind.Error)
+            toasts.toast("Choose a model to start", ToastKind.Error)
             return
         }
         if (!liveRec.available()) {
@@ -1007,7 +1011,6 @@ internal fun ChatScreen(
         // the effect drives the first listen, so the recognizer starts
         // exactly once (a double startListening burns a transient retry).
         val killedTurn = state.streaming
-        pendingLiveStart = false
         liveRec.cancel()
         tts.stop()
         if (state.streaming) onStop()
