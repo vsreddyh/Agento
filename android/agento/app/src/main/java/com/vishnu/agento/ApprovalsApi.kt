@@ -222,7 +222,7 @@ class ApprovalsApi(context: Context) {
         val arr = root.optJSONArray("approvals")
         if (arr == null) {
             runCatching { Log.w("ApprovalsApi", "approvals body has no array: ${body.take(120)}") }
-            return out
+            return ApprovalList()
         }
         var dropped = 0
         for (i in 0 until arr.length()) {
