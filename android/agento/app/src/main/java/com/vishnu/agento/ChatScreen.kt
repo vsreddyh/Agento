@@ -111,6 +111,12 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
+/** A camera intent older than this is treated as dead (#339): no callback
+ * will ever settle it, so the double-launch gate must not hold past here
+ * or one killed process disables the camera until reinstall. 30 minutes
+ * bounds a stuck gate far above any real camera session. */
+private const val CAMERA_PENDING_STALE_MS = 30 * 60 * 1000L
+
 /**
  * Head/tail content sample for thumbnail keys (#339): a true prefix/suffix
  * pair on normal payloads, the whole string when it fits — so the sample
@@ -283,12 +289,6 @@ internal fun ChatTab(
     fun isCameraPending(): Boolean =
         cameraPendingSince != 0L &&
             System.currentTimeMillis() - cameraPendingSince < CAMERA_PENDING_STALE_MS
-
-/** A camera intent older than this is treated as dead (#339): no callback
- * will ever settle it, so the double-launch gate must not hold past here
- * or one killed process disables the camera until reinstall. 30 minutes
- * bounds a stuck gate far above any real camera session. */
-private const val CAMERA_PENDING_STALE_MS = 30 * 60 * 1000L
     // Startup sweep (#339): a process kill between the TakePicture write
     // and the decode leaves a capture with no owner — per-batch finally
     // covers cancel/leave-tab, not death. The cache dir holds ONLY these
