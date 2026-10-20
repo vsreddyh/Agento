@@ -766,6 +766,10 @@ internal fun ChatScreen(
     // Transient recognizer faults (busy/audio/client overlap) retry without
     // costing a silent round; capped so a wedged recognizer still ends loudly.
     var transientRetries by remember(tab) { mutableIntStateOf(0) }
+    // Last readout state for the driver's reply-finish re-listen (#317):
+    // declared up here (not next to the driver) so endLive/startLive can
+    // retire it — a stale true plus an idle restart would double-listen.
+    var wasSpeaking by remember(tab) { mutableStateOf(false) }
     // Rotation silently kills a live session (remember(tab) state is lost
     // and the rotation guard deliberately doesn't restart it). This flag
     // survives recreation so the user gets told instead of silence.
@@ -862,7 +866,12 @@ internal fun ChatScreen(
             // must not leave the holder claiming "running" (else no restart
             // on return), a stale barge claim must not reroute the next
             // stream end, and the bumped generation retires in-flight
-            // detector triggers so none leak into the other tab. The
+            // detector triggers so none leak into the other tab. NOTE: this
+            // targets the leaving tab's slots and holds only while
+            // remember(tab) stays keyed — if that keying ever collapses the
+            // writes land on shared objects. Either way the external stops
+            // and the global gen bump are the load-bearing lines; do not
+            // "optimize out" the bump as redundant. The
             // milestone set is retired too: a turn settling while away never
             // runs the stream-end retire, so a kept set would suppress the
             // next turn's first cue for repeated tools. On a mid-turn return
@@ -900,6 +909,9 @@ internal fun ChatScreen(
         liveLostOnRotate = false
         livePartial = ""
         pendingLiveStart = false
+        // Retire the reply-finish gate too (#317): a stale true plus an
+        // idle restart would drive a second liveListen() with no turn.
+        wasSpeaking = false
         // Retire any barge claim and milestone set with the session (#317):
         // a stale claim must not reroute the next turn's stream end.
         // Bump the session generation too: in-flight detector triggers from
@@ -983,6 +995,10 @@ internal fun ChatScreen(
         silentRounds = 0
         transientRetries = 0
         livePartial = ""
+        // Retire the reply-finish gate for symmetry with endLive (#317):
+        // the first listen here is driven explicitly below (or by the
+        // stream-end effect for a killed turn), never by a stale flag.
+        wasSpeaking = false
         // Re-check, don't assume (#317): both callers gate on
         // permission, but a revoke in the gap must start tap-to-talk, not
         // lie armed and fail one AudioRecord alloc per phase transition.
@@ -1138,7 +1154,7 @@ internal fun ChatScreen(
     // transition so the floor recalibrates (quiet room vs readout bleed).
     // When the spoken reply fully finishes, listen again — but a cue
     // finishing mid-turn must not: the turn still owns the mic.
-    var wasSpeaking by remember(tab) { mutableStateOf(false) }
+    // (wasSpeaking lives up top with the other retired-on-reset state.)
     val cueSpeaking = speakingKey?.startsWith("live-cue-") == true
     val detecting = liveMode && micArmed && !cueSpeaking &&
         (speakingKey != null || state.streaming)
