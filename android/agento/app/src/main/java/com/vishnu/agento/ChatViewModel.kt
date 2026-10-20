@@ -30,6 +30,15 @@ private const val RECOVERY_FIRST_DELAY_MS = 6_000L
  * producing, the only completion signal without a server resume primitive. */
 private const val RECOVERY_SECOND_DELAY_MS = 15_000L
 
+/** One toast-host notice: text + styling + re-fire identity (#339). Data
+ * (not bare strings in state) so the queue can hold two identical texts
+ * as distinct entries. */
+data class ToastNotice(
+    val text: String,
+    val kind: ToastKind = ToastKind.Error,
+    val seq: Long = 0L,
+)
+
 data class ChatUiState(
     val provider: String = "",
     val model: String = "",
@@ -46,17 +55,13 @@ data class ChatUiState(
      * history, which can be hand-edited — so staged sites read this raw
      * while every history/display/wire site counts wiredPhotos(). */
     val pendingAttachments: List<ChatAttachment> = emptyList(),
-    /** One-shot notice for the toast host (attach caps, drops). Set by the
-     * ViewModel, cleared by `consumeNotice()` after the UI shows it — the
-     * error banner is for failed TURNS (with Retry), never for this. */
-    val notice: String = "",
-    /** Bumped on every [notice] set (#339): the toast host keys on
-     * (notice, noticeGen), so tapping the same dead-send twice re-fires
-     * instead of deduping into a second dead tap. */
-    val noticeGen: Int = 0,
-    /** Toast styling for [notice] (#339): cap refusals are errors, pickup
-     * confirmations are info — one plumbing for both, same lifetime. */
-    val noticeKind: ToastKind = ToastKind.Error,
+    /** Queued notices for the toast host, shown head-first (#339): two
+     * rapid notifies (cap refusal + decode failure in one batch) must both
+     * surface — a single slot lets the second overwrite the first before
+     * the host fires. Set by the ViewModel, headed by `consumeNotice()`
+     * after the UI shows each — the error banner is for failed TURNS
+     * (with Retry), never for this. */
+    val notices: List<ToastNotice> = emptyList(),
     val error: String = "",
     /** True once the persisted conversations finish loading; sends wait for it. */
     val ready: Boolean = false,
@@ -360,14 +365,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     /**
-     * Toast-host notice. Bumps the generation with every set so a repeated
-     * identical notice re-fires instead of deduping silent (#339).
+     * Toast-host notice (#339): appended to the queue, so a repeated
+     * identical notice re-fires (distinct sequence) instead of deduping
+     * silent — and two rapid notifies both surface instead of the second
+     * overwriting the first before the host fires.
      */
     fun notify(msg: String, kind: ToastKind = ToastKind.Error) {
         _state.value = _state.value.copy(
-            notice = msg, noticeGen = _state.value.noticeGen + 1, noticeKind = kind,
+            notices = _state.value.notices + ToastNotice(msg, kind, ++noticeSeq),
         )
     }
+
+    /** Monotonic notice sequence for re-fire identity (see [notify]). */
+    private var noticeSeq = 0L
 
     fun removePendingAttachment(index: Int) {
         val cur = _state.value.pendingAttachments
@@ -377,10 +387,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
     }
 
-    /** Clears [ChatUiState.notice] after the toast host shows it. */
+    /** Drops the shown head of [ChatUiState.notices] after the toast host shows it. */
     fun consumeNotice() {
-        if (_state.value.notice.isNotEmpty()) {
-            _state.value = _state.value.copy(notice = "")
+        if (_state.value.notices.isNotEmpty()) {
+            _state.value = _state.value.copy(notices = _state.value.notices.drop(1))
         }
     }
 
@@ -442,19 +452,22 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         stopApprovalWatch()
         retargetApprovals()
         retargetMemory()
+        // Staged photos die with the text draft, said out loud (#339):
+        // the composer belongs to the thread being left, and a parked
+        // photo firing into the wrong thread would be a silent mis-send —
+        // so the discard itself voices instead of vanishing.
+        val hadStaged = _state.value.pendingAttachments.isNotEmpty()
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
             threadId = id,
             error = "",
             pending = "",
-            // Staged photos die with the text draft (#339): the composer
-            // belongs to the thread being left, and a parked photo firing
-            // into the wrong thread is a silent mis-send. The notice dies
-            // with them: a cap toast triggered on the old thread must not
-            // render over the new composer's first paint.
+            // The notice queue dies with them: a cap toast triggered on the
+            // old thread must not render over the new composer's first
+            // paint (the discard notice below is the only carry-over).
             pendingAttachments = emptyList(),
-            notice = "",
+            notices = emptyList(),
             activeTools = emptyList(),
             activeToolLabel = "",
             serverTokens = null,
@@ -464,6 +477,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeRunId = "", busyRunId = "",
             showRuns = false, runsLoading = false,
         )
+        if (hadStaged) {
+            notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
+        }
         refreshServerTotals()
         maybeResume(id, ChatThreads.toUi(target.messages))
     }
@@ -514,6 +530,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             stopApprovalWatch()
             retargetApprovals()
             retargetMemory()
+            // Same staged-discard voice as switchThread above (#339).
+            val hadStagedOpen = _state.value.pendingAttachments.isNotEmpty()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(target.messages),
                 threads = summaries(),
@@ -525,7 +543,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // into the wrong thread is a silent mis-send. The notice dies
                 // with them (same leak as switchThread above).
                 pendingAttachments = emptyList(),
-                notice = "",
+                notices = emptyList(),
                 activeTools = emptyList(),
                 activeToolLabel = "",
                 serverTokens = null,
@@ -533,6 +551,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
             )
+            if (hadStagedOpen) {
+                notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
+            }
             refreshServerTotals()
             maybeResume(id, ChatThreads.toUi(target.messages))
         }
@@ -591,13 +612,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             s.pending.isBlank() -> s.queued
             else -> "${s.pending.trimEnd()} ${s.queued.trimStart()}"
         }
+        // Same staged-discard voice as switchThread (#339).
+        val hadStagedNew = _state.value.pendingAttachments.isNotEmpty()
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = parked,
             // Staged photos die with the draft like every other thread
             // change (#339): a New with a parked photo must not fire it
             // into the fresh thread. The notice dies with them.
             pendingAttachments = emptyList(),
-            notice = "",
+            notices = emptyList(),
             threads = summaries(), threadId = threadId,
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
@@ -605,6 +628,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeRunId = "", busyRunId = "",
             showRuns = false, runsLoading = false,
         )
+        if (hadStagedNew) {
+            notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
+        }
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
         if (threads.any { it.messages.isNotEmpty() }) persist()
@@ -655,17 +681,22 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 d.pending.isBlank() -> d.queued
                 else -> "${d.pending.trimEnd()} ${d.queued.trimStart()}"
             }
+            // Same staged-discard voice as switchThread (#339).
+            val hadStagedDelete = d.pendingAttachments.isNotEmpty()
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = kept,
                 // Same staged-photos-die-with-the-draft rule as the other
                 // thread changes above (#339). The notice dies with them.
                 pendingAttachments = emptyList(),
-                notice = "",
+                notices = emptyList(),
                 serverTokens = null, queued = "",
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
             )
+            if (hadStagedDelete) {
+                notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
+            }
         }
         _state.value = _state.value.copy(threads = summaries())
         persist()

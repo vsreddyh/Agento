@@ -349,17 +349,20 @@ internal fun ChatTab(
         if (vm.consumeSweepGateReset()) {
             cameraPendingSince = 0L
         }
-        // Application context for the dir (#339): the IO closure below
-        // must capture only this File, never the Activity. The synchronous
-        // pre-IO reads above (the keep-path) run on Main and retain nothing
-        // past their line — the boundary that matters is what crosses into
-        // IO, and appCacheDir (hoisted above the effect) keeps even the
-        // resolve out of the closure.
+        // Age out orphans, keep only the live capture (#339): a restored
+        // keep exempts its file forever, and no later sweep revisits it —
+        // so exemption is by path AND freshness. Anything older than the
+        // stale bound is an orphan by definition (no live batch or intent
+        // outlives it), mtime-persisted across the death that orphaned it.
         val sweepDir = appCacheDir.resolve("camera")
         withContext(Dispatchers.IO) {
             runCatching {
+                val now = System.currentTimeMillis()
                 sweepDir.takeIf { it.exists() }?.listFiles()
-                    ?.filter { it.absolutePath != keep }
+                    ?.filter {
+                        it.absolutePath != keep ||
+                            now - it.lastModified() > CAMERA_PENDING_STALE_MS
+                    }
                     ?.forEach { runCatching { it.delete() } }
             }
         }
@@ -382,13 +385,24 @@ internal fun ChatTab(
         cleanup: File? = null,
         onBatchDone: () -> Unit = {},
         homeThread: String = vm.threadIdNow(),
-    ) {        // Done fires on early returns too (#339): the camera sets its
+    ) {
+        // Done fires on early returns too (#339): the camera sets its
         // in-flight flag before calling, so a cap refusal without the
         // callback would stick the flag and leak the capture forever.
         // The capture itself is deleted here too — the finally below only
         // runs when the batch body starts.
+        // Best-effort cleanup off-main (#339): exists()/delete() are disk
+        // IO, and these early returns run on Main picker/camera callbacks.
+        // Fire-and-forget is safe — deletes never gate anything below.
+        // Declared first: every return below calls it.
+        fun deleteQuietly(f: File?) {
+            if (f == null) return
+            scope.launch(Dispatchers.IO) {
+                runCatching { f.takeIf { it.exists() }?.delete() }
+            }
+        }
         if (uris.isEmpty()) {
-            runCatching { cleanup?.takeIf { it.exists() }?.delete() }
+            deleteQuietly(cleanup)
             onBatchDone()
             return
         }
@@ -402,7 +416,7 @@ internal fun ChatTab(
             vm.notify(capRefused(), ToastKind.Info)
             // Same leak as above: refusal skips the body, so the capture
             // is deleted here, not in finally.
-            runCatching { cleanup?.takeIf { it.exists() }?.delete() }
+            deleteQuietly(cleanup)
             onBatchDone()
             return
         }
@@ -441,7 +455,7 @@ internal fun ChatTab(
         // so the try/finally below is entered before any later cancel can
         // land — no window between launch and first suspension skips it.
         if (!scope.isActive) {
-            runCatching { cleanup?.takeIf { it.exists() }?.delete() }
+            deleteQuietly(cleanup)
             onBatchDone()
             return
         }
@@ -575,7 +589,10 @@ internal fun ChatTab(
             }, cameraThread ?: vm.threadIdNow())
             cameraThread = null
         } else {
-            runCatching { f?.takeIf { it.exists() }?.delete() }
+            // Off-main cleanup like every other delete (#339).
+            scope.launch(Dispatchers.IO) {
+                runCatching { f?.takeIf { it.exists() }?.delete() }
+            }
             cameraPath = null
             // The third case above (ok + lost Uri): a capture deleted with
             // no notice would be silent data loss, so the impossible edge
@@ -584,14 +601,9 @@ internal fun ChatTab(
         }
     }
     fun launchCamera() {
-        // Single outstanding intent (#339): a second tap before the first
-        // returns would overwrite the shared Uri/path mid-flight. Voiced
-        // (the camera is already open, so the tap needs an answer, not
-        // silence) — and staleness-bounded, so a dead process can never
-        // stick the gate. This refusal also covers the rotation re-tap:
-        // the restored pending timestamp holds the gate, so the
-        // delete-previous below can never run against a restorable
-        // in-flight capture.
+        // Single outstanding intent + hardware gate first (both Main-safe,
+        // both synchronous reads): overlapping launches and camera-less
+        // devices refuse here, before any work starts.
         if (isCameraPending()) {
             vm.notify("Camera is already open — finish it first.", ToastKind.Info)
             return
@@ -608,63 +620,75 @@ internal fun ChatTab(
             vm.notify("No camera on this device — use Choose photos instead.", ToastKind.Info)
             return
         }
-        // Application context for the dir (#339): the tap handler must not
-        // resolve cacheDir on the Activity — same leak class as the sweep
-        // and batch fixes (a File crosses forward, never the Activity).
-        val dir = File(appTapContext.cacheDir, "camera")
-        // Checked, not assumed (#339): full storage fails mkdirs, and a
-        // bare TakePicture failure (ok=false) would leave the user with
-        // no hint why no camera appeared. State notice, not a composition
-        // toast: same rotation-proof lifetime as every other attach error.
-        // isDirectory, not exists (#339): a stray FILE at this path would
+        // File prep off-main (#339): mkdirs, exists/delete, and the
+        // FileProvider query are disk/package-manager IO on the tap
+        // handler's Main thread. Everything below runs in one IO hop;
+        // state writes + launcher fire hop back to Main at the end.
+        // Checked, not assumed: full storage fails mkdirs, and a bare
+        // TakePicture failure (ok=false) would leave the user with no hint
+        // why no camera appeared. State notice, not a composition toast:
+        // same rotation-proof lifetime as every other attach error.
+        // isDirectory, not exists: a stray FILE at this path would
         // otherwise pass the check and fail downstream as a generic
         // couldn't-start-the-camera instead of storage-unavailable.
-        if (!dir.isDirectory && !dir.mkdirs()) {
-            vm.notify("Couldn't start the camera — storage unavailable.")
-            return
-        }
-        // Skip the delete while a capture is decoding (#339): a rapid
-        // re-tap would delete the in-flight file mid-read and turn a good
-        // capture into a "moved or deleted" error. The in-flight batch's
-        // own cleanup deletes its file when it lands.
-        if (!cameraBusy) {
-            runCatching { cameraPath?.let(::File)?.takeIf { it.exists() }?.delete() }
-        }
-        // UUID, not millis (#339): a rapid double-tap can mint the same
-        // millisecond twice and point two captures at one file.
-        val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
-        val uri = runCatching {
-            // packageName tracks applicationId at runtime (#339): the
-            // earlier comment claiming a flavor/suffix would break this
-            // was wrong — Context.getPackageName() returns the runtime
-            // applicationId including any suffix, matching the manifest's
-            // ${applicationId} authority by construction. (BuildConfig is
-            // still not generated in this module — verified by the CI
-            // failure that tried it — but nothing here needs it.)
-            FileProvider.getUriForFile(appTapContext, "${appTapContext.packageName}.fileprovider", file)
-        }.getOrNull() ?: run {
-            vm.notify("Couldn't start the camera.")
-            return
-        }
-        cameraUri = uri
-        cameraPath = file.absolutePath
-        // Owner recorded with the launch (#339): the callback homes the
-        // batch to this thread even across a switch.
-        cameraThread = state.threadId
-        // Armed before launch, cleared in the callback (#339): the gate at
-        // the top of this function makes overlapping intents impossible.
-        // Guarded: if launch() itself throws (no camera activity to
-        // resolve, broken FileProvider on an odd OEM), no callback ever
-        // fires — so the gate resets, the path nulls, and the orphan file
-        // deletes here instead of sticking the gate till the stale bound.
-        cameraPendingSince = SystemClock.elapsedRealtime()
-        runCatching {
-            cameraLauncher.launch(uri)
-        }.onFailure {
-            cameraPendingSince = 0L
-            cameraPath = null
-            runCatching { file.takeIf { it.exists() }?.delete() }
-            vm.notify("Couldn't start the camera.")
+        scope.launch(Dispatchers.IO) {
+            val dir = File(appTapContext.cacheDir, "camera")
+            if (!dir.isDirectory && !dir.mkdirs()) {
+                withContext(Dispatchers.Main) {
+                    vm.notify("Couldn't start the camera — storage unavailable.")
+                }
+                return@launch
+            }
+            // Skip the delete while a capture is decoding (#339): a rapid
+            // re-tap would delete the in-flight file mid-read and turn a good
+            // capture into a "moved or deleted" error. The in-flight batch's
+            // own cleanup deletes its file when it lands. Snapshot reads
+            // (cameraBusy/cameraPath) are Main-thread-safe.
+            if (!cameraBusy) {
+                runCatching { cameraPath?.let(::File)?.takeIf { it.exists() }?.delete() }
+            }
+            // UUID, not millis (#339): a rapid double-tap can mint the same
+            // millisecond twice and point two captures at one file.
+            val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
+            val uri = runCatching {
+                // packageName tracks applicationId at runtime (#339): the
+                // earlier comment claiming a flavor/suffix would break this
+                // was wrong — Context.getPackageName() returns the runtime
+                // applicationId including any suffix, matching the manifest's
+                // ${applicationId} authority by construction. (BuildConfig is
+                // still not generated in this module — verified by the CI
+                // failure that tried it — but nothing here needs it.)
+                FileProvider.getUriForFile(appTapContext, "${appTapContext.packageName}.fileprovider", file)
+            }.getOrNull()
+            withContext(Dispatchers.Main) {
+                if (uri == null) {
+                    vm.notify("Couldn't start the camera.")
+                    runCatching { file.takeIf { it.exists() }?.delete() }
+                    return@withContext
+                }
+                cameraUri = uri
+                cameraPath = file.absolutePath
+                // Owner recorded with the launch (#339): the callback homes the
+                // batch to this thread even across a switch.
+                cameraThread = state.threadId
+                // Armed before launch, cleared in the callback (#339): the gate at
+                // the top of this function makes overlapping intents impossible.
+                // Guarded: if launch() itself throws (no camera activity to
+                // resolve, broken FileProvider on an odd OEM), no callback ever
+                // fires — so the gate resets, the path nulls, and the orphan file
+                // deletes here instead of sticking the gate till the stale bound.
+                cameraPendingSince = SystemClock.elapsedRealtime()
+                runCatching {
+                    cameraLauncher.launch(uri)
+                }.onFailure {
+                    cameraPendingSince = 0L
+                    cameraPath = null
+                    scope.launch(Dispatchers.IO) {
+                        runCatching { file.takeIf { it.exists() }?.delete() }
+                    }
+                    vm.notify("Couldn't start the camera.")
+                }
+            }
         }
     }
     val cameraPermission = rememberLauncherForActivityResult(
@@ -713,16 +737,17 @@ internal fun ChatTab(
             cameraPermission.launch(Manifest.permission.CAMERA)
         }
     }
-    // ViewModel notices (attach caps) surface as toasts, not the error
-    // banner: the banner's Retry resends a TURN, which is wrong for a
-    // staging problem. Consumed after showing so rotation never replays it.
-    // Keyed on the generation too (#339): an identical repeat notice must
-    // re-fire rather than dedupe into a dead second tap. Kind rides the
-    // state so info confirmations and error refusals share one plumbing
-    // with the same rotation-proof lifetime.
-    LaunchedEffect(state.notice, state.noticeGen) {
-        if (state.notice.isNotEmpty()) {
-            toasts.toast(state.notice, state.noticeKind)
+    // ViewModel notices (attach caps, drops, discards) surface as toasts,
+    // not the error banner: the banner's Retry resends a TURN, which is
+    // wrong for a staging problem. Head-first through the queue (#339):
+    // two rapid notifies both surface instead of the second overwriting
+    // the first. Consumed after showing so rotation never replays them.
+    // Keyed on the entry (text+kind+seq) so identical repeats re-fire
+    // rather than deduping into a dead second tap.
+    val headNotice = state.notices.firstOrNull()
+    LaunchedEffect(headNotice) {
+        if (headNotice != null) {
+            toasts.toast(headNotice.text, headNotice.kind)
             vm.consumeNotice()
         }
     }
@@ -2219,14 +2244,16 @@ internal fun ChatScreen(
                                             slot = i,
                                             stableId = a.id,
                                         )
-                                        // 24dp is an overlay exception to the
-                                        // standard-48dp rule (#283): the target
-                                        // sits ON a 64dp thumbnail, so a full
-                                        // 48dp button would cover the photo it
-                                        // removes. Content description kept.
+                                        // Standard 48dp target (#339): a scanner
+                                        // fails anything smaller, and the
+                                        // #283 overlay exception is withdrawn
+                                        // here — covering the thumbnail corner
+                                        // is the lesser evil next to an
+                                        // untappable remove. Icon stays 16dp,
+                                        // centered. Content description kept.
                                         IconButton(
                                             onClick = { onRemovePhoto(i) },
-                                            modifier = Modifier.align(Alignment.TopEnd).size(24.dp),
+                                            modifier = Modifier.align(Alignment.TopEnd).size(48.dp),
                                         ) {
                                             Icon(
                                                 Icons.Filled.Close,

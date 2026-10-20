@@ -405,8 +405,11 @@ private fun namedReadError(e: Throwable): Throwable {
     // Cancellation is not a read failure (#339): leaving the tab mid-batch
     // cancels the decode, and remapping that into the generic error would
     // toast "couldn't read" for a user-initiated abort — while also
-    // breaking structured concurrency by swallowing the cancel.
-    if (e is CancellationException) throw e
+    // breaking structured concurrency by swallowing the cancel. Errors
+    // (OOM and friends) rethrow for the same reason: masking a JVM-level
+    // failure as a read stall would invite re-picks into the same crash —
+    // fail loud, not toastable.
+    if (e is CancellationException || e is Error) throw e
     runCatching { Log.w("ChatAttachments", "photo read failed", e) }
     return if (e is NamedAttachError || e is OversizeAttachError) e
     else NamedAttachError(
@@ -545,6 +548,10 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // compression each allocate or throw, and any throw must recycle
             // the live bitmap — the recycle-before-reassign lines cover the
             // success path, the finally covers every throw between them.
+            // Cooperative cancel between the native steps (#339): decode,
+            // rotate, fill, and scale each run hundreds of ms with no
+            // suspension point — a tab-leave must surface at each gate,
+            // not only in the read/compress loops.
             // Declared outside ("": nothing measured yet): the oversize
             // check below reads them after, and a throw before the first
             // candidate must report "too large to process", never a
@@ -554,6 +561,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             var encoded: String? = null
             var lastCandidate = ""
             try {
+                ensureActive()
                 // Null means no transform: transposes and flips compose a mirror
                 // via negative scale, which createBitmap applies directly.
                 // Mapping follows the EXIF orientation semantics (CIPA DC-008 /
@@ -591,6 +599,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                         bitmap = rotated
                     }
                 }
+                ensureActive()
                 val (tw, th) = downscaledSize(bitmap.width, bitmap.height)
                 // Opaque white fill, only when needed (#339): JPEG has no
                 // alpha channel, so a transparent screenshot/icon would
@@ -615,6 +624,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                         bitmap = scaled
                     }
                 }
+                ensureActive()
                 for (quality in listOf(80, 60)) {
                     // Cooperative cancel like the read loop (#339): two
                     // full JPEG encodes with no suspension would hold the
@@ -686,7 +696,9 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
 fun decodeThumbnail(base64: String): Bitmap? {
     // Explicit try/catch, not runCatching (#339): cancellation must
     // propagate (produceState restart on recompose), never collapse into
-    // the null placeholder path like a corrupt payload does.
+    // the null placeholder path like a corrupt payload does. Errors
+    // propagate too, matching the stage path — a corrupt payload still
+    // lands null via the Exception branch, never via masking the JVM.
     return try {
         // Gated on decoded size, not raw length (#339): base64Bytes
         // excludes framing whitespace the raw length counts, so a wrapped
@@ -716,6 +728,10 @@ fun decodeThumbnail(base64: String): Bitmap? {
             BitmapFactory.Options().apply { inSampleSize = sample.toInt() },
         )
     } catch (e: CancellationException) {
+        throw e
+    } catch (e: Error) {
+        // Fail loud like the stage path (#339): an OOM here must crash,
+        // never collapse into a placeholder that hides JVM-level failure.
         throw e
     } catch (e: Exception) {
         null
