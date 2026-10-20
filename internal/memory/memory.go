@@ -111,10 +111,9 @@ type Filter struct {
 // it; the gateway, the app routes and the memory MCP server share one.
 type Store interface {
 	Create(ctx context.Context, i Item) (Item, error)
-	// Get is unscoped and must never be used for authorization: it cannot
-	// tell "missing" from "another profile's". Update and Delete take the
-	// profile and treat a foreign id as NotFound.
-	Get(ctx context.Context, id string) (Item, error)
+	// Get is profile-scoped like the writes: a foreign id is NotFound, so no
+	// caller can Get-then-check its way into leaking cross-profile existence.
+	Get(ctx context.Context, id, profile string) (Item, error)
 	// Update and Delete are profile-scoped: a foreign id is NotFound, so one
 	// query both authorises and writes instead of a Get-then-write pair.
 	Update(ctx context.Context, id, profile string, u Update) (Item, error)
@@ -162,11 +161,13 @@ func NormalizeTopic(topic string) string {
 }
 
 // CleanText trims an item's text and bounds it by runes. Empty text is
-// rejected by the callers that create items; this only normalises.
+// rejected by the stores; this only normalises.
 func CleanText(text string) string {
 	t := strings.TrimSpace(text)
 	if utf8.RuneCountInString(t) > MaxText {
-		t = string([]rune(t)[:MaxText])
+		// Re-trim: rune 1000 can be a space, and a clipped value must not
+		// keep a trailing one.
+		t = strings.TrimSpace(string([]rune(t)[:MaxText]))
 	}
 	return t
 }

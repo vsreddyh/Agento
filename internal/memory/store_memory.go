@@ -64,12 +64,12 @@ func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
 	return i, nil
 }
 
-// Get returns one item.
-func (s *MemoryStore) Get(_ context.Context, id string) (Item, error) {
+// Get returns one item. Profile-scoped: a foreign id is NotFound.
+func (s *MemoryStore) Get(_ context.Context, id, profile string) (Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it, ok := s.items[id]
-	if !ok {
+	if !ok || it.Profile != profile {
 		return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
 	}
 	return it, nil
@@ -132,7 +132,9 @@ func (s *MemoryStore) DeleteAll(_ context.Context, profile string) (int64, error
 	return n, nil
 }
 
-// List returns matching items, newest first.
+// List returns matching items, newest-created first. Creation order is
+// stable on purpose: an edit bumps UpdatedAt but does not re-float the item,
+// so the screen and the prompt see the same standing order.
 func (s *MemoryStore) List(_ context.Context, f Filter) ([]Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -191,7 +191,9 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 		// One list, filtered in memory: the status/topic filter and the
 		// screen's topic list are two views of the same rows, and three
 		// sequential calls under one deadline can 502 the third after
-		// doing the first two.
+		// doing the first two. The full ListCap read is by choice, not
+		// accident: topics must stay complete under any filter, and at 200
+		// rows it is cheap. If the cap ever grows, bound this query first.
 		all, err := s.memory.List(ctx, memory.Filter{Profile: profile})
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
@@ -242,6 +244,7 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 		if err := decodeJSONBody(w, r, &body); err != nil {
 			return
 		}
+		trimmed := strings.TrimSpace(body.Text)
 		text := memory.CleanText(body.Text)
 		if text == "" {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "text",
@@ -268,7 +271,13 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 			memoryError(w, err)
 			return
 		}
-		writeJSONResponse(w, http.StatusOK, map[string]any{"item": memoryWire(it)})
+		// Same contract as save_memory: a pasted paragraph clips at MaxText
+		// runes, and the screen should say so rather than show a 200 that
+		// quietly stored less.
+		writeJSONResponse(w, http.StatusOK, map[string]any{
+			"item":      memoryWire(it),
+			"truncated": text != trimmed,
+		})
 		return
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -291,7 +300,10 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 		// An empty or punctuation-only topic would silently normalise to
 		// "general" (NormalizeTopic's Trim(t,"-") fallback) and
 		// re-categorise the item; reject it instead. A topic that already
-		// spells general passes through.
+		// spells general passes through; "--general--" does not, on
+		// purpose — accepting anything that normalises to general would
+		// also accept every punctuation-only string, which is exactly
+		// the silent re-categorisation this rejects.
 		if strings.TrimSpace(*body.Topic) == "" ||
 			(memory.NormalizeTopic(*body.Topic) == memory.DefaultTopic &&
 				!strings.EqualFold(strings.TrimSpace(*body.Topic), memory.DefaultTopic)) {

@@ -73,7 +73,13 @@ func main() {
 	// fallback only matters for a hand-started server outside the gateway.
 	profile = strings.TrimSpace(os.Getenv("AGENTO_PROFILE"))
 	if profile == "" {
-		profile = "chat"
+		// Same default the gateway uses for PI_DEFAULT_PROFILE: a hand-started
+		// server outside the gateway must scope to the profile the default
+		// screen reads, not a neighbouring one.
+		profile = strings.TrimSpace(os.Getenv("PI_DEFAULT_PROFILE"))
+		if profile == "" {
+			profile = "default"
+		}
 	}
 
 	// Without Mongo the gateway serves from an in-process store the agent

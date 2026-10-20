@@ -92,10 +92,10 @@ func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
 	return i, nil
 }
 
-// Get returns one item.
-func (s *MongoStore) Get(ctx context.Context, id string) (Item, error) {
+// Get returns one item. Profile-scoped like the writes.
+func (s *MongoStore) Get(ctx context.Context, id, profile string) (Item, error) {
 	var it Item
-	if err := s.items.FindOne(ctx, bson.M{"_id": id}).Decode(&it); err != nil {
+	if err := s.items.FindOne(ctx, bson.M{"_id": id, "profile": profile}).Decode(&it); err != nil {
 		if errors.Is(err, mongoDrv.ErrNoDocuments) {
 			return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
 		}
@@ -161,7 +161,8 @@ func (s *MongoStore) DeleteAll(ctx context.Context, profile string) (int64, erro
 	return res.DeletedCount, nil
 }
 
-// List returns matching items, newest first.
+// List returns matching items, newest-created first (stable order; see
+// MemoryStore.List).
 func (s *MongoStore) List(ctx context.Context, f Filter) ([]Item, error) {
 	q := bson.M{}
 	if p := strings.TrimSpace(f.Profile); p != "" {

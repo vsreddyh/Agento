@@ -110,7 +110,7 @@ func TestMemoryIsProfileScoped(t *testing.T) {
 	if got := do(t, srv, http.MethodPut, "/api/memory/"+other.ID, `{"text":"x"}`); got.Code != http.StatusNotFound {
 		t.Fatalf("foreign edit = %d, want 404", got.Code)
 	}
-	if it, err := store.Get(context.Background(), other.ID); err != nil || it.Text != "has a bad knee" {
+	if it, err := store.Get(context.Background(), other.ID, "someone-else"); err != nil || it.Text != "has a bad knee" {
 		t.Fatalf("foreign item changed: %+v %v", it, err)
 	}
 }

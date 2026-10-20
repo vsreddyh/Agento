@@ -140,8 +140,12 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	if err := s.Delete(ctx, b.ID, "q"); err == nil {
 		t.Fatal("foreign delete should be NotFound")
 	}
-	if got, _ := s.Get(ctx, b.ID); got.Text != text {
+	if got, _ := s.Get(ctx, b.ID, "p"); got.Text != text {
 		t.Fatalf("foreign write changed the row: %+v", got)
+	}
+	// Get is scoped too: a foreign id reads as NotFound, not as a row.
+	if _, err := s.Get(ctx, b.ID, "q"); err == nil {
+		t.Fatal("foreign get should be NotFound")
 	}
 	// Create enforces the text invariant, not just the callers.
 	if _, err := s.Create(ctx, Item{Profile: "p", Text: "   "}); err == nil {
@@ -157,7 +161,7 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	if err := s.Delete(ctx, long.ID, "p"); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := s.Get(ctx, b.ID)
+	got, _ := s.Get(ctx, b.ID, "p")
 	if got.Text != text || got.Status != StatusConfirmed {
 		t.Fatalf("update = %+v", got)
 	}
