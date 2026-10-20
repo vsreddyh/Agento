@@ -273,12 +273,14 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // compression each allocate or throw, and any throw must recycle
             // the live bitmap — the recycle-before-reassign lines cover the
             // success path, the finally covers every throw between them.
-            // Declared outside: the oversize check below reads them after.
+            // Declared outside (0 = nothing measured yet): the oversize
+            // check below reads them after, and a throw before the first
+            // candidate must report "too large to process", never a
+            // nonsense byte count. Last attempt, not min/max (#339):
+            // quality descends, so the final measurement is the closest
+            // to passing by construction.
             var encoded: String? = null
-            // Smallest, not largest (#339): the error below reports the
-            // attempt that came CLOSEST to passing (q60 fails last), so a
-            // max() here would overstate the size that fell short.
-            var smallest = Int.MAX_VALUE
+            var lastSize = 0
             try {
                 // EXIF orientation (#339 review): BitmapFactory ignores it, so a
                 // portrait phone photo would stage and send sideways. The
@@ -344,9 +346,17 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 }
                 for (quality in listOf(80, 60)) {
                     val out = ByteArrayOutputStream()
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                    // Checked, not assumed (#339): a false return leaves
+                    // out empty, and an empty candidate would pass the cap
+                    // as a zero-byte "photo" — silent corrupt payload wired
+                    // as data:image/jpeg;base64, with no named error.
+                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)) {
+                        throw IllegalArgumentException(
+                            "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
+                        )
+                    }
                     val candidate = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                    smallest = minOf(smallest, candidate.length)
+                    lastSize = candidate.length
                     if (candidate.length <= MAX_IMAGE_BASE64_CHARS) {
                         encoded = candidate
                         break
@@ -356,8 +366,14 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 bitmap.recycle()
             }
             val final = encoded ?: throw IllegalStateException(
-                "Photo too large even after shrinking (${formatBytes(base64Bytes(smallest))})" +
-                    " — the per-photo limit is about " +
+                // Zero means the loop threw before measuring (OOM in the
+                // encode): report unprocessable, never "0 B" or a sentinel.
+                (if (lastSize > 0) {
+                    "Photo too large even after shrinking (${formatBytes(base64Bytes(lastSize))}) — "
+                } else {
+                    "Photo too large to process — "
+                }) +
+                    "the per-photo limit is about " +
                     "${formatBytes(base64Bytes(MAX_IMAGE_BASE64_CHARS))}. " +
                     "Pick a different photo.",
             )

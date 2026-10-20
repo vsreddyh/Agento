@@ -128,7 +128,9 @@ private fun AttachmentThumb(
     // identical payloads from aliasing one thumbnail. Decoded off-main:
     // ~1 MB Base64.decode + decodeByteArray during composition janks
     // low-end scroll, so produceState moves it to IO (placeholder shows
-    // until it lands) and awaitDispose recycles on change/unmount.
+    // until it lands). No manual recycle (#339): awaitDispose { recycle() }
+    // can pull pixels from under a late outgoing draw — ~256px thumbnails
+    // are GC-cheap, and prompt freeing is not worth a crash class.
     val thumbKey = Triple(base64.length, base64.hashCode(), slot)
     // No manual recycle (#339): awaitDispose { recycle() } can pull pixels
     // from under a late outgoing draw ("trying to use a recycled bitmap").
@@ -358,6 +360,13 @@ internal fun ChatTab(
         }
     }
     fun launchCamera() {
+        // Camera-less devices stay gallery-only (#339): uses-feature keeps
+        // them installable, so the Take-photo path must refuse with a
+        // notice instead of an ActivityNotFoundException.
+        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            vm.notify("No camera on this device — use Choose photos instead.", ToastKind.Info)
+            return
+        }
         val dir = File(context.cacheDir, "camera")
         // Checked, not assumed (#339): full storage fails mkdirs, and a
         // bare TakePicture failure (ok=false) would leave the user with

@@ -499,7 +499,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** + starts a new conversation; threads with chats are kept, empty
      * drafts are dropped so they never pile up in history. */
     fun newConversation() {
-        if (!_state.value.ready) return
+        // Voiced like send() (#339): the affordance stays live during
+        // thread load, so an ungated return would dead-tap there.
+        if (!_state.value.ready) {
+            notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            return
+        }
         streamJob?.cancel()
         streamJob = null
         serverTotalsJob?.cancel()
@@ -550,7 +555,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Deletes a conversation; if it was active, falls back to the newest
      * thread with chats (never a blank draft). */
     fun deleteThread(id: String) {
-        if (!_state.value.ready) return
+        // Voiced like send()/newConversation (#339).
+        if (!_state.value.ready) {
+            notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            return
+        }
         streamJob?.cancel()
         streamJob = null
         threads = threads.filterNot { it.id == id }
