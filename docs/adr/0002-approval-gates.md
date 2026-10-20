@@ -141,6 +141,12 @@ to the process that died, and leaving them pending would show the app a card
 whose approval could never forward. The gateway's global `MarkInterrupted`
 still runs at its own startup for the whole collection.
 
+Overlapping relays converge: during a Pi respawn the old relay may still be in
+its teardown join while the new one sweeps, so an abandoned row can flip to
+`expired` by either path. Both mean the same thing, and neither can forward
+the call — the disposition is identical; only who writes the audit line
+differs.
+
 The sweep is queue hygiene, not a decision: it writes no per-row audit entry
 (the count log is the record), because the rows it finds were owned by a
 process that died before it could record anything. The teardown path is where

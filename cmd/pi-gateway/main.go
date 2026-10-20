@@ -270,7 +270,9 @@ func run() error {
 	var approvalStore approvals.Store
 	if store, err := approvals.FromEnv(); err != nil {
 		logger.Printf("approvals: falling back to in-memory: %v", err)
-		approvalStore = approvals.NewMemoryStore()
+		mem := approvals.NewMemoryStore()
+		mem.Logf = logger.Printf
+		approvalStore = mem
 	} else {
 		approvalStore = store
 		store.Logf = logger.Printf

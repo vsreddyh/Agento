@@ -111,7 +111,14 @@ func openStore(server string) approvals.Store {
 		// Prefixed like every other relay line: six relays share stderr, and
 		// this is the line that explains a later split-brain warning.
 		log.Printf("mcp-gate[%s] approvals falling back to in-memory: %v", server, err)
-		return approvals.NewMemoryStore()
+		mem := approvals.NewMemoryStore()
+		// Same prefix and the same Logf contract as the Mongo branch: the
+		// fallback is the split-brain path triage cares about most, and a
+		// silent duplicate-create line helps nobody.
+		mem.Logf = func(format string, args ...any) {
+			log.Printf("mcp-gate["+server+"] "+format, args...)
+		}
+		return mem
 	} else {
 		return store
 	}
@@ -361,7 +368,10 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 					r.take(env.ID)
 				}
 				r.log.Printf("write to server failed: %v", err)
-				r.audit(params.Name, redacted, approvals.DispositionAllow,
+				// Async like every other pump-path row: the return below tears
+				// the pair down, and auditAsync is closing-aware, so the row is
+				// joined by the teardown wait without blocking this pump.
+				r.auditAsync(params.Name, redacted, approvals.DispositionAllow,
 					"allowed but not delivered to the server: "+err.Error(), "")
 				return err
 			}
@@ -430,12 +440,14 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 // up to waitFor; traffic is one turn per profile, so the bound is a single
 // frame, not a queue.
 //
-// The parsed argument map is nil'd immediately after redaction so the hold
-// pins ONE unmasked copy (the bytes it must forward), not two. Everything
+// Both parsed views of the arguments (params.Arguments and the envelope's
+// raw params) are nil'd immediately after redaction, so the hold pins ONE
+// unmasked copy — the bytes it must forward — rather than three. Everything
 // after this point reads `redacted`.
 func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 	redacted := approvals.Redact(params.Arguments)
 	params.Arguments = nil
+	env.Params = nil
 	a := approvals.Approval{
 		ID:     approvals.NewID(),
 		Server: r.server,

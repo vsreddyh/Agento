@@ -562,10 +562,7 @@ func TestAllowDeliveryFailureUntracksAndAudits(t *testing.T) {
 	if pending != 0 {
 		t.Fatalf("pending entries = %d after failed delivery, want 0", pending)
 	}
-	audit, err := store.ListAudit(context.Background(), approvals.AuditFilter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	audit := waitForAudit(t, store, 1)
 	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionAllow ||
 		!strings.Contains(audit[0].Error, "not delivered") {
 		t.Fatalf("audit = %+v, want one allow row recording the delivery failure", audit)
