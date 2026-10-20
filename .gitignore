@@ -136,6 +136,7 @@ __pycache__/
 /notes
 /memory
 /mcp-gate
+/browser
 
 # browser runtime state (page dumps, console logs)
 .playwright-mcp/

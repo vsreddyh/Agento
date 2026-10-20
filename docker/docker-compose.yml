@@ -154,6 +154,12 @@ services:
       # Workspace checkouts from the retired side profiles (portals,
       # portfolio-resume) stay mounted but unmanaged (#289).
       - ../workspace:/workspace
+      # Exports, writable: the browser MCP server saves evidence bundles
+      # under browser/ (the Storage tab reads them via health-api). rw only
+      # here — health-api keeps its read-only mount — and the server jails
+      # every write under browser/ with generated filenames, so the agent
+      # cannot touch anything else in the tree.
+      - ../exports:/exports:rw
       # VPS SSH keys, least-privilege file mounts (read-only): kept for host-side
       # git by hand. No profile clones or pulls on its own any more.
       - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519:/root/.ssh/id_ed25519:ro
