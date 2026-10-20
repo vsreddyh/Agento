@@ -38,6 +38,8 @@ internal fun TeachDialog(
     testOutput: String,
     acting: Boolean,
     error: String,
+    /** Information, not failure (clip hints): renders in variant, never red. */
+    notice: String = "",
     /** Successful saves from the screen: each increment collapses an open
      * editor, so a saved edit never lingers over fresh rows. */
     editSaves: Int = 0,
@@ -105,6 +107,14 @@ internal fun TeachDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    )
+                }
+                if (notice.isNotBlank()) {
+                    Text(
+                        notice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     )
                 }
                 LazyColumn(

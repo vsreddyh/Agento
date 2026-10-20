@@ -116,7 +116,8 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // Clip hints are information, not failure: they render in variant, not
     // error red, so success-with-clip never reads as a failed save.
     var composerNotice by remember(profile) { mutableStateOf("") }
-    var managingBusy by remember { mutableStateOf(false) }
+    var managingBusy by remember(profile) { mutableStateOf(false) }
+    var manageNotice by remember(profile) { mutableStateOf("") }
     var testOutput by remember(profile) { mutableStateOf("") }
     // Keyed by profile: a switch mid-compose starts empty instead of
     // carrying the old profile's typing into the new one's save.
@@ -517,6 +518,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             onClick = {
                                 managing = t
                                 managingError = ""
+                                manageNotice = ""
                                 testOutput = ""
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -562,12 +564,21 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             testOutput = testOutput,
             acting = managingBusy,
             error = managingError,
+            notice = manageNotice,
             onSaveEdit = { name, description, body ->
+                var clipped = false
                 mutate(
                     action = { api, path ->
                         api.updateSkill(path, open.id, name = name, description = description, body = body)
+                            .onSuccess { clipped = it.second }
                     },
-                    onSuccess = { editSaves++; testOutput = "" },
+                    onSuccess = {
+                        editSaves++
+                        testOutput = ""
+                        manageNotice =
+                            if (clipped) "Saved, but the text clipped at the length cap."
+                            else ""
+                    },
                 )
             },
             onTest = { input ->
