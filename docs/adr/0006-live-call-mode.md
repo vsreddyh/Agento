@@ -31,10 +31,11 @@ record — still half-duplex, still no realtime transport.**
   cue naming the latest, and the whole batch counts as announced.
   Milestones ride `live-cue-*` TTS keys: the detector stays off for cues
   (short self-speech must not self-trigger), their completion never starts
-  listening, cues are skipped while TTS isn't up (a parked cue would speak
-  late, possibly after the turn), and an engine-dead cue stays silent —
-  the reply path reports TTS failure loudly at stream end instead of
-  killing a working call over a cue.
+  listening, cues are gated on collected TTS readiness (a `StateFlow`, so
+  a late engine init re-fires the cue instead of losing the missed set —
+  a parked cue would speak late, possibly after the turn), and an
+  engine-dead cue stays silent — the reply path reports TTS failure
+  loudly at stream end instead of killing a working call over a cue.
 - Hang-up adds nothing. Every live turn already lands in the thread,
   including user-stopped partials (marked interrupted). Ending is silent;
   the thread is the summary.
@@ -44,7 +45,11 @@ record — still half-duplex, still no realtime transport.**
   carrying a quiet-room threshold into speech, which would cut every
   reply. Each restart's deaf window is the existing ~400 ms calibration,
   and redundant restarts are skipped when already running in the target
-  phase. A start failure never downgrades the session: contention with a
+  phase (plain holder, not state — the keys drive restarts). The detector
+  runs in the composition scope, not the restarting effect's, so an effect
+  restart can't cancel the old detector job out from under the new
+  AudioRecord — the explicit stop() is the only lifetime manager.
+  A start failure never downgrades the session: contention with a
   dying recorder reads the same as a dead mic, so the next phase change
   retries instead of sticking the loop in tap-to-talk.
 

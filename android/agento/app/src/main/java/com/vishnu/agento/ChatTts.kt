@@ -25,10 +25,14 @@ class ChatTts(context: Context) {
     val speakingKey: StateFlow<String?> = _speakingKey
 
     private var engine: TextToSpeech? = null
-    private var ready = false
-    /** True once the engine initialized successfully; cues check this so a
-     * pre-ready toggle can't park a cue in `pending` and speak it late. */
-    val isReady: Boolean get() = ready
+    // Written on the TTS init-callback thread, collected on Main:
+    // StateFlow (volatile-backed) instead of a plain var so cross-thread
+    // reads are safe and Compose re-fires keyed effects on init.
+    private val _ready = MutableStateFlow(false)
+    /** True once the engine initialized successfully. Milestone cues key on
+     * this so a late init still cues instead of losing the tool set that
+     * arrived while TTS was down. */
+    val readyFlow: StateFlow<Boolean> = _ready
     private var failed = false
     private var pending: Pair<String, String>? = null
     /** Utterance ID of the last queued chunk; only its completion clears state. */
@@ -36,9 +40,9 @@ class ChatTts(context: Context) {
 
     init {
         engine = TextToSpeech(appCtx) { status ->
-            ready = status == TextToSpeech.SUCCESS
-            failed = !ready
-            if (ready) {
+            _ready.value = status == TextToSpeech.SUCCESS
+            failed = !_ready.value
+            if (_ready.value) {
                 pickLanguage()
                 pending?.let { (key, text) ->
                     pending = null
@@ -95,7 +99,7 @@ class ChatTts(context: Context) {
         stop()
         val clean = cleanForSpeech(text)
         if (clean.isEmpty()) return true
-        if (!ready) {
+        if (!_ready.value) {
             // Engine still initing: queue one utterance. A failed engine
             // reports false so the caller can show a hint instead.
             if (failed) return false
@@ -142,7 +146,7 @@ class ChatTts(context: Context) {
         stop()
         runCatching { engine?.shutdown() }
         engine = null
-        ready = false
+        _ready.value = false
         failed = true
     }
 

@@ -443,6 +443,15 @@ internal fun ThreadSheet(
  * alone could theoretically collide across regenerate/retry). */
 internal fun ttsKeyFor(msg: ChatMessage): String = "${msg.ts}:${msg.content.hashCode()}"
 
+/** Detector bookkeeping for the live loop driver (review #338-followup-3):
+ * plain holder instead of state — only the driver effect touches it, and
+ * the effect keys drive restarts, so publishing it would recompose for
+ * bookkeeping the keys already encode. */
+private class DetectCtl {
+    var running = false
+    var phase = -1
+}
+
 /**
  * Chat provider/model picker (#18: model selection lives on the chat
  * profile's own page). Saves immediately on pick; blanks mean not set.
@@ -730,6 +739,10 @@ internal fun ChatScreen(
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val speakingKey by tts.speakingKey.collectAsState()
+    // TTS readiness as state (review #338-followup-1): the milestone effect
+    // keys on this, so an engine that finishes init mid-turn re-fires the
+    // effect and cues the tools that arrived while it was down.
+    val ttsReady by tts.readyFlow.collectAsState()
     // Live mode (#85, call-mode #317): chain the existing one-shot voice
     // input + TTS readout into a continuous talk-listen-talk loop. The
     // system recognizer handles silence cutoff per turn; LiveInterrupt
@@ -1034,28 +1047,33 @@ internal fun ChatScreen(
         speakingKey != null -> 1
         else -> 2
     }
-    // Whether the detector is up (review #338-3): restarts are skipped
-    // when already running in the target phase, so a micArmed/liveMode
-    // toggle with no phase change doesn't churn the AudioRecord.
-    var detectorRunning by remember(tab) { mutableStateOf(false) }
-    var lastDetectPhase by remember(tab) { mutableIntStateOf(-1) }
+    // Whether the detector is up, without recomposing bookkeeping
+    // (review #338-followup-3): restarts are skipped when already running
+    // in the target phase, so a micArmed/liveMode toggle with no phase
+    // change doesn't churn the AudioRecord. Plain holder, not state —
+    // only the effects below touch it, and the keys drive restarts.
+    val detectCtl = remember(tab) { DetectCtl() }
     LaunchedEffect(detectPhase, liveMode, micArmed) {
-        val phaseChanged = detectPhase != lastDetectPhase
-        lastDetectPhase = detectPhase
-        if (detecting && (phaseChanged || !detectorRunning)) {
+        val phaseChanged = detectPhase != detectCtl.phase
+        detectCtl.phase = detectPhase
+        if (detecting && (phaseChanged || !detectCtl.running)) {
             // Fresh start per phase (never a carried calibration): stop
             // first, the same rapid-restart shape LiveInterrupt is built for.
+            // Started in the composition scope, not this effect's
+            // (review #338-followup-2): an effect restart must not cancel
+            // the old detector job out from under the new AudioRecord —
+            // the explicit stop() below is the only lifetime manager.
             interrupt.stop()
-            detectorRunning = false
+            detectCtl.running = false
             // A start failure here does NOT clear micArmed (review #338-3):
             // contention with a dying recorder reads the same as a dead
             // mic, and a sticky downgrade would end detection for the whole
             // session. The next phase change retries; a truly dead mic
             // fails fast each time and the loop runs tap-to-talk.
-            detectorRunning = interrupt.start(this)
-        } else if (!detecting && detectorRunning) {
+            detectCtl.running = interrupt.start(scope)
+        } else if (!detecting && detectCtl.running) {
             interrupt.stop()
-            detectorRunning = false
+            detectCtl.running = false
         }
         if (wasSpeaking && speakingKey == null && liveMode && !state.streaming) {
             liveListen()
@@ -1068,12 +1086,15 @@ internal fun ChatScreen(
     // at once, but only one cue can play) — the whole batch still counts
     // as announced. Cues use live-cue-* keys: the driver above keeps the
     // detector off for them, and their completion never starts listening.
-    LaunchedEffect(liveMode, state.streaming, state.activeTools, state.activeToolLabel) {
+    LaunchedEffect(liveMode, state.streaming, state.activeTools, state.activeToolLabel, ttsReady) {
         if (!liveMode || !state.streaming || state.activeTools.isEmpty()) return@LaunchedEffect
-        // Skip cues while TTS isn't up (review #338-5): toggle() would park
-        // the cue in `pending` and speak it late — possibly after the turn —
-        // with no speakingKey while parked, so the detector stays armed.
-        if (!tts.isReady) return@LaunchedEffect
+        // Skip cues while TTS isn't up (review #338-5, followup-1): toggle()
+        // would park the cue in `pending` and speak it late — possibly after
+        // the turn — with no speakingKey while parked, so the detector stays
+        // armed. Readiness is collected state, so a late init re-fires this
+        // effect and the missed set still cues instead of being lost (the
+        // early return below leaves announcedTools untouched on purpose).
+        if (!ttsReady) return@LaunchedEffect
         val newTools = state.activeTools - announcedTools.toSet()
         val labelChanged = state.activeToolLabel != announcedLabel
         // Set-equality for tools (review #338-1/2): a reorder with no new
