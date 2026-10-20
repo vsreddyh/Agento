@@ -7,6 +7,7 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
 import android.util.Base64
+import android.util.Log
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -176,6 +177,28 @@ fun formatBytes(bytes: Long): String {
 }
 
 /**
+ * Maps a read failure onto the named error family (#339). Our own throws
+ * (oversize, stall, unreadable — all starting "Couldn't"/"Photo"/"That")
+ * pass through; system throwables (SecurityException on a revoked picker
+ * grant, FileNotFoundException, provider errors) become the generic
+ * unreadable-photo error. Raw publisher wording ("Permission Denial…")
+ * is logcat-only — the toast contract is named errors, never system text.
+ */
+private fun namedReadError(e: Throwable): Throwable {
+    runCatching { Log.w("ChatAttachments", "photo read failed", e) }
+    val msg = e.message.orEmpty()
+    return if (msg.startsWith("Couldn't") || msg.startsWith("Photo too large") ||
+        msg.startsWith("That file")
+    ) {
+        e
+    } else {
+        IllegalArgumentException(
+            "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
+        )
+    }
+}
+
+/**
  * Reads [uri] (gallery pick or camera capture) into a bounded [ChatAttachment].
  *
  * Bounds-first: the image is sampled down during decode and scaled to
@@ -233,12 +256,13 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     total += n
                     // The shrink happens after the read, so the ORIGINAL
                     // needs its own bound — far above any real photo, far
-                    // below an OOM from a mislabeled video file.
+                    // below an OOM from a mislabeled video file. Names only
+                    // the cap (#339): total is bytes-read-so-far, so quoting
+                    // it would present a partial count as the file's size.
                     if (total > MAX_SOURCE_BYTES) {
                         throw IllegalStateException(
                             "That file is too large to attach " +
-                                "(${formatBytes(total)}) — the original must be " +
-                                "under about ${formatBytes(MAX_SOURCE_BYTES.toLong())}.",
+                                "(over about ${formatBytes(MAX_SOURCE_BYTES.toLong())}).",
                         )
                     }
                     out.write(buf, 0, n)
@@ -378,6 +402,10 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     "Pick a different photo.",
             )
             ChatAttachment(mimeType = "image/jpeg", base64 = final)
+        }.let { result ->
+            // Remap system throwables onto the named family; ours pass
+            // through untouched (see namedReadError).
+            result.exceptionOrNull()?.let { Result.failure(namedReadError(it)) } ?: result
         }
     }
 

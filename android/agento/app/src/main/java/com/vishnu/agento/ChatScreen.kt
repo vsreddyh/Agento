@@ -128,14 +128,10 @@ private fun AttachmentThumb(
     // identical payloads from aliasing one thumbnail. Decoded off-main:
     // ~1 MB Base64.decode + decodeByteArray during composition janks
     // low-end scroll, so produceState moves it to IO (placeholder shows
-    // until it lands). No manual recycle (#339): awaitDispose { recycle() }
-    // can pull pixels from under a late outgoing draw — ~256px thumbnails
-    // are GC-cheap, and prompt freeing is not worth a crash class.
+    // until it lands). No manual recycle: it can pull pixels from under a
+    // late outgoing draw ("trying to use a recycled bitmap") — ~256px
+    // thumbnails are GC-cheap, and prompt freeing is not worth a crash.
     val thumbKey = Triple(base64.length, base64.hashCode(), slot)
-    // No manual recycle (#339): awaitDispose { recycle() } can pull pixels
-    // from under a late outgoing draw ("trying to use a recycled bitmap").
-    // ~256px thumbnails are GC-cheap via the native allocation registry —
-    // prompt freeing is not worth a crash class.
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
         value = withContext(Dispatchers.IO) {
             runCatching { decodeThumbnail(base64) }.getOrNull()
@@ -242,11 +238,16 @@ internal fun ChatTab(
     // app is foreground restores cameraPath, and sweeping its file would
     // turn the returning capture into a "moved or deleted" error.
     LaunchedEffect(Unit) {
-        runCatching {
-            val keep = cameraPath
-            context.cacheDir.resolve("camera").takeIf { it.exists() }?.listFiles()
-                ?.filter { it.absolutePath != keep }
-                ?.forEach { runCatching { it.delete() } }
+        // Off-main (#339): directory listing + deletes are disk IO, and
+        // this effect runs on every first composition including post-rotation.
+        // The keep-path reads on Main (snapshot state stays on-thread).
+        val keep = cameraPath
+        withContext(Dispatchers.IO) {
+            runCatching {
+                context.cacheDir.resolve("camera").takeIf { it.exists() }?.listFiles()
+                    ?.filter { it.absolutePath != keep }
+                    ?.forEach { runCatching { it.delete() } }
+            }
         }
     }
     // One decode at a time, in pick order: each photo lands (or its named
@@ -1437,13 +1438,19 @@ internal fun ChatScreen(
                     endLive()
                 } else {
                     silentRounds = 0
+                    // Staging reads come from the VM, not the snapshot
+                    // (#339): the composition state can lag by a
+                    // recomposition, and a stale-empty read here takes the
+                    // auto-send branch — the exact wrong-image send the
+                    // gate exists to prevent.
+                    val staged = vm.pendingAttachmentCount() > 0
                     // Append when photos are staged (#339): the confirming
                     // tap comes later, so each sentence must accumulate like
                     // the one-shot mic path below — replacing would discard
                     // every sentence but the last.
                     val cur = state.pending
                     onPending(
-                        if (cur.isBlank() || state.pendingAttachments.isEmpty()) {
+                        if (cur.isBlank() || !staged) {
                             heard
                         } else {
                             "${cur.trimEnd()} $heard"
@@ -1453,7 +1460,7 @@ internal fun ChatScreen(
                     // auto-send by design, but background speech firing a
                     // staged-photo turn with no confirmation is a
                     // wrong-image send. Text parks for the tap instead.
-                    if (state.pendingAttachments.isEmpty()) {
+                    if (!staged) {
                         onSend()
                     } else {
                         onLiveStagedPhotos()
