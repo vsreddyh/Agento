@@ -36,7 +36,10 @@ func NewMemoryStore() *MemoryStore {
 // only at the callers: MaxText is a store invariant, and a future caller that
 // forgets CleanText must not be able to store a 10KB item or "".
 func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
-	if strings.TrimSpace(i.Profile) == "" {
+	// Trimmed on write so " chat " cannot fork an isolated namespace that
+	// reads under "chat" 404; the check and the stored value must agree.
+	i.Profile = strings.TrimSpace(i.Profile)
+	if i.Profile == "" {
 		return Item{}, NewStoreError("memory item needs a profile", false)
 	}
 	i.Text = CleanText(i.Text)

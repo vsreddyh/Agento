@@ -102,6 +102,9 @@ func main() {
 			"\"wants weekly reports as a table\", not \"likes tables\"). The item is saved as PENDING and shown in the app; the user confirms it before it affects answers. " +
 			"Call this when they correct you or state a lasting preference, not for passing context or anything they have not said. Do not save secrets, credentials or one-off details."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in saveMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
+			if !memory.UsableTopic(in.Topic) {
+				return result(map[string]any{"ok": false, "error": "topic must contain a letter or digit"})
+			}
 			trimmed := strings.TrimSpace(in.Text)
 			text := memory.CleanText(in.Text)
 			if text == "" {

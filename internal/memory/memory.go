@@ -162,9 +162,9 @@ func NormalizeTopic(topic string) string {
 
 // UsableTopic reports whether a raw topic string names a real topic. Empty
 // and punctuation-only strings would silently normalise to DefaultTopic and
-// re-categorise the item; a topic that already spells general passes. Both
-// writers (POST and PUT) enforce this so create is not lenient where update
-// is strict.
+// re-categorise the item; a topic that already spells general passes. All
+// three writers (POST, PUT, save_memory) enforce this so no path is lenient
+// where the others are strict.
 func UsableTopic(raw string) bool {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {

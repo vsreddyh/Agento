@@ -61,7 +61,11 @@ func memoryError(w http.ResponseWriter, err error) {
 	apiError(w, http.StatusBadRequest, "invalid_request_error", "", bounded(err.Error()))
 }
 
-// memoryCtx bounds one store call: memory is a local read, not a model turn.
+// memoryCtx bounds the request's store calls: memory is a local read, not a
+// model turn. One deadline covers both calls (list, then paused topics) on
+// purpose: separate budgets would only move the same 5s around, and the
+// failure modes are already split — a list failure 502s, a paused failure
+// degrades with a warning.
 func memoryCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
@@ -114,6 +118,13 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request, rest, prof
 		if body.Paused == nil {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "paused",
 				"paused is required (true pauses, false resumes)")
+			return
+		}
+		// A typo must not pause the default topic the user never named:
+		// the same UsableTopic rule as item writes.
+		if !memory.UsableTopic(topic) {
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "topic",
+				memoryTopicError(topic))
 			return
 		}
 		ctx, cancel := memoryCtx(r)
@@ -180,6 +191,8 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 		if raw := strings.TrimSpace(r.URL.Query().Get("topic")); raw != "" {
 			f.Topic = memory.NormalizeTopic(raw)
 		}
+		// limit=0 means the default (ListCap here), not "no rows": 0 is the
+		// Go zero value for "unspecified", and the store maps <=0 to the cap.
 		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 			n, err := strconv.Atoi(raw)
 			if err != nil || n < 0 {

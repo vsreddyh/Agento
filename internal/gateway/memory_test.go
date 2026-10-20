@@ -259,4 +259,8 @@ func TestMemoryEmptyTopicAndNullPaused(t *testing.T) {
 	if rec := do(t, srv, http.MethodPost, "/api/memory/forget/", ""); rec.Code != http.StatusOK {
 		t.Fatalf("forget/: %d, want 200 (%s)", rec.Code, rec.Body)
 	}
+	// Pausing a junk topic 400s instead of pausing general by typo.
+	if rec := do(t, srv, http.MethodPut, "/api/memory/topics/---", `{"paused":true}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("pause ---: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
 }

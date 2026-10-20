@@ -67,7 +67,9 @@ func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
 	if i.ID == "" {
 		i.ID = NewID()
 	}
-	if strings.TrimSpace(i.Profile) == "" {
+	// Trimmed on write; see MemoryStore.Create.
+	i.Profile = strings.TrimSpace(i.Profile)
+	if i.Profile == "" {
 		return Item{}, NewStoreError("memory item needs a profile", false)
 	}
 	i.Text = CleanText(i.Text)
