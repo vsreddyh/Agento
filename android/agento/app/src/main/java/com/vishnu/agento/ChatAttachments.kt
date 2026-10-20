@@ -569,14 +569,18 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 // via negative scale, which createBitmap applies directly.
                 // Mapping follows the EXIF orientation semantics (CIPA DC-008 /
                 // AOSP ExifInterface: TRANSPOSE = 90° + horizontal mirror,
-                // TRANSVERSE = 270° + horizontal mirror). The Bitmap path is
-                // JVM-untestable by design (stubbed android.jar), so the
-                // reference — not a test — is what pins this; do not "simplify"
-                // the mirror cases into pure rotations. Pinned matrix, all 8
-                // values (#339): 1=identity, 2=flip-H, 3=rot180, 4=flip-V,
-                // 5=transpose(rot90+flip-H), 6=rot90, 7=transverse(rot270+flip-H),
-                // 8=rot270 — pre vs post picks which side of the rotation the
-                // mirror lands on, which is exactly the 5-vs-7 distinction.
+                // TRANSVERSE = 270° + horizontal mirror). The mirror composes
+                // AFTER the rotation (preScale on a setRotate matrix), so the
+                // rotated result is what gets mirrored — postScale would
+                // mirror first and swap the two cases (verified by tracing a
+                // 2x1 probe image through both orders, not just by reading
+                // the reference). The Bitmap path is JVM-untestable by
+                // design (stubbed android.jar), so this derivation — not a
+                // test — is what pins it; do not "simplify" the mirror cases
+                // into pure rotations. Pinned matrix, all 8 values (#339):
+                // 1=identity, 2=flip-H, 3=rot180, 4=flip-V,
+                // 5=transpose(rot90 then flip-H), 6=rot90,
+                // 7=transverse(rot270 then flip-H), 8=rot270.
                 val matrix: Matrix? = when (orientation) {
                     ExifInterface.ORIENTATION_ROTATE_90 -> Matrix().apply { postRotate(90f) }
                     ExifInterface.ORIENTATION_ROTATE_180 -> Matrix().apply { postRotate(180f) }
@@ -585,11 +589,11 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     ExifInterface.ORIENTATION_FLIP_VERTICAL -> Matrix().apply { preScale(1f, -1f) }
                     ExifInterface.ORIENTATION_TRANSPOSE -> Matrix().apply {
                         postRotate(90f)
-                        postScale(-1f, 1f)
+                        preScale(-1f, 1f)
                     }
                     ExifInterface.ORIENTATION_TRANSVERSE -> Matrix().apply {
                         postRotate(270f)
-                        postScale(-1f, 1f)
+                        preScale(-1f, 1f)
                     }
                     else -> null
                 }

@@ -290,11 +290,10 @@ internal fun ChatTab(
     // Owning thread of the outstanding gallery pick (#339): same hole as
     // camera — open the picker, switch thread while it is open, pick, and
     // result-time homing stages silently into the new composer while the
-    // camera path drops with notice. Snapshot at tap time like the camera
-    // owner above, for the same reason. Plain remember is right: unlike
-    // the camera file there is nothing to sweep-keep — a lost owner only
-    // falls back to current-at-result, the pre-fix behavior.
-    var galleryThread by remember { mutableStateOf<String?>(null) }
+    // camera path drops with notice. Saveable like the camera owner: the
+    // picker result redelivers across rotation, and a stale owner after
+    // death can only mismatch (drop with notice, never mis-stage).
+    var galleryThread by rememberSaveable { mutableStateOf<String?>(null) }
     // Thread-scoped transient UI, same as the editor/menu state inside
     // ChatScreen (#339). Split across parent/child by render site (the
     // dialog renders here, the editor/menu render there) — both fire on
@@ -357,18 +356,20 @@ internal fun ChatTab(
         if (vm.consumeSweepGateReset()) {
             cameraPendingSince = 0L
         }
-        // Age out orphans, keep only the live capture (#339): a restored
-        // keep exempts its file forever, and no later sweep revisits it —
-        // so exemption is by path AND freshness. Anything older than the
-        // stale bound is an orphan by definition (no live batch or intent
-        // outlives it), mtime-persisted across the death that orphaned it.
+        // Age out orphans, keep the live capture UNCONDITIONALLY (#339):
+        // a restored keep older than the bound is still the file the
+        // returning camera may be writing to — death with camera
+        // foreground long ago restores keep + aged file, and sweeping it
+        // turns a good capture into "moved or deleted". Only non-keep
+        // orphans age out (mtime-persisted across the death that orphaned
+        // them); the keep file's own batch/callback owns its lifecycle.
         val sweepDir = appCacheDir.resolve("camera")
         withContext(Dispatchers.IO) {
             runCatching {
                 val now = System.currentTimeMillis()
                 sweepDir.takeIf { it.exists() }?.listFiles()
                     ?.filter {
-                        it.absolutePath != keep ||
+                        it.absolutePath != keep &&
                             now - it.lastModified() > CAMERA_PENDING_STALE_MS
                     }
                     ?.forEach { runCatching { it.delete() } }
@@ -469,7 +470,16 @@ internal fun ChatTab(
             onBatchDone()
             return
         }
+        // Try-entry proof for the TOCTOU below (#339).
+        var batchStarted = false
         scope.launch(Dispatchers.IO, CoroutineStart.UNDISPATCHED) {
+            // First statement: try-entry proof (#339). Combined with
+            // UNDISPATCHED (body starts synchronously inside launch()),
+            // the post-launch check below can tell "body never ran"
+            // (scope died between the isActive check and launch) from
+            // "body ran" — and settle the never-ran case inline, since
+            // its finally/onBatchDone will never fire.
+            batchStarted = true
             // Landed count for the cancel notice below: only a batch that
             // staged something before dying has anything to report.
             var landed = 0
@@ -562,6 +572,16 @@ internal fun ChatTab(
                 runCatching { cleanup?.takeIf { it.exists() }?.delete() }
                 withContext(Dispatchers.Main + NonCancellable) { onBatchDone() }
             }
+        }
+        // Never-ran settle (#339): with UNDISPATCHED above, a live scope
+        // runs the body (and its first statement) synchronously inside
+        // launch() — so batchStarted == false here proves the scope died
+        // in the TOCTOU window and the finally above never ran. Settle
+        // inline on Main (this thread): the capture deletes best-effort
+        // via helper (IO), the flag resets directly.
+        if (!batchStarted) {
+            deleteQuietly(cleanup)
+            onBatchDone()
         }
     }
     val galleryLauncher = rememberLauncherForActivityResult(
@@ -704,6 +724,12 @@ internal fun ChatTab(
             }
         }
     }
+    // Asked-before flag for rationale routing (#339): the API returns
+    // false for both first-denial (some OEMs) and permanent denial, so
+    // without history a first deny jumps straight to the Settings dialog.
+    // false+never-asked → toast; false+asked → Settings. Saveable: a
+    // rotation between request and result must not lose the ask.
+    var cameraAskedBefore by rememberSaveable { mutableStateOf(false) }
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -721,7 +747,7 @@ internal fun ChatTab(
                 androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
                     it, Manifest.permission.CAMERA,
                 )
-            } != true
+            } != true && cameraAskedBefore
         ) {
             // Permanent denial ("Don't allow again"): the request UI will
             // never show again, so a re-toast loops forever (#339). The
@@ -756,8 +782,10 @@ internal fun ChatTab(
             // permission requests (OEM-dependent second-request behavior).
             // Cleared on settle below; a rotation between request and
             // result keeps it via saveable, and the stale bound covers
-            // death — same lifecycle as the launch gate.
+            // death — same lifecycle as the launch gate. Asked flag arms
+            // alongside for rationale routing (first vs permanent denial).
             cameraPendingSince = SystemClock.elapsedRealtime()
+            cameraAskedBefore = true
             cameraPermission.launch(Manifest.permission.CAMERA)
         }
     }

@@ -766,6 +766,11 @@ internal fun NotificationsSection() {
     }
 }
 
+/** Backup size past which the export status warns (#339): thread files
+ * ride wholesale (photo payloads included), so a photo-heavy backup
+ * restores slowly — worth one line, not a block. */
+private const val BACKUP_LARGE_BYTES = 5_000_000
+
 /** Issue #16: manual settings export/import. SAF pickers need no storage
  * permission; the file the user keeps survives any reinstall gap that outlives
  * cloud backup. [onImported] reloads the on-screen fields from prefs. */
@@ -789,13 +794,26 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
+                    // Sized for the photo-thread warning below (#339): the
+                    // export holds thread files wholesale, payloads
+                    // included, so photo-heavy threads make for slow
+                    // restores — worth one line when large, silent when not.
+                    val bytes = SettingsBackup.export(context).toString(2).toByteArray()
                     context.contentResolver.openOutputStream(uri)?.use { out ->
-                        out.write(SettingsBackup.export(context).toString(2).toByteArray())
+                        out.write(bytes)
                     } ?: throw IllegalStateException("Could not open the selected file for writing")
+                    bytes.size
                 }
             }
             status = result.fold(
-                onSuccess = { Toasts.EXPORTED },
+                onSuccess = { size ->
+                    if (size > BACKUP_LARGE_BYTES) {
+                        Toasts.EXPORTED + " Large backup (${formatBytes(size.toLong())}) — " +
+                            "photo threads make restores slow."
+                    } else {
+                        Toasts.EXPORTED
+                    }
+                },
                 onFailure = { e -> e.message ?: e.javaClass.simpleName },
             )
             failed = result.isFailure

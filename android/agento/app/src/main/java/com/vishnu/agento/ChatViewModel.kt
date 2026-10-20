@@ -1893,7 +1893,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Staged composer photos are deliberately NOT cleared here (unlike
         // send()): send() clears because the staged photos WERE sent, while
         // this sends the edited turn's carried photos — wiping the
-        // composer's unrelated staging would destroy user input.
+        // composer's unrelated staging would destroy user input. Same for
+        // typed text (#339): the draft parks back in the composer instead
+        // of vaporizing — it stays sendable/queueable behind the new turn.
+        val draft = _state.value.pending
         val history = msgs.take(index) +
             ChatMessage(
                 "user",
@@ -1901,7 +1904,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 ChatThreads.now(),
                 attachments = msgs[index].attachments.wiredPhotos(),
             )
-        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+        _state.value = _state.value.copy(messages = history, pending = draft, streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }
 
@@ -1946,10 +1949,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         stopApprovalWatch()
         retargetApprovals()
         retargetMemory()
+        // Typed draft parks back like Replace above (#339): forking must
+        // not eat composer text either — it stays sendable behind the turn
+        // on the new thread.
+        val forkDraft = _state.value.pending
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
-            error = "", pending = "", streaming = true, queued = "",
+            error = "", pending = forkDraft, streaming = true, queued = "",
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
             activeRunId = "", busyRunId = "",
@@ -2523,15 +2530,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * accident and nobody notices until the two disagree about what happens to a queued
      * message after a half-finished turn.
      *
-     * Queued text never overwrites what the user is already typing — if `pending` is
-     * occupied, the queued text is dropped rather than displacing live input. That
-     * asymmetry is deliberate and is the one thing worth remembering about this function.
+     * Concatenated when occupied (#339): like stop()/New/delete/flush,
+     * the queued text joins the live draft with the trimEnd/trimStart
+     * joint instead of dropping — failure/drop paths are where loss
+     * hurts most, so the old drop asymmetry is retired here.
      */
     private fun parkQueued() {
         val s = _state.value
         if (s.queued.isBlank()) return
         _state.value = s.copy(
-            pending = if (s.pending.isBlank()) s.queued else s.pending,
+            pending = if (s.pending.isBlank()) {
+                s.queued
+            } else {
+                "${s.pending.trimEnd()} ${s.queued.trimStart()}"
+            },
             queued = "",
         )
     }
