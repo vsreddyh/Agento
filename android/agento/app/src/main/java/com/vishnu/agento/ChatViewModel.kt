@@ -1015,6 +1015,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private val acting = mutableSetOf<String>()
 
     private fun actOnMemory(
+        /** Namespaced by the caller: "item:\u2026" for rows, "topic:\u2026" for
+         * pauses. Namespacing by kind, not by sniffing the id string, so an
+         * item literally named "topic:x" still keys as an item and can never
+         * collide with a pause key or bare "new"/"forget". */
+        key: String,
         id: String,
         action: suspend (String) -> Result<*>,
         /** Runs on Main after a success: collapses editors, clears composers. */
@@ -1022,12 +1027,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     ) {
         // Both the add here and the remove below run on Main (UI taps and
         // the Main-confined completion), so a plain set is safe; moving
-        // either side off Main needs a lock. Keys are namespaced per
-        // kind — "id:item:…" for rows, "id:topic:…" for pauses — so no item
-        // id, however adversarial ("new", "topic:x", "id:topic:y"), can
-        // collide with another key. Bare "new"/"forget" stay for the
-        // composer and the wipe, which address no row.
-        val key = if (id.startsWith("topic:")) "id:$id" else "id:item:$id"
+        // either side off Main needs a lock.
         if (id.isBlank() || !acting.add(key)) return
         _state.value = _state.value.copy(actingMemory = acting.toSet())
         val path = _state.value.path
@@ -1036,20 +1036,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 acting.remove(key)
                 _state.value = _state.value.copy(actingMemory = acting.toSet())
-                // A profile/thread switch mid-write: the write landed on the
-                // old profile, so its success must not clear the new
-                // profile's composer, repaint the new rows, or badge the new
-                // path. Errors still report — a failed write failed.
-                if (_state.value.path != path) {
-                    if (result.isFailure) {
-                        val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
-                        _state.value = _state.value.copy(
-                            memoryError = "Memory update failed" +
-                                (code?.let { " (HTTP $it)" } ?: "") + " — try again.",
-                        )
-                    }
-                    return@withContext
-                }
+                // A switch mid-write retires the whole completion: the
+                // write belonged to the old profile, so neither its success
+                // (repaint/badge) nor its failure (sheet error) may land on
+                // the new one.
+                if (_state.value.path != path) return@withContext
                 val code = ApprovalsApi.httpCode(result.exceptionOrNull()?.message)
                 if (result.isFailure) {
                     _state.value = _state.value.copy(
@@ -1070,11 +1061,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Confirms a pending proposal: it joins the next turn's prompt. */
     fun confirmMemory(id: String) =
-        actOnMemory(id, action = { path -> memoryApi.updateMemory(path, id, status = "confirmed") })
+        actOnMemory("item:$id", id, action = { path -> memoryApi.updateMemory(path, id, status = "confirmed") })
 
     /** Deletes one item: it is gone from the next turn. */
     fun deleteMemory(id: String) =
-        actOnMemory(id, action = { path -> memoryApi.deleteMemory(path, id) })
+        actOnMemory("item:$id", id, action = { path -> memoryApi.deleteMemory(path, id) })
 
     /** Saves an edit to text and/or topic. Trims like create: a
      * whitespace-only edit is a validation error here, not a server 400,
@@ -1089,6 +1080,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         val keepTopic = topic.trim()
         actOnMemory(
+            key = "item:$id",
             id = id,
             action = { path ->
                 memoryApi.updateMemory(
@@ -1105,7 +1097,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * …/topics/ is a 404), so it never fires. */
     fun toggleMemoryPause(topic: String, paused: Boolean) {
         if (topic.isBlank()) return
-        actOnMemory("topic:$topic", action = { path -> memoryApi.setTopicPaused(path, topic, paused) })
+        actOnMemory("topic:$topic", topic, action = { path -> memoryApi.setTopicPaused(path, topic, paused) })
     }
 
     /** Writes a user item: confirmed on arrival, no review loop for the

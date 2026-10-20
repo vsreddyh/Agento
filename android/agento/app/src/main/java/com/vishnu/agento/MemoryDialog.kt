@@ -41,8 +41,8 @@ internal fun MemoryDialog(
     warnings: List<String>,
     loading: Boolean,
     error: String,
-    /** Write keys in flight — "id:item:\u2026" for rows, "id:topic:\u2026"
-     * for pauses, bare "new"/"forget" for the composer and wipe. A listed
+    /** Write keys in flight — "item:\u2026" for rows, "topic:\u2026" for
+     * pauses, bare "new"/"forget" for the composer and wipe. A listed
      * key disables its buttons so a double tap cannot fire two writes. */
     acting: Set<String> = emptySet(),
     onConfirm: (String) -> Unit,
@@ -138,7 +138,7 @@ internal fun MemoryDialog(
                                     editTopic = editTopic,
                                     onEditText = { editText = it },
                                     onEditTopic = { editTopic = it },
-                                    busy = "id:item:${item.id}" in acting,
+                                    busy = "item:${item.id}" in acting,
                                     onStartEdit = {
                                         editingId = item.id
                                         editText = item.text
@@ -171,7 +171,7 @@ internal fun MemoryDialog(
                                     editTopic = editTopic,
                                     onEditText = { editText = it },
                                     onEditTopic = { editTopic = it },
-                                    busy = "id:item:${item.id}" in acting,
+                                    busy = "item:${item.id}" in acting,
                                     onStartEdit = {
                                         editingId = item.id
                                         editText = item.text
@@ -212,7 +212,7 @@ internal fun MemoryDialog(
                                 ) {
                                     for (topic in pair) {
                                         val isPaused = topic in paused
-                                        val busy = "id:topic:$topic" in acting
+                                        val busy = "topic:$topic" in acting
                                         TextButton(
                                             onClick = { onTogglePause(topic, !isPaused) },
                                             enabled = !busy,
