@@ -86,6 +86,12 @@ func checkURL(raw string) (*url.URL, error) {
 	if scheme := strings.ToLower(u.Scheme); scheme != "http" && scheme != "https" {
 		return nil, fmt.Errorf("only http and https urls are allowed, not %q", u.Scheme)
 	}
+	// Web ports only: the approval gate is per-domain, not per-port, and a
+	// https://host:22/ URL would otherwise buy a raw TCP tunnel the human
+	// never approved as anything but a web page.
+	if port := u.Port(); port != "" && port != "80" && port != "443" {
+		return nil, fmt.Errorf("only ports 80 and 443 are allowed, not %q", port)
+	}
 	if u.User != nil {
 		return nil, fmt.Errorf("urls with credentials are not allowed")
 	}
@@ -225,8 +231,9 @@ func (ss *sessions) get(profile string) *session {
 // their Chromium + proxy listener stop. Disk-only pruning would leave a
 // months-old browser running with its profile dir deleted from under it,
 // and live browsers would accumulate one Chromium per touched profile with
-// no idle close path (no close tool by design). All state here is touched
-// under ss.mu only, so no session lock is needed.
+// no idle close path (no close tool by design). Caller holds ss.mu; the
+// session lock is taken per session for hygiene (unreachable in practice
+// at a 30d TTL, but a short TTL under -race would flag it).
 func (ss *sessions) evictIdle() {
 	cutoff := time.Now().Add(-sessionTTL)
 	for profile, s := range ss.byProfile {
@@ -234,6 +241,8 @@ func (ss *sessions) evictIdle() {
 			continue
 		}
 		log.Printf("browser: evicting idle session %s", profile)
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		if s.browserCancel != nil {
 			s.browserCancel()
 		}
@@ -434,21 +443,27 @@ func main() {
 			if err != nil {
 				return fail(err)
 			}
-			readCtx, cancel := context.WithTimeout(bctx, readTimeout)
-			defer cancel()
-			url, err := chromedp.Run(readCtx, chromedp.Location())
+			// Own budgets per step, like evidence: location, title and
+			// text each get 30s instead of sharing one deadline.
+			url, err := runStep(bctx, func(ctx context.Context) (string, error) {
+				return chromedp.Run(ctx, chromedp.Location())
+			})
 			if err == nil && (url == "" || url == "about:blank") {
 				return result(map[string]any{"ok": false, "error": "no page yet: browser_goto first"})
 			}
 			if err != nil {
 				return fail(fmt.Errorf("read failed: %v", err))
 			}
-			title, err := chromedp.Run(readCtx, chromedp.Title())
+			title, err := runStep(bctx, func(ctx context.Context) (string, error) {
+				return chromedp.Run(ctx, chromedp.Title())
+			})
 			if err != nil {
 				return fail(fmt.Errorf("read failed: %v", err))
 			}
-			text, err := chromedp.Run(readCtx,
-				chromedp.Evaluate[string](`document.body ? document.body.innerText : ""`))
+			text, err := runStep(bctx, func(ctx context.Context) (string, error) {
+				return chromedp.Run(ctx,
+					chromedp.Evaluate[string](`document.body ? document.body.innerText : ""`))
+			})
 			if err != nil {
 				return fail(fmt.Errorf("read failed: %v", err))
 			}
@@ -595,13 +610,26 @@ func orDefault(s, fallback string) string {
 	return s
 }
 
+// collapseLines trims each line and collapses blank runs to one: paragraph
+// breaks survive as a single blank line instead of merging everything into
+// one newline-joined run.
 func collapseLines(s string) string {
 	lines := strings.Split(s, "\n")
 	out := make([]string, 0, len(lines))
+	blank := false
 	for _, l := range lines {
 		if t := strings.TrimSpace(l); t != "" {
 			out = append(out, t)
+			blank = false
+		} else if !blank && len(out) > 0 {
+			out = append(out, "")
+			blank = true
 		}
+	}
+	// No trailing blank: the input's final newline is a terminator, not a
+	// paragraph.
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
 	}
 	return strings.Join(out, "\n")
 }
@@ -611,8 +639,14 @@ func collapseLines(s string) string {
 // profile passed the safe-name gate at startup.
 func evidenceDir() (string, error) {
 	// Millisecond precision: two saves in the same second must not share
-	// a dir and silently overwrite each other's shot.png.
-	name := profile + "-" + time.Now().UTC().Format("20060102-150405.000")
+	// a dir and silently overwrite each other's shot.png. The profile is
+	// capped first: safeName allows 64 chars and the timestamp adds 20, so
+	// a long-but-legal profile would fail its own jail below.
+	p := profile
+	if len(p) > 32 {
+		p = p[:32]
+	}
+	name := p + "-" + time.Now().UTC().Format("20060102-150405.000")
 	// exports already ends in /browser (default /exports/browser): the
 	// timestamped dir hangs directly under it, never nested twice.
 	return jailPath(exports, name)

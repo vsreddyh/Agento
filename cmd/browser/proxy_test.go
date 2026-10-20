@@ -9,13 +9,17 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The proxy tests inject a permissive check so loopback test servers can
 // connect; the default publicIP path is pinned separately by the SSRF tests
 // (a 403 for loopback proves the production check engages).
 func testProxy() *filteringProxy {
-	return &filteringProxy{check: func(net.IP) bool { return true }}
+	return &filteringProxy{
+		check:     func(net.IP) bool { return true },
+		allowPort: func(string) bool { return true },
+	}
 }
 
 func TestProxyConnectTunnels(t *testing.T) {
@@ -72,6 +76,27 @@ func TestProxyRefusesLoopbackByDefault(t *testing.T) {
 	n, _ := conn.Read(buf)
 	if !strings.Contains(string(buf[:n]), "403") {
 		t.Fatalf("loopback CONNECT status = %q, want 403", buf[:n])
+	}
+}
+
+func TestProxyPortRule(t *testing.T) {
+	// Permissive IPs but default ports: an ephemeral test port must 403.
+	proxy := &filteringProxy{check: func(net.IP) bool { return true }}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer backend.Close()
+	u, _ := url.Parse(backend.URL)
+	psrv := httptest.NewServer(proxy)
+	defer psrv.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(psrv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", u.Host, u.Host)
+	conn.(*net.TCPConn).SetReadDeadline(time.Now().Add(2 * time.Second))
+	out, _ := io.ReadAll(conn)
+	if got := string(out); !strings.Contains(got, "403") || !strings.Contains(got, "ports") {
+		t.Fatalf("ephemeral-port CONNECT = %q, want a 403 naming ports", got)
 	}
 }
 

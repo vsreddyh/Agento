@@ -77,7 +77,7 @@ func TestJailPath(t *testing.T) {
 
 func TestCollapseLines(t *testing.T) {
 	got := collapseLines("  hello  \n\n   \nworld\n\n")
-	if got != "hello\nworld" {
+	if got != "hello\n\nworld" {
 		t.Fatalf("collapse = %q", got)
 	}
 }

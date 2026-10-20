@@ -31,7 +31,12 @@ type filteringProxy struct {
 	// check approves one resolved IP. publicIP in production; permissive
 	// in tests, where loopback test servers must connect.
 	check func(net.IP) bool
+	// allowPort approves a destination port. Web ports in production;
+	// tests listen on ephemeral ports and open it up.
+	allowPort func(port string) bool
 }
+
+func webPorts(port string) bool { return port == "80" || port == "443" }
 
 func (p *filteringProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
@@ -58,6 +63,15 @@ func (p *filteringProxy) dialChecked(ctx context.Context, host, port string) (ne
 	if err != nil || len(ips) == 0 {
 		return nil, fmt.Errorf("cannot resolve %q", host)
 	}
+	// Same port rule as checkURL: the proxy polices redirects and
+	// re-resolutions, which never see the first gate.
+	allow := p.allowPort
+	if allow == nil {
+		allow = webPorts
+	}
+	if !allow(port) {
+		return nil, fmt.Errorf("only ports 80 and 443 are allowed, not %q", port)
+	}
 	for _, ip := range ips {
 		if !p.check(ip) {
 			continue
@@ -70,8 +84,8 @@ func (p *filteringProxy) dialChecked(ctx context.Context, host, port string) (ne
 	return nil, fmt.Errorf("no allowed address for %q", host)
 }
 
-func deny(w http.ResponseWriter, host string) {
-	http.Error(w, fmt.Sprintf("forbidden target %q", host), http.StatusForbidden)
+func deny(w http.ResponseWriter, msg string) {
+	http.Error(w, msg, http.StatusForbidden)
 }
 
 func (p *filteringProxy) serveConnect(w http.ResponseWriter, r *http.Request) {
@@ -82,13 +96,13 @@ func (p *filteringProxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	target, err := p.dialChecked(r.Context(), host, port)
 	if err != nil {
-		deny(w, host)
+		deny(w, err.Error())
 		return
 	}
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		target.Close()
-		deny(w, host)
+		deny(w, "tunnel unavailable")
 		return
 	}
 	conn, _, err := hj.Hijack()
@@ -110,7 +124,7 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	// Forward proxies receive the absolute URI. Anything else is a
 	// misdirected request, not something to interpret.
 	if !r.URL.IsAbs() || r.URL.Host == "" {
-		deny(w, r.RequestURI)
+		deny(w, fmt.Sprintf("bad request target %q", r.RequestURI))
 		return
 	}
 	port := r.URL.Port()
@@ -123,7 +137,7 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	}
 	target, err := p.dialChecked(r.Context(), r.URL.Hostname(), port)
 	if err != nil {
-		deny(w, r.URL.Hostname())
+		deny(w, err.Error())
 		return
 	}
 	defer target.Close()
@@ -133,10 +147,14 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	// credentials, which are ours, not the origin's.
 	upstream := r.Clone(r.Context())
 	upstream.URL.Scheme, upstream.URL.Host = "", ""
+	// Userinfo never forwards: checkURL rejects it on the first URL, so any
+	// here arrived via redirect — exactly the path this proxy polices.
+	upstream.URL.User = nil
 	upstream.RequestURI = ""
 	stripHopHeaders(upstream.Header)
 	upstream.Header.Del("Proxy-Authorization")
 	upstream.Header.Del("Proxy-Authenticate")
+	upstream.Header.Del("Authorization")
 	if err := upstream.Write(target); err != nil {
 		return
 	}
@@ -145,6 +163,9 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	// Hop-by-hop headers describe the proxy-to-origin hop, not the
+	// client-facing one; copying them verbatim confuses keep-alive reuse.
+	stripHopHeaders(resp.Header)
 	for k, vs := range resp.Header {
 		for _, v := range vs {
 			w.Header().Add(k, v)
