@@ -611,15 +611,15 @@ class ChatApi(context: Context) {
         // 413. Phrased for the turn's actual contents below: photos when
         // it carries them, thread-shortening when it doesn't.
         val raw = payload.toString()
-        // Sized in bytes at send time (#339): one transient encode of a
-        // body already fully in memory, exact where a char count lies for
-        // non-ASCII history. Charset explicit: the platform default is
-        // UTF-8 in practice, but only the explicit arg makes the
-        // exactness the comment claims a contract. Transient peak is ~4x
-        // the byte cap for ASCII-heavy turns (2x UTF-16 string + byte copy
-        // + request buffer) — send-path only, never per-frame, so no
-        // steady-state cost.
-        val rawBytes = raw.toByteArray(Charsets.UTF_8).size
+        // Sized from the built body, not a second encode (#339): measuring
+        // via toByteArray() and then sending via toRequestBody() copies the
+        // ~3.5 MB string twice back to back. contentLength() on the built
+        // body is the same bytes OkHttp will write (the JSON media type
+        // declares UTF-8, so no charset ambiguity) — one copy instead of
+        // two, transient peak ~3x instead of ~4x. -1 (unknown length)
+        // refuses too: an unmeasurable body must not sail past the gate.
+        val body = raw.toRequestBody(JSON)
+        val rawBytes = body.contentLength()
         if (wireSizeExceeded(rawBytes)) {
             // Phrased for what's actually measured (#339): rawBytes is the
             // whole request JSON (full thread + framing), so "this turn"
@@ -631,7 +631,7 @@ class ChatApi(context: Context) {
                 messages[lastUserIdx].attachments.wiredPhotoCount() > 0
             trySend(
                 ChatEvent.Error(
-                    "Couldn't send: this conversation is about ${formatBytes(rawBytes.toLong())} " +
+                    "Couldn't send: this conversation is about ${formatBytes(rawBytes)} " +
                         "(limit about ${formatBytes(MAX_CHAT_WIRE_BYTES.toLong())}). " +
                         if (hasPhotos) {
                             "Remove a photo or start a new conversation."
@@ -643,7 +643,6 @@ class ChatApi(context: Context) {
             close()
             return@callbackFlow
         }
-        val body = raw.toRequestBody(JSON)
         val reqBuilder = Request.Builder()
             .url("$base$path/v1/chat/completions")
             .header("Authorization", "Bearer ${password()}")

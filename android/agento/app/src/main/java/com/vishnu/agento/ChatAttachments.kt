@@ -62,6 +62,12 @@ fun List<ChatAttachment>.wiredPhotoCount(): Int =
  * wire/display/cap contract. */
 private fun ChatAttachment.isWired(): Boolean = base64.isNotBlank()
 
+/** Wired payloads with their staged indices (#339): the strip renders
+ * wired but removes by staged slot, so it needs both — without
+ * re-rolling the predicate (or the remove index) at the call site. */
+fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachment>> =
+    mapIndexedNotNull { i, a -> if (a.isWired()) IndexedValue(i, a) else null }
+
 /** Max photos per turn (#318). Two is the acceptance bar (two images in one
  * turn render and reach the agent); the cap keeps the wire body under the
  * gateway's 4 MiB limit (see the invariant test in [ChatAttachmentsTest]). */
@@ -99,8 +105,9 @@ const val MAX_SOURCE_BYTES = 32_000_000
  * exists to prevent. */
 const val MAX_CHAT_WIRE_BYTES = 3_500_000
 
-/** `true` when a request body of [bytes] must be refused client-side. */
-fun wireSizeExceeded(bytes: Int): Boolean = bytes > MAX_CHAT_WIRE_BYTES
+/** `true` when a request body of [bytes] must be refused client-side. Long:
+ * callers measure `RequestBody.contentLength()`, which is Long (-1 unknown). */
+fun wireSizeExceeded(bytes: Long): Boolean = bytes < 0 || bytes > MAX_CHAT_WIRE_BYTES
 
 /** Wire form of one attachment: the `image_url` data URI the gateway's
  * multipart parser accepts (`internal/gateway/openai.go`). Remote URLs are
@@ -536,18 +543,18 @@ fun decodeThumbnail(base64: String): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        // Long division like the full-size loop (#339): identical exit
-        // behavior, minus the only Int multiplication in any sampling
-        // loop — same overflow discipline everywhere sampling runs.
-        var sample = 1
-        while (bounds.outWidth / sample.toLong() > 256 ||
-            bounds.outHeight / sample.toLong() > 256
+        // Long counter like the full-size loop (#339): same overflow
+        // discipline everywhere sampling runs (toInt only at the
+        // inSampleSize handoff, where the value is provably small).
+        var sample = 1L
+        while (bounds.outWidth / sample > 256 ||
+            bounds.outHeight / sample > 256
         ) {
             sample *= 2
         }
         BitmapFactory.decodeByteArray(
             bytes, 0, bytes.size,
-            BitmapFactory.Options().apply { inSampleSize = sample },
+            BitmapFactory.Options().apply { inSampleSize = sample.toInt() },
         )
     } catch (e: CancellationException) {
         throw e

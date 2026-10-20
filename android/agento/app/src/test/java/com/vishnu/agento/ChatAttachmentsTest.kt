@@ -359,8 +359,9 @@ class ChatAttachmentsTest {
 
     @Test
     fun wirePreflightBoundary() {
-        assertFalse(wireSizeExceeded(MAX_CHAT_WIRE_BYTES))
-        assertTrue(wireSizeExceeded(MAX_CHAT_WIRE_BYTES + 1))
+        assertFalse(wireSizeExceeded(MAX_CHAT_WIRE_BYTES.toLong()))
+        assertTrue(wireSizeExceeded(MAX_CHAT_WIRE_BYTES.toLong() + 1))
+        assertTrue(wireSizeExceeded(-1L))
     }
 
     @Test

@@ -301,6 +301,10 @@ internal fun ChatTab(
     // and sparing the restored capture: rotation/death while the camera
     // app is foreground restores cameraPath, and sweeping its file would
     // turn the returning capture into a "moved or deleted" error.
+    // Hoisted above the effect (#339): the sweep must not dereference
+    // the Activity at all — not even for the resolve line — so the
+    // effect closure never holds it, even briefly.
+    val appCacheDir = context.applicationContext.cacheDir
     LaunchedEffect(Unit) {
         // Off-main (#339): directory listing + deletes are disk IO, and
         // this effect runs on every first composition including post-rotation.
@@ -322,10 +326,11 @@ internal fun ChatTab(
         }
         // Application context for the dir (#339): the IO closure below
         // must capture only this File, never the Activity. The synchronous
-        // pre-IO reads above (this resolve, the Activity cast) retain
-        // nothing past their line — the boundary that matters is what
-        // crosses into IO. Same leak class as the batch decode.
-        val sweepDir = context.applicationContext.cacheDir.resolve("camera")
+        // pre-IO reads above (the keep-path, the Activity cast) run on Main
+        // and retain nothing past their line — the boundary that matters is
+        // what crosses into IO, and appCacheDir (hoisted above the effect)
+        // keeps even the resolve out of the closure.
+        val sweepDir = appCacheDir.resolve("camera")
         withContext(Dispatchers.IO) {
             runCatching {
                 sweepDir.takeIf { it.exists() }?.listFiles()
@@ -2099,9 +2104,7 @@ internal fun ChatScreen(
                     // pairs carry their staged index (for remove) alongside
                     // the wired payload (for render), so a single pass
                     // drives everything and no count can disagree with it.
-                    val stagedSlots = state.pendingAttachments.mapIndexedNotNull { i, a ->
-                        if (a.base64.isNotBlank()) i to a else null
-                    }
+                    val stagedSlots = state.pendingAttachments.wiredPhotosWithIndex()
                     if (stagedSlots.isNotEmpty()) {
                         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
