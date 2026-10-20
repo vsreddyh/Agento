@@ -249,7 +249,9 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request, h *agentHa
 	// committed skill is renamed or removed.
 	// Its own budget, not the Pi call's leftovers: under a slow Pi the
 	// taught rows must not vanish intermittently from their own review tab.
-	tctx, tcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Derived from the request ctx, so a disconnected client still cancels
+	// the store call instead of landing rows after the response is gone.
+	tctx, tcancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer tcancel()
 	if taught, err := s.teach.List(tctx, h.profile); err == nil {
 		seen := make(map[string]bool, len(skills))

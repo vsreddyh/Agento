@@ -131,6 +131,11 @@ __pycache__/
 /miser-money
 /cookbook
 /health-check
+/task-manager
+/project-manager
+/notes
+/memory
+/mcp-gate
 
 # browser runtime state (page dumps, console logs)
 .playwright-mcp/

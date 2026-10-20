@@ -8,26 +8,6 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
-## [5.9.0]
-- **Teach the agent: save procedures as skills** (#314). Any conversation
-  can become a draft skill from its menu ("Save as skill") — the transcript
-  lands in the **Skills** tab's "Taught by you" section for review. Edit the
-  procedure, run a **test** to see the transcript, then **activate** it (the
-  server refuses untested activations) so the model loads it from the next
-  start. **Schedule** turns a tested skill into a cron routine carrying a
-  copy of the reviewed text, with the scheduler's run history and pause. The
-  Skills inventory also marks taught rows, and drafts never steer a turn.
-
-## [5.8.0]
-- **Per-profile memory: the agent remembers what you tell it** (#315). The
-  agent can save a durable fact — a preference, a format rule, a correction
-  — and it lands **pending** in a new **Memory** screen (badged while
-  proposals await review). Confirm it and the next turn carries it; edit or
-  delete it and the next answer reflects that. Topics pause individually
-  (kept on screen, skipped at injection), **Forget all** wipes items but
-  keeps pauses, and your own entries save confirmed with no review loop. The
-  prompt shows what the screen shows: confirmed, unpaused items only.
-
 ## [5.7.0]
 - **Approval gates: sensitive agent actions pause for your decision**
   (#313). Money writes, deletes, archives and destructive rewrites no longer
@@ -38,6 +18,22 @@ see GitHub Releases for older notes.
   also carries the recent **audit trail**: every gated or sensitive call,
   what was decided, and when. Reads and routine writes run free, and older
   servers (no gate surface) behave exactly as before.
+- **Per-profile memory: the agent remembers what you tell it** (#315). The
+  agent can save a durable fact — a preference, a format rule, a correction
+  — and it lands **pending** in a new **Memory** screen (badged while
+  proposals await review). Confirm it and the next turn carries it; edit or
+  delete it and the next answer reflects that. Topics pause individually
+  (kept on screen, skipped at injection), **Forget all** wipes items but
+  keeps pauses, and your own entries save confirmed with no review loop. The
+  prompt shows what the screen shows: confirmed, unpaused items only.
+- **Teach the agent: save procedures as skills** (#314). Any conversation
+  can become a draft skill from its menu ("Save as skill") — the transcript
+  lands in the **Skills** tab's "Taught by you" section for review. Edit the
+  procedure, run a **test** to see the transcript, then **activate** it (the
+  server refuses untested activations) so the model loads it from the next
+  start. **Schedule** turns a tested skill into a cron routine carrying a
+  copy of the reviewed text, with the scheduler's run history and pause. The
+  Skills inventory also marks taught rows, and drafts never steer a turn.
 
 ## [5.6.0]
 - **Chat turns survive app kills: resumable runs with steer, stop and a

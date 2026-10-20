@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +11,14 @@ import (
 
 	"agento/internal/approvals"
 )
+
+// requestIdentity hashes the request's network + client markers for the
+// audit log: enough to tell two devices apart across the 90-day trail,
+// not enough to recover either value from the log.
+func requestIdentity(r *http.Request) string {
+	h := sha256.Sum256([]byte(r.RemoteAddr + "\x00" + r.UserAgent()))
+	return hex.EncodeToString(h[:])[:16]
+}
 
 // maxApprovalIDLen bounds the id segment of /api/approvals/{id}. Approvals are
 // ObjectIDs (24 hex); anything longer matches nothing. Separate from
@@ -137,7 +147,17 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 		for _, a := range list {
 			out = append(out, approvalWire(a))
 		}
-		writeJSONResponse(w, http.StatusOK, map[string]any{"approvals": out})
+		resp := map[string]any{"approvals": out}
+		// Split-brain signal: when the gateway and the relay hold different
+		// in-process stores, no decision made here can ever reach a held
+		// call — the turn would hang the full hold and fail closed. The app
+		// banners this instead of showing a queue that can never decide.
+		// (Failing the holds fast lives in the relay; this flag is what lets
+		// the app tell "empty" from "undecidable".)
+		if !s.approvals.Shared() {
+			resp["degraded"] = "approval store is not shared across processes; gated calls cannot be decided"
+		}
+		writeJSONResponse(w, http.StatusOK, resp)
 		return
 	}
 
@@ -162,6 +182,11 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
+		// decided_by stays "app" (single-PASSWORD deployment: one principal),
+		// but the 90-day audit row should still say which device decided. A
+		// hash of IP + User-Agent distinguishes devices without storing
+		// either verbatim in the log.
+		s.cfg.Logf("approvals: %s %s decided by client %x", action, id, requestIdentity(r))
 		a, err := s.approvals.DecideApproval(ctx, id, action == "approve", "app", time.Now())
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {

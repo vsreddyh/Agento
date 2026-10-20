@@ -15,7 +15,7 @@
  *    subprocesses that nothing ever reclaims. `AgentSession.dispose()` does not emit
  *    `session_shutdown`, which is the only event the MCP extension closes its
  *    connections on, and `AgentSessionRuntime.dispose()` (which does emit it) does not
- *    reproduce the MCP wiring. Measured: every delegation stranded seven processes,
+ *    reproduce the MCP wiring. Measured: every delegation stranded seven MCP server processes,
  *    accumulating for the life of the container.
  *  - A process is reaped by `RpcClient.stop()`, which SIGTERMs the CLI; the CLI closes
  *    its own MCP clients on the way out. Measured: zero processes left behind, across
@@ -76,7 +76,7 @@ const MAX_RESULT_CHARS = 8000;
 /**
  * Fail if `work` has not settled within `ms`.
  *
- * Startup is bounded for the same reason the prompt is: seven processes are pinned from
+ * Startup is bounded for the same reason the prompt is: eight processes are pinned from
  * the moment `start()` is called, and a child that stalls while connecting MCP would
  * otherwise sit there well past `timeoutSeconds` with nothing waiting on it. The
  * caller still tears the child down in its `finally`, so losing the race costs
@@ -97,7 +97,7 @@ function within<T>(ms: number, what: string, work: Promise<T>): Promise<T> {
  * What is left of the delegation's budget.
  *
  * Startup and the prompt share one ceiling rather than each getting the full
- * `timeoutMs`: the ceiling exists to bound how long seven processes stay pinned, and
+ * `timeoutMs`: the ceiling exists to bound how long eight processes stay pinned, and
  * two phases each granted the whole number would let one call hold them for twice
  * the time the caller asked to be capped at.
  */
@@ -139,7 +139,7 @@ const MAX_TIMEOUT_MS = 900_000;
  *
  * `stop()` runs in a `finally` after the call has already failed or answered, so
  * there is no budget left to spend and nothing left waiting on it. Without its own
- * bound, a child stalling while closing its MCP servers would hold all seven processes
+ * bound, a child stalling while closing its MCP servers would hold all eight processes
  * indefinitely — the one leak this file is written to prevent.
  */
 const TEARDOWN_TIMEOUT_MS = 30_000;
@@ -669,7 +669,7 @@ const spawnSubagent = defineTool({
 			//
 			// The answer is the deliverable; the stats are metadata on it. Fetching
 			// them after the run means a failure here would throw away work the parent
-			// has already paid seven processes for, and the natural response — retry —
+			// has already paid eight processes for, and the natural response — retry —
 			// would pay that cost again. So a failure is recorded, not raised.
 			let stats: Awaited<ReturnType<typeof client.getSessionStats>> | undefined;
 			try {
@@ -706,7 +706,7 @@ const spawnSubagent = defineTool({
 			//
 			// Bounded, because teardown is the one wait with no budget behind it: the
 			// startup and prompt deadlines were both inside `timeoutMs`, but a child
-			// stalling while closing its MCP servers would otherwise pin all seven
+			// stalling while closing its MCP servers would otherwise pin all eight
 			// processes indefinitely, with nothing left waiting on them. Thirty
 			// seconds is far longer than teardown has ever taken and far shorter than
 			// the ceiling.

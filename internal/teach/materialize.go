@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // RuntimeDir is where one profile's taught skills materialize:
@@ -11,6 +12,12 @@ import (
 // is never committed (git-ignored like the gateway's runtime state); Mongo
 // is the source of truth and this tree is rebuilt on every gateway start.
 func RuntimeDir(agentDir, profile string) string {
+	// Profiles come from directory listing today, but if one ever arrives
+	// from env or API input this is the backstop: no separators, no
+	// empties, no way out of the runtime tree.
+	if strings.ContainsAny(profile, `/\.`) || strings.TrimSpace(profile) == "" {
+		profile = "invalid-profile"
+	}
 	return filepath.Join(agentDir, ".runtime", "skills", profile)
 }
 
