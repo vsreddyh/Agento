@@ -231,7 +231,24 @@ internal fun ChatTab(
         scope.launch(Dispatchers.IO) {
             try {
                 for (u in take) {
-                    val result = prepareAttachment(context, u)
+                    // Re-check room per pick (#339): two rapid batches both
+                    // snapshot free slots at tap time, so without this both
+                    // decode fully and the loser drops AFTER the expensive
+                    // part. addPendingAttachments stays as backstop.
+                    val room = withContext(Dispatchers.Main) { vm.hasAttachmentRoom() }
+                    if (!room) {
+                        withContext(Dispatchers.Main) {
+                            vm.notify(
+                                "At most $MAX_IMAGES_PER_TURN photos per turn — " +
+                                    "extra photos dropped.",
+                            )
+                        }
+                        break
+                    }
+                    // Application context, not the Activity (#339): rotation
+                    // mid-decode would otherwise leak the old Activity for
+                    // the rest of the batch. The resolver is all this needs.
+                    val result = prepareAttachment(context.applicationContext, u)
                     withContext(Dispatchers.Main) {
                         result
                             .onSuccess { vm.addPendingAttachments(listOf(it)) }
@@ -314,7 +331,9 @@ internal fun ChatTab(
     // ViewModel notices (attach caps) surface as toasts, not the error
     // banner: the banner's Retry resends a TURN, which is wrong for a
     // staging problem. Consumed after showing so rotation never replays it.
-    LaunchedEffect(state.notice) {
+    // Keyed on the generation too (#339): an identical repeat notice must
+    // re-fire rather than dedupe into a dead second tap.
+    LaunchedEffect(state.notice, state.noticeGen) {
         if (state.notice.isNotEmpty()) {
             toasts.toast(state.notice, ToastKind.Error)
             vm.consumeNotice()

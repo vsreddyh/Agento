@@ -74,10 +74,22 @@ class ChatAttachmentsTest {
     }
 
     @Test
-    fun earlierTurnsRideAsText() {
+    fun earlierTurnsRideAsTextWithMarker() {
         assertEquals(
-            "earlier",
+            "earlier [1 photo attached]",
             messageContentJson("user", "earlier", listOf(attachment()), includeImages = false),
+        )
+    }
+
+    @Test
+    fun earlierImageOnlyTurnRidesAsMarker() {
+        assertEquals(
+            "[2 photos attached]",
+            messageContentJson(
+                "user", "  ",
+                listOf(attachment(), attachment()),
+                includeImages = false,
+            ),
         )
     }
 

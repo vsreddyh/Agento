@@ -46,6 +46,10 @@ data class ChatUiState(
      * ViewModel, cleared by `consumeNotice()` after the UI shows it — the
      * error banner is for failed TURNS (with Retry), never for this. */
     val notice: String = "",
+    /** Bumped on every [notice] set (#339): the toast host keys on
+     * (notice, noticeGen), so tapping the same dead-send twice re-fires
+     * instead of deduping into a second dead tap. */
+    val noticeGen: Int = 0,
     val error: String = "",
     /** True once the persisted conversations finish loading; sends wait for it. */
     val ready: Boolean = false,
@@ -286,21 +290,28 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val cur = _state.value.pendingAttachments
         val room = MAX_IMAGES_PER_TURN - cur.size
         if (room <= 0) {
-            _state.value = _state.value.copy(
-                notice = "At most $MAX_IMAGES_PER_TURN photos per turn — remove one first.",
-            )
+            notify("At most $MAX_IMAGES_PER_TURN photos per turn — remove one first.")
             return
         }
         val take = items.take(room)
         val dropped = items.size - take.size
-        _state.value = _state.value.copy(
-            pendingAttachments = cur + take,
-            notice = if (dropped > 0) {
-                "At most $MAX_IMAGES_PER_TURN photos per turn — $dropped dropped."
-            } else {
-                _state.value.notice
-            },
-        )
+        _state.value = _state.value.copy(pendingAttachments = cur + take)
+        if (dropped > 0) {
+            notify("At most $MAX_IMAGES_PER_TURN photos per turn — $dropped dropped.")
+        }
+    }
+
+    /** True while the composer has a free photo slot (#339: re-checked
+     * mid-batch so two rapid picks don't both decode then drop). */
+    fun hasAttachmentRoom(): Boolean =
+        _state.value.pendingAttachments.size < MAX_IMAGES_PER_TURN
+
+    /**
+     * Toast-host notice. Bumps the generation with every set so a repeated
+     * identical notice re-fires instead of deduping silent (#339).
+     */
+    fun notify(msg: String) {
+        _state.value = _state.value.copy(notice = msg, noticeGen = _state.value.noticeGen + 1)
     }
 
     fun removePendingAttachment(index: Int) {
@@ -813,8 +824,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // Image-only tap while streaming (#339): nothing queues
                 // (the queue is text), so say the photos are waiting —
                 // otherwise the enabled send button looks dead.
-                _state.value = _state.value.copy(
-                    notice = "Still answering — photos stay staged and " +
+                notify(
+                    "Still answering — photos stay staged and " +
                         "send with your next message.",
                 )
             }

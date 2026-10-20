@@ -108,7 +108,15 @@ fun messageContentJson(
     attachments: List<ChatAttachment>,
     includeImages: Boolean,
 ): Any {
-    if (role != "user" || attachments.isEmpty() || !includeImages) return content
+    if (role != "user" || attachments.isEmpty() || !includeImages) {
+        // Stripped earlier photo turns stay honest (#339): the server
+        // prompts with the trailing turn alone, but any other reader of
+        // this history should see that photos were here — not a blank.
+        if (role == "user" && attachments.isNotEmpty() && !includeImages) {
+            return (content.trim() + " " + attachmentMarker(attachments.size)).trim()
+        }
+        return content
+    }
     val arr = JSONArray()
     if (content.isNotBlank()) {
         arr.put(JSONObject().put("type", "text").put("text", content))
