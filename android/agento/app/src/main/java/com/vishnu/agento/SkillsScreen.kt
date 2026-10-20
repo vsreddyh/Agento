@@ -137,7 +137,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // Composer writes track their own busy flag: sharing managingBusy with
     // the dialog would disable Edit/Activate/Test on every composer save
     // and vice versa.
-    var composerBusy by remember { mutableStateOf(false) }
+    var composerBusy by remember(profile) { mutableStateOf(false) }
 
     /** Taught load with the same single-flight + path guard as load(): a
      * profile switch mid-flight must not land old rows on the new path. */
