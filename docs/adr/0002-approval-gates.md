@@ -108,6 +108,13 @@ one server narrows client-side. The audit trail, by contrast, is long and
 filterable (`?server=&tool=`), because history is read by cause. A server
 filter on the pending list would only matter if the queue were ever sharded.
 
+Expiry is evaluated at one instant per operation. Reads and lists use the
+store's own clock; a **decision** uses the caller's decision instant (`at`),
+because the row is being decided at that moment and both processes on this
+host call it with `time.Now()`. The two must not be mixed inside one
+operation, or a row could read as pending at one instant and be rejected as
+expired at the next.
+
 Two response-code contracts the app relies on. Reading an expired row is a
 **404** — it is no longer in the live queue — while deciding that same row is a
 **409**: the decision arrived after the hold ended. The 409 means "too late",
