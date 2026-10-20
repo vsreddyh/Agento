@@ -533,10 +533,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** + starts a new conversation; threads with chats are kept, empty
      * drafts are dropped so they never pile up in history. */
     fun newConversation() {
-        // Voiced like send() (#339): the affordance stays live during
-        // thread load, so an ungated return would dead-tap there.
+        // Voiced on staged content like send()/retry() (#339): an empty
+        // composer tapping through load stays silent, anything staged or
+        // typed gets the loading answer.
         if (!_state.value.ready) {
-            notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            }
             return
         }
         streamJob?.cancel()
@@ -590,9 +595,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Deletes a conversation; if it was active, falls back to the newest
      * thread with chats (never a blank draft). */
     fun deleteThread(id: String) {
-        // Voiced like send()/newConversation (#339).
+        // Voiced on staged content like send()/retry() (#339): an empty
+        // composer tapping through load stays silent, anything staged or
+        // typed gets the loading answer.
         if (!_state.value.ready) {
-            notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            }
             return
         }
         streamJob?.cancel()
@@ -874,7 +885,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * retry/regenerate/continue resend history, never the composer's
      * staging — said out loud like every other narrowing in this file.
      * Info, not Error: nothing failed, the photos are safe in the
-     * composer. Guarded wired like every marker it gates (#339). */
+     * composer. Guarded wired like every marker it gates (#339): the
+     * !ready voice below matches send()'s text-or-photos condition. */
     private fun noteParkedPhotos(verb: String) {
         if (_state.value.pendingAttachments.wiredPhotoCount() > 0) {
             notify(
@@ -900,9 +912,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // below, never before the guards, so it can't claim a resend that
         // never happens.
         if (!_state.value.ready) {
-            // Voiced on text-or-photos like send() (#339): a typed draft
-            // with no photos staged deserves the same answer.
-            if (_state.value.pendingAttachments.isNotEmpty() || _state.value.pending.isNotBlank()) {
+            // Voiced on text-or-wired-photos like send() (#339): a typed
+            // draft with no photos staged deserves the same answer, and
+            // the photo half counts wired like every marker it gates.
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 || _state.value.pending.isNotBlank()) {
                 notify("Conversations still loading — try again in a moment.", ToastKind.Info)
             }
             return
@@ -1708,9 +1721,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Same gate split as retry() (#339): voice !ready, silent on
         // streaming (affordances hidden), narrate at the resend.
         if (!_state.value.ready) {
-            // Voiced on text-or-photos like send() (#339): a typed draft
-            // with no photos staged deserves the same answer.
-            if (_state.value.pendingAttachments.isNotEmpty() || _state.value.pending.isNotBlank()) {
+            // Voiced on text-or-wired-photos like send() (#339): a typed
+            // draft with no photos staged deserves the same answer, and
+            // the photo half counts wired like every marker it gates.
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 || _state.value.pending.isNotBlank()) {
                 notify("Conversations still loading — try again in a moment.", ToastKind.Info)
             }
             return
@@ -1738,9 +1752,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun continueTurn() {
         // Same gate split as retry() (#339).
         if (!_state.value.ready) {
-            // Voiced on text-or-photos like send() (#339): a typed draft
-            // with no photos staged deserves the same answer.
-            if (_state.value.pendingAttachments.isNotEmpty() || _state.value.pending.isNotBlank()) {
+            // Voiced on text-or-wired-photos like send() (#339): a typed
+            // draft with no photos staged deserves the same answer, and
+            // the photo half counts wired like every marker it gates.
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 || _state.value.pending.isNotBlank()) {
                 notify("Conversations still loading — try again in a moment.", ToastKind.Info)
             }
             return
@@ -2333,8 +2348,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
         _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path)
+        // Same whitespace normalization as send() (#339): blank text fires
+        // as "" (unreachable via the trimmed gate above, but the two fire
+        // paths must not disagree on canonical form).
+        val storedFlush = if (raw.trim().isEmpty()) "" else raw
         val history = _state.value.messages +
-            ChatMessage("user", raw, ChatThreads.now())
+            ChatMessage("user", storedFlush, ChatThreads.now())
         // The queued fire is text-only by design (see send()), so staged
         // photos stay parked — said out loud (#339), because a silent
         // text-only send after staging photos reads as a dropped attach.

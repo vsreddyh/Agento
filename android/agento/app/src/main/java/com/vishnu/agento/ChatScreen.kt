@@ -94,9 +94,11 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -391,7 +393,19 @@ internal fun ChatTab(
         // in the closure until that line runs — narrowing the leak, not
         // removing it.
         val appContext = context.applicationContext
-        scope.launch(Dispatchers.IO) {
+        // Settled inline when the scope is already dead (#339): a
+        // navigate-away + result race can deliver picker output after the
+        // composition scope died — launching then is a no-op whose body
+        // (and its onBatchDone flag reset) never runs, sticking cameraBusy.
+        // Undispatched for the same reason: the body starts synchronously,
+        // so the try/finally below is entered before any later cancel can
+        // land — no window between launch and first suspension skips it.
+        if (!scope.isActive) {
+            runCatching { cleanup?.takeIf { it.exists() }?.delete() }
+            onBatchDone()
+            return
+        }
+        scope.launch(Dispatchers.IO, CoroutineStart.UNDISPATCHED) {
             // Landed count for the cancel notice below: only a batch that
             // staged something before dying has anything to report.
             var landed = 0

@@ -595,13 +595,17 @@ class ChatApi(context: Context) {
         // server prompts Pi with the last user turn alone and Pi holds
         // history in its own session file, so earlier photo turns ride as
         // text and the body stays bounded however long the thread gets.
+        // Exhaustive when: the sealed return forces both shapes handled —
+        // a bare String put would misrender a Multipart as a JSON string.
         val lastUserIdx = messages.indexOfLast { it.role == "user" }
         for ((i, m) in messages.withIndex()) {
+            val content = messageContentJson(m.role, m.content, m.attachments, includeImages = i == lastUserIdx)
+            val wire: Any = when (content) {
+                is WireContent.Text -> content.text
+                is WireContent.Multipart -> content.parts
+            }
             arr.put(
-                JSONObject().put("role", m.role).put(
-                    "content",
-                    messageContentJson(m.role, m.content, m.attachments, includeImages = i == lastUserIdx),
-                ),
+                JSONObject().put("role", m.role).put("content", wire),
             )
         }
         payload.put("messages", arr)

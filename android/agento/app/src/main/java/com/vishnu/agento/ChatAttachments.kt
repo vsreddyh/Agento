@@ -178,8 +178,20 @@ fun downscaledSize(w: Int, h: Int): Pair<Int, Int> {
 }
 
 /**
- * Wire content for one message: a bare string normally, the conventional
- * multipart array when this user turn carries photos.
+ * Wire shape of one message's content (#339): a bare string normally, the
+ * conventional multipart array when the turn carries photos. Sealed (not
+ * `Any`) so callers branch exhaustively with compiler help — the next edit
+ * that assumes String (a log line doing `.length`, a reader doing string
+ * concat) fails to compile instead of crashing only on photo turns. The
+ * two shapes mirror what the gateway parser already distinguishes.
+ */
+sealed interface WireContent {
+    data class Text(val text: String) : WireContent
+    data class Multipart(val parts: JSONArray) : WireContent
+}
+/**
+ * Wire content for one message: [WireContent.Text] normally, the
+ * conventional multipart array when this user turn carries photos.
  *
  * Only the LAST user turn in the request keeps its image parts
  * ([includeImages]): the server prompts Pi with the trailing user turn
@@ -194,7 +206,7 @@ fun messageContentJson(
     content: String,
     attachments: List<ChatAttachment>,
     includeImages: Boolean,
-): Any {
+): WireContent {
     // Fail-closed on payload, not just presence (#339): a hand-edited
     // thread file (or a future writer bug) can stage an empty base64,
     // which would otherwise wire as data:image/jpeg;base64, — a corrupt
@@ -210,13 +222,13 @@ fun messageContentJson(
         // Verbatim twin (NOT the trimming helper): history rides exactly
         // as typed, marker only appended.
         if (role == "user" && images.isNotEmpty() && !includeImages) {
-            return contentWithMarkerVerbatim(content, images.size)
+            return WireContent.Text(contentWithMarkerVerbatim(content, images.size))
         }
         // Assistant turns never stage photos: the marker rule above is
         // user-only by construction, and a bare return here keeps a
         // hypothetical assistant-with-attachments payload from silently
         // widening the wire shape (fail-closed, like the gateway).
-        return content
+        return WireContent.Text(content)
     }
     val arr = JSONArray()
     if (content.isNotBlank()) {
@@ -229,7 +241,7 @@ fun messageContentJson(
                 .put("image_url", JSONObject().put("url", a.dataUri())),
         )
     }
-    return arr
+    return WireContent.Multipart(arr)
 }
 
 /** Raw size of a base64 payload of [chars] in bytes, for human-sized error messages. */

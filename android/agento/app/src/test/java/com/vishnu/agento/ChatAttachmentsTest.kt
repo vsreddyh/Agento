@@ -1,6 +1,5 @@
 package com.vishnu.agento
 
-import org.json.JSONArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -72,13 +71,13 @@ class ChatAttachmentsTest {
 
     @Test
     fun noAttachmentsIsBareString() {
-        assertEquals("hi", messageContentJson("user", "hi", emptyList(), includeImages = true))
+        assertEquals(WireContent.Text("hi"), messageContentJson("user", "hi", emptyList(), includeImages = true))
     }
 
     @Test
     fun nonUserNeverMultipart() {
         assertEquals(
-            "hi",
+            WireContent.Text("hi"),
             messageContentJson("assistant", "hi", listOf(attachment()), includeImages = true),
         )
     }
@@ -89,7 +88,7 @@ class ChatAttachmentsTest {
         // photos, so a hypothetical attachments payload there must not
         // widen the wire shape — bare content, no marker, no parts.
         assertEquals(
-            "hi",
+            WireContent.Text("hi"),
             messageContentJson("assistant", "hi", listOf(attachment()), includeImages = false),
         )
     }
@@ -97,7 +96,7 @@ class ChatAttachmentsTest {
     @Test
     fun earlierTurnsRideAsTextWithMarker() {
         assertEquals(
-            "earlier [1 photo attached]",
+            WireContent.Text("earlier [1 photo attached]"),
             messageContentJson("user", "earlier", listOf(attachment()), includeImages = false),
         )
     }
@@ -105,7 +104,7 @@ class ChatAttachmentsTest {
     @Test
     fun earlierImageOnlyTurnRidesAsMarker() {
         assertEquals(
-            "[2 photos attached]",
+            WireContent.Text("[2 photos attached]"),
             messageContentJson(
                 "user", "  ",
                 listOf(attachment(), attachment()),
@@ -121,8 +120,8 @@ class ChatAttachmentsTest {
             listOf(attachment("AAA="), attachment("BBB=")),
             includeImages = true,
         )
-        assertTrue(out is JSONArray)
-        val arr = out as JSONArray
+        assertTrue(out is WireContent.Multipart)
+        val arr = (out as WireContent.Multipart).parts
         assertEquals(3, arr.length())
         assertEquals("text", arr.getJSONObject(0).getString("type"))
         assertEquals("describe these", arr.getJSONObject(0).getString("text"))
@@ -139,8 +138,8 @@ class ChatAttachmentsTest {
     @Test
     fun imageOnlyTurnOmitsTextPart() {
         val out = messageContentJson("user", "  ", listOf(attachment()), includeImages = true)
-        assertTrue(out is JSONArray)
-        val arr = out as JSONArray
+        assertTrue(out is WireContent.Multipart)
+        val arr = (out as WireContent.Multipart).parts
         assertEquals(1, arr.length())
         assertEquals("image_url", arr.getJSONObject(0).getString("type"))
     }
@@ -150,7 +149,7 @@ class ChatAttachmentsTest {
         // Fail-closed: an empty base64 (hand-edited thread, writer bug)
         // counts as no attachment — never a data:image/jpeg;base64, part.
         assertEquals(
-            "hi",
+            WireContent.Text("hi"),
             messageContentJson(
                 "user", "hi",
                 listOf(ChatAttachment(base64 = "")),
@@ -162,8 +161,8 @@ class ChatAttachmentsTest {
             listOf(ChatAttachment(base64 = ""), attachment("AAA=")),
             includeImages = true,
         )
-        assertTrue(out is JSONArray)
-        assertEquals(2, (out as JSONArray).length())
+        assertTrue(out is WireContent.Multipart)
+        assertEquals(2, (out as WireContent.Multipart).parts.length())
     }
 
     // Content rule + markers.
