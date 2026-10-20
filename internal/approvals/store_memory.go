@@ -54,6 +54,9 @@ func (m *MemoryStore) CreateApproval(_ context.Context, a Approval) error {
 		m.logf("approvals: ignored duplicate create for %s", a.ID)
 		return nil
 	}
+	// Redact in the store, not only at call sites: redaction is idempotent, and
+	// one future caller forgetting it must not write a secret for 90 days.
+	a.Args = Redact(a.Args)
 	now := m.now()
 	if a.CreatedAt == 0 {
 		a.CreatedAt = now.UnixMilli()
@@ -172,6 +175,7 @@ func (m *MemoryStore) Audit(_ context.Context, e AuditEntry) error {
 	if e.ExpiresAt.IsZero() {
 		e.ExpiresAt = m.now().Add(AuditTTL)
 	}
+	e.Args = Redact(e.Args)
 	m.audit[e.ID] = e
 	// Memory is bounded like the runs fallback: oldest-first past cap.
 	// The scan is O(n) per insert once full (n = 10*ListCap). This fallback is

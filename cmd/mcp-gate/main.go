@@ -592,7 +592,9 @@ func (r *relay) audit(tool string, args map[string]any, disp approvals.Dispositi
 		Error:       approvals.ScrubError(errMsg),
 		ApprovalID:  approvalID,
 		At:          now.UnixMilli(),
-		ExpiresAt:   now.Add(approvals.AuditTTL),
+		// ExpiresAt stays zero: the store stamps it from its own clock, so
+		// TTL behaviour is pinned in one place and the relay holds no retention
+		// rule of its own.
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()

@@ -11,11 +11,11 @@
  *
  *  - An SDK session (`createAgentSession`) does not load the CLI's built-in
  *    extensions, so reproducing MCP means building a `DefaultResourceLoader` by hand.
- *    That works — 43 MCP tools, verified — but the child then owns five MCP server
+ *    That works — 50 MCP tools, verified — but the child then owns six MCP server
  *    subprocesses that nothing ever reclaims. `AgentSession.dispose()` does not emit
  *    `session_shutdown`, which is the only event the MCP extension closes its
  *    connections on, and `AgentSessionRuntime.dispose()` (which does emit it) does not
- *    reproduce the MCP wiring. Measured: every delegation stranded five processes,
+ *    reproduce the MCP wiring. Measured: every delegation stranded six processes,
  *    accumulating for the life of the container.
  *  - A process is reaped by `RpcClient.stop()`, which SIGTERMs the CLI; the CLI closes
  *    its own MCP clients on the way out. Measured: zero processes left behind, across
@@ -126,7 +126,7 @@ const MAX_TASK_CHARS = 20_000;
 /**
  * Hard ceiling on a delegation, which is also the default.
  *
- * A subagent pins six processes (one CLI plus five MCP servers) for as long as it
+ * A subagent pins seven processes (one CLI plus six MCP servers) for as long as it
  * runs, so the upper bound is a resource decision, not a preference. It is
  * deliberately one-sided: `timeoutSeconds` can only *shorten* a delegation, never
  * extend it past the ceiling. Work that cannot finish inside it should be split
@@ -245,7 +245,7 @@ function unrecognised(events: readonly SessionEvent[]): string {
  *
  * Rejected rather than clamped at the low end: `0` and negatives are nonsense, and
  * silently turning `0` into the 15-minute default hides the mistake. The floor is 1s
- * because anything below that still pays the full cost — a process and five MCP
+ * because anything below that still pays the full cost — a process and six MCP
  * servers — to time out almost immediately.
  */
 function resolveTimeout(seconds: number | undefined): number {
@@ -335,7 +335,7 @@ function resolveCwd(requested: unknown, base: string): string {
 /**
  * Reject a task with nothing in it.
  *
- * An empty prompt would otherwise start a process, connect five MCP servers, and
+ * An empty prompt would otherwise start a process, connect six MCP servers, and
  * then return nothing — the most expensive way to do nothing.
  *
  * Takes `unknown` deliberately: `task` is required in the schema, but depending on

@@ -123,6 +123,9 @@ func (s *MongoStore) CreateApproval(ctx context.Context, a Approval) error {
 	if a.ExpiresAt.IsZero() {
 		a.ExpiresAt = now.Add(ApprovalTTL)
 	}
+	// Redact here too: see MemoryStore.CreateApproval. A caller that forgets
+	// must not be able to persist raw arguments.
+	a.Args = Redact(a.Args)
 	if _, err := s.approvals.InsertOne(ctx, a); err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
 			// Ids are ObjectIDs, so this is a retry, not a collision. A line
@@ -254,6 +257,7 @@ func (s *MongoStore) Audit(ctx context.Context, e AuditEntry) error {
 	if e.ExpiresAt.IsZero() {
 		e.ExpiresAt = s.clock().Add(AuditTTL)
 	}
+	e.Args = Redact(e.Args)
 	if _, err := s.audit.InsertOne(ctx, e); err != nil {
 		return NewStoreError("audit write failed: "+err.Error(), true)
 	}

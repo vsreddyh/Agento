@@ -328,3 +328,36 @@ func TestMemoryAuditExpiry(t *testing.T) {
 		t.Fatal("memory audit row kept a zero ExpiresAt; retention is unspecified")
 	}
 }
+
+// The store redacts on write, not only the call sites: one caller that forgets
+// must not be able to persist a secret for the retention window.
+func TestStoresRedactOnWrite(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	if err := store.CreateApproval(ctx, Approval{
+		ID: "a1", Server: "notes", Tool: "get_note", Status: StatusPending,
+		Args: map[string]any{"password": "hunter2", "id": "n1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := store.GetApproval(ctx, "a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Args["password"] != "***" || a.Args["id"] != "n1" {
+		t.Fatalf("approval args = %#v, want password masked and id intact", a.Args)
+	}
+	if err := store.Audit(ctx, AuditEntry{
+		ID: "e1", Server: "notes", Tool: "get_note", Disposition: DispositionAllow,
+		Args: map[string]any{"token": "sk-live-abc"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.ListAudit(ctx, AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Args["token"] != "***" {
+		t.Fatalf("audit args = %#v, want token masked", rows)
+	}
+}
