@@ -29,6 +29,9 @@ const (
 	// MaxBody bounds a skill body in runes. Procedures need room; the file
 	// is still small next to a prompt.
 	MaxBody = 20000
+	// MaxInput bounds a test-fire input in runes: it rides verbatim into the
+	// model prompt, so it clips like every other free-text field.
+	MaxInput = 2000
 	// MaxTestText bounds a stored test transcript in runes.
 	MaxTestText = 4000
 )
@@ -102,6 +105,11 @@ func NewStoreError(msg string, upstream bool) *StoreError {
 	return &StoreError{Msg: msg, Upstream: upstream}
 }
 
+// ClipInput trims and bounds a test input.
+func ClipInput(s string) string {
+	return clipRunes(strings.TrimSpace(strings.ReplaceAll(s, "\x00", "")), MaxInput)
+}
+
 // nameRe is the skill-name rule: filesystem-safe (it becomes a directory),
 // Pi-command-safe, lowercase. Checked in the stores and the gateway alike.
 var nameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
@@ -156,10 +164,16 @@ func collapseWS(s string) string {
 }
 
 // RenderSKILL renders the SKILL.md Pi loads: frontmatter in the same shape
-// as the committed skills, then the procedure body verbatim.
+// as the committed skills, then the procedure body verbatim. The name is
+// re-validated here, not just on write: a hand-edited row with a newline or
+// quote must not break frontmatter or inject YAML at render time.
 func RenderSKILL(s Skill) string {
+	name := s.Name
+	if !ValidName(name) {
+		name = "invalid-name"
+	}
 	var b strings.Builder
-	b.WriteString("---\nname: " + s.Name + "\n")
+	b.WriteString("---\nname: " + name + "\n")
 	b.WriteString("description: \"" + yamlEscape(s.Description) + "\"\n")
 	b.WriteString("---\n\n")
 	b.WriteString(s.Body + "\n")

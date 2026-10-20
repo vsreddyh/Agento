@@ -89,14 +89,14 @@ func TestMemoryLifecycle(t *testing.T) {
 
 func TestMaterializeReconciles(t *testing.T) {
 	dir := t.TempDir()
-	n, err := Materialize(dir, []Skill{
+	n, skipped, err := Materialize(dir, []Skill{
 		{Profile: "p", Name: "b-skill", Description: "b", Body: "B", Status: StatusActive},
 		{Profile: "p", Name: "a-skill", Description: "a", Body: "A", Status: StatusActive},
 		{Profile: "p", Name: "draft", Description: "d", Body: "D", Status: StatusDraft},
 		{Profile: "p", Name: "off", Description: "o", Body: "O", Status: StatusDisabled},
 	})
-	if err != nil || n != 2 {
-		t.Fatalf("materialize = %d, %v", n, err)
+	if err != nil || n != 2 || len(skipped) != 0 {
+		t.Fatalf("materialize = %d, %v, skipped %v", n, err, skipped)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "a-skill", "SKILL.md"))
 	if err != nil || !strings.Contains(string(b), "name: a-skill") {
@@ -110,8 +110,8 @@ func TestMaterializeReconciles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Materialize(dir, nil); err != nil {
-		t.Fatal(err)
+	if _, skipped, err := Materialize(dir, nil); err != nil || len(skipped) != 0 {
+		t.Fatalf("empty reconcile = %v, skipped %v", err, skipped)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatal("stale skill dir survived")

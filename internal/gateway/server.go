@@ -145,7 +145,7 @@ type Config struct {
 	// TeachMaterialize reconciles one profile's runtime skill dir with its
 	// active skills. Nil means no materialization (tests, binaries without
 	// an agent dir): the routes still work, but Pi never loads the files.
-	TeachMaterialize func(profile string, skills []teach.Skill) (int, error)
+	TeachMaterialize func(profile string, skills []teach.Skill) (written int, skipped []string, err error)
 
 	// Logf receives operational messages. Nil discards them.
 	Logf func(format string, args ...any)

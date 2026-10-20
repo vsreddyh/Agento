@@ -96,8 +96,10 @@ func (s *Server) materialize(profile string) {
 		s.cfg.Logf("teach: list for materialize failed for %s: %v", profile, err)
 		return
 	}
-	if _, err := s.cfg.TeachMaterialize(profile, skills); err != nil {
+	if _, skipped, err := s.cfg.TeachMaterialize(profile, skills); err != nil {
 		s.cfg.Logf("teach: materialize failed for %s: %v", profile, err)
+	} else if len(skipped) > 0 {
+		s.cfg.Logf("teach: skipped unrenderable skill(s) for %s: %v", profile, skipped)
 	}
 }
 
@@ -314,7 +316,9 @@ func (s *Server) handleSkillTest(w http.ResponseWriter, r *http.Request, profile
 	}
 	prompt := "Follow this procedure exactly. If a step needs data you do not have, say what is missing instead of inventing it.\n\n" +
 		teach.RenderSKILL(sk)
-	if input := strings.TrimSpace(body.Input); input != "" {
+	// Input clips like every other free-text field: an unbounded test
+	// input would build a multi-megabyte prompt from one tap.
+	if input := teach.ClipInput(body.Input); input != "" {
 		prompt += "\n\nTest input:\n" + input
 	}
 	// The model call gets its own budget: 5s covers the store, not an LLM.

@@ -14,14 +14,6 @@ import (
 type MemoryStore struct {
 	mu     sync.RWMutex
 	skills map[string]Skill
-	// Logf receives operational notes. Nil discards them.
-	Logf func(string, ...any)
-}
-
-func (s *MemoryStore) logf(format string, args ...any) {
-	if s.Logf != nil {
-		s.Logf(format, args...)
-	}
 }
 
 // NewMemoryStore builds an empty store.
@@ -49,10 +41,10 @@ func cleanCreate(in Skill) (Skill, error) {
 	// Source is client-supplied free text like the rest: trim and clip
 	// instead of riding unbounded.
 	in.Source = clipRunes(strings.TrimSpace(in.Source), MaxSource)
+	// CreatedAt is always stamped: a client-supplied past instant would
+	// backdate sort order, and nothing legitimate sets it.
 	now := nowMillis()
-	if in.CreatedAt == 0 || in.CreatedAt > now {
-		in.CreatedAt = now
-	}
+	in.CreatedAt = now
 	in.UpdatedAt = now
 	// Drafts are born drafts: only review + test promote, never the create
 	// call itself.
@@ -63,26 +55,29 @@ func cleanCreate(in Skill) (Skill, error) {
 }
 
 // Create stores one draft. The status is always draft: activation is a
-// separate, tested step.
+// separate, tested step. Validation runs before duplicate checks (same order
+// as Mongo): a request that is both malformed and colliding fails as
+// malformed on either backend.
 func (s *MemoryStore) Create(_ context.Context, in Skill) (Skill, error) {
+	if in.ID != "" && !ValidID(in.ID) {
+		return Skill{}, NewStoreError("skill id must be 1-64 letters, digits, _ or -", false)
+	}
+	in, err := cleanCreate(in)
+	if err != nil {
+		return Skill{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if in.ID == "" {
 		in.ID = NewID()
-	} else if !ValidID(in.ID) {
-		return Skill{}, NewStoreError("skill id must be 1-64 letters, digits, _ or -", false)
 	}
 	if _, exists := s.skills[in.ID]; exists {
 		return Skill{}, NewStoreError("skill id already exists", false)
 	}
 	for _, it := range s.skills {
-		if it.Profile == strings.TrimSpace(in.Profile) && it.Name == strings.TrimSpace(in.Name) {
-			return Skill{}, NewStoreError("a skill named "+strings.TrimSpace(in.Name)+" already exists", false)
+		if it.Profile == in.Profile && it.Name == in.Name {
+			return Skill{}, NewStoreError("a skill named "+in.Name+" already exists", false)
 		}
-	}
-	in, err := cleanCreate(in)
-	if err != nil {
-		return Skill{}, err
 	}
 	s.skills[in.ID] = in
 	return in, nil

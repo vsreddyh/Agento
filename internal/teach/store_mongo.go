@@ -19,8 +19,6 @@ type MongoStore struct {
 	// now is the clock every write boundary reads, mirroring the other
 	// stores. Nil means time.Now.
 	now func() time.Time
-	// Logf receives operational notes. Nil discards them.
-	Logf func(string, ...any)
 }
 
 func (s *MongoStore) clock() time.Time {
@@ -97,9 +95,7 @@ func (s *MongoStore) Create(ctx context.Context, in Skill) (Skill, error) {
 		return Skill{}, NewStoreError("skill id must be 1-64 letters, digits, _ or -", false)
 	}
 	now := s.clock().UnixMilli()
-	if in.CreatedAt == 0 || in.CreatedAt > now {
-		in.CreatedAt = now
-	}
+	in.CreatedAt = now
 	in.UpdatedAt = now
 	in.Status = StatusDraft
 	in.TestedAt = 0

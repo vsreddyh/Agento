@@ -84,22 +84,17 @@ func run() error {
 	logger := log.New(os.Stderr, "[gateway] ", log.LstdFlags|log.Lmsgprefix)
 	logger.Printf("profiles: %s", strings.Join(profiles, ", "))
 
-	// Taught skills (#314) open before Pi starts: the runtime dir must hold
-	// this boot's files before the first --skill argument points at it. A
-	// fresh deploy wipes the container filesystem, so reconciling after Pi
-	// starts would boot skill-less and only the next restart would fix it.
-	// Taught skills (#314). Same database, sibling collection. Without
-	// Mongo the routes still work from an in-process store, but activation
-	// cannot survive a restart and the materialized files are the only copy
-	// Pi ever sees — so an activation here would silently un-teach on the
-	// next boot. Log that plainly rather than silently degrade.
+	// Taught skills (#314), opened before Pi starts: the runtime dir must
+	// hold this boot's files before the first --skill argument points at
+	// it, or a fresh deploy boots skill-less. Same database, sibling
+	// collection; without Mongo the routes serve an in-process store whose
+	// activations die with the process. Logged plainly below.
 	var teachStore teach.Store
 	if store, err := teach.FromEnv(); err != nil {
 		logger.Printf("teach: falling back to in-process (activations do not survive restart): %v", err)
 		teachStore = teach.NewMemoryStore()
 	} else {
 		teachStore = store
-		store.Logf = logger.Printf
 		// Background, not the signal ctx: it does not exist yet this early
 		// in startup, and these are bounded one-shot calls anyway.
 		indexCtx, cancelIndex := context.WithTimeout(context.Background(), 10*time.Second)
@@ -119,10 +114,15 @@ func run() error {
 			logger.Printf("teach: startup list failed for %s: %v", profile, err)
 			continue
 		}
-		if n, err := teach.Materialize(teach.RuntimeDir(agentDir, profile), skills); err != nil {
+		if n, skipped, err := teach.Materialize(teach.RuntimeDir(agentDir, profile), skills); err != nil {
 			logger.Printf("teach: startup materialize failed for %s: %v", profile, err)
-		} else if n > 0 {
-			logger.Printf("teach: materialized %d skill(s) for %s", n, profile)
+		} else {
+			if n > 0 {
+				logger.Printf("teach: materialized %d skill(s) for %s", n, profile)
+			}
+			if len(skipped) > 0 {
+				logger.Printf("teach: skipped unrenderable skill(s) for %s: %v", profile, skipped)
+			}
 		}
 	}
 
@@ -632,7 +632,7 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStor
 		// materializer closes over the agent dir to reach the runtime tree.
 		TeachStore:  teachStore,
 		TeachRunner: teachRunner,
-		TeachMaterialize: func(profile string, skills []teach.Skill) (int, error) {
+		TeachMaterialize: func(profile string, skills []teach.Skill) (int, []string, error) {
 			return teach.Materialize(teach.RuntimeDir(agentDir, profile), skills)
 		},
 		// Each budget is configurable for the same reason: the right value depends on
