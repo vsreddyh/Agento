@@ -68,6 +68,15 @@ cross-restart record is the convenience; the cross-process record is the
 requirement. A restart expires pending rows (nothing will ever decide them)
 and deletes expired ones.
 
+Expiry is visible immediately even though TTL deletion lags: both list paths
+filter `expiresAt > now`, matching the atomic decide boundary, so a row that
+timed out can never be shown as pending and then 409 on decide. Because
+`TimeoutApproval` marks `status=expired` without extending `expiresAt`,
+`?status=expired` is only observable for the rest of that original 15-minute
+window. That is deliberate: the approvals collection is the live queue, and
+the **audit log is the durable history** — every expiry writes an `expired`
+audit row, retained for 90 days, and that is the record to query.
+
 ### The app decides, never with secrets
 
 `GET /api/approvals` (pending list), `POST .../approve|deny` (decision lands

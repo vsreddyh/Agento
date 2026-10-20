@@ -26,6 +26,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -109,7 +110,14 @@ type relay struct {
 	out     io.Writer
 	childIn io.Writer
 
-	mu      sync.Mutex
+	mu sync.Mutex
+	// pending holds allowed calls until their response arrives, so the
+	// response can be audited with the request's args. An entry whose server
+	// never answers stays for the life of the relay — bounded in practice by
+	// one turn at a time per profile (Pi serialises turns per process) and by
+	// the server answering every request it accepted. A sweep would need a
+	// clock per entry to stay useful; the field it would read is gone rather
+	// than kept as decoration.
 	pending map[string]*callState
 	// holds cancels parked waits at teardown, so a Pi disconnect does not
 	// leave approvals pending that nothing will ever decide.
@@ -122,7 +130,6 @@ type relay struct {
 type callState struct {
 	name string
 	args map[string]any
-	sent time.Time
 }
 
 func (r *relay) run(
@@ -151,8 +158,10 @@ func (r *relay) run(
 	r.pending = map[string]*callState{}
 	r.holds = map[string]context.CancelFunc{}
 	// Holds die with the pair (see holdCall): captured before the pumps
-	// start, so every parked wait observes teardown.
-	holdCtx, cancelHolds := context.WithCancel(context.Background())
+	// start, so every parked wait observes teardown. Derived from the run
+	// scope rather than Background, so a parent cancel reaches parked holds
+	// in one step instead of only through the pumps exiting.
+	holdCtx, cancelHolds := context.WithCancel(ctx)
 	r.holdCtx = holdCtx
 	r.mu.Unlock()
 	defer cancelHolds()
@@ -229,6 +238,11 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			}
 			continue
 		}
+		// One goroutine per held call. Unbounded by construction, but bounded
+		// by traffic: Pi serialises turns per profile, so a server sees one
+		// agent call at a time, and each hold ends at waitFor regardless. A
+		// semaphore here would queue sensitive calls behind each other for no
+		// gain the turn's own serialisation does not already give.
 		go r.holdCall(line, env, params)
 	}
 }
@@ -250,8 +264,10 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 	cancelCreate()
 	if err != nil {
 		r.log.Printf("create approval: %v (failing closed)", err)
-		if werr := r.writePi(rpcError(env.ID, -32000, "approval store unavailable; failing closed")); werr != nil {
-			r.log.Printf("write to Pi failed: %v", werr)
+		if hasReplyID(env.ID) {
+			if werr := r.writePi(rpcError(env.ID, -32000, "approval store unavailable; failing closed")); werr != nil {
+				r.log.Printf("write to Pi failed: %v", werr)
+			}
 		}
 		r.audit(params.Name, redacted, approvals.DispositionDenied, "approval store unavailable", "")
 		return
@@ -286,8 +302,10 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 			r.log.Printf("timeout approval %s: %v", a.ID, err)
 		}
 		cancelExpire()
-		if werr := r.writePi(rpcError(env.ID, -32000, "approval "+a.ID+" "+reason+"; failing closed")); werr != nil {
-			r.log.Printf("write to Pi failed: %v", werr)
+		if hasReplyID(env.ID) {
+			if werr := r.writePi(rpcError(env.ID, -32000, "approval "+a.ID+" "+reason+"; failing closed")); werr != nil {
+				r.log.Printf("write to Pi failed: %v", werr)
+			}
 		}
 		r.audit(params.Name, redacted, approvals.DispositionExpired, reason, a.ID)
 	}
@@ -337,8 +355,10 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 				return
 			case approvals.StatusDenied, approvals.StatusExpired:
 				r.log.Printf("approval %s %s", a.ID, got.Status)
-				if werr := r.writePi(rpcError(env.ID, -32000, "denied by user (approval "+a.ID+")")); werr != nil {
-					r.log.Printf("write to Pi failed: %v", werr)
+				if hasReplyID(env.ID) {
+					if werr := r.writePi(rpcError(env.ID, -32000, "denied by user (approval "+a.ID+")")); werr != nil {
+						r.log.Printf("write to Pi failed: %v", werr)
+					}
 				}
 				r.audit(params.Name, redacted, approvals.DispositionDenied, "denied by user", a.ID)
 				return
@@ -416,7 +436,7 @@ func (r *relay) track(id, name string, args map[string]any) {
 		return
 	}
 	r.mu.Lock()
-	r.pending[id] = &callState{name: name, args: args, sent: time.Now()}
+	r.pending[id] = &callState{name: name, args: args}
 	r.mu.Unlock()
 }
 
@@ -468,6 +488,18 @@ func readLine(rd *bufio.Reader) ([]byte, error) {
 			return out, nil
 		}
 	}
+}
+
+// hasReplyID reports whether Pi is waiting for a response. A tools/call
+// notification carries no id (or explicit null) and gets no reply by
+// JSON-RPC spec: writing one back is a stray frame the client never asked
+// for. The audit row is written either way.
+func hasReplyID(id json.RawMessage) bool {
+	switch strings.TrimSpace(string(id)) {
+	case "", "null":
+		return false
+	}
+	return true
 }
 
 // rpcError builds a JSON-RPC error reply preserving the caller's id bytes.

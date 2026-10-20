@@ -273,3 +273,42 @@ func TestAllowNotificationIsAudited(t *testing.T) {
 		t.Fatalf("audit = %+v", audit[0])
 	}
 }
+
+// A gated notification (tools/call with no id) still holds and audits, but
+// gets no reply frame: JSON-RPC notifications are not answered.
+func TestGatedNotificationGetsNoReply(t *testing.T) {
+	store := approvals.NewMemoryStore()
+	out, child := &bufWriter{}, &bufWriter{}
+	r := testRelay(store)
+	r.out = out
+	r.childIn = child
+	r.waitFor = 60 * time.Millisecond
+	r.pollFor = 10 * time.Millisecond
+
+	raw := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"delete_note","arguments":{"id":"abc"}}}`
+	var env envelope
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
+		t.Fatal(err)
+	}
+	var params callParams
+	if err := json.Unmarshal(env.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); r.holdCall([]byte(raw), env, params) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("notification hold did not time out")
+	}
+	if out.String() != "" {
+		t.Fatalf("notification got a reply: %q", out.String())
+	}
+	if child.String() != "" {
+		t.Fatalf("expired notification reached the child: %q", child.String())
+	}
+	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionExpired {
+		t.Fatalf("audit = %+v", audit)
+	}
+}
