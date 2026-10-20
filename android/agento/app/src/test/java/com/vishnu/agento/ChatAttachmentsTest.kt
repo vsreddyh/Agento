@@ -391,4 +391,14 @@ class ChatAttachmentsTest {
             java.util.Locale.setDefault(prev)
         }
     }
+
+    @Test
+    fun base64BytesAdjustsForPadding() {
+        // "TQ==" is 1 byte, not (4*3)/4 = 3 — the named oversize error
+        // must report the real size, not 1–2 B high.
+        assertEquals(1L, base64Bytes("TQ=="))
+        assertEquals(2L, base64Bytes("TWE="))
+        assertEquals(3L, base64Bytes("TWFu"))
+        assertEquals(0L, base64Bytes(""))
+    }
 }

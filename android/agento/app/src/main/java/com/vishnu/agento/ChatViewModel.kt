@@ -943,13 +943,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Ready-gated with a voice (#339): the button disables on !ready,
         // but the IME send action bypasses it — an ungated return would
         // dead-tap during thread load, now reachable with photos staged.
+        // Voiced on text-or-wired-photos like every notice it gates (#339).
         if (!_state.value.ready) {
-            if (text.isNotEmpty() || photos.isNotEmpty()) {
+            if (text.isNotEmpty() || photos.wiredPhotoCount() > 0) {
                 notify("Conversations still loading — try again in a moment.", ToastKind.Info)
             }
             return
         }
-        if (text.isEmpty() && photos.isEmpty()) return
+        if (text.isEmpty() && photos.wiredPhotoCount() == 0) return
         // Queue-or-send (#122): the composer stays live while streaming —
         // a send mid-stream parks the text and auto-fires on Done, instead
         // of being swallowed by the streaming guard. First queued text wins;

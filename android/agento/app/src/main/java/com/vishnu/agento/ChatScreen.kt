@@ -116,9 +116,12 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 
 /** A camera intent older than this is treated as dead (#339): no callback
  * will ever settle it, so the double-launch gate must not hold past here
- * or one killed process disables the camera until reinstall. 30 minutes
- * bounds a stuck gate far above any real camera session. */
-private const val CAMERA_PENDING_STALE_MS = 30 * 60 * 1000L
+ * or one killed process disables the camera until reinstall. 10 minutes
+ * bounds a stuck gate far above any real camera session (single-digit
+ * minutes at most) — while a session interrupted past even that reads as
+ * dead and re-opens the overwrite race, which is the documented cost of
+ * bounding the stuck gate at all. */
+private const val CAMERA_PENDING_STALE_MS = 10 * 60 * 1000L
 
 /**
  * Head/tail content sample for thumbnail keys (#339): a true prefix/suffix
@@ -150,9 +153,12 @@ private fun AttachmentThumb(
     // stable across removes — slot is deliberately NOT in the key, so
     // photo 1 keeps its thumbnail when photo 0 leaves (no re-decode, no
     // flicker) — and distinct across identical picks (no aliasing). A
-    // 64-char head/tail sample rides along so a hand-mutated payload
-    // (same id, same length, different bytes) still re-keys: exact with
-    // no full-string walk. Legacy payloads (id "") key on slot + sample.
+    // 256-char head/tail sample rides along so a hand-mutated payload
+    // (same id, same length, different middle) still re-keys in practice:
+    // burst-shot headers can share a 64-char prefix, so the sample is wide
+    // enough that only adversarial mutation aliases — which a full-string
+    // walk (the cost this key exists to avoid) could close. Legacy
+    // payloads (id "") key on slot + 128-char sample.
     // Decoded off-main: ~1 MB Base64.decode + decodeByteArray during
     // composition janks low-end scroll, so produceState moves it to IO
     // (placeholder shows until it lands). No manual recycle: it can pull
@@ -160,7 +166,7 @@ private fun AttachmentThumb(
     // bitmap") — ~256px thumbnails are GC-cheap, and prompt freeing is
     // not worth a crash.
     val thumbKey = if (stableId.isNotEmpty()) {
-        Triple(stableId, base64.length, base64.sampleKey(32))
+        Triple(stableId, base64.length, base64.sampleKey(128))
     } else {
         Triple("s$slot", base64.length, base64.sampleKey(64))
     }

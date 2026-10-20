@@ -244,8 +244,14 @@ fun messageContentJson(
     return WireContent.Multipart(arr)
 }
 
-/** Raw size of a base64 payload of [chars] in bytes, for human-sized error messages. */
-fun base64Bytes(chars: Int): Long = (chars * 3L) / 4L
+/** Exact decoded size of a base64 payload (#339): the naive 3/4 rule
+ * overstates by the padding (1–2 B), so named limit errors would name a
+ * wrong cap-adjacent number ("1.1 MB" is fine; "X B" off by two is not).
+ * Valid base64 lengths are multiples of 4, so len/4*3 holds exactly. */
+fun base64Bytes(base64: String): Long {
+    val padding = base64.takeLastWhile { it == '=' }.length
+    return (base64.length / 4L) * 3L - padding
+}
 
 /** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal, never blank.
  * Pinned to US formatting (#339): user-visible strings must not render
@@ -412,14 +418,14 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // compression each allocate or throw, and any throw must recycle
             // the live bitmap — the recycle-before-reassign lines cover the
             // success path, the finally covers every throw between them.
-            // Declared outside (0 = nothing measured yet): the oversize
+            // Declared outside ("": nothing measured yet): the oversize
             // check below reads them after, and a throw before the first
             // candidate must report "too large to process", never a
             // nonsense byte count. Last attempt, not min/max (#339):
             // quality descends, so the final measurement is the closest
             // to passing by construction.
             var encoded: String? = null
-            var lastSize = 0
+            var lastCandidate = ""
             try {
                 // Null means no transform: transposes and flips compose a mirror
                 // via negative scale, which createBitmap applies directly.
@@ -508,7 +514,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                         )
                     }
                     val candidate = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                    lastSize = candidate.length
+                    lastCandidate = candidate
                     if (candidate.length <= MAX_IMAGE_BASE64_CHARS) {
                         encoded = candidate
                         break
@@ -518,15 +524,17 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 bitmap.recycle()
             }
             val final = encoded ?: throw IllegalStateException(
-                // Zero means the loop threw before measuring (OOM in the
+                // Empty means the loop threw before measuring (OOM in the
                 // encode): report unprocessable, never "0 B" or a sentinel.
-                (if (lastSize > 0) {
-                    "Photo too large even after shrinking (${formatBytes(base64Bytes(lastSize))}) — "
+                // Sizes exact via base64Bytes (#339): padding-adjusted, so
+                // the named number is the real one, not 1–2 B high.
+                (if (lastCandidate.isNotEmpty()) {
+                    "Photo too large even after shrinking (${formatBytes(base64Bytes(lastCandidate))}) — "
                 } else {
                     "Photo too large to process — "
                 }) +
                     "the per-photo limit is about " +
-                    "${formatBytes(base64Bytes(MAX_IMAGE_BASE64_CHARS))}. " +
+                    "${formatBytes(MAX_IMAGE_BASE64_CHARS * 3L / 4L)}. " +
                     "Pick a different photo.",
             )
             ChatAttachment(mimeType = "image/jpeg", base64 = final, id = java.util.UUID.randomUUID().toString())
