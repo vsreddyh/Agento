@@ -847,16 +847,24 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * until the new turn's Done replaces it (doSend rebuilds from history).
      */
     fun retry() {
-        // Narrated before the guard (#339): the affordances are disabled
-        // while streaming/loading, but a gated tap with staged photos must
-        // still say the photos stay — never dead-tap.
-        noteParkedPhotos("Retried")
-        if (_state.value.streaming || !_state.value.ready) return
+        // Gated like send() (#339): the !ready tap voices (thread load is
+        // reachable), the streaming tap stays silent (affordances hidden —
+        // no dead tap reachable there). Narration fires at the resend
+        // below, never before the guards, so it can't claim a resend that
+        // never happens.
+        if (!_state.value.ready) {
+            if (_state.value.pendingAttachments.isNotEmpty()) {
+                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            }
+            return
+        }
+        if (_state.value.streaming) return
         // messageHasContent, not content.isNotBlank (#318): an image-only
         // turn's text is blank and must still resend with its photos.
         val history = stripTrailingFragmentForResend(_state.value.messages)
             .filter { messageHasContent(it) }
         if (history.none { it.role == "user" }) return
+        noteParkedPhotos("Retried")
         doSend(history)
     }
 
@@ -902,9 +910,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // Second tap while a queue is parked (#339): the new
                     // text correctly stays in the composer, but with no
                     // toast the tap reads dead — the class this PR keeps
-                    // eliminating.
+                    // eliminating. Names staged photos like the branch
+                    // above so the two queued notices agree.
                     notify(
-                        "Already queued — sends when this reply finishes.",
+                        "Already queued — sends when this reply finishes." +
+                            if (photos.isNotEmpty()) {
+                                " " + attachmentMarker(photos.size) + " stays staged."
+                            } else {
+                                ""
+                            },
                         ToastKind.Info,
                     )
                 }
@@ -1610,14 +1624,21 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Regenerates the last reply (#122, v1 replace semantics): drops the
      * trailing assistant message and resends the remaining history. */
     fun regenerate() {
-        // Same narrate-before-guard as retry() (#339).
-        noteParkedPhotos("Regenerated")
-        if (_state.value.streaming || !_state.value.ready) return
+        // Same gate split as retry() (#339): voice !ready, silent on
+        // streaming (affordances hidden), narrate at the resend.
+        if (!_state.value.ready) {
+            if (_state.value.pendingAttachments.isNotEmpty()) {
+                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            }
+            return
+        }
+        if (_state.value.streaming) return
         // Same image-only rule as retry() (#318).
         val msgs = _state.value.messages.filter { messageHasContent(it) }
         if (msgs.none { it.role == "user" }) return
         val trimmed = if (msgs.lastOrNull()?.role == "assistant") msgs.dropLast(1) else msgs
         if (trimmed.none { it.role == "user" }) return
+        noteParkedPhotos("Regenerated")
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
@@ -1632,12 +1653,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * and sends (the stateless loop resends full history, so continuation
      * is a fresh turn — never presented as server-side resumption). */
     fun continueTurn() {
-        // Same narrate-before-guard as retry() (#339).
-        noteParkedPhotos("Continued")
-        if (_state.value.streaming || !_state.value.ready) return
+        // Same gate split as retry() (#339).
+        if (!_state.value.ready) {
+            if (_state.value.pendingAttachments.isNotEmpty()) {
+                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            }
+            return
+        }
+        if (_state.value.streaming) return
         val msgs = _state.value.messages
         val last = msgs.lastOrNull()
         if (last?.role != "assistant" || !last.interrupted) return
+        noteParkedPhotos("Continued")
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)

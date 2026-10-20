@@ -203,6 +203,45 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun laterPhotoTurnStillSignals() {
+        // Suffix scans any photo turn (#339): a text opener with photos
+        // later still shows the signal.
+        assertEquals(
+            "hello [photo]",
+            ChatThreads.titleFor(
+                listOf(
+                    ChatMessage("user", "hello", 0L),
+                    ChatMessage("assistant", "hi", 1L),
+                    ChatMessage("user", "more", 2L, attachments = listOf(attachment())),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun legacyThreadJsonDecodesWithoutAttachments() {
+        // Backward-compat pins (#339): JSON written before attachments (no
+        // field at all) and attachment objects written before ids (no id
+        // field) must decode to text-only with empty ids — never fail the
+        // whole thread.
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val thread = json.decodeFromString(
+            ChatThread.serializer(),
+            """{"id":"t","title":"x","updatedAt":1,"messages":[{"role":"user","content":"hi","ts":2}]}""",
+        )
+        val ui = ChatThreads.toUi(thread.messages)
+        assertEquals(1, ui.size)
+        assertEquals("hi", ui.single().content)
+        assertTrue(ui.single().attachments.isEmpty())
+        val attachment = json.decodeFromString(
+            ChatAttachment.serializer(),
+            """{"mimeType":"image/jpeg","base64":"AAA="}""",
+        )
+        assertEquals("", attachment.id)
+        assertEquals("AAA=", attachment.base64)
+    }
+
+    @Test
     fun textTitleUnchanged() {
         assertEquals("hello", ChatThreads.titleFor(listOf(ChatMessage("user", "hello"))))
     }

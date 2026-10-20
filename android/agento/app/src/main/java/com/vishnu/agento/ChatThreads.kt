@@ -82,7 +82,11 @@ object ChatThreads {
             return "New conversation"
         }
         val first = textMsg.content.trim()
-        val photos = textMsg.attachments.size
+        // Suffix from ANY user photo turn (#339), not just the titled one:
+        // a text opener followed by a photo turn still carries photos, and
+        // the switcher row should say so like search/export do.
+        val photoTurn = userTurns.firstOrNull { it.attachments.isNotEmpty() }
+        val photos = photoTurn?.attachments?.size ?: 0
         val oneLine = first.replace(titleWhitespace, " ")
         // Photo signal with the budget kept (#339): the marker reserves
         // its width first, so the row never exceeds 42 chars.

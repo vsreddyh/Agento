@@ -127,17 +127,18 @@ private fun AttachmentThumb(
     // Identity without walking the payload (#339): the per-pick UUID is
     // stable across removes — slot is deliberately NOT in the key, so
     // photo 1 keeps its thumbnail when photo 0 leaves (no re-decode, no
-    // flicker) — and distinct across identical picks (no aliasing). Length
-    // rides along so an ID collision still re-keys. Legacy payloads
-    // (id "") fall back to slot + a 128-char head/tail sample — cheap
-    // compares, no full-string walk. Decoded off-main: ~1 MB Base64.decode
-    // + decodeByteArray during composition janks low-end scroll, so
-    // produceState moves it to IO (placeholder shows until it lands). No
-    // manual recycle: it can pull pixels from under a late outgoing draw
-    // ("trying to use a recycled bitmap") — ~256px thumbnails are
-    // GC-cheap, and prompt freeing is not worth a crash.
+    // flicker) — and distinct across identical picks (no aliasing). A
+    // 64-char head/tail sample rides along so a hand-mutated payload
+    // (same id, same length, different bytes) still re-keys: exact with
+    // no full-string walk. Legacy payloads (id "") key on slot + sample.
+    // Decoded off-main: ~1 MB Base64.decode + decodeByteArray during
+    // composition janks low-end scroll, so produceState moves it to IO
+    // (placeholder shows until it lands). No manual recycle: it can pull
+    // pixels from under a late outgoing draw ("trying to use a recycled
+    // bitmap") — ~256px thumbnails are GC-cheap, and prompt freeing is
+    // not worth a crash.
     val thumbKey = if (stableId.isNotEmpty()) {
-        stableId to base64.length
+        Triple(stableId, base64.length, base64.take(32) + base64.takeLast(32))
     } else {
         Triple("s$slot", base64.length, base64.take(64) + base64.takeLast(64))
     }
