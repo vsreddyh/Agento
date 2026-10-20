@@ -344,3 +344,46 @@ func TestPendingTableIsBounded(t *testing.T) {
 		t.Fatalf("pending = %d, want %d", n, pendingCap)
 	}
 }
+
+// Teardown mid-hold is not a timeout: the row must expire with the
+// "abandoned at teardown" reason, and Pi gets a failure for the call it is
+// waiting on. This branch only runs when holdCtx is wired, which the other
+// tests leave nil.
+func TestHoldAbandonedAtTeardown(t *testing.T) {
+	store := approvals.NewMemoryStore()
+	out, child := &bufWriter{}, &bufWriter{}
+	r := testRelay(store)
+	r.out = out
+	r.childIn = child
+	r.waitFor = time.Minute
+	r.pollFor = 10 * time.Millisecond
+
+	holdCtx, cancelHolds := context.WithCancel(context.Background())
+	defer cancelHolds()
+	r.holdCtx = holdCtx
+
+	line, env, params := callLine(`11`, "delete_note", `{"id":"abc"}`)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.holdCall(line, env, params)
+	}()
+	waitForApproval(t, store)
+	cancelHolds()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hold did not end at teardown")
+	}
+	if child.String() != "" {
+		t.Fatalf("abandoned call reached the child: %q", child.String())
+	}
+	if !strings.Contains(out.String(), "abandoned at teardown") {
+		t.Fatalf("Pi got no teardown error: %q", out.String())
+	}
+	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionExpired ||
+		!strings.Contains(audit[0].Error, "abandoned at teardown") {
+		t.Fatalf("audit = %+v", audit)
+	}
+}

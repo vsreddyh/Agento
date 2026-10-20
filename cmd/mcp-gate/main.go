@@ -75,7 +75,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: mcp-gate --server NAME -- <command> [args...]")
 		os.Exit(2)
 	}
-	store := openStore()
+	store := openStore(*server)
 	r := newRelay(*server, store, log.New(os.Stderr, "mcp-gate["+*server+"] ", log.LstdFlags))
 	if err := r.run(context.Background(), os.Stdin, os.Stdout, rest[0], rest[1:]); err != nil {
 		r.log.Printf("relay ended: %v", err)
@@ -83,9 +83,11 @@ func main() {
 	}
 }
 
-func openStore() approvals.Store {
+func openStore(server string) approvals.Store {
 	if store, err := approvals.FromEnv(); err != nil {
-		log.Printf("mcp-gate: approvals falling back to in-memory: %v", err)
+		// Prefixed like every other relay line: six relays share stderr, and
+		// this is the line that explains a later split-brain warning.
+		log.Printf("mcp-gate[%s] approvals falling back to in-memory: %v", server, err)
 		return approvals.NewMemoryStore()
 	} else {
 		return store
@@ -207,6 +209,18 @@ func (r *relay) run(
 	}
 	stop()
 	child.Wait()
+	// The second pump ends because of the teardown above, so it is read
+	// without waiting (a Pi-side reader can stay blocked on stdin forever).
+	// A non-clean cause is still worth a line: a clean hangup must not hide a
+	// child that died dirty, and vice versa. "server process exited" is the
+	// expected consequence of stop() and is not logged.
+	select {
+	case second := <-done:
+		if second != nil && second.Error() != "server process exited" {
+			r.log.Printf("relay: other direction ended: %v", second)
+		}
+	default:
+	}
 	return err
 }
 

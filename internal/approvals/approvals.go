@@ -228,6 +228,9 @@ func isSecretKey(k string) bool {
 		"password", "passwd", "pwd", "passcode", "secret", "token",
 		"2fa", "otp", "api_key", "apikey", "private_key", "credential",
 		"auth", "bearer", "cookie", "session", "access_key", "accesskey",
+		// Bare "key" too: over-matching "monkey" is the accepted cost, and a
+		// {"key": "sk-..."} arg must not sit in Mongo for 90 days.
+		"key",
 	} {
 		if strings.Contains(k, sub) {
 			return true
@@ -268,7 +271,10 @@ type AuditEntry struct {
 	ExpiresAt time.Time `bson:"expiresAt" json:"-"`
 }
 
-// Clone returns a copy safe to hand to another goroutine.
+// Clone returns a top-level copy: Args is a fresh map, but nested values
+// (map[string]any, []any) are shared. That is safe for the current contract —
+// Redact builds new values and no caller mutates a returned row — but it is
+// not a deep copy, so a future in-place edit must copy the nested value too.
 func (a Approval) Clone() Approval {
 	if a.Args != nil {
 		cp := make(map[string]any, len(a.Args))
