@@ -85,6 +85,15 @@ fun ChatAttachment.dataUri(): String = "data:image/jpeg;base64,$base64"
 fun attachmentMarker(n: Int): String =
     if (n == 1) "[1 photo attached]" else "[$n photos attached]"
 
+/**
+ * Text plus its photo marker, one spelling (#339): the wire history,
+ * search haystack, and Markdown export all render photo turns this way,
+ * so the next edit cannot fix two and miss one. Empty text yields the
+ * bare marker; zero photos yields the text untouched.
+ */
+fun contentWithMarker(content: String, n: Int): String =
+    if (n <= 0) content else (content.trim() + " " + attachmentMarker(n)).trim()
+
 /** True when the message carries anything the agent should see. Text-only
  * checks (`content.isNotBlank()`) drop image-only turns from resends and
  * resume, so every history filter must use this instead. */
@@ -131,7 +140,7 @@ fun messageContentJson(
         // prompts with the trailing turn alone, but any other reader of
         // this history should see that photos were here — not a blank.
         if (role == "user" && attachments.isNotEmpty() && !includeImages) {
-            return (content.trim() + " " + attachmentMarker(attachments.size)).trim()
+            return contentWithMarker(content, attachments.size)
         }
         // Assistant turns never stage photos: the marker rule above is
         // user-only by construction, and a bare return here keeps a
@@ -339,7 +348,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 "Photo too large even after shrinking (${formatBytes(base64Bytes(largest))})" +
                     " — the per-photo limit is about " +
                     "${formatBytes(base64Bytes(MAX_IMAGE_BASE64_CHARS))}. " +
-                    "Try a smaller crop.",
+                    "Pick a different photo.",
             )
             ChatAttachment(mimeType = "image/jpeg", base64 = final)
         }

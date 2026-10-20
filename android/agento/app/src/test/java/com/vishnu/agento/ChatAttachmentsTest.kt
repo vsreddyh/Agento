@@ -154,6 +154,15 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun contentWithMarkerSharedSpelling() {
+        assertEquals("hi", contentWithMarker("hi", 0))
+        assertEquals("hi [1 photo attached]", contentWithMarker("hi", 1))
+        assertEquals("hi [1 photo attached]", contentWithMarker("  hi  ", 1))
+        assertEquals("[2 photos attached]", contentWithMarker("", 2))
+        assertEquals("[2 photos attached]", contentWithMarker("   ", 2))
+    }
+
+    @Test
     fun photoOnlyThreadTitlesNamePhotos() {
         assertEquals(
             "Photo",

@@ -311,6 +311,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun hasAttachmentRoom(): Boolean =
         _state.value.pendingAttachments.size < MAX_IMAGES_PER_TURN
 
+    /** Live staged-photo count for tap-time cap math (#339): ChatTab reads
+     * the ViewModel, not its last-recomposed snapshot, so a
+     * remove-then-rapid-repick sees the freed slot. */
+    fun pendingAttachmentCount(): Int = _state.value.pendingAttachments.size
+
     /**
      * Toast-host notice. Bumps the generation with every set so a repeated
      * identical notice re-fires instead of deduping silent (#339).
@@ -588,13 +593,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 t.title.ifBlank { UNTITLED }.lowercase(java.util.Locale.ROOT).contains(q) ||
                     t.messages.any {
                         // Photo threads are findable by "photo" (#318): their
-                        // images are payloads with no searchable text.
-                        val marker = if (it.attachments.isNotEmpty()) {
-                            " " + attachmentMarker(it.attachments.size)
-                        } else {
-                            ""
-                        }
-                        (it.content + marker).lowercase(java.util.Locale.ROOT).contains(q)
+                        // images are payloads with no searchable text. One
+                        // marker spelling shared with export + wire (#339).
+                        contentWithMarker(it.content, it.attachments.size)
+                            .lowercase(java.util.Locale.ROOT).contains(q)
                     }
                 )
         }.map {
@@ -687,9 +689,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         for (m in t.messages) {
             val who = if (m.role == "user") "You" else "Assistant"
             // Photos are payloads, not text: the marker keeps the export
-            // honest about turns whose content is an image (#318).
-            val marker = if (m.attachments.isNotEmpty()) " " + attachmentMarker(m.attachments.size) else ""
-            sb.append("**$who:** ${(m.content.trim() + marker).trim()}\n\n")
+            // honest about turns whose content is an image (#318). Shared
+            // spelling with search + wire (#339).
+            val marker = contentWithMarker(m.content.trim(), m.attachments.size)
+            sb.append("**$who:** $marker\n\n")
             if (m.role != "user" && (m.tools.isNotEmpty() || m.skills.isNotEmpty())) {
                 // Backticked so a tool/skill name can never break the export's
                 // Markdown; inner backticks are quoted first so the fence holds.
@@ -919,7 +922,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      */
     fun steer() {
         val text = _state.value.pending.trim()
-        if (text.isEmpty() || !_state.value.ready) return
+        // Ready-gated with a voice like send() (#339): the Steer affordance
+        // only shows with non-blank text, so the empty-text half is
+        // UI-unreachable — but !ready is reachable (streaming during load),
+        // and an ungated return would dead-tap there.
+        if (text.isEmpty() || !_state.value.ready) {
+            if (!_state.value.ready &&
+                (text.isNotEmpty() || _state.value.pendingAttachments.isNotEmpty())
+            ) {
+                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            }
+            return
+        }
         if (!_state.value.streaming || _state.value.activeRunId.isBlank()) {
             send()
             return

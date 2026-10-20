@@ -13,6 +13,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -101,6 +102,13 @@ import kotlinx.coroutines.withContext
 /** Pending count as both the badge and the banner show it: one cap, one
  * wording, so the two can never disagree above 99. */
 private fun pendingCountLabel(count: Int): String = if (count > 99) "99+" else "$count"
+
+/** Unwraps a possibly-wrapped Context to its Activity, if any (#339). */
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 /**
  * One staged or sent photo (#318): the remembered ~256px thumbnail, or an
@@ -245,8 +253,7 @@ internal fun ChatTab(
     // a concurrent gallery batch can never delete a capture still decoding.
     // [onBatchDone] fires on Main after the batch (camera uses it to drop
     // its in-flight flag).
-    fun processUris(uris: List<Uri>, cleanup: File? = null, onBatchDone: () -> Unit = {}) {
-        // Done fires on early returns too (#339): the camera sets its
+    fun processUris(uris: List<Uri>, cleanup: File? = null, onBatchDone: () -> Unit = {}) {        // Done fires on early returns too (#339): the camera sets its
         // in-flight flag before calling, so a cap refusal without the
         // callback would stick the flag and leak the capture forever.
         // The capture itself is deleted here too — the finally below only
@@ -258,8 +265,9 @@ internal fun ChatTab(
         }
         // Unified on vm.notify (#339): the same cap refused here and
         // mid-batch below must have one lifetime — a composition toast is
-        // lost on rotation while a state notice survives it.
-        val slots = MAX_IMAGES_PER_TURN - state.pendingAttachments.size
+        // lost on rotation while a state notice survives it. Count read
+        // live from the ViewModel, not the last recomposition (#339).
+        val slots = MAX_IMAGES_PER_TURN - vm.pendingAttachmentCount()
         if (slots <= 0) {
             // One cap string + Info, shared with the backstop (#339).
             vm.notify(capRefused(), ToastKind.Info)
@@ -384,10 +392,11 @@ internal fun ChatTab(
     ) { granted ->
         if (granted) {
             launchCamera()
-        } else if (context is Activity &&
-            !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
-                context, Manifest.permission.CAMERA,
-            )
+        } else if (context.findActivity()?.let {
+                androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
+                    it, Manifest.permission.CAMERA,
+                )
+            } == false
         ) {
             // Permanent denial ("Don't allow again"): the request UI will
             // never show again, so a re-toast loops forever (#339). The
