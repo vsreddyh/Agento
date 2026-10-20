@@ -200,7 +200,9 @@ func (s *MemoryStore) List(_ context.Context, f Filter) ([]Item, error) {
 	}
 	out := make([]Item, 0, 16)
 	for _, it := range s.items {
-		if p := strings.TrimSpace(f.Profile); p != "" && it.Profile != p {
+		// f.Profile is trimmed and non-empty (rejected above); it.Profile
+		// was trimmed on write. Direct comparison, no re-trim.
+		if it.Profile != f.Profile {
 			continue
 		}
 		if t := strings.TrimSpace(f.Topic); t != "" && it.Topic != NormalizeTopic(t) {

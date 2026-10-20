@@ -101,7 +101,10 @@ type Update struct {
 	Status *Status
 }
 
-// Filter selects items. Zero values mean no constraint.
+// Filter selects items. Profile is required (an empty one fails, so no read
+// can fan out across profiles); Topic is raw (List normalises, and callers
+// may pass either form because normalising is idempotent); Status and Limit
+// are optional, with Limit<=0 meaning the store cap.
 type Filter struct {
 	Profile string
 	Topic   string

@@ -207,10 +207,8 @@ func (s *MongoStore) List(ctx context.Context, f Filter) ([]Item, error) {
 		return nil, NewStoreError("unknown memory status", false)
 	}
 	// 0 is the Go zero value for "unspecified", not "no rows".
-	q := bson.M{}
-	if p := strings.TrimSpace(f.Profile); p != "" {
-		q["profile"] = p
-	}
+	// f.Profile is trimmed and non-empty (rejected above).
+	q := bson.M{"profile": f.Profile}
 	if t := strings.TrimSpace(f.Topic); t != "" {
 		q["topic"] = NormalizeTopic(t)
 	}
