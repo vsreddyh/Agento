@@ -58,7 +58,8 @@ internal fun parseMemoryItem(o: JSONObject): MemoryItem? {
 }
 
 /** A 200 whose body is not JSON is a broken payload, not an empty answer:
- * callers render the code (no silent success, no codeless error). */
+ * the message carries no status, so callers fall back to codeless text
+ * rather than showing a success code as an error code. */
 internal fun parseObject(body: String): JSONObject =
     runCatching { JSONObject(body) }.getOrElse {
         throw RuntimeException("unparseable response body")

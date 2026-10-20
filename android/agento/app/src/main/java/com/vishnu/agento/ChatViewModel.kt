@@ -1024,6 +1024,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         action: suspend (String) -> Result<*>,
         /** Runs on Main after a success: collapses editors, clears composers. */
         onSuccess: () -> Unit = {},
+        /** Notice carried into the completion's own refresh: passing it here
+         * instead of refreshing inside onSuccess avoids a double load whose
+         * second, noticeless call cancels the first (single-flight). */
+        notice: String? = null,
     ) {
         // Both the add here and the remove below run on Main (UI taps and
         // the Main-confined completion), so a plain set is safe; moving
@@ -1053,7 +1057,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // pending count.
                     onSuccess()
                     pollMemoryCount(path)
-                    if (_state.value.showMemory) refreshMemory()
+                    if (_state.value.showMemory) refreshMemory(notice)
                 }
             }
         }
@@ -1066,9 +1070,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Deletes one item: it is gone from the next turn. */
     fun deleteMemory(id: String) {
         actOnMemory("item:$id", id, action = { path -> memoryApi.deleteMemory(path, id) },
-            onSuccess = {
-                if (_state.value.showMemory) refreshMemory("Deleted.")
-            })
+            notice = "Deleted.")
     }
 
     /** Saves an edit to text and/or topic. Trims like create: a

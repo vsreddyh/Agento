@@ -55,7 +55,7 @@ class MemoryApiTest {
             {"id":42,"topic":"work","text":"coerced","status":"pending"},
             {"id":"m2","topic":"","text":"","status":"pending"}
             ],"paused":["health",null,42],"topics":["work"],"warnings":[]}"""
-        val list = parseMemoryList(body)
+        val list = parseMemoryList(body)!!
         assertEquals(2, list.items.size)
         assertEquals("m1", list.items[0].id)
         assertEquals("m2", list.items[1].id)
@@ -66,7 +66,7 @@ class MemoryApiTest {
 
     @Test
     fun `parseMemoryList tolerates missing keys`() {
-        val list = parseMemoryList("""{"items":[]}""")
+        val list = parseMemoryList("""{"items":[]}""")!!
         assertTrue(list.items.isEmpty())
         assertTrue(list.paused.isEmpty())
         assertTrue(list.topics.isEmpty())
