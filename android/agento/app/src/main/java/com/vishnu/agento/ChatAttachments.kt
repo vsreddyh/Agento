@@ -536,8 +536,13 @@ fun decodeThumbnail(base64: String): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        // Long division like the full-size loop (#339): identical exit
+        // behavior, minus the only Int multiplication in any sampling
+        // loop — same overflow discipline everywhere sampling runs.
         var sample = 1
-        while (bounds.outWidth / sample > 256 || bounds.outHeight / sample > 256) {
+        while (bounds.outWidth / sample.toLong() > 256 ||
+            bounds.outHeight / sample.toLong() > 256
+        ) {
             sample *= 2
         }
         BitmapFactory.decodeByteArray(

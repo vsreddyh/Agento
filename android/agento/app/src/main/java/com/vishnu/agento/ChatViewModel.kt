@@ -874,9 +874,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * retry/regenerate/continue resend history, never the composer's
      * staging — said out loud like every other narrowing in this file.
      * Info, not Error: nothing failed, the photos are safe in the
-     * composer. */
+     * composer. Guarded wired like every marker it gates (#339). */
     private fun noteParkedPhotos(verb: String) {
-        if (_state.value.pendingAttachments.isNotEmpty()) {
+        if (_state.value.pendingAttachments.wiredPhotoCount() > 0) {
             notify(
                 "$verb without the staged photos — they stay in the " +
                     "composer for your next message.",

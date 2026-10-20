@@ -621,15 +621,17 @@ class ChatApi(context: Context) {
         // steady-state cost.
         val rawBytes = raw.toByteArray(Charsets.UTF_8).size
         if (wireSizeExceeded(rawBytes)) {
-            // Phrased for what's actually in the turn (#339): a long
-            // text-only thread trips the same cap with zero photos, and
-            // "remove a photo" would send it hunting for one. Counted
-            // wired, like the wire filter itself.
+            // Phrased for what's actually measured (#339): rawBytes is the
+            // whole request JSON (full thread + framing), so "this turn"
+            // would misname the number on a long text-only thread — and a
+            // photo-less trip must not say "remove a photo". The actionable
+            // second half is conditional on what the turn carries (counted
+            // wired, like the wire filter itself).
             val hasPhotos = lastUserIdx >= 0 &&
                 messages[lastUserIdx].attachments.wiredPhotoCount() > 0
             trySend(
                 ChatEvent.Error(
-                    "Couldn't send: this turn is about ${formatBytes(rawBytes.toLong())} " +
+                    "Couldn't send: this conversation is about ${formatBytes(rawBytes.toLong())} " +
                         "(limit about ${formatBytes(MAX_CHAT_WIRE_BYTES.toLong())}). " +
                         if (hasPhotos) {
                             "Remove a photo or start a new conversation."

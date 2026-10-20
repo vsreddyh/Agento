@@ -320,7 +320,12 @@ internal fun ChatTab(
         if ((context as? Activity)?.isChangingConfigurations != true) {
             cameraPendingSince = 0L
         }
-        val sweepDir = context.cacheDir.resolve("camera")
+        // Application context for the dir (#339): the IO closure below
+        // must capture only this File, never the Activity. The synchronous
+        // pre-IO reads above (this resolve, the Activity cast) retain
+        // nothing past their line — the boundary that matters is what
+        // crosses into IO. Same leak class as the batch decode.
+        val sweepDir = context.applicationContext.cacheDir.resolve("camera")
         withContext(Dispatchers.IO) {
             runCatching {
                 sweepDir.takeIf { it.exists() }?.listFiles()
@@ -2090,29 +2095,27 @@ internal fun ChatScreen(
                     // Staged photos (#318): thumbnails with per-photo remove.
                     // They send with the next turn even when the turn has no
                     // text; the count line states the per-turn cap up front.
-                    // All counts wired (#339): the strip describes the same
-                    // cap math addPendingAttachments enforces, so blanks
-                    // (impossible from the picker, possible in theory) can
-                    // never read "1/2 photos" with 2 slots free.
-                    val stagedWiredCount = state.pendingAttachments.wiredPhotoCount()
-                    if (stagedWiredCount > 0) {
+                    // One wired list for gate + row + labels (#339): the
+                    // pairs carry their staged index (for remove) alongside
+                    // the wired payload (for render), so a single pass
+                    // drives everything and no count can disagree with it.
+                    val stagedSlots = state.pendingAttachments.mapIndexedNotNull { i, a ->
+                        if (a.base64.isNotBlank()) i to a else null
+                    }
+                    if (stagedSlots.isNotEmpty()) {
                         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                // Rendered wired, removed by staged index
-                                // (#339): blanks (theoretical only) render
-                                // nothing, while remove still targets the
-                                // staged slot the ViewModel holds. Labeled
-                                // by WIRED position (#339): the staged index
-                                // would read "photo 3 of 2" once blanks stop
-                                // aligning the two orders.
-                                state.pendingAttachments.mapIndexedNotNull { i, a ->
-                                    if (a.base64.isNotBlank()) i to a else null
-                                }.forEachIndexed { w, (i, a) ->
+                                // Labeled by WIRED position (#339): the staged
+                                // index would read "photo 3 of 2" once blanks
+                                // stop aligning the two orders — while remove
+                                // still targets the staged slot the ViewModel
+                                // holds.
+                                stagedSlots.forEachIndexed { w, (i, a) ->
                                     Box {
                                         AttachmentThumb(
                                             base64 = a.base64,
                                             label = "Staged photo ${w + 1} of " +
-                                                "${stagedWiredCount}",
+                                                "${stagedSlots.size}",
                                             modifier = Modifier.size(64.dp),
                                             slot = i,
                                             stableId = a.id,
@@ -2136,7 +2139,7 @@ internal fun ChatScreen(
                                 }
                             }
                             Text(
-                                "${stagedWiredCount}/$MAX_IMAGES_PER_TURN photos — " +
+                                "${stagedSlots.size}/$MAX_IMAGES_PER_TURN photos — " +
                                     "sent with your next message.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
