@@ -118,5 +118,9 @@ available.
   ranking.
 - Agent-side deletion. Deletion is the user's verb; a model that can forget on
   request can also forget on a misreading.
+- Deduplication or rate-limiting of agent proposals. `save_memory` never checks
+  existing text, so a looping agent can fill the 200-item cap with duplicates.
+  Pending items are cheap, visible, and confirmed one by one; a dedup heuristic
+  would risk merging two facts the user stated separately.
 - Memory in the settings backup. The export contract is app-owned; a memory
   payload would need its own versioning conversation.

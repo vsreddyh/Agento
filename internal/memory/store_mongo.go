@@ -21,10 +21,6 @@ type MongoStore struct {
 	Logf func(string, ...any)
 }
 
-// Shared reports true: every process holding the same URI sees the same
-// memory, which is what lets the gateway inject what the app just edited.
-func (s *MongoStore) Shared() bool { return true }
-
 func (s *MongoStore) logf(format string, args ...any) {
 	if s.Logf != nil {
 		s.Logf(format, args...)
@@ -63,13 +59,19 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 }
 
 // Create inserts one item. Empty timestamps are filled here so every path
-// (app, agent tool) gets the same clock.
+// (app, agent tool) gets the same clock, and text is cleaned and empty text
+// rejected here for the same reason as the memory store: the invariant lives
+// in the store, not in each caller.
 func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
 	if i.ID == "" {
 		i.ID = NewID()
 	}
 	if strings.TrimSpace(i.Profile) == "" {
 		return Item{}, NewStoreError("memory item needs a profile", false)
+	}
+	i.Text = CleanText(i.Text)
+	if i.Text == "" {
+		return Item{}, NewStoreError("memory item needs text", false)
 	}
 	now := time.Now().UnixMilli()
 	if i.CreatedAt == 0 {
@@ -101,8 +103,10 @@ func (s *MongoStore) Get(ctx context.Context, id string) (Item, error) {
 	return it, nil
 }
 
-// Update applies a partial edit and returns the stored row.
-func (s *MongoStore) Update(ctx context.Context, id string, u Update) (Item, error) {
+// Update applies a partial edit and returns the stored row. The filter
+// carries the profile: one query authorises and writes, and a foreign id
+// reads as NotFound instead of costing a Get-then-write pair.
+func (s *MongoStore) Update(ctx context.Context, id, profile string, u Update) (Item, error) {
 	set := bson.M{"updatedAt": time.Now().UnixMilli()}
 	if u.Text != nil {
 		set["text"] = CleanText(*u.Text)
@@ -118,7 +122,7 @@ func (s *MongoStore) Update(ctx context.Context, id string, u Update) (Item, err
 	}
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
 	var it Item
-	err := s.items.FindOneAndUpdate(ctx, bson.M{"_id": id}, bson.M{"$set": set}, opts).Decode(&it)
+	err := s.items.FindOneAndUpdate(ctx, bson.M{"_id": id, "profile": profile}, bson.M{"$set": set}, opts).Decode(&it)
 	if errors.Is(err, mongoDrv.ErrNoDocuments) {
 		return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
 	}
@@ -130,8 +134,9 @@ func (s *MongoStore) Update(ctx context.Context, id string, u Update) (Item, err
 
 // Delete removes one item. Deleting an already-deleted id is NotFound: the
 // app should reload rather than believe a second delete did something.
-func (s *MongoStore) Delete(ctx context.Context, id string) error {
-	res, err := s.items.DeleteOne(ctx, bson.M{"_id": id})
+// Profile-scoped like Update.
+func (s *MongoStore) Delete(ctx context.Context, id, profile string) error {
+	res, err := s.items.DeleteOne(ctx, bson.M{"_id": id, "profile": profile})
 	if err != nil {
 		return NewStoreError("memory delete failed: "+err.Error(), true)
 	}
@@ -209,9 +214,12 @@ func (s *MongoStore) PausedTopics(ctx context.Context, profile string) ([]string
 	}
 	if err := s.settings.FindOne(ctx, bson.M{"_id": profile}).Decode(&doc); err != nil {
 		if errors.Is(err, mongoDrv.ErrNoDocuments) {
-			return nil, nil
+			return []string{}, nil
 		}
 		return nil, NewStoreError("memory topic read failed: "+err.Error(), true)
+	}
+	if doc.Paused == nil {
+		return []string{}, nil
 	}
 	return doc.Paused, nil
 }

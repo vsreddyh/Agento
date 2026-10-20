@@ -24,9 +24,6 @@ type MemoryStore struct {
 	paused map[string]map[string]bool
 }
 
-// Shared reports false: this store is not visible across processes.
-func (s *MemoryStore) Shared() bool { return false }
-
 // NewMemoryStore builds an empty store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
@@ -35,10 +32,16 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-// Create stores one item.
+// Create stores one item. Text is cleaned and empty text rejected here, not
+// only at the callers: MaxText is a store invariant, and a future caller that
+// forgets CleanText must not be able to store a 10KB item or "".
 func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
 	if strings.TrimSpace(i.Profile) == "" {
 		return Item{}, NewStoreError("memory item needs a profile", false)
+	}
+	i.Text = CleanText(i.Text)
+	if i.Text == "" {
+		return Item{}, NewStoreError("memory item needs text", false)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,12 +75,13 @@ func (s *MemoryStore) Get(_ context.Context, id string) (Item, error) {
 	return it, nil
 }
 
-// Update applies a partial edit.
-func (s *MemoryStore) Update(_ context.Context, id string, u Update) (Item, error) {
+// Update applies a partial edit. A foreign profile's id is NotFound, the
+// same 404 the gateway returns for a missing id.
+func (s *MemoryStore) Update(_ context.Context, id, profile string, u Update) (Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it, ok := s.items[id]
-	if !ok {
+	if !ok || it.Profile != profile {
 		return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
 	}
 	if u.Text != nil {
@@ -97,11 +101,12 @@ func (s *MemoryStore) Update(_ context.Context, id string, u Update) (Item, erro
 	return it, nil
 }
 
-// Delete removes one item.
-func (s *MemoryStore) Delete(_ context.Context, id string) error {
+// Delete removes one item. Profile-scoped like Update.
+func (s *MemoryStore) Delete(_ context.Context, id, profile string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.items[id]; !ok {
+	it, ok := s.items[id]
+	if !ok || it.Profile != profile {
 		return &StoreError{Msg: "unknown memory " + id, NotFound: true}
 	}
 	delete(s.items, id)
@@ -176,11 +181,12 @@ func (s *MemoryStore) SetTopicPaused(_ context.Context, profile, topic string, p
 	return nil
 }
 
-// PausedTopics returns the paused topics for a profile.
+// PausedTopics returns the paused topics for a profile. Never nil: the app
+// screen reads paused as a list, and null is not a list.
 func (s *MemoryStore) PausedTopics(_ context.Context, profile string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []string
+	out := []string{}
 	for t := range s.paused[profile] {
 		out = append(out, t)
 	}

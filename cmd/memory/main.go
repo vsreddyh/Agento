@@ -73,11 +73,17 @@ func main() {
 		profile = "chat"
 	}
 
-	ms, err := memory.FromEnv()
-	if err != nil {
-		log.Fatalf("memory: %v", err)
+	// Without Mongo the gateway serves from an in-process store the agent
+	// cannot see, so proposals would vanish. Refusing to start would fail the
+	// container's pi-mcp-list gate and take all six servers down with it; an
+	// in-process store with a loud warning keeps the server connectable while
+	// saying plainly that saves here will not reach the app.
+	if ms, err := memory.FromEnv(); err != nil {
+		log.Printf("memory: no database, using in-process store (saves will not reach the app): %v", err)
+		store = memory.NewMemoryStore()
+	} else {
+		store = ms
 	}
-	store = ms
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: "1.0.0"}, nil)
 
@@ -86,10 +92,15 @@ func main() {
 			"\"wants weekly reports as a table\", not \"likes tables\"). The item is saved as PENDING and shown in the app; the user confirms it before it affects answers. " +
 			"Call this when they correct you or state a lasting preference, not for passing context or anything they have not said. Do not save secrets, credentials or one-off details."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in saveMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
+			trimmed := strings.TrimSpace(in.Text)
 			text := memory.CleanText(in.Text)
 			if text == "" {
 				return result(map[string]any{"ok": false, "error": "text is required: one durable thing the user said"})
 			}
+			// CleanText clips at MaxText runes rather than rejecting: say so,
+			// so the agent can rephrase instead of believing a clipped fact
+			// stored whole.
+			truncated := text != trimmed
 			it, err := store.Create(ctx, memory.Item{
 				Profile: profile,
 				Topic:   memory.NormalizeTopic(in.Topic),
@@ -101,10 +112,11 @@ func main() {
 				return fail(err)
 			}
 			return result(map[string]any{
-				"ok":     true,
-				"item":   it,
-				"status": string(memory.StatusPending),
-				"note":   "Saved as pending; the user confirms it in the app before it is used.",
+				"ok":        true,
+				"item":      it,
+				"status":    string(memory.StatusPending),
+				"truncated": truncated,
+				"note":      "Saved as pending; the user confirms it in the app before it is used.",
 			})
 		})
 
@@ -118,6 +130,12 @@ func main() {
 					return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown status %q: use confirmed or pending", st)})
 				}
 				f.Status = status
+			}
+			// Negative is a caller error, not the store cap: the HTTP
+			// contract 400s it, and the MCP surface must not silently mean
+			// 200.
+			if in.Limit < 0 {
+				return result(map[string]any{"ok": false, "error": "limit must be a non-negative number"})
 			}
 			f.Limit = in.Limit
 			if f.Limit == 0 {

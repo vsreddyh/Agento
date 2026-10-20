@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -207,5 +208,31 @@ func TestMemoryPromptInjectsOnlyConfirmedUnpaused(t *testing.T) {
 	}
 	if !strings.HasPrefix(block, "[Memory:") || !strings.HasSuffix(block, "[/Memory]") {
 		t.Fatalf("block not delimited: %q", block)
+	}
+}
+
+func TestMemoryEmptyTopicAndNullPaused(t *testing.T) {
+	srv := newTestServer(t, &fakeAgent{}, Config{})
+	// A fresh profile's paused list is an empty array, not null.
+	body := decodeBody(t, do(t, srv, http.MethodGet, "/api/memory", ""))
+	paused, ok := body["paused"].([]any)
+	if !ok || len(paused) != 0 {
+		t.Fatalf("fresh paused = %#v, want []", body["paused"])
+	}
+
+	create := do(t, srv, http.MethodPost, "/api/memory",
+		`{"topic":"health","text":"likes tea"}`)
+	id := decodeBody(t, create)["item"].(map[string]any)["id"].(string)
+	for _, topic := range []string{``, `---`, `   `} {
+		rec := do(t, srv, http.MethodPut, "/api/memory/"+id,
+			`{"topic":`+strconv.Quote(topic)+`}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("topic %q: %d, want 400 (%s)", topic, rec.Code, rec.Body)
+		}
+	}
+	// A real topic name still works, including one that normalises.
+	rec := do(t, srv, http.MethodPut, "/api/memory/"+id, `{"topic":"general"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("topic general: %d, want 200 (%s)", rec.Code, rec.Body)
 	}
 }

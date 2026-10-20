@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"agento/internal/memory"
 )
@@ -27,6 +28,11 @@ import (
 //
 // What these routes show is what the next turn is given: injection reads the
 // same store and applies the same confirmed-unpaused rule.
+
+// Memory ids are 24-hex ObjectIDs; the cap only keeps a garbage path from
+// becoming a store query. Per-resource on purpose: changing the runs cap must
+// not silently change this 404 contract (same rule as approvals).
+const maxMemoryIDLen = 64
 
 func memoryWire(it memory.Item) map[string]any {
 	return map[string]any{
@@ -59,20 +65,6 @@ func memoryError(w http.ResponseWriter, err error) {
 // memoryCtx bounds one store call: memory is a local read, not a model turn.
 func memoryCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
-}
-
-// ownedMemory reads one item and hides a foreign profile's row behind the
-// same 404 as a missing id. Memory ids are not secrets, but "exists but is
-// not yours" is a fact the API has no reason to confirm.
-func (s *Server) ownedMemory(ctx context.Context, id, profile string) (memory.Item, error) {
-	it, err := s.memory.Get(ctx, id)
-	if err != nil {
-		return memory.Item{}, err
-	}
-	if it.Profile != profile {
-		return memory.Item{}, &memory.StoreError{Msg: "unknown memory " + id, NotFound: true}
-	}
-	return it, nil
 }
 
 func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request, rest, profile string) {
@@ -141,7 +133,7 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request, rest, prof
 	}
 
 	// One item, addressed by id.
-	if strings.Contains(path, "/") || len(path) > maxRunIDLen || strings.ContainsRune(path, 0) {
+	if strings.Contains(path, "/") || len(path) > maxMemoryIDLen || strings.ContainsRune(path, 0) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "", "unknown memory")
 		return
 	}
@@ -151,16 +143,9 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request, rest, prof
 	case http.MethodDelete:
 		ctx, cancel := memoryCtx(r)
 		defer cancel()
-		if _, err := s.ownedMemory(ctx, path, profile); err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				apiError(w, http.StatusBadGateway, "upstream_error", "",
-					"the memory store did not answer in time")
-				return
-			}
-			memoryError(w, err)
-			return
-		}
-		if err := s.memory.Delete(ctx, path); err != nil {
+		// One profile-scoped query authorises and deletes; a foreign id is
+		// NotFound, indistinguishable from a missing one.
+		if err := s.memory.Delete(ctx, path, profile); err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
 				apiError(w, http.StatusBadGateway, "upstream_error", "",
 					"the memory store did not answer in time")
@@ -204,7 +189,11 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 		}
 		ctx, cancel := memoryCtx(r)
 		defer cancel()
-		items, err := s.memory.List(ctx, f)
+		// One list, filtered in memory: the status/topic filter and the
+		// screen's topic list are two views of the same rows, and three
+		// sequential calls under one deadline can 502 the third after
+		// doing the first two.
+		all, err := s.memory.List(ctx, memory.Filter{Profile: profile})
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
 				apiError(w, http.StatusBadGateway, "upstream_error", "",
@@ -224,18 +213,7 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 			memoryError(w, err)
 			return
 		}
-		// Topic list is independent of the status filter: pausing a topic with
-		// no currently-visible item must still be possible from the screen.
-		all, err := s.memory.List(ctx, memory.Filter{Profile: profile})
-		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				apiError(w, http.StatusBadGateway, "upstream_error", "",
-					"the memory store did not answer in time")
-				return
-			}
-			memoryError(w, err)
-			return
-		}
+		items := memoryFilter(all, f)
 		topics := memoryTopics(all, paused)
 		out := make([]any, 0, len(items))
 		for _, it := range items {
@@ -299,7 +277,23 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 	if err := decodeJSONBody(w, r, &body); err != nil {
 		return
 	}
-	upd := memory.Update{Topic: body.Topic}
+	upd := memory.Update{}
+	if body.Topic != nil {
+		// An empty or punctuation-only topic would silently normalise to
+		// "general" and re-categorise the item; reject it instead.
+		stripped := strings.Map(func(r rune) rune {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				return r
+			}
+			return -1
+		}, strings.ToLower(strings.TrimSpace(*body.Topic)))
+		if stripped == "" {
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "topic",
+				"topic must contain a letter or digit")
+			return
+		}
+		upd.Topic = body.Topic
+	}
 	if body.Text != nil {
 		text := memory.CleanText(*body.Text)
 		if text == "" {
@@ -325,16 +319,7 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 	}
 	ctx, cancel := memoryCtx(r)
 	defer cancel()
-	if _, err := s.ownedMemory(ctx, id, profile); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			apiError(w, http.StatusBadGateway, "upstream_error", "",
-				"the memory store did not answer in time")
-			return
-		}
-		memoryError(w, err)
-		return
-	}
-	it, err := s.memory.Update(ctx, id, upd)
+	it, err := s.memory.Update(ctx, id, profile, upd)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			apiError(w, http.StatusBadGateway, "upstream_error", "",
@@ -345,6 +330,29 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 		return
 	}
 	writeJSONResponse(w, http.StatusOK, map[string]any{"item": memoryWire(it)})
+}
+
+// memoryFilter applies the collection's status/topic/limit views to one
+// store list. Limit <= 0 means the store cap, matching List.
+func memoryFilter(all []memory.Item, f memory.Filter) []memory.Item {
+	limit := f.Limit
+	if limit <= 0 || limit > memory.ListCap {
+		limit = memory.ListCap
+	}
+	out := make([]memory.Item, 0, len(all))
+	for _, it := range all {
+		if t := strings.TrimSpace(f.Topic); t != "" && it.Topic != memory.NormalizeTopic(t) {
+			continue
+		}
+		if f.Status != "" && it.Status != f.Status {
+			continue
+		}
+		out = append(out, it)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 // memoryTopics unions item topics with paused ones, sorted by first seen.
@@ -384,10 +392,13 @@ func (s *Server) memoryPrompt(ctx context.Context, profile string) string {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
+	// ListCap, not PromptItems: the pause filter runs after the list, so a
+	// limit applied first would let 30 paused items starve unpaused ones.
+	// PromptBlock enforces its own item and byte caps.
 	items, err := s.memory.List(ctx, memory.Filter{
 		Profile: profile,
 		Status:  memory.StatusConfirmed,
-		Limit:   memory.PromptItems,
+		Limit:   memory.ListCap,
 	})
 	if err != nil {
 		s.cfg.Logf("memory: prompt load failed for %s: %v", profile, err)

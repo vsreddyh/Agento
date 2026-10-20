@@ -78,12 +78,17 @@ func TestPromptBlockCapsAndTerminator(t *testing.T) {
 		t.Fatalf("block = %d bytes, cap %d", len(got), PromptBytes)
 	}
 
-	// One item that cannot fit stops the block entirely: a bare header would
-	// be worse than none.
+	// Skip-and-continue: one oversized item must not starve older items that
+	// fit. A bare header would be worse than none, so all-oversized is still
+	// "".
 	// Multi-byte text: MaxText runes can still exceed the byte budget.
 	big := Item{Topic: "general", Text: strings.Repeat("記", MaxText), Status: StatusConfirmed}
 	if got := PromptBlock([]Item{big}, nil); got != "" {
 		t.Fatalf("oversized block = %q", got)
+	}
+	small := Item{Topic: "general", Text: "short", Status: StatusConfirmed}
+	if got := PromptBlock([]Item{big, small}, nil); !strings.Contains(got, "short") {
+		t.Fatalf("fittable item starved by an oversized one: %q", got)
 	}
 }
 
@@ -119,7 +124,32 @@ func TestMemoryStoreCRUD(t *testing.T) {
 
 	status := StatusConfirmed
 	text := "has two dogs"
-	if _, err := s.Update(ctx, b.ID, Update{Text: &text, Status: &status}); err != nil {
+	if _, err := s.Update(ctx, b.ID, "p", Update{Text: &text, Status: &status}); err != nil {
+		t.Fatal(err)
+	}
+	// A foreign profile's id is NotFound, and the row is untouched.
+	other := "someone else"
+	if _, err := s.Update(ctx, b.ID, "q", Update{Text: &other}); err == nil {
+		t.Fatal("foreign update should be NotFound")
+	}
+	if err := s.Delete(ctx, b.ID, "q"); err == nil {
+		t.Fatal("foreign delete should be NotFound")
+	}
+	if got, _ := s.Get(ctx, b.ID); got.Text != text {
+		t.Fatalf("foreign write changed the row: %+v", got)
+	}
+	// Create enforces the text invariant, not just the callers.
+	if _, err := s.Create(ctx, Item{Profile: "p", Text: "   "}); err == nil {
+		t.Fatal("empty-text create should fail")
+	}
+	long, err := s.Create(ctx, Item{Profile: "p", Text: strings.Repeat("y", MaxText+10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len([]rune(long.Text)); n != MaxText {
+		t.Fatalf("over-long create stored %d runes, want clipped to %d", n, MaxText)
+	}
+	if err := s.Delete(ctx, long.ID, "p"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.Get(ctx, b.ID)
@@ -143,7 +173,11 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	if n, err := s.DeleteAll(ctx, "p"); err != nil || n != 2 {
 		t.Fatalf("forget = %d, %v", n, err)
 	}
-	if err := s.Delete(ctx, a.ID); err == nil {
+	if err := s.Delete(ctx, a.ID, "p"); err == nil {
 		t.Fatal("deleting a forgotten item should be NotFound")
+	}
+	// PausedTopics is a list, never null: the screen decodes it as an array.
+	if paused, _ := s.PausedTopics(ctx, "nobody"); paused == nil {
+		t.Fatal("fresh-profile paused topics encoded as null")
 	}
 }

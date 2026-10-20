@@ -112,8 +112,10 @@ type Filter struct {
 type Store interface {
 	Create(ctx context.Context, i Item) (Item, error)
 	Get(ctx context.Context, id string) (Item, error)
-	Update(ctx context.Context, id string, u Update) (Item, error)
-	Delete(ctx context.Context, id string) error
+	// Update and Delete are profile-scoped: a foreign id is NotFound, so one
+	// query both authorises and writes instead of a Get-then-write pair.
+	Update(ctx context.Context, id, profile string, u Update) (Item, error)
+	Delete(ctx context.Context, id, profile string) error
 	// DeleteAll forgets every item for a profile and returns how many went.
 	DeleteAll(ctx context.Context, profile string) (int64, error)
 	List(ctx context.Context, f Filter) ([]Item, error)
@@ -204,8 +206,12 @@ func PromptBlock(items []Item, paused []string) string {
 		line := "- (" + topic + ") " + text + "\n"
 		// The header and the closing tag count against the budget: a block
 		// cut before its terminator would read as instructions running on.
+		// Skip-and-continue, not break: one long item must not starve every
+		// older item that would fit. The budget is bytes while MaxText is
+		// runes, so a non-latin item spends it faster; that is accepted, the
+		// terminator guarantee is what matters.
 		if len(header)+used+len(line)+len(footer) > PromptBytes {
-			break
+			continue
 		}
 		b.WriteString(line)
 		used += len(line)
