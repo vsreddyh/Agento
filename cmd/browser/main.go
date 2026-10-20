@@ -249,11 +249,11 @@ type sessions struct {
 
 func (ss *sessions) get(profile string) (*session, error) {
 	ss.mu.Lock()
-	defer ss.mu.Unlock()
 	// Validated here, not just at startup: the signature invites
 	// non-global callers, and collapsing bad inputs to one shared dir
 	// would mix state across callers. Fail closed instead.
 	if !safeName.MatchString(profile) {
+		ss.mu.Unlock()
 		return nil, fmt.Errorf("refusing unsafe profile %q", profile)
 	}
 	s, ok := ss.byProfile[profile]
@@ -274,8 +274,16 @@ func (ss *sessions) get(profile string) (*session, error) {
 	// cannot tell a daily-used profile with a stable file set from an
 	// abandoned one, and deleting a running browser's dir from under it is
 	// exactly what evictIdle exists to prevent.
+	// Prune outside the global lock: eviction does listener closes and
+	// multi-second RemoveAlls that must not block other profiles' get().
+	// This session just refreshed lastUse, so the prune cannot take it.
+	prune := false
 	if time.Since(ss.lastPrune) > 24*time.Hour {
 		ss.lastPrune = time.Now()
+		prune = true
+	}
+	ss.mu.Unlock()
+	if prune {
 		ss.evictIdle()
 	}
 	return s, nil
@@ -285,23 +293,39 @@ func (ss *sessions) get(profile string) (*session, error) {
 // their Chromium + proxy listener stop. Disk-only pruning would leave a
 // months-old browser running with its profile dir deleted from under it,
 // and live browsers would accumulate one Chromium per touched profile with
-// no idle close path (no close tool by design). Caller holds ss.mu; the
-// session lock is taken per session for hygiene (unreachable in practice
-// at a 30d TTL, but a short TTL under -race would flag it).
+// no idle close path (no close tool by design). Takes ss.mu only to
+// snapshot the idle set and to delete afterwards: teardown IO (listener
+// close, multi-second RemoveAll of a Chromium Cache) runs lock-free so one
+// abandoned profile never blocks every other profile's get(). A session
+// touched between snapshot and teardown is re-checked under its own lock
+// and spared; delete re-checks map identity under ss.mu.
 func (ss *sessions) evictIdle() {
 	cutoff := time.Now().Add(-sessionTTL)
+	ss.mu.Lock()
+	type doomedSession struct {
+		name string
+		s    *session
+	}
+	var doomed []doomedSession
 	for name, s := range ss.byProfile {
+		s.mu.Lock()
+		isIdle := !s.lastUse.After(cutoff)
+		s.mu.Unlock()
+		if isIdle {
+			doomed = append(doomed, doomedSession{name, s})
+		}
+	}
+	ss.mu.Unlock()
+	for _, d := range doomed {
+		s := d.s
+		// Explicit unlock before IO, not defer: teardown below is slow.
+		s.mu.Lock()
 		if s.lastUse.After(cutoff) {
+			// Touched while snapshotted: spared, not torn down.
+			s.mu.Unlock()
 			continue
 		}
-		log.Printf("browser: evicting idle session %s", name)
-		// Explicit unlock at iteration end, not defer: N defers would hold
-		// every evicted session's lock until the function returns. The
-		// disk removal runs after unlock: a Chromium Cache makes RemoveAll
-		// seconds of IO, and ensure/shotPath for this profile must not
-		// block on it. dir is read into a local under the lock; nothing
-		// after touches session state except delete (needs only ss.mu).
-		s.mu.Lock()
+		log.Printf("browser: evicting idle session %s", d.name)
 		if s.browserCancel != nil {
 			s.browserCancel()
 		}
@@ -316,7 +340,11 @@ func (ss *sessions) evictIdle() {
 		if dir != "" {
 			os.RemoveAll(dir)
 		}
-		delete(ss.byProfile, name)
+		ss.mu.Lock()
+		if ss.byProfile[d.name] == s {
+			delete(ss.byProfile, d.name)
+		}
+		ss.mu.Unlock()
 	}
 }
 

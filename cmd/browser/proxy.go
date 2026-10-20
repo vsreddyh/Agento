@@ -185,7 +185,11 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		// Truncation is already the documented 60s-deadline behavior;
+		// logging names the cause when a download arrives short.
+		log.Printf("browser: forward copy truncated: %v", err)
+	}
 }
 
 // stripHopHeaders removes the headers named by Connection plus the fixed
@@ -209,7 +213,23 @@ func stripHopHeaders(h http.Header) {
 func relay(a, b net.Conn) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); io.Copy(a, b); a.Close() }()
-	go func() { defer wg.Done(); io.Copy(b, a); b.Close() }()
+	// Half-close, not full Close: when client→origin ends, the
+	// origin→client copy may still stream a large download. CloseWrite
+	// signals EOF one way while leaving the opposite bytes flowing;
+	// non-TCP conns fall back to a full close.
+	go func() { defer wg.Done(); io.Copy(a, b); closeWrite(a) }()
+	go func() { defer wg.Done(); io.Copy(b, a); closeWrite(b) }()
 	wg.Wait()
+	// Both directions ended: release the FDs the half-closes kept open.
+	_ = a.Close()
+	_ = b.Close()
+}
+
+// closeWrite half-closes the write side; anything else gets a full close.
+func closeWrite(c net.Conn) {
+	if t, ok := c.(*net.TCPConn); ok {
+		_ = t.CloseWrite()
+		return
+	}
+	_ = c.Close()
 }
