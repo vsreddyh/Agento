@@ -518,5 +518,9 @@ class ChatAttachmentsTest {
         assertEquals(0L, base64Bytes(""))
         assertEquals(1L, base64Bytes("TQ==\n"))
         assertEquals(1L, base64Bytes("T Q= = "))
+        // Interior '=' is content-positioned, never padding (#339):
+        // "AB=C" measures 3 content chars → 2 B, not 3.
+        assertEquals(2L, base64Bytes("AB=C"))
+        assertEquals(0L, base64Bytes("=="))
     }
 }

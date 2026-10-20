@@ -348,16 +348,22 @@ fun messageContentJson(
  * too, so measuring them would overstate the named size by the space
  * count. Single counting pass, no copies: the error path already failed
  * for size, so allocating another ~1.5 M-char filter copy just to report
- * it would repeat the peak. */
+ * it would repeat the peak. Padding counts trailing-only (#339): interior
+ * '=' resets the run, so "AB=C" measures 3 content chars → 2 B instead of
+ * overstating — only the trailing run pads, capped at 2, floored at 0. */
 fun base64Bytes(base64: String): Long {
     var content = 0
-    var padding = 0
+    var tailPad = 0
     for (c in base64) {
         if (c.isWhitespace()) continue
-        content++
-        padding = if (c == '=') padding + 1 else 0
+        if (c == '=') {
+            tailPad++
+        } else {
+            content++
+            tailPad = 0
+        }
     }
-    return (content / 4L) * 3L - padding
+    return maxOf(0L, ((content + tailPad) / 4L) * 3L - minOf(tailPad, 2))
 }
 
 /** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal at KB

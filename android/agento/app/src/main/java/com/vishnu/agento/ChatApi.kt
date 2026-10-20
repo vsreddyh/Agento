@@ -576,64 +576,73 @@ class ChatApi(context: Context) {
             close()
             return@callbackFlow
         }
-        val payload = JSONObject()
-        // An explicit provider/model is always sent; blanks are omitted
-        // (legacy configs predate required selection).
-        if (provider.isNotEmpty()) payload.put("provider", provider)
-        if (model.isNotEmpty()) payload.put("model", model)
-        // Per-request reasoning override: the gateway translates
-        // model_options.reasoning_effort into the agent's reasoning config
-        // (unknown values are ignored server-side; blank = server default).
-        if (effort.trim().isNotEmpty()) {
-            payload.put(
-                "model_options",
-                JSONObject().put("reasoning_effort", effort.trim().lowercase()),
-            )
-        }
-        val arr = JSONArray()
-        // Only the trailing user turn keeps its photo parts (#318): the
-        // server prompts Pi with the last user turn alone and Pi holds
-        // history in its own session file, so earlier photo turns ride as
-        // text and the body stays bounded however long the thread gets.
-        // Exhaustive when: the sealed return forces both shapes handled —
-        // a bare String put would misrender a Multipart as a JSON string.
-        val lastUserIdx = messages.indexOfLast { it.role == "user" }
-        for ((i, m) in messages.withIndex()) {
-            val content = messageContentJson(m.role, m.content, m.attachments, includeImages = i == lastUserIdx)
-            val wire: Any = when (content) {
-                is WireContent.Text -> content.text
-                is WireContent.Multipart -> content.parts
+        // Built off-main (#339): toString + JSON assembly + validity scans
+        // over ~3.5 MB run inline in the collector context otherwise — tens
+        // of ms on the frame thread per photo send (the ViewModel collects
+        // on Main). The network hop below already runs on IO; the build
+        // joins it. Returns body + measured bytes; preflight + request
+        // stay in producer context below (trySend/close live there).
+        val (body, rawBytes) = withContext(Dispatchers.IO) {
+            val lastUserIdx = messages.indexOfLast { it.role == "user" }
+            val payload = JSONObject()
+            // An explicit provider/model is always sent; blanks are omitted
+            // (legacy configs predate required selection).
+            if (provider.isNotEmpty()) payload.put("provider", provider)
+            if (model.isNotEmpty()) payload.put("model", model)
+            // Per-request reasoning override: the gateway translates
+            // model_options.reasoning_effort into the agent's reasoning config
+            // (unknown values are ignored server-side; blank = server default).
+            if (effort.trim().isNotEmpty()) {
+                payload.put(
+                    "model_options",
+                    JSONObject().put("reasoning_effort", effort.trim().lowercase()),
+                )
             }
-            arr.put(
-                JSONObject().put("role", m.role).put("content", wire),
-            )
+            val arr = JSONArray()
+            // Only the trailing user turn keeps its photo parts (#318): the
+            // server prompts Pi with the last user turn alone and Pi holds
+            // history in its own session file, so earlier photo turns ride as
+            // text and the body stays bounded however long the thread gets.
+            // Exhaustive when: the sealed return forces both shapes handled —
+            // a bare String put would misrender a Multipart as a JSON string.
+            // (lastUserIdx hoisted above the IO block — also read below.)
+            for ((i, m) in messages.withIndex()) {
+                val content = messageContentJson(m.role, m.content, m.attachments, includeImages = i == lastUserIdx)
+                val wire: Any = when (content) {
+                    is WireContent.Text -> content.text
+                    is WireContent.Multipart -> content.parts
+                }
+                arr.put(
+                    JSONObject().put("role", m.role).put("content", wire),
+                )
+            }
+            payload.put("messages", arr)
+            payload.put("stream", true)
+            // Client-side preflight (#318): refuse an over-cap turn with a named,
+            // actionable error instead of sending it into the gateway's 4 MiB
+            // 413. Phrased for the turn's actual contents below: photos when
+            // it carries them, thread-shortening when it doesn't.
+            // Sized from the built body, not a second encode (#339): measuring
+            // via toByteArray() and then sending via toRequestBody() copies the
+            // ~3.5 MB string twice back to back. contentLength() on the built
+            // body is the same bytes OkHttp will write (the JSON media type
+            // declares UTF-8, so no charset ambiguity) — one copy instead of
+            // two, transient peak ~3x instead of ~4x. -1 (unknown length)
+            // refuses too: an unmeasurable body must not sail past the gate.
+            // Scoped pair (#339): raw falls out of scope with this block
+            // instead of living in the closure for the whole upload — one
+            // copy freed for the slow-upload seconds, leaving body alone
+            // with the request. Both declared INSIDE (an earlier revision
+            // scoped only the build while raw stayed reachable outside,
+            // which retained the string it claimed to free).
+            val measured = run {
+                val raw = payload.toString()
+                val built = raw.toRequestBody(JSON)
+                built to built.contentLength()
+            }
+            val body = measured.first
+            val rawBytes = measured.second
         }
-        payload.put("messages", arr)
-        payload.put("stream", true)
-        // Client-side preflight (#318): refuse an over-cap turn with a named,
-        // actionable error instead of sending it into the gateway's 4 MiB
-        // 413. Phrased for the turn's actual contents below: photos when
-        // it carries them, thread-shortening when it doesn't.
-        // Sized from the built body, not a second encode (#339): measuring
-        // via toByteArray() and then sending via toRequestBody() copies the
-        // ~3.5 MB string twice back to back. contentLength() on the built
-        // body is the same bytes OkHttp will write (the JSON media type
-        // declares UTF-8, so no charset ambiguity) — one copy instead of
-        // two, transient peak ~3x instead of ~4x. -1 (unknown length)
-        // refuses too: an unmeasurable body must not sail past the gate.
-        // Scoped pair (#339): raw falls out of scope with this block
-        // instead of living in the closure for the whole upload — one
-        // copy freed for the slow-upload seconds, leaving body alone
-        // with the request. Both declared INSIDE (an earlier revision
-        // scoped only the build while raw stayed reachable outside,
-        // which retained the string it claimed to free).
-        val measured = run {
-            val raw = payload.toString()
-            val built = raw.toRequestBody(JSON)
-            built to built.contentLength()
-        }
-        val body = measured.first
-        val rawBytes = measured.second
         if (wireSizeExceeded(rawBytes)) {
             // Phrased for what's actually measured (#339): rawBytes is the
             // whole request JSON (full thread + framing), so "this turn"

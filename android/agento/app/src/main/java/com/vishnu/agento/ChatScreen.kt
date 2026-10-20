@@ -776,6 +776,15 @@ internal fun ChatTab(
             PackageManager.PERMISSION_GRANTED
         ) {
             launchCamera()
+        } else if (isCameraPending()) {
+            // Double-request gate (#339): a second tap while the permission
+            // dialog is outstanding would otherwise fire two permission
+            // requests (OEM-dependent second-request behavior) — the same
+            // class the launch gate closed for the intent. Silent: the
+            // first tap's dialog is already up answering. (The launch gate
+            // stays authoritative for the intent itself; this only guards
+            // the request window. A stale timestamp here can only come from
+            // a dead process, where silence is correct — nothing is open.)
         } else {
             // Permission request armed like the launch gate (#339): rapid
             // double-tap on a fresh install would otherwise fire two

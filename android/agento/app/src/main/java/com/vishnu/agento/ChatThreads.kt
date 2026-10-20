@@ -166,7 +166,12 @@ object ChatThreads {
                 // filter asserts decode-validity. Runs on IO callers only
                 // (never Main); the next persist writes back the canonical
                 // form (self-healing, no notice — corrupt bytes are
-                // dropped, never sent).
+                // dropped, never sent). In-memory-only by design: no
+                // write-back here (load is a pure read), so a crash between
+                // load and save — or any reader bypassing load() (raw file
+                // share) — still sees the raw bytes. Both re-heal on the
+                // next load; the window only matters to readers outside
+                // every contract, who get raw bytes either way.
                 .map { t ->
                     t.copy(messages = t.messages.map { m ->
                         m.copy(attachments = canonicalizeAttachments(m.attachments))
