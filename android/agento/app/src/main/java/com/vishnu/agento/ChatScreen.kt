@@ -256,7 +256,10 @@ internal fun ChatTab(
     // Take-photo tap, not the new composer.
     var showCameraSettings by rememberSaveable { mutableStateOf(false) }
     // Thread-scoped transient UI, same as the editor/menu state inside
-    // ChatScreen (#339).
+    // ChatScreen (#339). Split across parent/child by render site (the
+    // dialog renders here, the editor/menu render there) — both fire on
+    // the same key, so a new transient-UI addition belongs in whichever
+    // effect owns its render site, not whichever is nearer.
     LaunchedEffect(state.threadId) { showCameraSettings = false }
     // True while a camera batch is decoding (#339): launchCamera's
     // delete-previous must skip a file with an in-flight decode, or a
@@ -1157,6 +1160,8 @@ internal fun ChatScreen(
     // this a thread switch leaves it open over the new thread's composer.
     // The draft text clears with them: opening the editor always overwrites
     // it, but a stale draft from the old thread must not linger in state.
+    // (The camera Settings dialog closes in ChatTab's effect on the same
+    // key — it renders there, so its reset lives there too.)
     LaunchedEffect(state.threadId) {
         editingIndex = null
         editDraft = ""

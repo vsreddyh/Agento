@@ -117,9 +117,10 @@ fun contentWithMarker(content: String, n: Int): String =
 
 /** True when the message carries anything the agent should see. Text-only
  * checks (`content.isNotBlank()`) drop image-only turns from resends and
- * resume, so every history filter must use this instead. */
+ * resume, so every history filter must use this instead. Counted wired
+ * (#339): a blank payload is not a photo anywhere, including here. */
 fun messageHasContent(m: ChatMessage): Boolean =
-    m.content.isNotBlank() || m.attachments.isNotEmpty()
+    m.content.isNotBlank() || m.attachments.wiredPhotos().isNotEmpty()
 
 /**
  * Dimensions fitting `w`×`h` inside [MAX_IMAGE_SIDE_PX] on the long side,

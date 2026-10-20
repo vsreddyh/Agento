@@ -40,7 +40,11 @@ data class ChatUiState(
     val pending: String = "",
     /** Photos staged in the composer for the next turn (#318). Cleared on
      * send; parked untouched while streaming (a mid-turn send queues the
-     * text only — the photos wait for the next explicit send). */
+     * text only — the photos wait for the next explicit send). Raw
+     * size/emptiness is exact here (#339): staged payloads are never blank
+     * (prepareAttachment throws instead of staging one), unlike persisted
+     * history, which can be hand-edited — so staged sites read this raw
+     * while every history/display/wire site counts wiredPhotos(). */
     val pendingAttachments: List<ChatAttachment> = emptyList(),
     /** One-shot notice for the toast host (attach caps, drops). Set by the
      * ViewModel, cleared by `consumeNotice()` after the UI shows it — the
