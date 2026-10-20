@@ -57,19 +57,17 @@ internal fun TeachDialog(
     var schedule by remember(skill.id) { mutableStateOf("") }
     var promoteName by remember(skill.id) { mutableStateOf("") }
     var deleteArmed by remember(skill.id) { mutableStateOf(false) }
+    // A save collapses the editor; reopening re-seeds from the fresh row
+    // (onStartEdit below), so no stale snapshot survives a server
+    // normalization. Seeding lives at open time rather than here because a
+    // background reload mid-edit must never wipe in-progress typing.
     LaunchedEffect(editSaves) {
-        // A save retires the whole edit state: the fields reset to the
-        // reloaded row (server-normalized), not the pre-save typing, so a
-        // reopened editor never shows stale text.
-        if (editSaves > 0) {
-            editing = false
-            name = skill.name
-            description = skill.description
-            body = skill.body
-        }
+        if (editSaves > 0) editing = false
     }
     AlertDialog(
-        onDismissRequest = onClose,
+        // No dismiss mid-write: the error has nowhere to render once the
+    // dialog is gone (composer errors are separate).
+    onDismissRequest = { if (!acting) onClose() },
         title = { Text(skill.name.ifBlank { "Skill" }) },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -141,8 +139,13 @@ internal fun TeachDialog(
                                 TextButton(
                                     // Trimmed like every other writer: "   "
                                     // passes isNotBlank but sends "".
+                                    // All three trimmed, matching the
+                                    // composer and the server contract: the
+                                    // server requires name, description and
+                                    // body on every write.
                                     onClick = { onSaveEdit(name.trim(), description.trim(), body.trim()) },
-                                    enabled = !acting && name.trim().isNotBlank() && body.trim().isNotBlank(),
+                                    enabled = !acting && name.trim().isNotBlank() &&
+                                        description.trim().isNotBlank() && body.trim().isNotBlank(),
                                 ) {
                                     Text(if (acting) "Saving…" else "Save")
                                 }
@@ -227,10 +230,14 @@ internal fun TeachDialog(
                                 }
                             }
                         }
-                        if (testOutput.isNotBlank()) {
+                        // testText persists across reloads while testOutput is
+                        // this dialog's run only: prefer the fresh run, fall
+                        // back to the record.
+                        val shownTest = testOutput.ifBlank { skill.testText }
+                        if (shownTest.isNotBlank()) {
                             item {
                                 Text(
-                                    testOutput.take(600),
+                                    shownTest.take(600),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 8,

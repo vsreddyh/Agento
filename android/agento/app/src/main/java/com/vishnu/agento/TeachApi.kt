@@ -247,9 +247,10 @@ class TeachApi(context: Context) {
 }
 
 /** Parses one skills list leniently, shared by the client and its tests.
- * Null when the whole body is unparseable: the caller fails instead of
- * wiping the screen, so a transient 200-with-garbage keeps old rows behind
- * an error. Missing keys read as empty. */
+ * Null when the whole body is unparseable or the "skills" key is missing:
+ * the caller fails instead of wiping the screen, so a transient
+ * 200-with-garbage keeps old rows behind an error. Present rows with
+ * missing fields read blank. */
 internal fun parseSkillList(body: String): List<TaughtSkill>? {
     val root = runCatching { JSONObject(body) }.getOrNull()
     if (root == null) {

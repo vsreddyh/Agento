@@ -409,12 +409,16 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                                 val path = chatApi.pathFor(profile)
                                                 val (_, clipped) = teachApi.createDraft(path, n, d, b, source = "skills-screen").getOrThrow()
                                                 ensureActive()
-                                                newName = ""
-                                                newDescription = ""
-                                                newBody = ""
-                                                composing = false
                                                 if (clipped) {
+                                                    // Keep the composer open with its text:
+                                                    // closing would hide the clip hint
+                                                    // this branch exists to show.
                                                     composerError = "Saved, but the text clipped at the length cap."
+                                                } else {
+                                                    newName = ""
+                                                    newDescription = ""
+                                                    newBody = ""
+                                                    composing = false
                                                 }
                                                 loadTaught(path)
                                             } catch (e: Exception) {

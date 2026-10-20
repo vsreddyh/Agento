@@ -526,11 +526,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // code-only.
                 val detail = result.exceptionOrNull()?.message.orEmpty()
                 val truncated = result.getOrNull()?.second == true
+                // Server messages pass through bounded like loadTaught does:
+                // they are validation/contract strings ("unparseable
+                // response body", "skill name must be…"), never memory text,
+                // and the actionable one beats a bare code.
                 done(
                     if (result.isSuccess) null
-                    else if ("Server URL not configured" in detail) detail
-                    else "Couldn't save draft" +
-                        (ApprovalsApi.httpCode(detail)?.let { " (HTTP $it)" } ?: "") + ".",
+                    else detail.take(120).ifBlank {
+                        "Couldn't save draft" +
+                            (ApprovalsApi.httpCode(detail)?.let { " (HTTP $it)" } ?: "") + "."
+                    },
                     truncated,
                 )
             }
