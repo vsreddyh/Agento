@@ -1808,6 +1808,11 @@ internal fun LiveOverlay(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(status, style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Voice loop over text turns — not a phone call.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 if (partial.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(

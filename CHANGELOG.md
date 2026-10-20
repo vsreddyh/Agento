@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.8.1]
+- **Voice: Agento is text-only (#317).** The decision is recorded
+  (`docs/adr/0006-voice-text-only.md`): no call mode — no duplex, no
+  barge-in, no background work during a call — because the stack serves
+  one text turn per profile over SSE with no realtime voice transport.
+  Dictation, the live session and readout stay exactly as they are,
+  labelled as what they are: accessibility over text turns. README and
+  Settings → About state it plainly, and the live overlay carries the
+  one-line caption.
+
 ## [5.8.0]
 - **Projects: Testing and Blocked phases.** The project board grows from
   four statuses to six — Todo, Ongoing, **Testing**, **Blocked**, Paused,

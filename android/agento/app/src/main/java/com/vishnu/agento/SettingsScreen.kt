@@ -354,6 +354,7 @@ internal fun SettingsScreen(
                     }
                     SettingSection.About -> {
                         AppUpdateSection()
+                        VoicePositionCard()
                         WidgetDiagnosticsCard()
                     }
                     SettingSection.Health -> {
@@ -862,6 +863,26 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
         if (status.isNotEmpty()) {
             if (failed) ErrorCard(raw = status) else HintLine(status)
         }
+    }
+}
+
+/** Voice positioning (#317): Agento is text-only — stated in Settings so
+ * no UI implies calling exists. Dictation, the live session and readout
+ * are accessibility over text turns, not a call mode. */
+@Composable
+internal fun VoicePositionCard() {
+    SectionCard(
+        title = "Voice: text-only",
+        subtitle = "Agento makes no calls — every conversation is a text turn.",
+    ) {
+        Text(
+            "The mic button dictates into the composer, the live session is " +
+                "a hands-free talk-listen-talk loop over those turns, and the " +
+                "speaker icon reads replies aloud. Voice input and readout " +
+                "are accessibility features, not a call mode.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

@@ -132,7 +132,7 @@ All services read the same root `.env`, so a dev checkout just points `MONGODB_U
 ## Android App Screens (2.x)
 
 - **Sidebar**: Chat + Tasks + Storage + Reminders + Settings (drawer replaced the bottom bar).
-- **Chat tab**: threaded conversations persisted on-device (survive restarts; New starts a thread, switcher revisits/deletes old ones), sender labels + timestamps, copy button, retry on failure. Provider/model picked from its own model sheet (top-bar button), saved instantly.
+- **Chat tab**: threaded conversations persisted on-device (survive restarts; New starts a thread, switcher revisits/deletes old ones), sender labels + timestamps, copy button, retry on failure. Provider/model picked from its own model sheet (top-bar button), saved instantly. **Text-only by design (#317): no calls in or out** — the mic button dictates into the composer, the live session is a hands-free talk-listen-talk loop over the same text turns, and the speaker icon reads replies aloud. See `docs/adr/0006-voice-text-only.md` for why.
 - **Tasks**: name/status/note table; tap status cycles todo → doing → done; add/edit dialog; persisted locally.
 - **Storage**: browses the VPS `exports/` folder (subfolders supported), downloads to mobile Downloads.
 - **Reminders**: exact-alarm local notifications (falls back to inexact without the system grant); survives reboot.
