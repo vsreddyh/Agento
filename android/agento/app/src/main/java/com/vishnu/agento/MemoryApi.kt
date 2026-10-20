@@ -57,6 +57,13 @@ internal fun parseMemoryItem(o: JSONObject): MemoryItem? {
     )
 }
 
+/** A 200 whose body is not JSON is a broken payload, not an empty answer:
+ * callers render the code (no silent success, no codeless error). */
+internal fun parseObject(body: String): JSONObject =
+    runCatching { JSONObject(body) }.getOrElse {
+        throw RuntimeException("HTTP 200: bad payload")
+    }
+
 internal fun parseMemoryList(body: String): MemoryList {
     val root = runCatching { JSONObject(body) }.getOrNull()
     if (root == null) {
@@ -104,7 +111,10 @@ internal fun parseMemoryList(body: String): MemoryList {
         }
         return out
     }
-    return MemoryList(items, stringsOf("paused"), stringsOf("topics"), stringsOf("warnings"))
+    // Duplicated entries render one toggle each; membership still
+    // behaves, but the sheet should not show the same button twice.
+    fun dedup(v: List<String>): List<String> = v.distinct()
+    return MemoryList(items, dedup(stringsOf("paused")), dedup(stringsOf("topics")), stringsOf("warnings"))
 }
 
 /**
@@ -202,7 +212,7 @@ class MemoryApi(context: Context) {
     ): Result<Pair<MemoryItem, Boolean>> = withContext(Dispatchers.IO) {
         val body = JSONObject().put("topic", topic).put("text", text)
         call("POST", "$path/api/memory", body).mapCatching {
-            val root = JSONObject(checkOk(it).body)
+            val root = parseObject(checkOk(it).body)
             val item = parseMemoryItem(root.optJSONObject("item") ?: JSONObject())
                 ?: throw RuntimeException("HTTP 200: no item")
             item to root.optBoolean("truncated", false)
@@ -223,7 +233,7 @@ class MemoryApi(context: Context) {
         if (topic != null) body.put("topic", topic)
         if (status != null) body.put("status", status)
         call("PUT", "$path/api/memory/${encode(id)}", body).mapCatching {
-            val root = JSONObject(checkOk(it).body)
+            val root = parseObject(checkOk(it).body)
             val item = parseMemoryItem(root.optJSONObject("item") ?: JSONObject())
                 ?: throw RuntimeException("HTTP 200: no item")
             item to root.optBoolean("truncated", false)
@@ -242,7 +252,7 @@ class MemoryApi(context: Context) {
      * memory). Returns how many rows went. */
     suspend fun forgetMemory(path: String): Result<Int> = withContext(Dispatchers.IO) {
         call("POST", "$path/api/memory/forget").mapCatching {
-            JSONObject(checkOk(it).body).optInt("deleted", 0)
+            parseObject(checkOk(it).body).optInt("deleted", 0)
         }
     }
 

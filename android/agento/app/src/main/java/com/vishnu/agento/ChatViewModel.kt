@@ -1187,11 +1187,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * poll never lands on a new path. */
     private fun pollMemoryCount(path: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            // Pending-only page, like the approvals poll: counting needs no
-            // rows, pauses or topics. Same limit as the sheet so the badge
-            // and the header cannot disagree past 200 pending.
-            val n = memoryApi.listMemory(path, status = "pending", limit = 200)
-                .getOrNull()?.items?.size ?: return@launch
+            // The sheet's own query, not a pending-only page: with 200+
+            // mixed-status rows a filtered window could count pendings the
+            // sheet's window excludes (or vice versa). Same rows, same count.
+            val n = memoryApi.listMemory(path, limit = 200)
+                .getOrNull()?.items?.count { it.isPending() } ?: return@launch
             withContext(Dispatchers.Main) {
                 if (_state.value.path != path) return@withContext
                 _state.value = _state.value.copy(pendingMemoryCount = n)

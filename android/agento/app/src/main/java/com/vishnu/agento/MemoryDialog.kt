@@ -205,25 +205,24 @@ internal fun MemoryDialog(
                                     modifier = Modifier.padding(top = 4.dp),
                                 )
                             }
-                            items(topics.chunked(2), key = { it.joinToString("|") }) { pair ->
+                            items(topics, key = { it }) { topic ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    for (topic in pair) {
-                                        val isPaused = topic in paused
-                                        val busy = "topic:$topic" in acting
-                                        TextButton(
-                                            onClick = { onTogglePause(topic, !isPaused) },
-                                            enabled = !busy,
-                                            modifier = Modifier.weight(1f),
-                                        ) {
-                                            Text(
-                                                (if (isPaused) "▶ " else "⏸ ") + topic,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                        }
+                                    val isPaused = topic in paused
+                                    Text(
+                                        topic,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    TextButton(
+                                        onClick = { onTogglePause(topic, !isPaused) },
+                                        enabled = "topic:$topic" !in acting,
+                                    ) {
+                                        Text(if (isPaused) "Resume" else "Pause")
                                     }
                                 }
                             }

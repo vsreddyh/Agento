@@ -52,6 +52,7 @@ class MemoryApiTest {
         val body = """{"items":[
             {"id":"m1","topic":"work","text":"t1","status":"confirmed"},
             {"status":"pending"},
+            {"id":42,"topic":"work","text":"coerced","status":"pending"},
             {"id":"m2","topic":"","text":"","status":"pending"}
             ],"paused":["health",null,42],"topics":["work"],"warnings":[]}"""
         val list = parseMemoryList(body)
