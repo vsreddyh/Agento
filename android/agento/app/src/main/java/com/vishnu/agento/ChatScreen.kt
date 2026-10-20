@@ -81,6 +81,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import java.util.Locale
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Pending count as both the badge and the banner show it: one cap, one
@@ -443,7 +444,10 @@ internal fun ThreadSheet(
  * alone could theoretically collide across regenerate/retry). */
 internal fun ttsKeyFor(msg: ChatMessage): String = "${msg.ts}:${msg.content.hashCode()}"
 
-/** Detector bookkeeping for the live loop driver (review #338-followup-3):
+/** One beat between detector start attempts (see driver retry below). */
+private const val DETECT_RETRY_MS = 2_000L
+
+/** Detector bookkeeping for the live loop driver (#317):
  * plain holder instead of state — only the driver effect touches it, and
  * the effect keys drive restarts, so publishing it would recompose for
  * bookkeeping the keys already encode. */
@@ -452,7 +456,7 @@ private class DetectCtl {
     var phase = -1
 }
 
-/** Monotonic milestone-cue key counter (review #338-5th): plain holder,
+/** Monotonic milestone-cue key counter (#317): plain holder,
  * not state — only the milestone effect touches it. */
 private class CueKeys {
     var n = 0
@@ -745,7 +749,7 @@ internal fun ChatScreen(
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val speakingKey by tts.speakingKey.collectAsState()
-    // TTS readiness as state (review #338-followup-1): the milestone effect
+    // TTS readiness as state (#317): the milestone effect
     // keys on this, so an engine that finishes init mid-turn re-fires the
     // effect and cues the tools that arrived while it was down.
     val ttsReady by tts.readyFlow.collectAsState()
@@ -786,9 +790,9 @@ internal fun ChatScreen(
     var announcedTools by remember(tab) { mutableStateOf(listOf<String>()) }
     // Label already spoken alongside the tools above: the ViewModel keeps
     // the last non-empty label independently, so a label-only frame must
-    // re-fire the milestone effect too (review #338-1).
+    // re-fire the milestone effect too (#317).
     var announcedLabel by remember(tab) { mutableStateOf("") }
-    // Monotonic cue-key counter (review #338-7, #338-5th, #338-8th):
+    // Monotonic cue-key counter (#317):
     // plain holder, not state — only the milestone effect touches it, so
     // publishing would recompose the whole screen once per cue for
     // bookkeeping the toggle() key needs. Never resets within one activity
@@ -796,7 +800,7 @@ internal fun ChatScreen(
     // reset could collide with one. (Rotation drops remember(tab), which is
     // safe because onDispose stops TTS — no cue survives to collide.)
     val cueKeys = remember(tab) { CueKeys() }
-    // Detector bookkeeping (review #338-followup-3, #338-3-followup):
+    // Detector bookkeeping (#317):
     // plain holder, not state — only the driver effect writes it in the
     // steady state, and the effect keys drive restarts. Declared up here
     // (not next to the driver) so endLive/startLive can reset it alongside
@@ -804,13 +808,17 @@ internal fun ChatScreen(
     // recorder still holds the mic, or vice versa.
     val detectCtl = remember(tab) { DetectCtl() }
     fun onBargeIn() {
+        // Stale-trigger guard (#317): the detector posts via scope.launch,
+        // so a trigger from just before hang-up can land after liveMode is
+        // false — it must not claim and kill a post-hang-up turn.
+        if (!liveMode) return
         tts.stop()
         if (state.streaming) {
             bargeCancel = true
             onStop()
         }
     }
-    // Fresh callback for the once-per-tab detector (review #338-4): the
+    // Fresh callback for the once-per-tab detector (#317): the
     // remembered lambda reads the latest handler instead of the first
     // composition's closure over state/onStop.
     val latestBarge by rememberUpdatedState(::onBargeIn)
@@ -867,7 +875,7 @@ internal fun ChatScreen(
         announcedLabel = ""
         // Stop the detector now — don't rely on the liveMode=false effect
         // round-trip to get around to it — and reset its holder alongside
-        // (review #338-3-followup): the holder must not claim "running"
+        // (#317): the holder must not claim "running"
         // after the recorder was stopped out from under the driver effect.
         interrupt.stop()
         detectCtl.running = false
@@ -924,7 +932,7 @@ internal fun ChatScreen(
             endLive("Voice recognition unavailable on this device.")
             return
         }
-        // Mid-turn entry (review #338-6th): capture before onStop() clears
+        // Mid-turn entry (#317): capture before onStop() clears
         // it. A startLive-killed turn must not be spoken back: claim it like
         // a barge so the stream-end effect re-listens instead of reading
         // the just-killed partial, and skip the direct liveListen() below —
@@ -940,13 +948,13 @@ internal fun ChatScreen(
         silentRounds = 0
         transientRetries = 0
         livePartial = ""
-        // Re-check, don't assume (review #338-8th): both callers gate on
+        // Re-check, don't assume (#317): both callers gate on
         // permission, but a revoke in the gap must start tap-to-talk, not
         // lie armed and fail one AudioRecord alloc per phase transition.
         micArmed = interrupt.hasPermission(context)
         // Fresh call state (#317): a previous session's barge claim or
         // milestone set must not leak into this one. The detector is
-        // stopped and its holder reset too (review #338-3-followup) so the
+        // stopped and its holder reset too (#317) so the
         // next detecting phase recalibrates from clean state — a bare reset
         // without the stop would lie the other way (effect sees "stopped",
         // skips its own stop, and leaks a live recorder into the
@@ -959,7 +967,7 @@ internal fun ChatScreen(
         bargeCancel = killedTurn
         announcedTools = emptyList()
         announcedLabel = ""
-        // Only a live readout hands off (review #338-6th/7th): the
+        // Only a live readout hands off (#317): the
         // streaming disjunct would be dead here — onStop() already cleared
         // it — and a killed turn's first listen belongs to the stream-end
         // effect. speakingKey is read pre-stop on purpose: tts.stop()
@@ -1028,7 +1036,7 @@ internal fun ChatScreen(
                 if (bargeCancel) {
                     // Barge-in (#317): the user cut the turn — re-listen
                     // instead of speaking the stopped partial. Barge wins
-                    // over a simultaneous stream error (review #338-6): the
+                    // over a simultaneous stream error (#317): the
                     // user asked to talk, and the error toast still fires
                     // from the state.error effect.
                     bargeCancel = false
@@ -1043,6 +1051,10 @@ internal fun ChatScreen(
                             endLive("Live session ended (voice output unavailable).")
                         }
                     } else {
+                        // Blank reply (#317): cut a still-playing milestone
+                        // cue first, or it bleeds into the fresh listen with
+                        // the detector off and no re-listen to save it.
+                        tts.stop()
                         liveListen()
                     }
                 } else {
@@ -1096,7 +1108,7 @@ internal fun ChatScreen(
         speakingKey != null -> 1
         else -> 2
     }
-    // Driver bookkeeping lives up top (review #338-3-followup) so session
+    // Driver bookkeeping lives up top (#317) so session
     // start/end can reset it alongside the actual stop(). Restarts are
     // skipped when already running in the target phase, so a
     // micArmed/liveMode toggle with no phase change doesn't churn the
@@ -1108,17 +1120,30 @@ internal fun ChatScreen(
             // Fresh start per phase (never a carried calibration): stop
             // first, the same rapid-restart shape LiveInterrupt is built for.
             // Started in the composition scope, not this effect's
-            // (review #338-followup-2): an effect restart must not cancel
+            // (#317): an effect restart must not cancel
             // the old detector job out from under the new AudioRecord —
             // the explicit stop() below is the only lifetime manager.
             interrupt.stop()
             detectCtl.running = false
-            // A start failure here does NOT clear micArmed (review #338-3):
+            // A start failure here does NOT clear micArmed (#317):
             // contention with a dying recorder reads the same as a dead
             // mic, and a sticky downgrade would end detection for the whole
-            // session. The next phase change retries; a truly dead mic
-            // fails fast each time and the loop runs tap-to-talk.
+            // session. One bounded retry runs below, then the next phase
+            // change retries; a truly dead mic fails fast each time and
+            // the loop runs tap-to-talk.
             detectCtl.running = interrupt.start(scope)
+            if (!detectCtl.running) {
+                // One bounded retry (#317): a long tool task sits in a
+                // single phase, so an entry failure would leave the whole
+                // task unmonitored until the next transition. Wait one
+                // mic-release beat, then retry once — a phase change cancels
+                // this effect first, and a session reset flips detectCtl
+                // phase, so a stale retry can't arm a dead phase.
+                delay(DETECT_RETRY_MS)
+                if (detecting && detectPhase == detectCtl.phase) {
+                    detectCtl.running = interrupt.start(scope)
+                }
+            }
         } else if (!detecting && detectCtl.running) {
             interrupt.stop()
             detectCtl.running = false
@@ -1130,13 +1155,13 @@ internal fun ChatScreen(
     }
     // Tool milestones (#317): while a live turn streams, announce newly
     // appearing tools once per change so a long task is audible. The cue
-    // names the latest delta (review #338-2: a batch seeds several tools
+    // names the latest delta (#317: a batch seeds several tools
     // at once, but only one cue can play) — the whole batch still counts
     // as announced. Cues use live-cue-* keys: the driver above keeps the
     // detector off for them, and their completion never starts listening.
     LaunchedEffect(liveMode, state.streaming, state.activeTools, state.activeToolLabel, ttsReady) {
         if (!liveMode || !state.streaming || state.activeTools.isEmpty()) return@LaunchedEffect
-        // Skip cues while TTS isn't up (review #338-5, followup-1): toggle()
+        // Skip cues while TTS isn't up (#317): toggle()
         // would park the cue in `pending` and speak it late — possibly after
         // the turn — with no speakingKey while parked, so the detector stays
         // armed. Readiness is collected state, so a late init re-fires this
@@ -1145,7 +1170,7 @@ internal fun ChatScreen(
         if (!ttsReady) return@LaunchedEffect
         val newTools = state.activeTools - announcedTools.toSet()
         val labelChanged = state.activeToolLabel != announcedLabel
-        // Set-equality for tools (review #338-1/2): a reorder with no new
+        // Set-equality for tools (#317): a reorder with no new
         // member and no fresh label is not a milestone.
         if (newTools.isEmpty() && !labelChanged) return@LaunchedEffect
         announcedTools = state.activeTools.toList()
@@ -1153,7 +1178,7 @@ internal fun ChatScreen(
         val what = if (labelChanged && state.activeToolLabel.isNotBlank()) {
             state.activeToolLabel
         } else {
-            // Fallback names the latest too (review #338-5th): the empty-delta
+            // Fallback names the latest too (#317): the empty-delta
             // path needs a blank label, which the ViewModel's keep-prior
             // never produces mid-turn — defensive, and consistent if reached.
             "Using " + (newTools.lastOrNull() ?: state.activeTools.last())
@@ -1464,7 +1489,7 @@ internal fun ChatScreen(
                         }
                         if (state.streaming) {
                             FilledTonalIconButton(onClick = {
-                                // Live stop cuts like a barge (review #338-6th/7th):
+                                // Live stop cuts like a barge (#317):
                                 // the user cut the turn to talk, so the loop
                                 // re-listens instead of reading back the
                                 // just-killed partial. Cuts a playing cue too
