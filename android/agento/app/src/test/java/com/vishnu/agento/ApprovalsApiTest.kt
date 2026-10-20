@@ -66,7 +66,7 @@ class ApprovalsApiTest {
 
     @Test
     fun `relativeAgo and waitingLabel name ages and clamp skew`() {
-        val now = 10_000_000L
+        val now = 1_000_000_000L
         assertEquals("", relativeAgo(0, now))
         assertEquals("just now", relativeAgo(now + 5_000, now))
         assertEquals("2m ago", relativeAgo(now - 120_000, now))
