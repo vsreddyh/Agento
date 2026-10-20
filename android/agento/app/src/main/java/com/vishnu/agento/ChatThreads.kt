@@ -78,7 +78,7 @@ object ChatThreads {
             // LARGEST photo turn (#339), like the suffix below — a 1-photo
             // opener followed by a 2-photo turn holds a 2-photo turn.
             // Counted wired like every other signal.
-            val n = userTurns.maxOfOrNull { it.attachments.wiredPhotos().size } ?: 0
+            val n = userTurns.maxOfOrNull { it.attachments.wiredPhotoCount() } ?: 0
             if (n > 0) return if (n == 1) "Photo" else "$n photos"
             return "New conversation"
         }
@@ -87,7 +87,7 @@ object ChatThreads {
         // 1-photo turn followed by a 2-photo turn holds a 2-photo turn,
         // and the signal should say so. Counted wired so blanks never
         // title a thread.
-        val photos = userTurns.maxOfOrNull { it.attachments.wiredPhotos().size } ?: 0
+        val photos = userTurns.maxOfOrNull { it.attachments.wiredPhotoCount() } ?: 0
         val oneLine = first.replace(titleWhitespace, " ")
         // Photo signal with the budget kept (#339): the marker reserves
         // its width first, so the row never exceeds 42 chars. avail == 0

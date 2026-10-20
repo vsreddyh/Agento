@@ -626,7 +626,7 @@ class ChatApi(context: Context) {
             // "remove a photo" would send it hunting for one. Counted
             // wired, like the wire filter itself.
             val hasPhotos = lastUserIdx >= 0 &&
-                messages[lastUserIdx].attachments.wiredPhotos().isNotEmpty()
+                messages[lastUserIdx].attachments.wiredPhotoCount() > 0
             trySend(
                 ChatEvent.Error(
                     "Couldn't send: this turn is about ${formatBytes(rawBytes.toLong())} " +

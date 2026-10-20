@@ -303,7 +303,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Counted wired (#339): cap slots are for photos that wire, so a
         // blank can never spend one even if a future caller passes
         // storage-read attachments.
-        val room = MAX_IMAGES_PER_TURN - cur.wiredPhotos().size
+        val room = MAX_IMAGES_PER_TURN - cur.wiredPhotoCount()
         if (room <= 0) {
             notify(capRefused(), ToastKind.Info)
             return
@@ -320,12 +320,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * mid-batch so two rapid picks don't both decode then drop). Counted
      * wired like the cap math above. */
     fun hasAttachmentRoom(): Boolean =
-        _state.value.pendingAttachments.wiredPhotos().size < MAX_IMAGES_PER_TURN
+        _state.value.pendingAttachments.wiredPhotoCount() < MAX_IMAGES_PER_TURN
 
     /** Live staged-photo count for tap-time cap math (#339): ChatTab reads
      * the ViewModel, not its last-recomposed snapshot, so a
      * remove-then-rapid-repick sees the freed slot. Counted wired. */
-    fun pendingAttachmentCount(): Int = _state.value.pendingAttachments.wiredPhotos().size
+    fun pendingAttachmentCount(): Int = _state.value.pendingAttachments.wiredPhotoCount()
 
     /**
      * Appends heard text to the composer (#339): live results accumulate
@@ -652,7 +652,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // images are payloads with no searchable text. One
                         // marker spelling shared with export + wire (#339),
                         // counted wired so blanks never claim a photo.
-                        contentWithMarker(it.content, it.attachments.wiredPhotos().size)
+                        contentWithMarker(it.content, it.attachments.wiredPhotoCount())
                             .lowercase(java.util.Locale.ROOT).contains(q)
                     }
                 )
@@ -748,7 +748,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // Photos are payloads, not text: the marker keeps the export
             // honest about turns whose content is an image (#318). Shared
             // spelling with search + wire, counted wired (#339).
-            val marker = contentWithMarker(m.content.trim(), m.attachments.wiredPhotos().size)
+            val marker = contentWithMarker(m.content.trim(), m.attachments.wiredPhotoCount())
             sb.append("**$who:** $marker\n\n")
             if (m.role != "user" && (m.tools.isNotEmpty() || m.skills.isNotEmpty())) {
                 // Backticked so a tool/skill name can never break the export's
@@ -900,7 +900,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // below, never before the guards, so it can't claim a resend that
         // never happens.
         if (!_state.value.ready) {
-            if (_state.value.pendingAttachments.isNotEmpty()) {
+            // Voiced on text-or-photos like send() (#339): a typed draft
+            // with no photos staged deserves the same answer.
+            if (_state.value.pendingAttachments.isNotEmpty() || _state.value.pending.isNotBlank()) {
                 notify("Conversations still loading — try again in a moment.", ToastKind.Info)
             }
             return
@@ -951,11 +953,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // said here too, not just for the image-only tap. Info:
                     // the photos are safe, nothing failed. Counted wired
                     // like every marker in this file (#339).
-                    val parkedQueued = photos.wiredPhotos()
-                    if (parkedQueued.isNotEmpty()) {
+                    val parkedQueuedCount = photos.wiredPhotoCount()
+                    if (parkedQueuedCount > 0) {
                         notify(
                             "Queued behind this reply — text sends, " +
-                                attachmentMarker(parkedQueued.size) +
+                                attachmentMarker(parkedQueuedCount) +
                                 " stays staged for the next message.",
                             ToastKind.Info,
                         )
@@ -966,11 +968,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // toast the tap reads dead — the class this PR keeps
                     // eliminating. Names staged photos like the branch
                     // above so the two queued notices agree (wired count).
-                    val parkedSecond = photos.wiredPhotos()
+                    val parkedSecondCount = photos.wiredPhotoCount()
                     notify(
                         "Already queued — sends when this reply finishes." +
-                            if (parkedSecond.isNotEmpty()) {
-                                " " + attachmentMarker(parkedSecond.size) + " stays staged."
+                            if (parkedSecondCount > 0) {
+                                " " + attachmentMarker(parkedSecondCount) + " stays staged."
                             } else {
                                 ""
                             },
@@ -1039,11 +1041,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // part in the steered turn — said here like every other narrowing,
         // or the steer button silently drops the user's staging. Info:
         // parked, not failed. Counted wired.
-        val parkedSteer = _state.value.pendingAttachments.wiredPhotos()
-        if (parkedSteer.isNotEmpty()) {
+        val parkedSteerCount = _state.value.pendingAttachments.wiredPhotoCount()
+        if (parkedSteerCount > 0) {
             notify(
                 "Steered the text — " +
-                    attachmentMarker(parkedSteer.size) +
+                    attachmentMarker(parkedSteerCount) +
                     " stays staged for your next message.",
                 ToastKind.Info,
             )
@@ -1639,7 +1641,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // positive (live TEXT run, image-only tail) only 429s at the
             // server's own text+images comparison — never misattaches.
             val imageOnlyTail = last.content.isBlank() &&
-                last.attachments.wiredPhotos().isNotEmpty()
+                last.attachments.wiredPhotoCount() > 0
             // Newest match wins (#339): two image-only tails in rapid
             // succession (retry killed + resent) can both be live — resume
             // into the one still producing, not the older settling one.
@@ -1702,7 +1704,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Same gate split as retry() (#339): voice !ready, silent on
         // streaming (affordances hidden), narrate at the resend.
         if (!_state.value.ready) {
-            if (_state.value.pendingAttachments.isNotEmpty()) {
+            // Voiced on text-or-photos like send() (#339): a typed draft
+            // with no photos staged deserves the same answer.
+            if (_state.value.pendingAttachments.isNotEmpty() || _state.value.pending.isNotBlank()) {
                 notify("Conversations still loading — try again in a moment.", ToastKind.Info)
             }
             return
@@ -1730,7 +1734,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun continueTurn() {
         // Same gate split as retry() (#339).
         if (!_state.value.ready) {
-            if (_state.value.pendingAttachments.isNotEmpty()) {
+            // Voiced on text-or-photos like send() (#339): a typed draft
+            // with no photos staged deserves the same answer.
+            if (_state.value.pendingAttachments.isNotEmpty() || _state.value.pending.isNotBlank()) {
                 notify("Conversations still loading — try again in a moment.", ToastKind.Info)
             }
             return
@@ -1769,7 +1775,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // words off a photo+text turn yields the image-only shape send()
         // supports — while an empty text-only resend stays refused.
         // Counted wired: blanks are not photos.
-        if (clean.isEmpty() && msgs[index].attachments.wiredPhotos().isEmpty()) return
+        if (clean.isEmpty() && msgs[index].attachments.wiredPhotoCount() == 0) return
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
@@ -1805,7 +1811,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val msgs = _state.value.messages
         if (index !in msgs.indices || msgs[index].role != "user") return
         // Same empty-text rule as Replace above (#339), counted wired.
-        if (clean.isEmpty() && msgs[index].attachments.wiredPhotos().isEmpty()) return
+        if (clean.isEmpty() && msgs[index].attachments.wiredPhotoCount() == 0) return
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
@@ -2325,11 +2331,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // photos stay parked — said out loud (#339), because a silent
         // text-only send after staging photos reads as a dropped attach.
         // Counted wired.
-        val parkedFlush = _state.value.pendingAttachments.wiredPhotos()
-        if (parkedFlush.isNotEmpty()) {
+        val parkedFlushCount = _state.value.pendingAttachments.wiredPhotoCount()
+        if (parkedFlushCount > 0) {
             notify(
                 "Sent the queued text — " +
-                    attachmentMarker(parkedFlush.size) +
+                    attachmentMarker(parkedFlushCount) +
                     " still staged for your next message.",
                 ToastKind.Info,
             )

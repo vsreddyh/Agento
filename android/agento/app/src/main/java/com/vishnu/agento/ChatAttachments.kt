@@ -50,6 +50,12 @@ data class ChatAttachment(
 fun List<ChatAttachment>.wiredPhotos(): List<ChatAttachment> =
     filter { it.base64.isNotBlank() }
 
+/** Count-only twin of [wiredPhotos] for hot paths (#339): search runs per
+ * message per keystroke and titles render per turn — a `count {}` avoids
+ * the throwaway list `filter {}` allocates without changing the contract. */
+fun List<ChatAttachment>.wiredPhotoCount(): Int =
+    count { it.base64.isNotBlank() }
+
 /** Max photos per turn (#318). Two is the acceptance bar (two images in one
  * turn render and reach the agent); the cap keeps the wire body under the
  * gateway's 4 MiB limit (see the invariant test in [ChatAttachmentsTest]). */
@@ -136,7 +142,7 @@ fun contentWithMarkerVerbatim(content: String, n: Int): String =
  * resume, so every history filter must use this instead. Counted wired
  * (#339): a blank payload is not a photo anywhere, including here. */
 fun messageHasContent(m: ChatMessage): Boolean =
-    m.content.isNotBlank() || m.attachments.wiredPhotos().isNotEmpty()
+    m.content.isNotBlank() || m.attachments.wiredPhotoCount() > 0
 
 /**
  * Dimensions fitting `w`×`h` inside [MAX_IMAGE_SIDE_PX] on the long side,
@@ -448,7 +454,10 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     }
                 }
                 for (quality in listOf(80, 60)) {
-                    val out = ByteArrayOutputStream()
+                    // Pre-sized like the read buffer (#339): the default
+                    // 32-byte buffer would double its way to ~1.5 MB per
+                    // attempt, then toByteArray() copies again.
+                    val out = ByteArrayOutputStream(1 shl 20)
                     // Peak note (#339): bitmap (~10 MB at 1568px) + out bytes
                     // + base64 string co-exist here, plus the transient
                     // opaque fill above when the source had alpha (two

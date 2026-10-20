@@ -274,11 +274,21 @@ internal fun ChatTab(
     // True while a camera intent is outstanding (#339): launchCamera
     // overwrites the shared Uri/path on every tap, so a second tap before
     // the first returns would make the first callback decode the wrong
-    // file (and leak the first until the sweep). Plain remember — a
-    // rotation recreates the activity the result redelivers to, while
-    // process death drops the gate with the composition (bounded by the
-    // sweep either way).
-    var cameraPending by remember { mutableStateOf(false) }
+    // file (and leak the first until the sweep). Saveable timestamp, not a
+    // boolean: process death must not stick the gate forever (no callback
+    // will ever clear it), so staleness bounds it — an intent older than
+    // the bound is treated as dead and the launch proceeds.
+    var cameraPendingSince by rememberSaveable { mutableStateOf(0L) }
+    /** True while a camera intent launched recently enough to still return. */
+    fun isCameraPending(): Boolean =
+        cameraPendingSince != 0L &&
+            System.currentTimeMillis() - cameraPendingSince < CAMERA_PENDING_STALE_MS
+
+/** A camera intent older than this is treated as dead (#339): no callback
+ * will ever settle it, so the double-launch gate must not hold past here
+ * or one killed process disables the camera until reinstall. 30 minutes
+ * bounds a stuck gate far above any real camera session. */
+private const val CAMERA_PENDING_STALE_MS = 30 * 60 * 1000L
     // Startup sweep (#339): a process kill between the TakePicture write
     // and the decode leaves a capture with no owner — per-batch finally
     // covers cancel/leave-tab, not death. The cache dir holds ONLY these
@@ -442,8 +452,8 @@ internal fun ChatTab(
     ) { ok ->
         val u = cameraUri
         val f = cameraPath?.let(::File)
-        // Intent settled — the gate below re-arms for the next launch.
-        cameraPending = false
+        // Intent settled — the launch gate below re-arms for the next tap.
+        cameraPendingSince = 0L
         // Uri nulls now (single-delivery, never reused); the PATH stays
         // until the batch completes (#339) so a rotation mid-decode
         // restores a non-null keep for the startup sweep — nulling it here
@@ -478,9 +488,14 @@ internal fun ChatTab(
     }
     fun launchCamera() {
         // Single outstanding intent (#339): a second tap before the first
-        // returns would overwrite the shared Uri/path mid-flight. Silent
-        // return — the camera is already open, so there is nothing to voice.
-        if (cameraPending) return
+        // returns would overwrite the shared Uri/path mid-flight. Voiced
+        // (the camera is already open, so the tap needs an answer, not
+        // silence) — and staleness-bounded, so a dead process can never
+        // stick the gate.
+        if (isCameraPending()) {
+            vm.notify("Camera is already open — finish it first.", ToastKind.Info)
+            return
+        }
         // Hardware gate, idempotent (#339): requestCamera refuses first so
         // no permission prompt fires on camera-less devices, and the same
         // guard holds AT the launch so a future direct call refuses
@@ -528,7 +543,7 @@ internal fun ChatTab(
         cameraPath = file.absolutePath
         // Armed before launch, cleared in the callback (#339): the gate at
         // the top of this function makes overlapping intents impossible.
-        cameraPending = true
+        cameraPendingSince = System.currentTimeMillis()
         cameraLauncher.launch(uri)
     }
     val cameraPermission = rememberLauncherForActivityResult(
@@ -2055,8 +2070,8 @@ internal fun ChatScreen(
                     // cap math addPendingAttachments enforces, so blanks
                     // (impossible from the picker, possible in theory) can
                     // never read "1/2 photos" with 2 slots free.
-                    val stagedWired = state.pendingAttachments.wiredPhotos()
-                    if (stagedWired.isNotEmpty()) {
+                    val stagedWiredCount = state.pendingAttachments.wiredPhotoCount()
+                    if (stagedWiredCount > 0) {
                         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 // Rendered wired, removed by staged index
@@ -2073,7 +2088,7 @@ internal fun ChatScreen(
                                         AttachmentThumb(
                                             base64 = a.base64,
                                             label = "Staged photo ${w + 1} of " +
-                                                "${stagedWired.size}",
+                                                "${stagedWiredCount}",
                                             modifier = Modifier.size(64.dp),
                                             slot = i,
                                             stableId = a.id,
@@ -2097,7 +2112,7 @@ internal fun ChatScreen(
                                 }
                             }
                             Text(
-                                "${stagedWired.size}/$MAX_IMAGES_PER_TURN photos — " +
+                                "${stagedWiredCount}/$MAX_IMAGES_PER_TURN photos — " +
                                     "sent with your next message.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2224,7 +2239,7 @@ internal fun ChatScreen(
                                 // image-only turn is a real turn. Counted
                                 // wired like the cap math (#339).
                                 enabled = (state.pending.isNotBlank() ||
-                                    state.pendingAttachments.wiredPhotos().isNotEmpty()) &&
+                                    state.pendingAttachments.wiredPhotoCount() > 0) &&
                                     state.ready,
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
@@ -2462,10 +2477,10 @@ internal fun ChatScreen(
                                                 // or an edit to "thanks" silently
                                                 // resends images. Counted wired
                                                 // so blanks claim nothing.
-                                                val wired = msg.attachments.wiredPhotos()
-                                                if (wired.isNotEmpty()) {
+                                                val wiredCount = msg.attachments.wiredPhotoCount()
+                                                if (wiredCount > 0) {
                                                     HintLine(
-                                                        attachmentMarker(wired.size) +
+                                                        attachmentMarker(wiredCount) +
                                                             " — resends with the edited text.",
                                                     )
                                                 }
@@ -2482,7 +2497,7 @@ internal fun ChatScreen(
                                                     // text-only resends.
                                                     // Wired count, like the hint.
                                                     val canResend = editDraft.isNotBlank() ||
-                                                        msg.attachments.wiredPhotos().isNotEmpty()
+                                                        msg.attachments.wiredPhotoCount() > 0
                                                     Button(
                                                         onClick = {
                                                             if (dropsTurns) {
@@ -2534,7 +2549,7 @@ internal fun ChatScreen(
                                                         Spacer(modifier = Modifier.height(4.dp))
                                                     }
                                                 }
-                                                if (msg.content.isNotBlank() || wiredBubble.isEmpty()) {
+                                                if (msg.content.isNotBlank() || msg.attachments.wiredPhotoCount() == 0) {
                                                     // Rendered trimEnd, stored raw
                                                     // (#339): storage is wire-verbatim
                                                     // since round-37, so trailing
@@ -2692,7 +2707,7 @@ internal fun ChatScreen(
             // turn's photos resend with the new text — named here so the
             // confirmation covers the full resend. Counted wired like the
             // HintLine (#339).
-            val resendPhotos = state.messages.getOrNull(idx)?.attachments?.wiredPhotos()?.size ?: 0
+            val resendPhotos = state.messages.getOrNull(idx)?.attachments?.wiredPhotoCount() ?: 0
             AlertDialog(
                 onDismissRequest = { confirmReplace = null },
                 title = { Text("Resend from edited message?") },
