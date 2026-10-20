@@ -452,6 +452,12 @@ private class DetectCtl {
     var phase = -1
 }
 
+/** Monotonic milestone-cue key counter (review #338-5th): plain holder,
+ * not state — only the milestone effect touches it. */
+private class CueKeys {
+    var n = 0
+}
+
 /**
  * Chat provider/model picker (#18: model selection lives on the chat
  * profile's own page). Saves immediately on pick; blanks mean not set.
@@ -782,9 +788,12 @@ internal fun ChatScreen(
     // the last non-empty label independently, so a label-only frame must
     // re-fire the milestone effect too (review #338-1).
     var announcedLabel by remember(tab) { mutableStateOf("") }
-    var cueN by remember(tab) { mutableIntStateOf(0) }
-    // cueN never resets on purpose (review #338-7): toggle() needs a key
+    // Monotonic cue-key counter (review #338-7, #338-5th): plain holder,
+    // not state — only the milestone effect touches it, so publishing
+    // would recompose the whole screen once per cue for bookkeeping the
+    // toggle() key needs. Never resets on purpose: toggle() needs a key
     // no still-playing cue holds, and a reset could collide with one.
+    val cueKeys = remember(tab) { CueKeys() }
     // Detector bookkeeping (review #338-followup-3, #338-3-followup):
     // plain holder, not state — only the driver effect writes it in the
     // steady state, and the effect keys drive restarts. Declared up here
@@ -1123,16 +1132,19 @@ internal fun ChatScreen(
         val what = if (labelChanged && state.activeToolLabel.isNotBlank()) {
             state.activeToolLabel
         } else {
-            "Using " + (newTools.lastOrNull() ?: state.activeTools.first())
+            // Fallback names the latest too (review #338-5th): the empty-delta
+            // path needs a blank label, which the ViewModel's keep-prior
+            // never produces mid-turn — defensive, and consistent if reached.
+            "Using " + (newTools.lastOrNull() ?: state.activeTools.last())
                 .substringAfterLast("__").replace('_', ' ')
         }
-        cueN++
+        cueKeys.n++
         // Engine-dead stays silent via the !ttsReady early return above (a
         // failed engine never becomes ready), not via the branch below —
         // the reply path reports TTS failure loudly at stream end instead
         // of killing a working call over a cue. The branch is defense for
         // a shutdown racing the readiness snapshot; intentionally a no-op.
-        if (!tts.toggle("live-cue-$cueN", what)) {
+        if (!tts.toggle("live-cue-${cueKeys.n}", what)) {
             // No-op by decision, not by accident.
         }
     }
