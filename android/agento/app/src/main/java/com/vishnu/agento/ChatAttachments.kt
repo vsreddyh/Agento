@@ -398,7 +398,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // loop: the toInt() at the inSampleSize handoff is provably
             // small (exits in ~6 iterations), same overflow discipline
             // everywhere sampling runs.
-            var sample = 1LL
+            var sample = 1L
             while (bounds.outWidth / (sample * 2) >= MAX_IMAGE_SIDE_PX ||
                 bounds.outHeight / (sample * 2) >= MAX_IMAGE_SIDE_PX
             ) {
