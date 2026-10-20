@@ -201,4 +201,18 @@ class ChatAttachmentsTest {
         assertEquals("150 KB", formatBytes(150_000L))
         assertEquals("1.1 MB", formatBytes(1_100_000L))
     }
+
+    @Test
+    fun byteFormattingIgnoresLocale() {
+        // Named limit errors are user-visible: a comma-decimal locale must
+        // not render "1,1 MB".
+        val prev = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.GERMANY)
+            assertEquals("1.1 MB", formatBytes(1_100_000L))
+            assertEquals("150 KB", formatBytes(150_000L))
+        } finally {
+            java.util.Locale.setDefault(prev)
+        }
+    }
 }

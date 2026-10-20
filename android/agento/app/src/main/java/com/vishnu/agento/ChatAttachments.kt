@@ -115,6 +115,10 @@ fun messageContentJson(
         if (role == "user" && attachments.isNotEmpty() && !includeImages) {
             return (content.trim() + " " + attachmentMarker(attachments.size)).trim()
         }
+        // Assistant turns never stage photos: the marker rule above is
+        // user-only by construction, and a bare return here keeps a
+        // hypothetical assistant-with-attachments payload from silently
+        // widening the wire shape (fail-closed, like the gateway).
         return content
     }
     val arr = JSONArray()
@@ -134,11 +138,13 @@ fun messageContentJson(
 /** Raw size of a base64 payload of [chars] in bytes, for human-sized error messages. */
 fun base64Bytes(chars: Int): Long = (chars * 3L) / 4L
 
-/** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal, never blank. */
+/** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal, never blank.
+ * Pinned to US formatting (#339): user-visible strings must not render
+ * `1,1 MB` under a comma-decimal locale. */
 fun formatBytes(bytes: Long): String {
     if (bytes < 1_000L) return "$bytes B"
-    if (bytes < 1_000_000L) return "${"%.0f".format(bytes / 1_000.0)} KB"
-    return "${"%.1f".format(bytes / 1_000_000.0)} MB"
+    if (bytes < 1_000_000L) return "${"%.0f".format(java.util.Locale.US, bytes / 1_000.0)} KB"
+    return "${"%.1f".format(java.util.Locale.US, bytes / 1_000_000.0)} MB"
 }
 
 /**

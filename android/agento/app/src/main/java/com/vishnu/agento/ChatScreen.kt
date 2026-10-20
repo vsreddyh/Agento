@@ -252,14 +252,12 @@ internal fun ChatTab(
                     // the rest of the batch. The resolver is all this needs.
                     val result = prepareAttachment(context.applicationContext, u)
                     withContext(Dispatchers.Main) {
+                        // State notices, not composition toasts (#339): a
+                        // decode failure must survive rotation like the cap
+                        // refusals do — same lifetime for every attach error.
                         result
                             .onSuccess { vm.addPendingAttachments(listOf(it)) }
-                            .onFailure {
-                                toasts.toast(
-                                    it.message ?: "Couldn't attach that photo.",
-                                    ToastKind.Error,
-                                )
-                            }
+                            .onFailure { vm.notify(it.message ?: "Couldn't attach that photo.") }
                     }
                 }
             } finally {
@@ -291,9 +289,10 @@ internal fun ChatTab(
         val dir = File(context.cacheDir, "camera")
         // Checked, not assumed (#339): full storage fails mkdirs, and a
         // bare TakePicture failure (ok=false) would leave the user with
-        // no hint why no camera appeared.
+        // no hint why no camera appeared. State notice, not a composition
+        // toast: same rotation-proof lifetime as every other attach error.
         if (!dir.exists() && !dir.mkdirs()) {
-            toasts.toast("Couldn't start the camera — storage unavailable.", ToastKind.Error)
+            vm.notify("Couldn't start the camera — storage unavailable.")
             return
         }
         // A re-tap stages a new Uri over the old one: delete the previous
@@ -311,7 +310,7 @@ internal fun ChatTab(
             // .debug suffix ever lands, this call is the one that breaks.
             FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         }.getOrNull() ?: run {
-            toasts.toast("Couldn't start the camera.", ToastKind.Error)
+            vm.notify("Couldn't start the camera.")
             return
         }
         cameraUri = uri
@@ -324,7 +323,8 @@ internal fun ChatTab(
         if (granted) {
             launchCamera()
         } else {
-            toasts.toast("Camera permission is needed to take photos.", ToastKind.Error)
+            // State notice like every other attach refusal (#339).
+            vm.notify("Camera permission is needed to take photos.")
         }
     }
     fun requestCamera() {
