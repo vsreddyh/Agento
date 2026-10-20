@@ -472,3 +472,19 @@ func TestPollObservedExpiryIsNotADenial(t *testing.T) {
 		t.Fatalf("audit = %+v", audit)
 	}
 }
+
+// Once teardown starts, auditAsync writes inline: the row survives the join
+// instead of racing process exit, and no Add can race the Wait.
+func TestAuditAsyncIsInlineAfterClose(t *testing.T) {
+	store := approvals.NewMemoryStore()
+	r := testRelay(store)
+	r.beginClose()
+	r.auditAsync("list_notes", nil, approvals.DispositionAllow, "", "")
+	audit, err := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audit) != 1 || audit[0].Tool != "list_notes" {
+		t.Fatalf("audit = %+v, want the row written synchronously", audit)
+	}
+}

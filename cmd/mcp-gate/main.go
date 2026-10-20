@@ -122,6 +122,13 @@ type relay struct {
 	// holdWG tracks detached hold goroutines. run waits on it (bounded) at
 	// teardown so an expiry/deny audit write is not cut off by process exit.
 	holdWG sync.WaitGroup
+	// auditWG tracks notification/malformed audits, which are detached so the
+	// pump cannot stall on the store. closing flips when teardown starts:
+	// after that auditAsync runs inline, because a WaitGroup Add racing Wait
+	// is a panic, and a frame still in the pipe has no row to lose anyway.
+	auditMu sync.Mutex
+	closing bool
+	auditWG sync.WaitGroup
 
 	mu sync.Mutex
 	// pending holds allowed calls until their response arrives, so the
@@ -197,20 +204,30 @@ func (r *relay) run(
 	// closed stdin means Pi is gone. stop() SIGKILLs a live child; the
 	// blocked reader is abandoned on the exit path, which is safe because
 	// the process is leaving.
+	r.beginClose()
 	cancelHolds()
 	// Holds record their own expiry after the cancel, and this process exits
 	// as soon as run returns — without a join, the teardown audit row (the
 	// one case the relay specifically promises to record) is cut off mid-write.
-	// Bounded: a wedged store must not hold shutdown open forever.
+	// Each hold can spend 2x storeTimeout sequentially (timeout + audit), so
+	// the budget scales with the number of parked holds, capped so a wedged
+	// store cannot hold shutdown open indefinitely. Concurrent holds are rare
+	// by design (one turn per profile), but the cap keeps the worst case
+	// bounded rather than proportional to traffic.
 	holdsDone := make(chan struct{})
 	go func() {
 		r.holdWG.Wait()
+		r.auditWG.Wait()
 		close(holdsDone)
 	}()
+	budget := 2*storeTimeout + time.Duration(r.holdCount())*2*storeTimeout
+	if budget > 30*time.Second {
+		budget = 30 * time.Second
+	}
 	select {
 	case <-holdsDone:
-	case <-time.After(2 * storeTimeout):
-		r.log.Printf("shutdown: held calls still recording after %s; continuing", 2*storeTimeout)
+	case <-time.After(budget):
+		r.log.Printf("shutdown: held calls still recording after %s; continuing", budget)
 	}
 	stop()
 	child.Wait()
@@ -591,7 +608,33 @@ func idKey(raw json.RawMessage) string {
 // logged inside audit(), so a lost row is never silent.
 func (r *relay) auditAsync(tool string, args map[string]any,
 	disp approvals.Disposition, errMsg, approvalID string) {
-	go r.audit(tool, args, disp, errMsg, approvalID)
+	r.auditMu.Lock()
+	if r.closing {
+		r.auditMu.Unlock()
+		// Teardown has begun: run() is about to wait, so write inline.
+		r.audit(tool, args, disp, errMsg, approvalID)
+		return
+	}
+	r.auditWG.Add(1)
+	r.auditMu.Unlock()
+	go func() {
+		defer r.auditWG.Done()
+		r.audit(tool, args, disp, errMsg, approvalID)
+	}()
+}
+
+// beginClose stops new detached audits; later ones run inline.
+func (r *relay) beginClose() {
+	r.auditMu.Lock()
+	r.closing = true
+	r.auditMu.Unlock()
+}
+
+// holdCount reports parked holds, for sizing the teardown budget.
+func (r *relay) holdCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.holds)
 }
 
 func (r *relay) track(id json.RawMessage, name string, args map[string]any) {
@@ -627,10 +670,10 @@ func (r *relay) trackWith(id json.RawMessage, name string, args map[string]any,
 	// the eviction writes its own allow row with the reason.
 	if evicted != nil {
 		r.log.Printf("pending call table full: evicted unanswered id %s", evictedKey)
-		// Synchronous, like every other audit: the 5s store bound caps the
-		// stall, and a fire-and-forget row is the one most likely to be lost
-		// to teardown — the exact hole this row exists to close.
-		r.audit(evicted.name, evicted.args, evicted.disp,
+		// Async like the other notification-path rows, and closing-aware:
+		// once teardown starts auditAsync writes inline, so the row the
+		// eviction exists to preserve is not lost at exit.
+		r.auditAsync(evicted.name, evicted.args, evicted.disp,
 			"relay_evicted: response not observed (pending cap)", evicted.approvalID)
 	}
 }
@@ -673,12 +716,13 @@ func (p *prefixWriter) Write(b []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// Report only the caller's bytes: the prefix was not part of b. A short
-	// write under the prefix means none of b was written, never part of it.
-	if n <= len(p.prefix) {
-		return 0, nil
+	// Report only the caller's bytes: the prefix was not part of b. Anything
+	// short of the whole prefixed frame is a short write, never a silent
+	// success the caller might spin on.
+	if n != len(p.prefix)+len(b) {
+		return 0, io.ErrShortWrite
 	}
-	return n - len(p.prefix), nil
+	return len(b), nil
 }
 
 // writeFrame writes one newline-terminated frame with a single Write. Two
