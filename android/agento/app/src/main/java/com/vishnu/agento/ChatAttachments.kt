@@ -161,9 +161,12 @@ fun contentWithMarkerVerbatim(content: String, n: Int): String =
 /** True when the message carries anything the agent should see. Text-only
  * checks (`content.isNotBlank()`) drop image-only turns from resends and
  * resume, so every history filter must use this instead. Counted wired
- * (#339): a blank payload is not a photo anywhere, including here. */
+ * (#339): a blank payload is not a photo anywhere, including here. The
+ * attachment half is user-only, matching the wire marker: a hypothetical
+ * assistant photo turn filters as content-less (it would wire as bare
+ * text with no marker), so resends never carry a turn the wire drops. */
 fun messageHasContent(m: ChatMessage): Boolean =
-    m.content.isNotBlank() || m.attachments.wiredPhotoCount() > 0
+    m.content.isNotBlank() || (m.role == "user" && m.attachments.wiredPhotoCount() > 0)
 
 /**
  * Dimensions fitting `w`×`h` inside [MAX_IMAGE_SIDE_PX] on the long side,

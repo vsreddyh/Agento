@@ -614,7 +614,6 @@ class ChatApi(context: Context) {
         // actionable error instead of sending it into the gateway's 4 MiB
         // 413. Phrased for the turn's actual contents below: photos when
         // it carries them, thread-shortening when it doesn't.
-        val raw = payload.toString()
         // Sized from the built body, not a second encode (#339): measuring
         // via toByteArray() and then sending via toRequestBody() copies the
         // ~3.5 MB string twice back to back. contentLength() on the built
@@ -622,12 +621,16 @@ class ChatApi(context: Context) {
         // declares UTF-8, so no charset ambiguity) — one copy instead of
         // two, transient peak ~3x instead of ~4x. -1 (unknown length)
         // refuses too: an unmeasurable body must not sail past the gate.
-        // Scoped pair (#339): raw falls out of scope here instead of living
-        // in the closure for the whole upload — one copy freed for the
-        // slow-upload seconds, leaving body alone with the request.
+        // Scoped pair (#339): raw falls out of scope with this block
+        // instead of living in the closure for the whole upload — one
+        // copy freed for the slow-upload seconds, leaving body alone
+        // with the request. Both declared INSIDE (an earlier revision
+        // scoped only the build while raw stayed reachable outside,
+        // which retained the string it claimed to free).
         val measured = run {
-            val body = raw.toRequestBody(JSON)
-            body to body.contentLength()
+            val raw = payload.toString()
+            val built = raw.toRequestBody(JSON)
+            built to built.contentLength()
         }
         val body = measured.first
         val rawBytes = measured.second

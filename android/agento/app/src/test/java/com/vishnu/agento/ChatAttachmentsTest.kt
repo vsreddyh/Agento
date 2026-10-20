@@ -178,6 +178,18 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun contentRuleIgnoresAssistantPhotos() {
+        // Matches the wire marker's user-only rule (#339): a hypothetical
+        // assistant photo turn wires as bare text with no marker, so the
+        // resend filters must not treat it as content either.
+        assertFalse(
+            messageHasContent(
+                ChatMessage("assistant", "", 0L, attachments = listOf(attachment())),
+            ),
+        )
+    }
+
+    @Test
     fun blankPayloadIsNoContent() {
         // The blank-payload-is-no-content rule the wire filter relies on
         // (#339): a hand-edited {"base64":""} turn must not pass resend

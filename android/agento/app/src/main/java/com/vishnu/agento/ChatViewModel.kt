@@ -761,10 +761,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // turns export verbatim like the wire path (a photo+code turn
             // keeps the indentation the agent saw); plain text keeps the
             // long-standing trimmed shape so exports don't gain blank
-            // lines. Counted wired (#339).
+            // lines. Render-trimmed like the bubble (#339): trailing
+            // newlines would export a blank line per turn that the bubble
+            // doesn't show. Counted wired (#339).
             val wiredCount = m.attachments.wiredPhotoCount()
             val marker = if (wiredCount > 0) {
-                contentWithMarkerVerbatim(m.content, wiredCount)
+                contentWithMarkerVerbatim(m.content.trimEnd(), wiredCount)
             } else {
                 m.content.trim()
             }
