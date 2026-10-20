@@ -165,6 +165,9 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	upstream.Header.Del("Proxy-Authenticate")
 	upstream.Header.Del("Authorization")
 	if err := upstream.Write(target); err != nil {
+		// Logged like the copy truncation below: a silent return here
+		// makes a dead upstream indistinguishable from a client cancel.
+		log.Printf("browser: forward upstream write failed: %v", err)
 		return
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(target), r)

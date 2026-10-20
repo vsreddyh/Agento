@@ -218,8 +218,11 @@ type session struct {
 	// launchErr carries a failed launch to concurrent waiters so they
 	// report the cause instead of a generic failure.
 	launchErr error
-	// lastUse is written in get() under the sessions lock; evictIdle reads
-	// it under the same lock. Never touched from tool handlers directly.
+	// lastUse is written in get() and read in evictIdle's snapshot under
+	// the sessions lock, but evictIdle's spare re-check reads it holding
+	// only this lock — so the write takes both too. Lock order everywhere
+	// is ss.mu -> s.mu; the common lock for lastUse is s.mu. Never touched
+	// from tool handlers directly.
 	lastUse time.Time
 	// browserCancel stops the tab context. Stored, not dropped: a session
 	// that is ever torn down (idle prune, future close tool) cancels its
@@ -391,6 +394,8 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 
 	bctx, btabCancel, balloc, bcancel, bln, berr := launchBrowser(dir, chrome)
 
+	// Directory IO outside the session lock: ensure/shotPath wait on it.
+	shots := resumeShots(dir)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	close(s.ready)
@@ -399,27 +404,37 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 		s.launchErr = berr
 		return nil, berr
 	}
-	s.publish(bctx, btabCancel, balloc, bcancel, bln)
+	s.publish(bctx, btabCancel, balloc, bcancel, bln, shots)
 	return s.browser, nil
+}
+
+// resumeShots scans for the highest existing shot number so a new process
+// never overwrites the previous run's shot-001.png. Runs before publish
+// takes the session lock; failures read as zero (counter restarts, and the
+// per-save counter still keeps names unique within the run).
+func resumeShots(dir string) int {
+	max := 0
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		var n int
+		if _, err := fmt.Sscanf(e.Name(), "shot-%d.png", &n); err == nil && n > max {
+			max = n
+		}
+	}
+	return max
 }
 
 // publish installs a launched browser under the session lock: contexts,
 // listener, cleared error and the resumed shot counter travel together, so
 // the first-launch and retry paths cannot diverge again.
-func (s *session) publish(bctx context.Context, btabCancel context.CancelFunc, balloc context.Context, bcancel context.CancelFunc, bln net.Listener) {
+func (s *session) publish(bctx context.Context, btabCancel context.CancelFunc, balloc context.Context, bcancel context.CancelFunc, bln net.Listener, shots int) {
 	// Cleared on success: a stale launch error must not outlive the retry
 	// that fixed it for the next reader to trip over.
 	s.launchErr = nil
 	s.alloc, s.cancel, s.browserCancel, s.browser, s.started = balloc, bcancel, btabCancel, bctx, true
 	s.proxyLn = bln
-	// Resume the shot counter past restarts so a new process never
-	// overwrites the previous run's shot-001.png.
-	entries, _ := os.ReadDir(s.dir)
-	for _, e := range entries {
-		var n int
-		if _, err := fmt.Sscanf(e.Name(), "shot-%d.png", &n); err == nil && n > s.shots {
-			s.shots = n
-		}
+	if shots > s.shots {
+		s.shots = shots
 	}
 }
 
