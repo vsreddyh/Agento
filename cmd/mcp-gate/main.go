@@ -271,6 +271,12 @@ func (r *relay) run(
 		}
 	default:
 	}
+	// A cancelled parent is a requested shutdown: the child's exit is the
+	// expected consequence, not a crash. Returning it would log "relay ended"
+	// and exit 1 on every deploy/container stop.
+	if ctx.Err() != nil && errors.Is(err, errServerExited) {
+		return nil
+	}
 	return err
 }
 
