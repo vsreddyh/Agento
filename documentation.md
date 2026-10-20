@@ -265,6 +265,46 @@ All settings are configured in the single root `.env` file:
 
 - **Secrets Management**: Live API keys and database credentials reside exclusively in the git-ignored `.env` file.
 - **Container Isolation**: the `pi` container mounts only what it needs (`pi/`, `workspace/`, three read-only SSH files) with no host container-socket access (Podman is daemonless — there is no shared socket). The agent runs as root inside it, because the bind-mounted workspace is owned by the host uid.
+- **Single credential, one principal**: the same `PASSWORD` bearer authenticates chat (`pi-gateway`) and health sync, so every approval decision is attributed as `decided_by: "app"` — read it as "decided from the app", not a per-user id. The 90-day audit row records only a hash of IP + User-Agent per deciding device, never the values themselves. Per-user auth (and per-user attribution) arrives with per-user auth, not before.
+
+### Approval gates + audit log (#313)
+
+Sensitive tool calls pause for an explicit in-app approve/deny before they
+execute. Enforcement lives in `cmd/mcp-gate`, the relay every `pi/mcp.json`
+entry points through: reads and routine writes forward untouched, while money
+writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`) and
+prunes that actually delete (`prune_old` with `dry_run=false`) hold up to 14
+minutes for a decision, then run on approve or fail closed on deny/expiry —
+Pi gets a tool error and the turn continues. Unknown tools and unknown
+servers hold too (deny-by-default). Every proxied `tools/call` writes one
+audit row with tool, redacted args, disposition (`allowed`/`approved`/
+`denied`/`expired`), result and decider; arg keys are redacted by substring
+and error text is pattern-scrubbed (300-rune cap), so treat `error` as
+untrusted display text. Pending queue: `GET /api/approvals` (pass
+`?status=pending`), decide with `POST /api/approvals/{id}/approve|deny`
+(exactly once — races after expiry 409); history: `GET /api/audit`
+(`?server=&tool=`). State is in Mongo (`approvals`, 15-minute TTL;
+`audit_log`, 90-day TTL) and survives restarts; without Mongo both sides
+fall back to memory that cannot meet — the relay denies gated calls
+immediately (`relay_unavailable`) and the app banners the queue as degraded
+instead of showing an undecidable list. The app surface (since 5.7.0) is the
+**Approvals** sheet: pending cards with redacted args + approve/deny, a
+badged entry with an in-turn banner while streaming, and the recent audit
+trail below. Full design: `docs/adr/0002-approval-gates.md`.
+
+Threat note — what this does and does not fix:
+
+- Fixed: unattended money writes, deletes, prunes and rewrites now need a
+  human; every proxied call is attributable for 90 days; deny leaves state
+  unchanged (Pi gets a tool error, the turn continues).
+- NOT fixed: Pi built-in tools (`bash` file writes, `read`/`write`/`edit`
+  via codemode) never traverse MCP, so they are observed but not gated — a
+  model told to `rm -rf` via bash is unimpeded. The agent still runs as root
+  in the container, and the single bearer token still authenticates every
+  route. Full sandboxing and per-connector OAuth vaults are out of scope
+  (connectors own the vault).
+- Residual: a held call occupies its turn until expiry; an approval shows
+  tool + args + time but not which conversation asked.
 
 ---
 
