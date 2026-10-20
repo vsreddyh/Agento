@@ -319,6 +319,16 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 	}
 	s.alloc, s.cancel, s.browserCancel, s.browser, s.started = balloc, bcancel, btabCancel, bctx, true
 	s.proxyLn = bln
+	// Resume the shot counter past restarts so a new process never
+	// overwrites the previous run's shot-001.png. Under the session lock
+	// with everything else published above.
+	entries, _ := os.ReadDir(s.dir)
+	for _, e := range entries {
+		var n int
+		if _, err := fmt.Sscanf(e.Name(), "shot-%d.png", &n); err == nil && n > s.shots {
+			s.shots = n
+		}
+	}
 	return s.browser, nil
 }
 
