@@ -115,12 +115,16 @@ fun wireSizeExceeded(bytes: Long): Boolean = bytes < 0 || bytes > MAX_CHAT_WIRE_
  * not rendered from storage (#339): every payload is JPEG re-encoded at
  * pick time, so a hand-edited thread file cannot widen the wire type —
  * fail-closed at the client edge, like the gateway's unknown-part 400.
- * Wired-only precondition, enforced: blank payloads must be filtered via
- * wiredPhotos() first — an empty data URI is the corrupt part the wire
- * filter exists to prevent, so this fails fast instead of rendering one. */
+ * Wired-only precondition, enforced as the named family (#339): blank
+ * payloads must be filtered via wiredPhotos() first — an empty data URI
+ * is the corrupt part the wire filter exists to prevent, so this throws
+ * NamedAttachError (pass-through bucket, not the generic remap) instead
+ * of rendering one. Unreachable today (all wire sites filter first). */
 fun ChatAttachment.dataUri(): String {
-    require(base64.isNotBlank()) {
-        "ChatAttachment.dataUri requires a non-blank payload (filter wiredPhotos() first)"
+    if (base64.isBlank()) {
+        throw NamedAttachError(
+            "ChatAttachment.dataUri requires a non-blank payload (filter wiredPhotos() first)",
+        )
     }
     return "data:image/jpeg;base64,$base64"
 }
@@ -262,11 +266,12 @@ fun messageContentJson(
  * with a ragged length floors down by up to 2 B, which is acceptable for
  * approximate error strings and never reached (wire/display paths filter
  * to decode-valid payloads via wiredPhotos()). Framing whitespace
- * (`\n` from older wrapped payloads, which decode stays lenient toward)
- * is excluded first: it is not content, and measuring it would overstate
- * the named size by the newline count. */
+ * (older wrapped payloads, which decode stays lenient toward) is excluded
+ * first — ALL of it, not just newlines (#339): decode skips spaces/tabs
+ * too, so measuring them would overstate the named size by the space
+ * count. */
 fun base64Bytes(base64: String): Long {
-    val stripped = base64.filterNot { it == '\n' || it == '\r' }
+    val stripped = base64.filterNot { it.isWhitespace() }
     val padding = stripped.takeLastWhile { it == '=' }.length
     return (stripped.length / 4L) * 3L - padding
 }

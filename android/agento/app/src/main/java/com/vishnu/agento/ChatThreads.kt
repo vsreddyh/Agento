@@ -49,6 +49,16 @@ private val threadJson = Json { ignoreUnknownKeys = true }
  * every title render and switcher-search filter pass. */
 private val titleWhitespace = Regex("\\s+")
 
+/** Grapheme walker for title cuts, thread-local (#339): BreakIterator is
+ * stateful and not thread-safe, and constructing one per title render
+ * (plus per switcher-search filter pass over 200-msg threads) is churn.
+ * ROOT locale pins deterministic cluster rules across locales (Thai/Lao
+ * boundaries are locale-sensitive). */
+private val titleBreaks: ThreadLocal<java.text.BreakIterator> =
+    ThreadLocal.withInitial {
+        java.text.BreakIterator.getCharacterInstance(java.util.Locale.ROOT)
+    }
+
 /**
  * Per-tab conversation persisted as JSON (`#17` history survival,
  * `#26` storage). One conversation per tab survives app restarts; +
@@ -110,12 +120,10 @@ object ChatThreads {
         val base = if (oneLine.length <= avail) {
             oneLine
         } else if (avail >= 1) {
-            // Grapheme-safe cut (#339): BreakIterator walks extended
-            // grapheme clusters (ZWJ emoji, flag pairs, surrogate pairs),
-            // so the cut never splits a cluster — lone surrogates and
-            // half-flags can't reach the switcher row. Takes the last
-            // boundary within budget; the "…" replaces the rest.
-            val breaks = java.text.BreakIterator.getCharacterInstance()
+            // Grapheme-safe cut via the shared walker (#339): the last
+            // boundary within budget, so ZWJ sequences, flag pairs, and
+            // surrogate pairs never split mid-cluster in the switcher row.
+            val breaks = titleBreaks.get() ?: java.text.BreakIterator.getCharacterInstance()
             breaks.setText(oneLine)
             var end = 0
             var n = breaks.first()

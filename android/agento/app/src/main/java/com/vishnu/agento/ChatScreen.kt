@@ -317,14 +317,6 @@ internal fun ChatTab(
     // the Activity at all — not even for the resolve line — so the
     // effect closure never holds it, even briefly.
     val appCacheDir = context.applicationContext.cacheDir
-    // Fresh-process detector, saveable (#339): false only on a process
-    // that never composed this tab — rotation restores true. The cast
-    // this replaces read isChangingConfigurations on the NEW activity
-    // (always false there), so it cleared the gate on every rotation and
-    // silently dropped the double-launch protection. A kill-while-camera
-    // restores true as well — but that path keeps the gate via the
-    // timestamp bound, which is the designed tradeoff, not a silent clear.
-    var sweepGateResetDone by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         // Off-main (#339): directory listing + deletes are disk IO, and
         // this effect runs on every first composition including post-rotation.
@@ -334,15 +326,15 @@ internal fun ChatTab(
         // captures only the resulting File — so no rotation can leak the
         // Activity through this effect. Same class as the batch decode,
         // fixed the same way.
-        // Fresh-process gate reset, once ever (#339): a kill while the
-        // camera app is foreground restores a fresh pending timestamp
-        // with no callback to clear it — bounded by the stale timestamp
-        // instead. A fresh process has no outstanding intent by
-        // construction, so only the first composition clears it.
+        // Fresh-process gate reset via the ViewModel (#339): saveable
+        // state restores on rotation AND on kill-with-bundle, so a local
+        // first-run flag can't tell them apart — but the VM dies with the
+        // process and survives rotation, which is exactly the distinction
+        // needed. Only a truly fresh process clears the gate; rotation
+        // keeps it via the timestamp bound.
         val keep = cameraPath
-        if (!sweepGateResetDone) {
+        if (vm.consumeSweepGateReset()) {
             cameraPendingSince = 0L
-            sweepGateResetDone = true
         }
         // Application context for the dir (#339): the IO closure below
         // must capture only this File, never the Activity. The synchronous

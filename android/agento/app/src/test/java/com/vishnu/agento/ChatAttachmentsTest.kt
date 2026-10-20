@@ -464,5 +464,6 @@ class ChatAttachmentsTest {
         assertEquals(3L, base64Bytes("TWFu"))
         assertEquals(0L, base64Bytes(""))
         assertEquals(1L, base64Bytes("TQ==\n"))
+        assertEquals(1L, base64Bytes("T Q= = "))
     }
 }

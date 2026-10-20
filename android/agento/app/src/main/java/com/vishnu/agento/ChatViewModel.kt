@@ -370,6 +370,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
+    /** Fresh-process detector for the camera-gate reset (#339): true once,
+     * on the first sweep ever. The ViewModel dies with the process and
+     * survives rotation — a saveable flag can't tell rotation from
+     * kill-with-bundle (both restore), but this can. */
+    private var sweepGateResetDone = false
+
+    fun consumeSweepGateReset(): Boolean {
+        if (sweepGateResetDone) return false
+        sweepGateResetDone = true
+        return true
+    }
+
     /** History rows: only threads with actual chats, newest first. */
     private fun summaries(): List<ThreadSummary> = threads
         .filter { it.messages.isNotEmpty() }
