@@ -812,8 +812,10 @@ internal fun ChatScreen(
     // posts via scope.launch, so a trigger fired just before hang-up can
     // land after it. endLive/startLive bump this; onBargeIn only honors the
     // generation live at fire time (captured before the launch hop), so a
-    // trigger can't leak across a hang-up→restart either.
-    val liveGen = remember(tab) { AtomicInteger(0) }
+    // trigger can't leak across a hang-up→restart either. Global, not
+    // per-tab: the trigger path (scope/latestBarge) is shared across tabs,
+    // so per-tab counters restarting at 0 would collide cross-tab.
+    val liveGen = remember { AtomicInteger(0) }
     fun onBargeIn(firedGen: Int) {
         // Stale-trigger guard (#317): drop triggers from a previous session
         // generation, and anything landing after hang-up — neither may claim
