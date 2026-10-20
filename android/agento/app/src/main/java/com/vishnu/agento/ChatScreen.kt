@@ -130,6 +130,10 @@ private fun AttachmentThumb(
     base64: String,
     label: String,
     modifier: Modifier = Modifier,
+    // Legacy-only (#339): the stable-id key ignores this — it exists
+    // solely for the id == "" fallback, so both call sites always pass
+    // it. Do NOT re-add slot to the stable key: that reintroduces the
+    // shift-reload the UUID fixed.
     slot: Int = 0,
     stableId: String = "",
 ) {
@@ -267,6 +271,14 @@ internal fun ChatTab(
     // "moved or deleted" error. Plain remember is right — a rotation
     // during decode cancels the batch anyway, so no restore is needed.
     var cameraBusy by remember { mutableStateOf(false) }
+    // True while a camera intent is outstanding (#339): launchCamera
+    // overwrites the shared Uri/path on every tap, so a second tap before
+    // the first returns would make the first callback decode the wrong
+    // file (and leak the first until the sweep). Plain remember — a
+    // rotation recreates the activity the result redelivers to, while
+    // process death drops the gate with the composition (bounded by the
+    // sweep either way).
+    var cameraPending by remember { mutableStateOf(false) }
     // Startup sweep (#339): a process kill between the TakePicture write
     // and the decode leaves a capture with no owner — per-batch finally
     // covers cancel/leave-tab, not death. The cache dir holds ONLY these
@@ -279,8 +291,10 @@ internal fun ChatTab(
         // Off-main (#339): directory listing + deletes are disk IO, and
         // this effect runs on every first composition including post-rotation.
         // The keep-path reads on Main (snapshot state stays on-thread), and
-        // the dir resolves above the IO block (#339): the closure captures
-        // a File, never the Activity — same leak class as the batch decode,
+        // the dir resolves BEFORE the IO block (#339): evaluating
+        // context.cacheDir here retains nothing — the withContext closure
+        // captures only the resulting File — so no rotation can leak the
+        // Activity through this effect. Same class as the batch decode,
         // fixed the same way.
         val keep = cameraPath
         val sweepDir = context.cacheDir.resolve("camera")
@@ -333,8 +347,10 @@ internal fun ChatTab(
         // dedupe would need a post-read content hash, i.e. decoding first,
         // which is the cost dedupe exists to avoid.
         val unique = uris.distinct()
-        val take = unique.take(slots)
-        if (take.size < unique.size) {
+        // Cap toast here covers pre-truncation overflow; the loop below
+        // re-checks room per pick (concurrent batches can only shrink it).
+        val overCap = unique.size > slots
+        if (overCap) {
             vm.notify(capRefused(), ToastKind.Info)
         }
         // Hoisted ABOVE the launch (#339): the resolver is all the batch
@@ -347,7 +363,11 @@ internal fun ChatTab(
             // staged something before dying has anything to report.
             var landed = 0
             try {
-                for (u in take) {
+                // No pre-truncation (#339): a failed pick must not cost a
+                // later good pick its slot — the room re-check below stops
+                // the loop exactly when full, so failures simply yield to
+                // the next Uri.
+                for (u in unique) {
                     // Re-check room per pick (#339): two rapid batches both
                     // snapshot free slots at tap time, so without this both
                     // decode fully and the loser drops AFTER the expensive
@@ -356,7 +376,7 @@ internal fun ChatTab(
                     // toasted the cap, repeating it per pick nags.
                     val room = withContext(Dispatchers.Main) { vm.hasAttachmentRoom() }
                     if (!room) {
-                        if (take.size == unique.size) {
+                        if (!overCap) {
                             withContext(Dispatchers.Main) {
                                 vm.notify(capRefused(), ToastKind.Info)
                             }
@@ -422,6 +442,8 @@ internal fun ChatTab(
     ) { ok ->
         val u = cameraUri
         val f = cameraPath?.let(::File)
+        // Intent settled — the gate below re-arms for the next launch.
+        cameraPending = false
         // Uri nulls now (single-delivery, never reused); the PATH stays
         // until the batch completes (#339) so a rotation mid-decode
         // restores a non-null keep for the startup sweep — nulling it here
@@ -455,6 +477,10 @@ internal fun ChatTab(
         }
     }
     fun launchCamera() {
+        // Single outstanding intent (#339): a second tap before the first
+        // returns would overwrite the shared Uri/path mid-flight. Silent
+        // return — the camera is already open, so there is nothing to voice.
+        if (cameraPending) return
         // Hardware gate, idempotent (#339): requestCamera refuses first so
         // no permission prompt fires on camera-less devices, and the same
         // guard holds AT the launch so a future direct call refuses
@@ -500,6 +526,9 @@ internal fun ChatTab(
         }
         cameraUri = uri
         cameraPath = file.absolutePath
+        // Armed before launch, cleared in the callback (#339): the gate at
+        // the top of this function makes overlapping intents impossible.
+        cameraPending = true
         cameraLauncher.launch(uri)
     }
     val cameraPermission = rememberLauncherForActivityResult(

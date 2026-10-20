@@ -371,6 +371,14 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun byteFormattingNeverCrossesUnits() {
+        // 999_999 would round to "1000 KB" under %.0f — the MB branch
+        // takes over below that so limit errors never name a wrong cap.
+        assertEquals("1.0 MB", formatBytes(999_999L))
+        assertEquals("999 KB", formatBytes(999_499L))
+    }
+
+    @Test
     fun byteFormattingIgnoresLocale() {
         // Named limit errors are user-visible: a comma-decimal locale must
         // not render "1,1 MB".

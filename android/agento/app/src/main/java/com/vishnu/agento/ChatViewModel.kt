@@ -332,10 +332,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * sentence by sentence (like the one-shot mic path), and the read +
      * write happen atomically here so rapid results can't clobber each
      * other on a stale snapshot. Also preserves user-typed text the old
-     * replace dropped. Joint symmetric like every other concatenation in
-     * this file (#339): the gap normalizes, both sides ride verbatim.
+     * replace dropped. Blank input is a no-op: appending whitespace would
+     * park a trailing space with no visible text. Joint symmetric like
+     * every other concatenation in this file (#339): the gap normalizes,
+     * both sides ride verbatim.
      */
     fun appendPending(text: String) {
+        if (text.isBlank()) return
         val cur = _state.value.pending
         _state.value = _state.value.copy(
             pending = if (cur.isBlank()) text else "${cur.trimEnd()} ${text.trimStart()}",
@@ -946,11 +949,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // Same narrowing note as the branches around it (#339):
                     // the queued fire is text-only, so staged photos park —
                     // said here too, not just for the image-only tap. Info:
-                    // the photos are safe, nothing failed.
-                    if (photos.isNotEmpty()) {
+                    // the photos are safe, nothing failed. Counted wired
+                    // like every marker in this file (#339).
+                    val parkedQueued = photos.wiredPhotos()
+                    if (parkedQueued.isNotEmpty()) {
                         notify(
                             "Queued behind this reply — text sends, " +
-                                attachmentMarker(photos.size) +
+                                attachmentMarker(parkedQueued.size) +
                                 " stays staged for the next message.",
                             ToastKind.Info,
                         )
@@ -960,11 +965,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // text correctly stays in the composer, but with no
                     // toast the tap reads dead — the class this PR keeps
                     // eliminating. Names staged photos like the branch
-                    // above so the two queued notices agree.
+                    // above so the two queued notices agree (wired count).
+                    val parkedSecond = photos.wiredPhotos()
                     notify(
                         "Already queued — sends when this reply finishes." +
-                            if (photos.isNotEmpty()) {
-                                " " + attachmentMarker(photos.size) + " stays staged."
+                            if (parkedSecond.isNotEmpty()) {
+                                " " + attachmentMarker(parkedSecond.size) + " stays staged."
                             } else {
                                 ""
                             },
@@ -1032,11 +1038,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Steering carries text only (#339): staged photos park with no
         // part in the steered turn — said here like every other narrowing,
         // or the steer button silently drops the user's staging. Info:
-        // parked, not failed.
-        if (_state.value.pendingAttachments.isNotEmpty()) {
+        // parked, not failed. Counted wired.
+        val parkedSteer = _state.value.pendingAttachments.wiredPhotos()
+        if (parkedSteer.isNotEmpty()) {
             notify(
                 "Steered the text — " +
-                    attachmentMarker(_state.value.pendingAttachments.size) +
+                    attachmentMarker(parkedSteer.size) +
                     " stays staged for your next message.",
                 ToastKind.Info,
             )
@@ -2317,10 +2324,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // The queued fire is text-only by design (see send()), so staged
         // photos stay parked — said out loud (#339), because a silent
         // text-only send after staging photos reads as a dropped attach.
-        if (_state.value.pendingAttachments.isNotEmpty()) {
+        // Counted wired.
+        val parkedFlush = _state.value.pendingAttachments.wiredPhotos()
+        if (parkedFlush.isNotEmpty()) {
             notify(
                 "Sent the queued text — " +
-                    attachmentMarker(_state.value.pendingAttachments.size) +
+                    attachmentMarker(parkedFlush.size) +
                     " still staged for your next message.",
                 ToastKind.Info,
             )
