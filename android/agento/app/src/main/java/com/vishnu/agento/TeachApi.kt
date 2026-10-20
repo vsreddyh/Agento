@@ -135,7 +135,8 @@ class TeachApi(context: Context) {
     suspend fun listSkills(path: String): Result<List<TaughtSkill>> =
         withContext(Dispatchers.IO) {
             call("GET", "$path/api/skills").mapCatching {
-                parseSkillList(parseObject(checkOk(it).body))
+                // Null (unparseable) fails instead of wiping the screen.
+                parseSkillList(checkOk(it).body)
                     ?: throw RuntimeException("unparseable response body")
             }
         }
