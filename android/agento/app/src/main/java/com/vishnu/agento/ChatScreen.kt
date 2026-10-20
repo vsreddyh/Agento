@@ -311,10 +311,16 @@ internal fun ChatTab(
     // turn the returning capture into a "moved or deleted" error.
     // Hoisted above the effect (#339): the sweep must not dereference
     // the Activity at all — not even for the resolve line — so the
-    // effect closure never holds it, even briefly. Rotation state hoists
-    // with it: the effect branches on the boolean below, never the cast.
+    // effect closure never holds it, even briefly.
     val appCacheDir = context.applicationContext.cacheDir
-    val sweepingAfterRotation = (context as? Activity)?.isChangingConfigurations == true
+    // Fresh-process detector, saveable (#339): false only on a process
+    // that never composed this tab — rotation restores true. The cast
+    // this replaces read isChangingConfigurations on the NEW activity
+    // (always false there), so it cleared the gate on every rotation and
+    // silently dropped the double-launch protection. A kill-while-camera
+    // restores true as well — but that path keeps the gate via the
+    // timestamp bound, which is the designed tradeoff, not a silent clear.
+    var sweepGateResetDone by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         // Off-main (#339): directory listing + deletes are disk IO, and
         // this effect runs on every first composition including post-rotation.
@@ -324,23 +330,22 @@ internal fun ChatTab(
         // captures only the resulting File — so no rotation can leak the
         // Activity through this effect. Same class as the batch decode,
         // fixed the same way.
-        // Fresh-process gate reset (#339): a kill while the camera app is
-        // foreground restores a fresh pending timestamp with no callback
-        // to clear it — 30 min of "already open" on the crashed device.
-        // A fresh process has no outstanding intent by construction; a
-        // rotation recreates with isChangingConfigurations, so only the
-        // former clears here (read from the hoisted boolean above — the
-        // effect itself never touches the Activity).
+        // Fresh-process gate reset, once ever (#339): a kill while the
+        // camera app is foreground restores a fresh pending timestamp
+        // with no callback to clear it — bounded by the stale timestamp
+        // instead. A fresh process has no outstanding intent by
+        // construction, so only the first composition clears it.
         val keep = cameraPath
-        if (!sweepingAfterRotation) {
+        if (!sweepGateResetDone) {
             cameraPendingSince = 0L
+            sweepGateResetDone = true
         }
         // Application context for the dir (#339): the IO closure below
         // must capture only this File, never the Activity. The synchronous
-        // pre-IO reads above (the keep-path, the Activity cast) run on Main
-        // and retain nothing past their line — the boundary that matters is
-        // what crosses into IO, and appCacheDir (hoisted above the effect)
-        // keeps even the resolve out of the closure.
+        // pre-IO reads above (the keep-path) run on Main and retain nothing
+        // past their line — the boundary that matters is what crosses into
+        // IO, and appCacheDir (hoisted above the effect) keeps even the
+        // resolve out of the closure.
         val sweepDir = appCacheDir.resolve("camera")
         withContext(Dispatchers.IO) {
             runCatching {
@@ -542,7 +547,10 @@ internal fun ChatTab(
         // returns would overwrite the shared Uri/path mid-flight. Voiced
         // (the camera is already open, so the tap needs an answer, not
         // silence) — and staleness-bounded, so a dead process can never
-        // stick the gate.
+        // stick the gate. This refusal also covers the rotation re-tap:
+        // the restored pending timestamp holds the gate, so the
+        // delete-previous below can never run against a restorable
+        // in-flight capture.
         if (isCameraPending()) {
             vm.notify("Camera is already open — finish it first.", ToastKind.Info)
             return
@@ -1548,9 +1556,10 @@ internal fun ChatScreen(
         }
         // One-shot mic only: live sessions listen headless via LiveRecognizer,
         // so there is no live branch here (its retry path is onNoSpeech/onRetry).
+        // Accumulated in the VM like live results (#339): the callback's
+        // snapshot can lag a fast typist the same way.
         if (heard.isNotEmpty()) {
-            val cur = state.pending
-            onPending(if (cur.isBlank()) heard else "${cur.trimEnd()} $heard")
+            onAppendPending(heard)
         }
     }
     fun startVoice() {
@@ -2602,6 +2611,16 @@ internal fun ChatScreen(
                                                     Row(
                                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                     ) {
+                                                        // Wired position as slot here, staged
+                                                        // index in the strip (#339): history
+                                                        // has no staged slots, so the bubble
+                                                        // keys legacy payloads on wired
+                                                        // position while the strip keys them
+                                                        // on staged index. Divergent only for
+                                                        // pre-id payloads (stable ids ignore
+                                                        // slot either way) — documented, not
+                                                        // unified, because there is no shared
+                                                        // index domain to unify on.
                                                         wiredBubble.forEachIndexed { ai, a ->
                                                             AttachmentThumb(
                                                                 base64 = a.base64,

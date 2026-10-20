@@ -631,7 +631,10 @@ class ChatApi(context: Context) {
             // photo-less trip must not say "remove a photo". The actionable
             // second half is conditional on what the turn carries (counted
             // wired, like the wire filter itself). Unknown length (-1)
-            // phrases separately: formatBytes(-1) would print "-1 B".
+            // phrases separately: formatBytes(-1) would print "-1 B" — a
+            // defense-in-depth branch only, since a String-built body
+            // always measures; revisit it if bodies ever stream chunked,
+            // which has no fixed length to preflight.
             val hasPhotos = lastUserIdx >= 0 &&
                 messages[lastUserIdx].attachments.wiredPhotoCount() > 0
             trySend(
