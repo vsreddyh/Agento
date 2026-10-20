@@ -65,7 +65,11 @@ internal fun parseMemoryList(body: String): MemoryList {
         for (i in 0 until arr.length()) {
             // Non-object rows count as dropped too: both undecodable
             // shapes get the same log line, not two treatments.
-            val obj = arr.optJSONObject(i) ?: run { dropped++; continue }
+            val obj = arr.optJSONObject(i)
+            if (obj == null) {
+                dropped++
+                continue
+            }
             val row = parseMemoryItem(obj)
             if (row == null) {
                 dropped++
