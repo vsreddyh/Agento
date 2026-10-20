@@ -13,8 +13,10 @@ package approvals
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -99,8 +101,11 @@ func (s Status) Valid() bool {
 // relay at all — see the ADR's threat note.
 func NeedsApproval(server, tool string, args map[string]any) bool {
 	// Dry runs only count: both prune tools default dry_run=true, and a
-	// counting call changes nothing whatever server it names.
-	if tool == "prune_old" && isDryRun(args) {
+	// counting call changes nothing. Scoped to the two servers that have the
+	// tool: an unclassified "prune_old" elsewhere must not inherit a free
+	// pass from a name match.
+	if tool == "prune_old" &&
+		(server == "miser-money" || server == "health-check") && isDryRun(args) {
 		return false
 	}
 	gated, ok := gatedTools[server]
@@ -111,6 +116,15 @@ func NeedsApproval(server, tool string, args map[string]any) bool {
 	// test below forces an explicit rule the moment a server gains one.
 	gate, ok := gated[tool]
 	return !ok || gate
+}
+
+// KnownServer reports whether the policy table has a row for this server. The
+// relay warns at startup when it does not, so a wiring typo in mcp.json is
+// visible at boot instead of only as per-hold lines. Execution stays
+// fail-closed either way: unknown servers hold every call.
+func KnownServer(server string) bool {
+	_, ok := gatedTools[server]
+	return ok
 }
 
 // isDryRun reports whether a prune call only counts. Missing or
@@ -177,6 +191,12 @@ var gatedTools = map[string]map[string]bool{
 // None of today's tools take passwords, but arguments are persisted for 90
 // days and rendered in the app, so anything named like a credential is masked
 // by rule rather than by audit of each tool's schema.
+//
+// The recursion covers map[string]any and []any — the shapes encoding/json
+// produces for tool arguments. A caller that builds typed maps itself
+// (map[string]string, []string) is outside that contract and must convert to
+// the JSON shapes first; those values fall through the default branch
+// unredacted rather than being guessed at by reflection.
 func Redact(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return map[string]any{}
@@ -207,11 +227,55 @@ func redactValue(v any) any {
 	}
 }
 
+// MaxAuditError bounds one persisted tool-error message, in runes.
+const MaxAuditError = 300
+
+// secretValue matches credential-shaped text that a server may echo back in an
+// error message. Arguments are redacted by key; an error is free text, so it
+// needs a value-shape scrub: "invalid token sk-live-..." must not become a
+// 90-day audit row just because it arrived in the wrong field.
+var secretValue = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:sk|pk|ghp|gho|ghs|ghu|xox[abprs])[-_][A-Za-z0-9_-]{8,}`),
+	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`),
+	// The key set mirrors isSecretKey so an upstream `passwd=...` is masked as
+	// surely as a `password` arg. Optional quotes on both sides of the
+	// separator: an error often echoes JSON ({"token":"sk-..."}).
+	regexp.MustCompile(`(?i)\b(?:password|passwd|pwd|passcode|secret|token|2fa|otp|api[_-]?key|apikey|private[_-]?key|credential|auth|bearer|cookie|session|access[_-]?key|accesskey|key)["']?\s*[:=]\s*"[^"]*"`),
+	regexp.MustCompile(`(?i)\b(?:password|passwd|pwd|passcode|secret|token|2fa|otp|api[_-]?key|apikey|private[_-]?key|credential|auth|bearer|cookie|session|access[_-]?key|accesskey|key)["']?\s*[:=]\s*'[^']*'`),
+	regexp.MustCompile(`(?i)\b(?:password|passwd|pwd|passcode|secret|token|2fa|otp|api[_-]?key|apikey|private[_-]?key|credential|auth|bearer|cookie|session|access[_-]?key|accesskey|key)["']?\s*[:=]\s*["']?[^"',}\s]+`),
+}
+
+// ScrubError masks credential-shaped text in an upstream error and bounds the
+// result. Over-redaction is the accepted direction: a mangled message is
+// cheaper than a leaked key in a row the app renders.
+func ScrubError(msg string) string {
+	msg = strings.TrimSpace(msg)
+	for _, re := range secretValue {
+		msg = re.ReplaceAllString(msg, "[redacted]")
+	}
+	if utf8.RuneCountInString(msg) > MaxAuditError {
+		// Keep the marker INSIDE the cap and make the cut visible: a silently
+		// truncated message reads as a complete one to the app.
+		msg = string([]rune(msg)[:MaxAuditError-1]) + "…"
+	}
+	return msg
+}
+
+// isSecretKey reports whether an argument key names a credential.
+//
+// Substring matching is deliberate and deliberately over-broad: a
+// hypothetical "tokenizer" arg is masked too. Over-redacting an audit row is
+// the safe direction; missing a credential is not, and the cost of a false
+// positive is one unreadable argument name.
 func isSecretKey(k string) bool {
 	k = strings.ToLower(k)
 	for _, sub := range []string{
 		"password", "passwd", "pwd", "passcode", "secret", "token",
 		"2fa", "otp", "api_key", "apikey", "private_key", "credential",
+		"auth", "bearer", "cookie", "session", "access_key", "accesskey",
+		// Bare "key" too: over-matching "monkey" is the accepted cost, and a
+		// {"key": "sk-..."} arg must not sit in Mongo for 90 days.
+		"key",
 	} {
 		if strings.Contains(k, sub) {
 			return true
@@ -252,7 +316,10 @@ type AuditEntry struct {
 	ExpiresAt time.Time `bson:"expiresAt" json:"-"`
 }
 
-// Clone returns a copy safe to hand to another goroutine.
+// Clone returns a top-level copy: Args is a fresh map, but nested values
+// (map[string]any, []any) are shared. That is safe for the current contract —
+// Redact builds new values and no caller mutates a returned row — but it is
+// not a deep copy, so a future in-place edit must copy the nested value too.
 func (a Approval) Clone() Approval {
 	if a.Args != nil {
 		cp := make(map[string]any, len(a.Args))
@@ -262,6 +329,19 @@ func (a Approval) Clone() Approval {
 		a.Args = cp
 	}
 	return a
+}
+
+// Clone returns a top-level copy of the audit row: Args is a fresh map, but
+// nested values are shared for the same reason as Approval.Clone.
+func (e AuditEntry) Clone() AuditEntry {
+	if e.Args != nil {
+		args := make(map[string]any, len(e.Args))
+		for k, v := range e.Args {
+			args[k] = v
+		}
+		e.Args = args
+	}
+	return e
 }
 
 // NewID returns a hex ObjectID: the Mongo _id and the id the app decides on.
@@ -290,6 +370,11 @@ type Store interface {
 	// MarkInterrupted flips pending rows expired at startup: a restart must
 	// not leave a "pending" row the relay that owned it will never read.
 	MarkInterrupted(ctx context.Context, at time.Time) (int64, error)
+	// MarkServerInterrupted flips one server's pending rows expired. A relay
+	// restart owns that server's queue outright (one relay per server), so
+	// the rows it finds at startup belong to a process that will never
+	// decide them. Scoped by server so six relays do not expire each other.
+	MarkServerInterrupted(ctx context.Context, server string, at time.Time) (int64, error)
 }
 
 // ApprovalFilter selects approvals. Zero values mean no constraint.

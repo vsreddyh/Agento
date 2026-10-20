@@ -2,8 +2,10 @@ package approvals
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestStatusTerminal(t *testing.T) {
@@ -63,9 +65,16 @@ func TestPolicyGatesMoneyAndDeletes(t *testing.T) {
 }
 
 // TestPolicyTableIsComplete pins the fail-closed contract: every tool the
-// six servers publish must have an explicit rule. A server that gains a tool
-// without a table entry fails this test — which is the point, forcing the
-// author to classify it as free or gated instead of silently allowing it.
+// servers publish must have an explicit rule. The `known` map is hand-written
+// on purpose — there is no shared registry the server binaries export, and
+// generating it would mean refactoring every main for a test.
+//
+// That makes the maintenance rule part of the contract: a PR that adds or
+// renames a tool updates `known` HERE in the same change, exactly as it
+// updates gatedTools. Without both, the test only checks the two hardcoded
+// copies against each other. Runtime stays safe regardless (an unknown tool on
+// a known server holds), so forgetting yields a test that under-reports, never
+// an ungated write.
 func TestPolicyTableIsComplete(t *testing.T) {
 	known := map[string][]string{
 		"miser-money": {"create_account", "list_accounts", "archive_account",
@@ -202,7 +211,9 @@ func TestMemoryMarkInterrupted(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	n, err := m.MarkInterrupted(ctx, now)
+	// at is the restart instant: the rows above were created before it, so the
+	// same scope Mongo uses (createdAt < at) must still expire them.
+	n, err := m.MarkInterrupted(ctx, now.Add(time.Second))
 	if err != nil || n != 1 {
 		t.Fatalf("marked %d, err %v", n, err)
 	}
@@ -212,6 +223,20 @@ func TestMemoryMarkInterrupted(t *testing.T) {
 	}
 	if _, err := m.GetApproval(ctx, old.ID); err == nil {
 		t.Fatal("expired row should be deleted, not flipped")
+	}
+
+	// A row created after the restart instant belongs to this process and
+	// must survive the sweep.
+	m2 := NewMemoryStore()
+	late := Approval{ID: NewID(), Server: "notes", Tool: "delete_note"}
+	if err := m2.CreateApproval(ctx, late); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := m2.MarkInterrupted(ctx, time.Now().Add(-time.Hour)); err != nil || n != 0 {
+		t.Fatalf("marked %d late rows, err %v", n, err)
+	}
+	if got, err := m2.GetApproval(ctx, late.ID); err != nil || got.Status != StatusPending {
+		t.Fatalf("late row = %+v, %v; want still pending", got, err)
 	}
 }
 
@@ -239,5 +264,159 @@ func TestMemoryAuditCap(t *testing.T) {
 		if e.At < 903 {
 			t.Fatalf("evicted row survived: at=%d", e.At)
 		}
+	}
+}
+
+// Audit errors are free text from a server, so they need a value-shape scrub
+// as well as the key-based redaction used for arguments.
+func TestScrubErrorMasksCredentials(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"invalid token sk-live-abcdef123456", "[redacted]"},
+		{"Authorization: Bearer abcdefghijklmnop", "[redacted]"},
+		{"api_key=supersecretvalue failed", "[redacted]"},
+		{`{"token":"sk-abcdef123456"}`, "[redacted]"},
+		// Compact JSON: the match must stop at the value, not swallow the
+		// following fields into the replacement.
+		{`{"token":"sk-abcdef123456","note":"keep"}`, "[redacted]"},
+		{"passwd=hunter2 failed", "[redacted]"},
+		{`token="correct horse battery staple"`, "[redacted]"},
+		{"no such note: abc", "no such note: abc"},
+	}
+	for _, c := range cases {
+		got := ScrubError(c.in)
+		if c.want == "[redacted]" {
+			if strings.Contains(got, "sk-live") || strings.Contains(got, "abcdefghijklmnop") ||
+				strings.Contains(got, "supersecretvalue") {
+				t.Fatalf("ScrubError(%q) = %q, credential survived", c.in, got)
+			}
+			if !strings.Contains(got, "[redacted]") {
+				t.Fatalf("ScrubError(%q) = %q, want a redaction marker", c.in, got)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Fatalf("ScrubError(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// Extended key set and space-containing quoted values.
+	if got := ScrubError("passwd=hunter2 failed"); strings.Contains(got, "hunter2") {
+		t.Fatalf("passwd value survived: %q", got)
+	}
+	if got := ScrubError(`token="correct horse battery staple"`); strings.Contains(got, "correct horse") {
+		t.Fatalf("quoted multi-word value survived: %q", got)
+	}
+
+	// Compact JSON: the value match must terminate, leaving the next field.
+	got := ScrubError(`{"token":"sk-abcdef123456","note":"keep"}`)
+	if strings.Contains(got, "sk-abcdef") || !strings.Contains(got, `"note":"keep"`) {
+		t.Fatalf("compact JSON scrub = %q, want the secret masked and note kept", got)
+	}
+
+	long := strings.Repeat("x", MaxAuditError+50)
+	if n := utf8.RuneCountInString(ScrubError(long)); n != MaxAuditError {
+		t.Fatalf("long error scrubbed to %d runes, want %d", n, MaxAuditError)
+	}
+}
+
+// The memory audit honours the same 90-day retention contract as Mongo: a row
+// past ExpiresAt stops listing even though no TTL monitor exists here.
+func TestMemoryAuditExpiry(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Now()
+	rows := []AuditEntry{
+		{ID: "live", Server: "notes", Tool: "get_note", At: now.UnixMilli()},
+		{ID: "dead", Server: "notes", Tool: "get_note", At: now.UnixMilli() - 1000,
+			ExpiresAt: now.Add(-time.Second)},
+	}
+	for _, e := range rows {
+		if err := store.Audit(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.ListAudit(context.Background(), AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "live" {
+		t.Fatalf("audit = %+v, want only the live row", got)
+	}
+	if got[0].ExpiresAt.IsZero() {
+		t.Fatal("memory audit row kept a zero ExpiresAt; retention is unspecified")
+	}
+}
+
+// KnownServer is what the relay warns on: a typo must be detectable without
+// importing the unexported table.
+func TestKnownServer(t *testing.T) {
+	if !KnownServer("notes") || !KnownServer("miser-money") {
+		t.Fatal("a wired server is not in the policy table")
+	}
+	if KnownServer("miser_monet") || KnownServer("") {
+		t.Fatal("an unwired server name reported as known")
+	}
+}
+
+// The store redacts on write, not only the call sites: one caller that forgets
+// must not be able to persist a secret for the retention window.
+func TestStoresRedactOnWrite(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	if err := store.CreateApproval(ctx, Approval{
+		ID: "a1", Server: "notes", Tool: "get_note", Status: StatusPending,
+		Args: map[string]any{"password": "hunter2", "id": "n1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := store.GetApproval(ctx, "a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Args["password"] != "***" || a.Args["id"] != "n1" {
+		t.Fatalf("approval args = %#v, want password masked and id intact", a.Args)
+	}
+	if err := store.Audit(ctx, AuditEntry{
+		ID: "e1", Server: "notes", Tool: "get_note", Disposition: DispositionAllow,
+		Args:  map[string]any{"token": "sk-live-abc"},
+		Error: "password=hunter2 rejected",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.ListAudit(ctx, AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Args["token"] != "***" {
+		t.Fatalf("audit args = %#v, want token masked", rows)
+	}
+	if strings.Contains(rows[0].Error, "hunter2") {
+		t.Fatalf("audit error = %q, want the store to scrub it", rows[0].Error)
+	}
+	if rows[0].At == 0 || rows[0].ExpiresAt.IsZero() {
+		t.Fatalf("audit stamps = At %d / ExpiresAt %v, want both stamped by the store",
+			rows[0].At, rows[0].ExpiresAt)
+	}
+}
+
+// A relay restart expires only its own server's queue: six relays share one
+// collection, and one restarting must not kill another's live hold.
+func TestMarkServerInterruptedIsScoped(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	mine := Approval{ID: NewID(), Server: "notes", Tool: "delete_note"}
+	other := Approval{ID: NewID(), Server: "miser-money", Tool: "log_transaction"}
+	for _, a := range []Approval{mine, other} {
+		if err := m.CreateApproval(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := m.MarkServerInterrupted(ctx, "notes", time.Now())
+	if err != nil || n != 1 {
+		t.Fatalf("marked %d, err %v; want 1", n, err)
+	}
+	if got, err := m.GetApproval(ctx, mine.ID); err != nil || got.Status != StatusExpired {
+		t.Fatalf("own row = %+v, %v; want expired", got, err)
+	}
+	if got, err := m.GetApproval(ctx, other.ID); err != nil || got.Status != StatusPending {
+		t.Fatalf("other server row = %+v, %v; want untouched pending", got, err)
 	}
 }
