@@ -145,6 +145,27 @@ class ChatAttachmentsTest {
         assertEquals("image_url", arr.getJSONObject(0).getString("type"))
     }
 
+    @Test
+    fun blankPayloadsAreNotWired() {
+        // Fail-closed: an empty base64 (hand-edited thread, writer bug)
+        // counts as no attachment — never a data:image/jpeg;base64, part.
+        assertEquals(
+            "hi",
+            messageContentJson(
+                "user", "hi",
+                listOf(ChatAttachment(base64 = "")),
+                includeImages = true,
+            ),
+        )
+        val out = messageContentJson(
+            "user", "hi",
+            listOf(ChatAttachment(base64 = ""), attachment("AAA=")),
+            includeImages = true,
+        )
+        assertTrue(out is JSONArray)
+        assertEquals(2, (out as JSONArray).length())
+    }
+
     // Content rule + markers.
 
     @Test
@@ -205,7 +226,7 @@ class ChatAttachmentsTest {
     @Test
     fun laterPhotoTurnStillSignals() {
         // Suffix scans any photo turn (#339): a text opener with photos
-        // later still shows the signal.
+        // later still shows the signal — and names the largest turn.
         assertEquals(
             "hello [photo]",
             ChatThreads.titleFor(
@@ -213,6 +234,16 @@ class ChatAttachmentsTest {
                     ChatMessage("user", "hello", 0L),
                     ChatMessage("assistant", "hi", 1L),
                     ChatMessage("user", "more", 2L, attachments = listOf(attachment())),
+                ),
+            ),
+        )
+        assertEquals(
+            "pic [2 photos]",
+            ChatThreads.titleFor(
+                listOf(
+                    ChatMessage("user", "pic", 0L, attachments = listOf(attachment())),
+                    ChatMessage("assistant", "hi", 1L),
+                    ChatMessage("user", "hello", 2L, attachments = listOf(attachment(), attachment())),
                 ),
             ),
         )

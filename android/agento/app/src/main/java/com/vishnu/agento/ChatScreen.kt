@@ -397,7 +397,10 @@ internal fun ChatTab(
         // bare TakePicture failure (ok=false) would leave the user with
         // no hint why no camera appeared. State notice, not a composition
         // toast: same rotation-proof lifetime as every other attach error.
-        if (!dir.exists() && !dir.mkdirs()) {
+        // isDirectory, not exists (#339): a stray FILE at this path would
+        // otherwise pass the check and fail downstream as a generic
+        // couldn't-start-the-camera instead of storage-unavailable.
+        if (!dir.isDirectory && !dir.mkdirs()) {
             vm.notify("Couldn't start the camera — storage unavailable.")
             return
         }

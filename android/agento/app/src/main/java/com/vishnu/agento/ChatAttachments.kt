@@ -147,12 +147,20 @@ fun messageContentJson(
     attachments: List<ChatAttachment>,
     includeImages: Boolean,
 ): Any {
-    if (role != "user" || attachments.isEmpty() || !includeImages) {
+    // Fail-closed on payload, not just presence (#339): a hand-edited
+    // thread file (or a future writer bug) can stage an empty base64,
+    // which would otherwise wire as data:image/jpeg;base64, — a corrupt
+    // part the gateway would feed Pi. Empty payloads count as no
+    // attachment for wire purposes (an image-only turn of blanks falls
+    // back to bare text, which the server refuses with its named
+    // blank-turn error instead of a corrupt image part).
+    val images = attachments.filter { it.base64.isNotBlank() }
+    if (role != "user" || images.isEmpty() || !includeImages) {
         // Stripped earlier photo turns stay honest (#339): the server
         // prompts with the trailing turn alone, but any other reader of
         // this history should see that photos were here — not a blank.
-        if (role == "user" && attachments.isNotEmpty() && !includeImages) {
-            return contentWithMarker(content, attachments.size)
+        if (role == "user" && images.isNotEmpty() && !includeImages) {
+            return contentWithMarker(content, images.size)
         }
         // Assistant turns never stage photos: the marker rule above is
         // user-only by construction, and a bare return here keeps a
@@ -164,7 +172,7 @@ fun messageContentJson(
     if (content.isNotBlank()) {
         arr.put(JSONObject().put("type", "text").put("text", content))
     }
-    for (a in attachments) {
+    for (a in images) {
         arr.put(
             JSONObject()
                 .put("type", "image_url")

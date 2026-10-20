@@ -82,17 +82,24 @@ object ChatThreads {
             return "New conversation"
         }
         val first = textMsg.content.trim()
-        // Suffix from ANY user photo turn (#339), not just the titled one:
-        // a text opener followed by a photo turn still carries photos, and
-        // the switcher row should say so like search/export do.
-        val photoTurn = userTurns.firstOrNull { it.attachments.isNotEmpty() }
-        val photos = photoTurn?.attachments?.size ?: 0
+        // Suffix from the LARGEST photo turn (#339), not the first: a
+        // 1-photo turn followed by a 2-photo turn holds a 2-photo turn,
+        // and the signal should say so.
+        val photos = userTurns.maxOfOrNull { it.attachments.size } ?: 0
         val oneLine = first.replace(titleWhitespace, " ")
         // Photo signal with the budget kept (#339): the marker reserves
-        // its width first, so the row never exceeds 42 chars.
+        // its width first, so the row never exceeds 42 chars. avail == 0
+        // yields the bare suffix (unreachable today — suffixes are short —
+        // but the budget math must hold for all inputs, not just short ones).
         val suffix = if (photos == 0) "" else if (photos == 1) " [photo]" else " [$photos photos]"
         val avail = maxOf(0, 42 - suffix.length)
-        val base = if (oneLine.length <= avail) oneLine else oneLine.take(maxOf(0, avail - 1)) + "…"
+        val base = if (oneLine.length <= avail) {
+            oneLine
+        } else if (avail >= 1) {
+            oneLine.take(avail - 1) + "…"
+        } else {
+            ""
+        }
         return base + suffix
     }
 
