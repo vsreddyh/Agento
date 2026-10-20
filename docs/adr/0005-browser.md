@@ -74,11 +74,12 @@ diverge from it; retention's pruning covers the same collections.
 
 ### Caps, stated
 
-- One navigation/read/screenshot: 30s each (evidence gives each capture
-  step its own 30s rather than sharing one deadline); the turn's own
-  timeout bounds the task. First launch serializes concurrent tools per
-  profile behind a single-flight gate — one slow Chromium start holds the
-  others, accepted for v1 because launches are seconds and rare.
+- Each step gets its own 30s budget rather than sharing one deadline:
+  a `goto` (navigate + title + location) runs up to 90s, `read` up to 90s,
+  evidence up to 120s; the turn's own timeout bounds the task. First launch
+  serializes concurrent tools per profile behind a single-flight gate —
+  one slow Chromium start holds the others, accepted for v1 because
+  launches are seconds and rare.
 - Extracted text: 12k runes per read (response says when it clipped).
 - Session TTL: 30 days idle. Pruned at server start (stray dirs) and
   evicted daily-lazily in use (live Chromium + listener + dir go together);
@@ -87,6 +88,9 @@ diverge from it; retention's pruning covers the same collections.
   itself, and full-page screenshots of long pages are large by nature.
   Working `shot-*.png` files accumulate in the session dir alongside
   evidence (same 30d TTL reaps both); only evidence bundles reach exports.
+  Only `goto` is approval-gated, so free `save_evidence` + no quota means
+  disk fill is one approved `goto` away (agent loop saving full-page PNGs);
+  the 30d TTL reaps it, and a size quota is the follow-up.
 
 ### Fallback honesty
 
