@@ -171,7 +171,11 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 	// Hop-by-hop headers describe the proxy-to-origin hop, not the
 	// client-facing one; copying them verbatim confuses keep-alive reuse.
+	// Transfer-Encoding goes too: resp.Body is already the decoded stream
+	// and Go re-frames (chunked as needed) on the way out, so forwarding
+	// the origin's framing would describe bytes the client never sees.
 	stripHopHeaders(resp.Header)
+	resp.Header.Del("Transfer-Encoding")
 	for k, vs := range resp.Header {
 		for _, v := range vs {
 			w.Header().Add(k, v)

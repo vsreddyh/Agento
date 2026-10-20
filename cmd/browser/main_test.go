@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -122,6 +123,22 @@ func TestEvictIdleTearsDown(t *testing.T) {
 	}
 	if _, err := os.Stat(s.dir); !os.IsNotExist(err) {
 		t.Fatalf("idle session dir survived: %v", err)
+	}
+}
+
+func TestEvidenceDirLongProfile(t *testing.T) {
+	oldExports, oldProfile := exports, profile
+	defer func() { exports, profile = oldExports, oldProfile }()
+	exports = t.TempDir() + "/browser"
+	// 64 chars: legal, but timestamp alone would overflow the 64-char jail.
+	// The hash-qualified truncation must still pass it.
+	profile = strings.Repeat("p", 64)
+	dir, err := evidenceDir()
+	if err != nil {
+		t.Fatalf("long profile rejected: %v", err)
+	}
+	if !strings.HasPrefix(dir, exports+"/") || len(filepath.Base(dir)) > 64 {
+		t.Fatalf("dir = %q", dir)
 	}
 }
 
