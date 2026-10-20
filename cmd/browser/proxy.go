@@ -141,9 +141,11 @@ func (p *filteringProxy) serveForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer target.Close()
-	// One deadline for write + read + copy: the dial budget is spent, and a
-	// hung origin must not pin this handler and connection past it. The
-	// relay documents the same bounded-by-traffic rule for tunnels.
+	// One deadline for the whole response — write + headers + body copy —
+	// not just connect/headers: a slow large origin streaming past 60s
+	// truncates mid-copy. Accepted for human-gated v1 (the dial budget above
+	// is the SSRF control; this is only liveness). Do not tighten it
+	// thinking it bounds headers alone.
 	target.SetDeadline(time.Now().Add(60 * time.Second))
 	// Rewrite to origin-form for the upstream server, preserving everything
 	// else about the client's request — except hop-by-hop headers, which

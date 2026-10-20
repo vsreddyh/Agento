@@ -44,7 +44,10 @@ const (
 	// readTimeout bounds one read or screenshot the same way.
 	readTimeout = 30 * time.Second
 	// MaxReadRunes bounds extracted page text. Long enough for an article,
-	// short enough for a prompt; the response says when it clipped.
+	// short enough for a prompt; the response says when it clipped. The JS
+	// pre-cap fast path compares UTF-16 units (t.length <= cap needs no
+	// array); units never exceed code points, so a short string skips the
+	// Array.from spread and only long ones pay for code-point slicing.
 	MaxReadRunes = 12000
 	// sessionTTL prunes idle browser profiles: cookies and state older than
 	// this with no fresh use go away on server start.
@@ -287,11 +290,11 @@ func (ss *sessions) get(profile string) (*session, error) {
 // at a 30d TTL, but a short TTL under -race would flag it).
 func (ss *sessions) evictIdle() {
 	cutoff := time.Now().Add(-sessionTTL)
-	for profile, s := range ss.byProfile {
+	for name, s := range ss.byProfile {
 		if s.lastUse.After(cutoff) {
 			continue
 		}
-		log.Printf("browser: evicting idle session %s", profile)
+		log.Printf("browser: evicting idle session %s", name)
 		// Explicit unlock at iteration end, not defer: N defers would hold
 		// every evicted session's lock until the function returns.
 		s.mu.Lock()
@@ -308,7 +311,7 @@ func (ss *sessions) evictIdle() {
 			os.RemoveAll(s.dir)
 		}
 		s.mu.Unlock()
-		delete(ss.byProfile, profile)
+		delete(ss.byProfile, name)
 	}
 }
 
@@ -567,7 +570,7 @@ func main() {
 			}
 			text, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx,
-					chromedp.Evaluate[string](`(() => { const t = document.body ? document.body.innerText : ""; if ([...t].length <= 100000) return t; return Array.from(t).slice(0, 100000).join(""); })()`))
+					chromedp.Evaluate[string](`(() => { const t = document.body ? document.body.innerText : ""; if (t.length <= 100000) return t; return Array.from(t).slice(0, 100000).join(""); })()`))
 			})
 			if err != nil {
 				return fail(fmt.Errorf("read failed: %v", err))
@@ -651,7 +654,7 @@ func main() {
 			}
 			text, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx,
-					chromedp.Evaluate[string](`(() => { const t = document.body ? document.body.innerText : ""; if ([...t].length <= 100000) return t; return Array.from(t).slice(0, 100000).join(""); })()`))
+					chromedp.Evaluate[string](`(() => { const t = document.body ? document.body.innerText : ""; if (t.length <= 100000) return t; return Array.from(t).slice(0, 100000).join(""); })()`))
 			})
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
