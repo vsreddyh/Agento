@@ -986,7 +986,9 @@ internal fun ChatScreen(
         // Re-check, don't assume (#317): both callers gate on
         // permission, but a revoke in the gap must start tap-to-talk, not
         // lie armed and fail one AudioRecord alloc per phase transition.
+        // Say so out loud, like the permission-launcher denial path does.
         micArmed = interrupt.hasPermission(context)
+        if (!micArmed) toasts.toast("Live mode needs microphone access.", ToastKind.Error)
         // Fresh call state (#317): a previous session's barge claim or
         // milestone set must not leak into this one. The detector is
         // stopped and its holder reset too (#317) so the
