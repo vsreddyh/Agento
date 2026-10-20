@@ -39,7 +39,10 @@ closed: store outage, timeout, unknown tool, unknown server — all resolve to
 treated as a dead connection: the reader drains to the next boundary and the
 pair keeps serving. An oversize drop is reply-less by design — the line is
 larger than the cap precisely because it could not be parsed as a frame, so
-there is no id to answer, and Pi's own call timeout is the backstop. A SIGTERM
+there is no id to answer, and Pi's own call timeout is the backstop. Such a
+drop is also the one `tools/call`-shaped frame with no audit row: it could not
+be parsed, so it has no tool name or id to record, and inventing one would
+pollute the tool facet more than the log line helps. A SIGTERM
 or SIGINT drives the same teardown as a Pi hangup: pumps stop, holds expire,
 and the join writes their audit rows before exit.
 
@@ -136,6 +139,12 @@ A relay that restarts expires its **own server's** pending rows at startup
 to the process that died, and leaving them pending would show the app a card
 whose approval could never forward. The gateway's global `MarkInterrupted`
 still runs at its own startup for the whole collection.
+
+The sweep is queue hygiene, not a decision: it writes no per-row audit entry
+(the count log is the record), because the rows it finds were owned by a
+process that died before it could record anything. The teardown path is where
+an abandoned hold gets its own `expired` row; the sweep covers what a SIGKILL
+left behind.
 
 The sweep assumes this deployment's one-profile contract (one relay per
 server). If two profiles ever shared a server name, a restarting relay would
