@@ -251,9 +251,13 @@ internal fun ChatTab(
     var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
     // Confirm dialog before the Settings escape hatch (#339): auto-opening
     // Settings on every tap would surprise-navigate on accidental taps.
-    // Saveable like the camera path (rotation must not lose the dialog),
-    // and closed on thread switch with the rest of the transient UI below.
+    // Saveable like the camera path (rotation must not lose the dialog).
+    // Closed on thread switch below: it belongs to the old thread's
+    // Take-photo tap, not the new composer.
     var showCameraSettings by rememberSaveable { mutableStateOf(false) }
+    // Thread-scoped transient UI, same as the editor/menu state inside
+    // ChatScreen (#339).
+    LaunchedEffect(state.threadId) { showCameraSettings = false }
     // True while a camera batch is decoding (#339): launchCamera's
     // delete-previous must skip a file with an in-flight decode, or a
     // rapid re-tap deletes it mid-read and turns a good capture into a
@@ -1153,14 +1157,11 @@ internal fun ChatScreen(
     // this a thread switch leaves it open over the new thread's composer.
     // The draft text clears with them: opening the editor always overwrites
     // it, but a stale draft from the old thread must not linger in state.
-    // The camera Settings dialog closes too: it belongs to the old
-    // thread's Take-photo tap, not the new composer.
     LaunchedEffect(state.threadId) {
         editingIndex = null
         editDraft = ""
         confirmReplace = null
         showAttachMenu = false
-        showCameraSettings = false
     }
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
