@@ -118,6 +118,15 @@ func NeedsApproval(server, tool string, args map[string]any) bool {
 	return !ok || gate
 }
 
+// KnownServer reports whether the policy table has a row for this server. The
+// relay warns at startup when it does not, so a wiring typo in mcp.json is
+// visible at boot instead of only as per-hold lines. Execution stays
+// fail-closed either way: unknown servers hold every call.
+func KnownServer(server string) bool {
+	_, ok := gatedTools[server]
+	return ok
+}
+
 // isDryRun reports whether a prune call only counts. Missing or
 // non-boolean dry_run is treated as a real prune: fail closed.
 func isDryRun(args map[string]any) bool {

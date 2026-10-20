@@ -329,6 +329,17 @@ func TestMemoryAuditExpiry(t *testing.T) {
 	}
 }
 
+// KnownServer is what the relay warns on: a typo must be detectable without
+// importing the unexported table.
+func TestKnownServer(t *testing.T) {
+	if !KnownServer("notes") || !KnownServer("miser-money") {
+		t.Fatal("a wired server is not in the policy table")
+	}
+	if KnownServer("miser_monet") || KnownServer("") {
+		t.Fatal("an unwired server name reported as known")
+	}
+}
+
 // The store redacts on write, not only the call sites: one caller that forgets
 // must not be able to persist a secret for the retention window.
 func TestStoresRedactOnWrite(t *testing.T) {

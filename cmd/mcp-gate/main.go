@@ -75,6 +75,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: mcp-gate --server NAME -- <command> [args...]")
 		os.Exit(2)
 	}
+	if !approvals.KnownServer(*server) {
+		// Fail-closed still applies (every call holds), but a typo in
+		// mcp.json should be loud at startup, not discovered hold by hold.
+		log.Printf("mcp-gate[%s] warning: server is not in the approval policy table; every tool call will hold", *server)
+	}
 	store := openStore(*server)
 	r := newRelay(*server, store, log.New(os.Stderr, "mcp-gate["+*server+"] ", log.LstdFlags))
 	if err := r.run(context.Background(), os.Stdin, os.Stdout, rest[0], rest[1:]); err != nil {
@@ -704,6 +709,9 @@ func (r *relay) trackWith(id json.RawMessage, name string, args map[string]any,
 		evicted = r.pending[evictedKey]
 		delete(r.pending, evictedKey)
 	}
+	// at is wall clock on purpose: it orders eviction only (oldest unanswered
+	// first past pendingCap), never correctness, and the store's clock is not
+	// reachable from this in-memory table.
 	r.pending[key] = &callState{
 		name: name, args: args, at: time.Now(),
 		disp: disp, approvalID: approvalID,

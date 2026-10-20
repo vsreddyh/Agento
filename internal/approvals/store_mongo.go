@@ -96,6 +96,9 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 		},
 		{
 			// The audit screen filters by server and/or tool and sorts by at.
+			// The {at,-1,_id,-1} tie-break sorts in memory for same-millis
+			// rows; at ListCap=100 that is negligible (same ESR note as
+			// approvals_expiry_created above).
 			Keys: bson.D{
 				{Key: "server", Value: 1},
 				{Key: "tool", Value: 1},
