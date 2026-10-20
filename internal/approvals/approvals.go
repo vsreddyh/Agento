@@ -183,6 +183,13 @@ var gatedTools = map[string]map[string]bool{
 		"create_note": false, "get_note": false, "list_notes": false,
 		"search_notes": false, "update_note": false, "delete_note": true,
 	},
+	"memory": {
+		// A memory write is the point of the tool, and it starts pending: the
+		// second confirmation (use it or not) is the one that matters. Gating
+		// the write would make the agent ask twice for one fact. Reads never
+		// gate anywhere.
+		"save_memory": false, "list_memory": false,
+	},
 }
 
 // Redact returns a copy of args with secret-shaped values masked, recursing

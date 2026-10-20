@@ -1582,7 +1582,16 @@ func (s *Server) executeRun(
 	ticker := time.NewTicker(runPersistInterval)
 	defer ticker.Stop()
 
-	if err := h.runner.agent.Send(ctx, "prompt", promptPayload(userTurn)); err != nil {
+	// Memory (#315) rides in front of the user's turn rather than living in
+	// Pi's session: Pi owns the transcript, and this block has to reflect
+	// edits made since the last turn (a forgotten item must be gone from the
+	// next answer). promptFull was captured before this point, so reattach
+	// still compares the user's text, not the injected block.
+	agentTurn := *userTurn
+	if block := s.memoryPrompt(ctx, lr.run.Profile); block != "" {
+		agentTurn.Text = block + "\n\n" + userTurn.Text
+	}
+	if err := h.runner.agent.Send(ctx, "prompt", promptPayload(&agentTurn)); err != nil {
 		revert()
 		const msg = "could not deliver the prompt to the agent"
 		lr.settle(runs.StatusFailed, msg, time.Now())

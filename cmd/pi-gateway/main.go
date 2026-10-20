@@ -30,6 +30,7 @@ import (
 	"agento/internal/approvals"
 	"agento/internal/crashlog"
 	"agento/internal/cronjobs"
+	"agento/internal/memory"
 	"agento/internal/runs"
 	"context"
 	"errors"
@@ -134,7 +135,16 @@ func run() error {
 			// anything the agent runs, including tool output.
 			Env: pi.EnvWith(
 				pi.EnvironOrOs(withoutEnv(os.Environ(), "PASSWORD")),
-				map[string]string{"PI_CODING_AGENT_DIR": agentDir},
+				map[string]string{
+					"PI_CODING_AGENT_DIR": agentDir,
+					// The memory MCP server is one binary shared by every
+					// profile, so the profile has to travel with the process:
+					// Pi spawns its MCP servers as children, which inherit
+					// this environment. Without it the memory server would
+					// guess a profile and write one profile's facts into
+					// another's store (#315).
+					"AGENTO_PROFILE": profile,
+				},
 			),
 			ReadyTimeout: readyTimeout,
 		})
@@ -293,6 +303,25 @@ func run() error {
 		cancelMark()
 	}
 
+	// Memory (#315). Same database, sibling collections. Without Mongo the
+	// routes still work from an in-process store, but nothing survives a
+	// restart and the memory MCP server (a separate process) cannot see it —
+	// so an agent-proposed item would be invisible to the screen that has to
+	// confirm it. Log that plainly rather than silently degrade.
+	var memoryStore memory.Store
+	if store, err := memory.FromEnv(); err != nil {
+		logger.Printf("memory: falling back to in-process (not durable, agent proposals not shared): %v", err)
+		memoryStore = memory.NewMemoryStore()
+	} else {
+		memoryStore = store
+		store.Logf = logger.Printf
+		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+		if err := store.EnsureIndexes(indexCtx); err != nil {
+			logger.Printf("memory: index setup failed: %v", err)
+		}
+		cancelIndex()
+	}
+
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")
 	if _, ok := agents[defaultProfile]; !ok {
 		// Fall back to the first profile that actually STARTED, not the first one
@@ -309,7 +338,7 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, logger.Printf), agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, memoryStore, logger.Printf), agents)
 	if err != nil {
 		return err
 	}
@@ -509,7 +538,7 @@ func skillArgs(skillsDir string) []string {
 // InventoryTimeout line left every test green, because the test exercised secondsEnv
 // directly and never the wiring. A budget that cannot be shown to reach its field is
 // not configurable in any useful sense.
-func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, logf func(string, ...any)) gateway.Config {
+func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, memoryStore memory.Store, logf func(string, ...any)) gateway.Config {
 	return gateway.Config{
 		Password: password,
 		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
@@ -530,6 +559,8 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStor
 		RunStore: runStore,
 		// Approval + audit stores, owned by run() for the same reason.
 		ApprovalStore: approvalStore,
+		// Per-profile memory, owned by run() for the same reason.
+		MemoryStore: memoryStore,
 		// Each budget is configurable for the same reason: the right value depends on
 		// the host, and changing it should not mean rebuilding the binary.
 		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),

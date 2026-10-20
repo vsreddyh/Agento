@@ -71,6 +71,7 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/miser-money ./cmd/miser-money \
  && go build -trimpath -ldflags="-s -w" -o /out/task-manager ./cmd/task-manager \
  && go build -trimpath -ldflags="-s -w" -o /out/project-manager ./cmd/project-manager \
  && go build -trimpath -ldflags="-s -w" -o /out/notes ./cmd/notes \
+ && go build -trimpath -ldflags="-s -w" -o /out/memory ./cmd/memory \
  && go build -trimpath -ldflags="-s -w" -o /out/mcp-gate ./cmd/mcp-gate \
  && go build -trimpath -ldflags="-s -w" -o /out/pi-gateway ./cmd/pi-gateway
 
@@ -186,6 +187,7 @@ COPY --from=gobuild /out/health-check     /usr/local/bin/health-check
 COPY --from=gobuild /out/task-manager     /usr/local/bin/task-manager
 COPY --from=gobuild /out/project-manager  /usr/local/bin/project-manager
 COPY --from=gobuild /out/notes             /usr/local/bin/notes
+COPY --from=gobuild /out/memory            /usr/local/bin/memory
 COPY --from=gobuild /out/mcp-gate          /usr/local/bin/mcp-gate
 
 # pi-gateway is the container's main process, not an optional extra. It serves the
@@ -199,6 +201,7 @@ COPY --from=gobuild /out/pi-gateway       /usr/local/bin/pi-gateway
 RUN chmod 755 /usr/local/bin/miser-money /usr/local/bin/cookbook \
              /usr/local/bin/health-check /usr/local/bin/task-manager \
              /usr/local/bin/project-manager /usr/local/bin/notes \
+             /usr/local/bin/memory \
              /usr/local/bin/mcp-gate /usr/local/bin/pi-gateway
 
 COPY docker/pi/entrypoint.sh /usr/local/bin/entrypoint.sh

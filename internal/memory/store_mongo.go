@@ -1,0 +1,217 @@
+package memory
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"agento/internal/mongostore"
+
+	"go.mongodb.org/mongo-driver/bson"
+	mongoDrv "go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+)
+
+// MongoStore is the MongoDB backend for items and paused topics.
+type MongoStore struct {
+	items    *mongoDrv.Collection
+	settings *mongoDrv.Collection
+	// Logf receives operational notes. Nil discards them.
+	Logf func(string, ...any)
+}
+
+// Shared reports true: every process holding the same URI sees the same
+// memory, which is what lets the gateway inject what the app just edited.
+func (s *MongoStore) Shared() bool { return true }
+
+func (s *MongoStore) logf(format string, args ...any) {
+	if s.Logf != nil {
+		s.Logf(format, args...)
+	}
+}
+
+// New connects to uri/dbName.
+func New(uri, dbName string) (*MongoStore, error) {
+	_, db, err := mongostore.Open(uri, dbName)
+	if err != nil {
+		return nil, err
+	}
+	return &MongoStore{
+		items:    db.Collection(ItemsCollection),
+		settings: db.Collection(SettingsCollection),
+	}, nil
+}
+
+// FromEnv connects from the shared MONGODB_URI/MONGODB_DB pair.
+func FromEnv() (*MongoStore, error) {
+	uri, db := mongostore.Env()
+	return New(uri, db)
+}
+
+// EnsureIndexes creates the profile listing index and the settings lookup.
+// Memory has no TTL: an item lives until it is deleted or forgotten.
+func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
+	_, err := s.items.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
+		Keys: bson.D{
+			{Key: "profile", Value: 1},
+			{Key: "createdAt", Value: -1},
+		},
+		Options: options.Index().SetName("memory_profile_created"),
+	})
+	return err
+}
+
+// Create inserts one item. Empty timestamps are filled here so every path
+// (app, agent tool) gets the same clock.
+func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
+	if i.ID == "" {
+		i.ID = NewID()
+	}
+	if strings.TrimSpace(i.Profile) == "" {
+		return Item{}, NewStoreError("memory item needs a profile", false)
+	}
+	now := time.Now().UnixMilli()
+	if i.CreatedAt == 0 {
+		i.CreatedAt = now
+	}
+	i.UpdatedAt = now
+	i.Topic = NormalizeTopic(i.Topic)
+	if !i.Status.Valid() {
+		i.Status = StatusPending
+	}
+	if i.Source == "" {
+		i.Source = SourceUser
+	}
+	if _, err := s.items.InsertOne(ctx, i); err != nil {
+		return Item{}, NewStoreError("memory create failed: "+err.Error(), true)
+	}
+	return i, nil
+}
+
+// Get returns one item.
+func (s *MongoStore) Get(ctx context.Context, id string) (Item, error) {
+	var it Item
+	if err := s.items.FindOne(ctx, bson.M{"_id": id}).Decode(&it); err != nil {
+		if errors.Is(err, mongoDrv.ErrNoDocuments) {
+			return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
+		}
+		return Item{}, NewStoreError("memory read failed: "+err.Error(), true)
+	}
+	return it, nil
+}
+
+// Update applies a partial edit and returns the stored row.
+func (s *MongoStore) Update(ctx context.Context, id string, u Update) (Item, error) {
+	set := bson.M{"updatedAt": time.Now().UnixMilli()}
+	if u.Text != nil {
+		set["text"] = CleanText(*u.Text)
+	}
+	if u.Topic != nil {
+		set["topic"] = NormalizeTopic(*u.Topic)
+	}
+	if u.Status != nil {
+		if !u.Status.Valid() {
+			return Item{}, NewStoreError("unknown memory status", false)
+		}
+		set["status"] = *u.Status
+	}
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
+	var it Item
+	err := s.items.FindOneAndUpdate(ctx, bson.M{"_id": id}, bson.M{"$set": set}, opts).Decode(&it)
+	if errors.Is(err, mongoDrv.ErrNoDocuments) {
+		return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
+	}
+	if err != nil {
+		return Item{}, NewStoreError("memory update failed: "+err.Error(), true)
+	}
+	return it, nil
+}
+
+// Delete removes one item. Deleting an already-deleted id is NotFound: the
+// app should reload rather than believe a second delete did something.
+func (s *MongoStore) Delete(ctx context.Context, id string) error {
+	res, err := s.items.DeleteOne(ctx, bson.M{"_id": id})
+	if err != nil {
+		return NewStoreError("memory delete failed: "+err.Error(), true)
+	}
+	if res.DeletedCount == 0 {
+		return &StoreError{Msg: "unknown memory " + id, NotFound: true}
+	}
+	return nil
+}
+
+// DeleteAll forgets every item for one profile. Paused topics survive: they
+// are the user's learning policy, not something they remembered.
+func (s *MongoStore) DeleteAll(ctx context.Context, profile string) (int64, error) {
+	res, err := s.items.DeleteMany(ctx, bson.M{"profile": profile})
+	if err != nil {
+		return 0, NewStoreError("memory forget failed: "+err.Error(), true)
+	}
+	return res.DeletedCount, nil
+}
+
+// List returns matching items, newest first.
+func (s *MongoStore) List(ctx context.Context, f Filter) ([]Item, error) {
+	q := bson.M{}
+	if p := strings.TrimSpace(f.Profile); p != "" {
+		q["profile"] = p
+	}
+	if t := strings.TrimSpace(f.Topic); t != "" {
+		q["topic"] = NormalizeTopic(t)
+	}
+	if f.Status != "" {
+		q["status"] = f.Status
+	}
+	limit := f.Limit
+	if limit <= 0 || limit > ListCap {
+		limit = ListCap
+	}
+	cur, err := s.items.Find(ctx, q,
+		options.Find().
+			SetSort(bson.D{{Key: "createdAt", Value: -1}}).
+			SetLimit(int64(limit)))
+	if err != nil {
+		return nil, NewStoreError("memory list failed: "+err.Error(), true)
+	}
+	defer cur.Close(ctx)
+	items := make([]Item, 0, 16)
+	if err := cur.All(ctx, &items); err != nil {
+		return nil, NewStoreError("memory list failed: "+err.Error(), true)
+	}
+	return items, nil
+}
+
+// SetTopicPaused pauses or resumes one topic for one profile.
+func (s *MongoStore) SetTopicPaused(ctx context.Context, profile, topic string, paused bool) error {
+	if strings.TrimSpace(profile) == "" {
+		return NewStoreError("memory topic needs a profile", false)
+	}
+	t := NormalizeTopic(topic)
+	var update bson.M
+	if paused {
+		update = bson.M{"$addToSet": bson.M{"paused": t}}
+	} else {
+		update = bson.M{"$pull": bson.M{"paused": t}}
+	}
+	_, err := s.settings.UpdateOne(ctx, bson.M{"_id": profile}, update,
+		options.Update().SetUpsert(true))
+	if err != nil {
+		return NewStoreError("memory topic update failed: "+err.Error(), true)
+	}
+	return nil
+}
+
+// PausedTopics returns the paused topics for a profile.
+func (s *MongoStore) PausedTopics(ctx context.Context, profile string) ([]string, error) {
+	var doc struct {
+		Paused []string `bson:"paused"`
+	}
+	if err := s.settings.FindOne(ctx, bson.M{"_id": profile}).Decode(&doc); err != nil {
+		if errors.Is(err, mongoDrv.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, NewStoreError("memory topic read failed: "+err.Error(), true)
+	}
+	return doc.Paused, nil
+}

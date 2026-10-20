@@ -16,6 +16,7 @@ import (
 
 	"agento/internal/approvals"
 	"agento/internal/crashlog"
+	"agento/internal/memory"
 	"agento/internal/runs"
 )
 
@@ -124,6 +125,12 @@ type Config struct {
 	// unreachable.
 	ApprovalStore approvals.Store
 
+	// MemoryStore is the per-profile memory store (#315). Nil means an
+	// in-process store: the routes still work, but items do not survive a
+	// restart and the memory MCP server (a separate process) cannot see them.
+	// main sets a Mongo store when the database is reachable.
+	MemoryStore memory.Store
+
 	// Logf receives operational messages. Nil discards them.
 	Logf func(format string, args ...any)
 }
@@ -184,6 +191,10 @@ type Server struct {
 	// relay polls the store, so every gateway process answers identically.
 	approvals approvals.Store
 
+	// memory backs the memory routes and the per-turn prompt prefix. Scoped by
+	// profile: one store holds every profile's items.
+	memory memory.Store
+
 	// mcpServers is the configured MCP server set, read once at startup. Empty when
 	// there is no agent directory or no readable mcp.json, which is a valid state.
 	mcpServers []string
@@ -223,6 +234,10 @@ func New(cfg Config, agents map[string]Agent) (*Server, error) {
 	s.approvals = cfg.ApprovalStore
 	if s.approvals == nil {
 		s.approvals = approvals.NewMemoryStore()
+	}
+	s.memory = cfg.MemoryStore
+	if s.memory == nil {
+		s.memory = memory.NewMemoryStore()
 	}
 
 	// Read once, here, rather than per request. mcp.json is fixed for the life of
@@ -527,6 +542,13 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	}
 	if rest == "api/audit" || strings.HasPrefix(rest, "api/audit/") {
 		s.handleAudit(w, r, rest)
+		return
+	}
+
+	// Memory (#315). Per profile, unlike the two globals above: the handler
+	// scopes every read and write to the profile this request resolved to.
+	if rest == "api/memory" || strings.HasPrefix(rest, "api/memory/") {
+		s.handleMemory(w, r, rest, profile)
 		return
 	}
 

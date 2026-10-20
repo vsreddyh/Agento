@@ -1,0 +1,189 @@
+package memory
+
+import (
+	"context"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+// MemoryStore is the in-process backend used when no Mongo URI is
+// configured. It is honest about being local:
+//
+//   - items live and die with the process, so a restart forgets everything
+//     between the app's write and the next read;
+//   - the memory MCP server is a different process and cannot see this store
+//     at all, so agent-proposed items only work with Mongo.
+//
+// The gateway still serves the routes and injects what it has, which keeps a
+// development stack usable without pretending it is durable.
+type MemoryStore struct {
+	mu     sync.Mutex
+	items  map[string]Item
+	paused map[string]map[string]bool
+}
+
+// Shared reports false: this store is not visible across processes.
+func (s *MemoryStore) Shared() bool { return false }
+
+// NewMemoryStore builds an empty store.
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{
+		items:  make(map[string]Item),
+		paused: make(map[string]map[string]bool),
+	}
+}
+
+// Create stores one item.
+func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
+	if strings.TrimSpace(i.Profile) == "" {
+		return Item{}, NewStoreError("memory item needs a profile", false)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i.ID == "" {
+		i.ID = NewID()
+	}
+	now := time.Now().UnixMilli()
+	if i.CreatedAt == 0 {
+		i.CreatedAt = now
+	}
+	i.UpdatedAt = now
+	i.Topic = NormalizeTopic(i.Topic)
+	if !i.Status.Valid() {
+		i.Status = StatusPending
+	}
+	if i.Source == "" {
+		i.Source = SourceUser
+	}
+	s.items[i.ID] = i
+	return i, nil
+}
+
+// Get returns one item.
+func (s *MemoryStore) Get(_ context.Context, id string) (Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it, ok := s.items[id]
+	if !ok {
+		return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
+	}
+	return it, nil
+}
+
+// Update applies a partial edit.
+func (s *MemoryStore) Update(_ context.Context, id string, u Update) (Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it, ok := s.items[id]
+	if !ok {
+		return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
+	}
+	if u.Text != nil {
+		it.Text = CleanText(*u.Text)
+	}
+	if u.Topic != nil {
+		it.Topic = NormalizeTopic(*u.Topic)
+	}
+	if u.Status != nil {
+		if !u.Status.Valid() {
+			return Item{}, NewStoreError("unknown memory status", false)
+		}
+		it.Status = *u.Status
+	}
+	it.UpdatedAt = time.Now().UnixMilli()
+	s.items[id] = it
+	return it, nil
+}
+
+// Delete removes one item.
+func (s *MemoryStore) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.items[id]; !ok {
+		return &StoreError{Msg: "unknown memory " + id, NotFound: true}
+	}
+	delete(s.items, id)
+	return nil
+}
+
+// DeleteAll forgets one profile's items, keeping its paused topics.
+func (s *MemoryStore) DeleteAll(_ context.Context, profile string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var n int64
+	for id, it := range s.items {
+		if it.Profile == profile {
+			delete(s.items, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
+// List returns matching items, newest first.
+func (s *MemoryStore) List(_ context.Context, f Filter) ([]Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	limit := f.Limit
+	if limit <= 0 || limit > ListCap {
+		limit = ListCap
+	}
+	out := make([]Item, 0, 16)
+	for _, it := range s.items {
+		if p := strings.TrimSpace(f.Profile); p != "" && it.Profile != p {
+			continue
+		}
+		if t := strings.TrimSpace(f.Topic); t != "" && it.Topic != NormalizeTopic(t) {
+			continue
+		}
+		if f.Status != "" && it.Status != f.Status {
+			continue
+		}
+		out = append(out, it)
+	}
+	// Newest first; the id tiebreak keeps equal-millisecond writes stable so
+	// a list does not reshuffle between two identical requests.
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].CreatedAt != out[b].CreatedAt {
+			return out[a].CreatedAt > out[b].CreatedAt
+		}
+		return out[a].ID > out[b].ID
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// SetTopicPaused pauses or resumes one topic.
+func (s *MemoryStore) SetTopicPaused(_ context.Context, profile, topic string, paused bool) error {
+	if strings.TrimSpace(profile) == "" {
+		return NewStoreError("memory topic needs a profile", false)
+	}
+	t := NormalizeTopic(topic)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.paused[profile] == nil {
+		s.paused[profile] = make(map[string]bool)
+	}
+	if paused {
+		s.paused[profile][t] = true
+	} else {
+		delete(s.paused[profile], t)
+	}
+	return nil
+}
+
+// PausedTopics returns the paused topics for a profile.
+func (s *MemoryStore) PausedTopics(_ context.Context, profile string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for t := range s.paused[profile] {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out, nil
+}
