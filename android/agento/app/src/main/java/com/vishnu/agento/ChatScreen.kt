@@ -112,17 +112,21 @@ private fun AttachmentThumb(
     base64: String,
     label: String,
     modifier: Modifier = Modifier,
+    slot: Int = 0,
 ) {
-    // Keyed by (length, hashCode), not the string (#339 review): remember's
-    // equality check would memcmp ~1.5 M chars on every recomposition.
-    // hashCode() walks once — the JVM caches it — and is O(1) after that.
-    val thumbKey = base64.length to base64.hashCode()
-    val bmp = remember(thumbKey) { runCatching { decodeThumbnail(base64) }.getOrNull() }
-    // Recycled with the composition: the remembered ~256px bitmap is owned
-    // here, never shared, so disposing it on key change/unmount leaks
-    // nothing and cannot pull pixels from under a live Image.
-    DisposableEffect(thumbKey) {
-        onDispose { runCatching { bmp?.takeUnless { it.isRecycled }?.recycle() } }
+    // Keyed (length, hash, slot), not the string (#339): remember's
+    // equality check would memcmp ~1.5 M chars on every recomposition
+    // (hashCode walks once — the JVM caches it), and the slot keeps two
+    // identical payloads from aliasing one thumbnail. Decoded off-main:
+    // ~1 MB Base64.decode + decodeByteArray during composition janks
+    // low-end scroll, so produceState moves it to IO (placeholder shows
+    // until it lands) and awaitDispose recycles on change/unmount.
+    val thumbKey = Triple(base64.length, base64.hashCode(), slot)
+    val bmp by produceState<android.graphics.Bitmap?>(null, thumbKey) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { decodeThumbnail(base64) }.getOrNull()
+        }
+        awaitDispose { runCatching { value?.takeUnless { it.isRecycled }?.recycle() } }
     }
     if (bmp != null) {
         Image(
@@ -1800,6 +1804,7 @@ internal fun ChatScreen(
                                             label = "Staged photo ${i + 1} of " +
                                                 "${state.pendingAttachments.size}",
                                             modifier = Modifier.size(64.dp),
+                                            slot = i,
                                         )
                                         // 24dp is an overlay exception to the
                                         // standard-48dp rule (#283): the target
@@ -2232,6 +2237,7 @@ internal fun ChatScreen(
                                                                 label = "Attached photo ${ai + 1} of " +
                                                                     "${msg.attachments.size}",
                                                                 modifier = Modifier.size(120.dp),
+                                                                slot = ai,
                                                             )
                                                         }
                                                     }

@@ -65,8 +65,11 @@ fun wireSizeExceeded(bytes: Int): Boolean = bytes > MAX_CHAT_WIRE_BYTES
 
 /** Wire form of one attachment: the `image_url` data URI the gateway's
  * multipart parser accepts (`internal/gateway/openai.go`). Remote URLs are
- * never produced — the gateway refuses to fetch them. */
-fun ChatAttachment.dataUri(): String = "data:$mimeType;base64,$base64"
+ * never produced — the gateway refuses to fetch them. The type is PINNED,
+ * not rendered from storage (#339): every payload is JPEG re-encoded at
+ * pick time, so a hand-edited thread file cannot widen the wire type —
+ * fail-closed at the client edge, like the gateway's unknown-part 400. */
+fun ChatAttachment.dataUri(): String = "data:image/jpeg;base64,$base64"
 
 /** Inline marker for text-only surfaces (exports, search, titles):
  * `[1 photo attached]` / `[3 photos attached]`. */

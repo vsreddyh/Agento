@@ -831,7 +831,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Photos send with or without text (#318): an image-only turn is a
         // real turn (the server treats blank text + images as non-blank).
         val photos = _state.value.pendingAttachments
-        if ((text.isEmpty() && photos.isEmpty()) || !_state.value.ready) return
+        // Ready-gated with a voice (#339): the button disables on !ready,
+        // but the IME send action bypasses it — an ungated return would
+        // dead-tap during thread load, now reachable with photos staged.
+        if (!_state.value.ready) {
+            if (text.isNotEmpty() || photos.isNotEmpty()) {
+                notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+            }
+            return
+        }
+        if (text.isEmpty() && photos.isEmpty()) return
         // Queue-or-send (#122): the composer stays live while streaming —
         // a send mid-stream parks the text and auto-fires on Done, instead
         // of being swallowed by the streaming guard. First queued text wins;
