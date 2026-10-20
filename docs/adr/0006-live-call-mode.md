@@ -29,6 +29,10 @@ record — still half-duplex, still no realtime transport.**
   label when one arrived with the change, else the latest delta's last
   segment de-snaked). A batch that seeds several tools at once yields one
   cue naming the latest, and the whole batch counts as announced.
+  Rapid changes inside one ~1–2 s cue window lose the middle the same
+  way: the first cue is cut (flush), the second names the latest, and the
+  middle counts as announced unheard — flush is deliberate, so stale names
+  never backlog behind a finished task.
   Milestones ride `live-cue-*` TTS keys: the detector stays off for cues
   (short self-speech must not self-trigger), their completion never starts
   listening, cues are gated on collected TTS readiness (a `StateFlow`, so
@@ -55,7 +59,9 @@ record — still half-duplex, still no realtime transport.**
 
 What this still is not: full-duplex realtime. There is no duplex audio
 path, no barge-in *during* the 400 ms calibration windows, speech during
-a ~1–2 s milestone cue is missed, and a 2-minute task still occupies the
+a ~1–2 s milestone cue is missed — including barge-in (the detector is off
+for cues, so talking over one cuts neither the cue nor the turn
+underneath) — and a 2-minute task still occupies the
 profile's single turn (a second prompt gets `429`). Those are the
 documented edges of an energy detector over text turns, not a voice
 transport — building one stays out of scope with no realtime model API

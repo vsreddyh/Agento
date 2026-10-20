@@ -785,6 +785,13 @@ internal fun ChatScreen(
     var cueN by remember(tab) { mutableIntStateOf(0) }
     // cueN never resets on purpose (review #338-7): toggle() needs a key
     // no still-playing cue holds, and a reset could collide with one.
+    // Detector bookkeeping (review #338-followup-3, #338-3-followup):
+    // plain holder, not state — only the driver effect writes it in the
+    // steady state, and the effect keys drive restarts. Declared up here
+    // (not next to the driver) so endLive/startLive can reset it alongside
+    // the actual stop(): the holder must never claim "stopped" while the
+    // recorder still holds the mic, or vice versa.
+    val detectCtl = remember(tab) { DetectCtl() }
     fun onBargeIn() {
         tts.stop()
         if (state.streaming) {
@@ -848,8 +855,12 @@ internal fun ChatScreen(
         announcedTools = emptyList()
         announcedLabel = ""
         // Stop the detector now — don't rely on the liveMode=false effect
-        // round-trip to get around to it.
+        // round-trip to get around to it — and reset its holder alongside
+        // (review #338-3-followup): the holder must not claim "running"
+        // after the recorder was stopped out from under the driver effect.
         interrupt.stop()
+        detectCtl.running = false
+        detectCtl.phase = -1
         liveRec.cancel()
         tts.stop()
         if (reason != null) toasts.toast(reason, ToastKind.Error)
@@ -913,7 +924,15 @@ internal fun ChatScreen(
         livePartial = ""
         micArmed = true
         // Fresh call state (#317): a previous session's barge claim or
-        // milestone set must not leak into this one.
+        // milestone set must not leak into this one. The detector is
+        // stopped and its holder reset too (review #338-3-followup) so the
+        // next detecting phase recalibrates from clean state — a bare reset
+        // without the stop would lie the other way (effect sees "stopped",
+        // skips its own stop, and leaks a live recorder into the
+        // recognizer's mic).
+        interrupt.stop()
+        detectCtl.running = false
+        detectCtl.phase = -1
         bargeCancel = false
         announcedTools = emptyList()
         announcedLabel = ""
@@ -1047,12 +1066,11 @@ internal fun ChatScreen(
         speakingKey != null -> 1
         else -> 2
     }
-    // Whether the detector is up, without recomposing bookkeeping
-    // (review #338-followup-3): restarts are skipped when already running
-    // in the target phase, so a micArmed/liveMode toggle with no phase
-    // change doesn't churn the AudioRecord. Plain holder, not state —
-    // only the effects below touch it, and the keys drive restarts.
-    val detectCtl = remember(tab) { DetectCtl() }
+    // Driver bookkeeping lives up top (review #338-3-followup) so session
+    // start/end can reset it alongside the actual stop(). Restarts are
+    // skipped when already running in the target phase, so a
+    // micArmed/liveMode toggle with no phase change doesn't churn the
+    // AudioRecord.
     LaunchedEffect(detectPhase, liveMode, micArmed) {
         val phaseChanged = detectPhase != detectCtl.phase
         detectCtl.phase = detectPhase
@@ -1109,9 +1127,11 @@ internal fun ChatScreen(
                 .substringAfterLast("__").replace('_', ' ')
         }
         cueN++
-        // Engine-dead stays silent here (review #338-5 makes it explicit):
+        // Engine-dead stays silent via the !ttsReady early return above (a
+        // failed engine never becomes ready), not via the branch below —
         // the reply path reports TTS failure loudly at stream end instead
-        // of killing a working call over a cue.
+        // of killing a working call over a cue. The branch is defense for
+        // a shutdown racing the readiness snapshot; intentionally a no-op.
         if (!tts.toggle("live-cue-$cueN", what)) {
             // No-op by decision, not by accident.
         }

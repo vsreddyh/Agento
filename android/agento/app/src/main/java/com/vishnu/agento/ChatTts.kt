@@ -25,18 +25,19 @@ class ChatTts(context: Context) {
     val speakingKey: StateFlow<String?> = _speakingKey
 
     private var engine: TextToSpeech? = null
-    // Written on the TTS init-callback thread, collected on Main:
-    // StateFlow (volatile-backed) instead of a plain var so cross-thread
-    // reads are safe and Compose re-fires keyed effects on init.
+    // TTS callbacks can arrive off the Main thread (utterance progress
+    // always does), so everything the callbacks share with Main is
+    // volatile-backed: readiness as a StateFlow (which also lets Compose
+    // re-fire keyed effects on init), the rest as @Volatile plain fields.
     private val _ready = MutableStateFlow(false)
     /** True once the engine initialized successfully. Milestone cues key on
      * this so a late init still cues instead of losing the tool set that
      * arrived while TTS was down. */
     val readyFlow: StateFlow<Boolean> = _ready
-    private var failed = false
-    private var pending: Pair<String, String>? = null
+    @Volatile private var failed = false
+    @Volatile private var pending: Pair<String, String>? = null
     /** Utterance ID of the last queued chunk; only its completion clears state. */
-    private var lastUtteranceId = ""
+    @Volatile private var lastUtteranceId = ""
 
     init {
         engine = TextToSpeech(appCtx) { status ->
