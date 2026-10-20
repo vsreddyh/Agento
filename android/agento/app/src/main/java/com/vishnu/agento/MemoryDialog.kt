@@ -68,7 +68,12 @@ internal fun MemoryDialog(
     // disarms, so a stale arm can never meet a later tap and wipe without
     // its second confirm. Keyed on loading as well as content: an
     // identical-rows reload would otherwise not relaunch the effect.
-    LaunchedEffect(items, loading) { forgetArmed = false }
+    LaunchedEffect(items, loading) {
+        forgetArmed = false
+        if (editingId != null && items.none { it.id == editingId }) {
+            editingId = null
+        }
+    }
     val pending = items.filter { it.isPending() }
     val confirmed = items.filter { !it.isPending() }
     AlertDialog(

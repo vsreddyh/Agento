@@ -61,16 +61,19 @@ internal fun parseMemoryItem(o: JSONObject): MemoryItem? {
  * callers render the code (no silent success, no codeless error). */
 internal fun parseObject(body: String): JSONObject =
     runCatching { JSONObject(body) }.getOrElse {
-        throw RuntimeException("HTTP 200: bad payload")
+        throw RuntimeException("unparseable response body")
     }
 
-internal fun parseMemoryList(body: String): MemoryList {
+/** Null when the whole body is unparseable: the caller fails instead of
+ * wiping the sheet, so a transient 200-with-garbage keeps old rows and the
+ * badge behind an in-sheet error. Missing keys still read as empty. */
+internal fun parseMemoryList(body: String): MemoryList? {
     val root = runCatching { JSONObject(body) }.getOrNull()
     if (root == null) {
         // Length only: the body is memory text (PII), same rationale as the
         // code-only error messages.
         runCatching { Log.w("MemoryApi", "unparseable memory body (${body.length} chars)") }
-        return MemoryList()
+        return null
     }
     val items = mutableListOf<MemoryItem>()
     var dropped = 0
@@ -216,7 +219,7 @@ class MemoryApi(context: Context) {
         call("POST", "$path/api/memory", body).mapCatching {
             val root = parseObject(checkOk(it).body)
             val item = parseMemoryItem(root.optJSONObject("item") ?: JSONObject())
-                ?: throw RuntimeException("HTTP 200: no item")
+                ?: throw RuntimeException("response had no item")
             item to root.optBoolean("truncated", false)
         }
     }
@@ -237,7 +240,7 @@ class MemoryApi(context: Context) {
         call("PUT", "$path/api/memory/${encode(id)}", body).mapCatching {
             val root = parseObject(checkOk(it).body)
             val item = parseMemoryItem(root.optJSONObject("item") ?: JSONObject())
-                ?: throw RuntimeException("HTTP 200: no item")
+                ?: throw RuntimeException("response had no item")
             item to root.optBoolean("truncated", false)
         }
     }

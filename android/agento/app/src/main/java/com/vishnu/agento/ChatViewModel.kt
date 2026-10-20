@@ -1064,8 +1064,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         actOnMemory("item:$id", id, action = { path -> memoryApi.updateMemory(path, id, status = "confirmed") })
 
     /** Deletes one item: it is gone from the next turn. */
-    fun deleteMemory(id: String) =
-        actOnMemory("item:$id", id, action = { path -> memoryApi.deleteMemory(path, id) })
+    fun deleteMemory(id: String) {
+        actOnMemory("item:$id", id, action = { path -> memoryApi.deleteMemory(path, id) },
+            onSuccess = {
+                if (_state.value.showMemory) refreshMemory("Deleted.")
+            })
+    }
 
     /** Saves an edit to text and/or topic. Trims like create: a
      * whitespace-only edit is a validation error here, not a server 400,
