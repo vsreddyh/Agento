@@ -97,5 +97,13 @@ class ApprovalsApiTest {
         assertTrue(degraded.degraded)
         val healthy = parseApprovalList("""{"approvals":[]}""")
         assertFalse(healthy.degraded)
+        // Missing array keeps the flag: unavailable reads as unavailable,
+        // not as a clean empty that means "none".
+        val noArray = parseApprovalList("""{"degraded":"x"}""")
+        assertTrue(noArray.degraded)
+        assertTrue(noArray.approvals.isEmpty())
+        // Key presence, not string content: a future boolean wire reads too.
+        val boolWire = parseApprovalList("""{"approvals":[],"degraded":true}""")
+        assertTrue(boolWire.degraded)
     }
 }

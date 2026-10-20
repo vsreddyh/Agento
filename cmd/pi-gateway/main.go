@@ -339,9 +339,10 @@ func run() error {
 	// Approval gates + audit trail (#313). Same database, sibling
 	// collections to runs. Without it the gateway answers approvals from
 	// memory, and the relay falls back independently too — but a decision
-	// then needs a SHARED store: with no Mongo the relay's pending row is
-	// invisible to the gateway, so every gated call waits out its hold and
-	// expires by design (Store.Shared documents the same contract).
+	// then needs a SHARED store: with no Mongo the relay denies gated calls
+	// immediately (relay_unavailable — a hold could never be decided), so the
+	// failure is fast and audited rather than a 14-minute hang
+	// (Store.Shared documents the same contract).
 	var approvalStore approvals.Store
 	if store, err := approvals.FromEnv(); err != nil {
 		logger.Printf("approvals: falling back to in-memory: %v", err)

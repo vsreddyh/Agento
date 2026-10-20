@@ -18,6 +18,18 @@ import (
 	"agento/internal/approvals"
 )
 
+// sharedStore behaves like Mongo for split-brain purposes: decisions made
+// elsewhere are visible, so gated calls park instead of failing fast. Tests
+// that hold use it; the fail-fast path is pinned separately with a plain
+// memory store.
+type sharedStore struct {
+	*approvals.MemoryStore
+}
+
+func (sharedStore) Shared() bool { return true }
+
+func testStore() sharedStore { return sharedStore{approvals.NewMemoryStore()} }
+
 func testRelay(store approvals.Store) *relay {
 	return &relay{
 		server:  "notes",
@@ -100,7 +112,7 @@ func waitForAudit(t *testing.T, store approvals.Store, n int) []approvals.AuditE
 
 // A gated call holds, and an approval releases the exact bytes to the child.
 func TestHoldApproveForwards(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	out, child := &bufWriter{}, &bufWriter{}
 	r := testRelay(store)
 	r.out = out
@@ -144,7 +156,7 @@ func TestHoldApproveForwards(t *testing.T) {
 // A denied call answers Pi with a tool error carrying the call id, and the
 // child never sees it.
 func TestHoldDenyAnswersPi(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	out, child := &bufWriter{}, &bufWriter{}
 	r := testRelay(store)
 	r.out = out
@@ -183,7 +195,7 @@ func TestHoldDenyAnswersPi(t *testing.T) {
 
 // No decision in time fails closed: error to Pi, expiry recorded.
 func TestHoldTimeoutFailsClosed(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	out, child := &bufWriter{}, &bufWriter{}
 	r := testRelay(store)
 	r.out = out
@@ -213,7 +225,7 @@ func TestHoldTimeoutFailsClosed(t *testing.T) {
 
 // Allowed calls forward untouched and audit as allowed.
 func TestAllowForwardsAndAudits(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	if approvals.NeedsApproval("notes", "list_notes", nil) {
 		t.Fatal("list_notes should run free")
 	}
@@ -239,7 +251,7 @@ func TestRelayRoundTrip(t *testing.T) {
 	if _, err := exec.LookPath("cat"); err != nil {
 		t.Skip("no cat binary")
 	}
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	r := testRelay(store)
 	piInR, piInW := ioPipe(t)
 	piOut := &bufWriter{}
@@ -286,7 +298,7 @@ func testLogger() *log.Logger {
 // path audits it inline. Without that, "every proxied call is audited" was
 // false for exactly the calls the relay cannot track.
 func TestAllowNotificationIsAudited(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	r := testRelay(store)
 	r.childIn = &bufWriter{}
 	line := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_notes","arguments":{}}}` + "\n"
@@ -306,7 +318,7 @@ func TestAllowNotificationIsAudited(t *testing.T) {
 // it fails closed inline: no hold, no approval card, no reply frame, and a
 // denied audit row saying why.
 func TestGatedNotificationFailsClosed(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	out, child := &bufWriter{}, &bufWriter{}
 	r := testRelay(store)
 	r.out = out
@@ -334,7 +346,7 @@ func TestGatedNotificationFailsClosed(t *testing.T) {
 // A server may re-encode the id it echoes; pairing must survive that or the
 // allowed call's audit row is silently lost.
 func TestTakeNormalisesIdEncoding(t *testing.T) {
-	r := testRelay(approvals.NewMemoryStore())
+	r := testRelay(testStore())
 	r.track(json.RawMessage(`1`), "list_notes", map[string]any{})
 	if st := r.take(json.RawMessage(`1.0`)); st == nil {
 		t.Fatal("1 and 1.0 did not pair")
@@ -360,7 +372,7 @@ func TestTakeNormalisesIdEncoding(t *testing.T) {
 
 // The pending table is bounded even when a server never answers.
 func TestPendingTableIsBounded(t *testing.T) {
-	r := testRelay(approvals.NewMemoryStore())
+	r := testRelay(testStore())
 	for i := 0; i < pendingCap+50; i++ {
 		r.track(json.RawMessage(strconv.Itoa(i)), "list_notes", map[string]any{})
 	}
@@ -377,7 +389,7 @@ func TestPendingTableIsBounded(t *testing.T) {
 // waiting on. This branch only runs when holdCtx is wired, which the other
 // tests leave nil.
 func TestHoldAbandonedAtTeardown(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	out, child := &bufWriter{}, &bufWriter{}
 	r := testRelay(store)
 	r.out = out
@@ -418,7 +430,7 @@ func TestHoldAbandonedAtTeardown(t *testing.T) {
 // A tools/call the relay cannot parse is denied, not forwarded: the gate must
 // not be bypassable by sending params it cannot classify.
 func TestMalformedToolsCallFailsClosed(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	out, child := &bufWriter{}, &bufWriter{}
 	r := testRelay(store)
 	r.out = out
@@ -443,7 +455,7 @@ func TestMalformedToolsCallFailsClosed(t *testing.T) {
 // A row that expired elsewhere is reported as expired, never as a denial by
 // the user: the audit trail must not attribute an action nobody took.
 func TestPollObservedExpiryIsNotADenial(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	out, child := &bufWriter{}, &bufWriter{}
 	r := testRelay(store)
 	r.out = out
@@ -477,7 +489,7 @@ func TestPollObservedExpiryIsNotADenial(t *testing.T) {
 // Once teardown starts, auditAsync writes inline: the row survives the join
 // instead of racing process exit, and no Add can race the Wait.
 func TestAuditAsyncIsInlineAfterClose(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	r := testRelay(store)
 	r.beginClose()
 	r.auditAsync("list_notes", nil, approvals.DispositionAllow, "", "")
@@ -494,7 +506,7 @@ func TestAuditAsyncIsInlineAfterClose(t *testing.T) {
 // parked (the relay is exiting) and it must not Add to a WaitGroup already
 // being waited on.
 func TestGatedCallAfterCloseFailsClosed(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	out, child := &bufWriter{}, &bufWriter{}
 	r := testRelay(store)
 	r.out = out
@@ -547,7 +559,7 @@ func (failWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe
 // A forwarded-but-undelivered call must not stay tracked and must not be
 // recorded as a clean allow: no response is coming to complete it.
 func TestAllowDeliveryFailureUntracksAndAudits(t *testing.T) {
-	store := approvals.NewMemoryStore()
+	store := testStore()
 	r := testRelay(store)
 	r.out = &bufWriter{}
 	r.childIn = failWriter{}
@@ -566,5 +578,34 @@ func TestAllowDeliveryFailureUntracksAndAudits(t *testing.T) {
 	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionAllow ||
 		!strings.Contains(audit[0].Error, "not delivered") {
 		t.Fatalf("audit = %+v, want one allow row recording the delivery failure", audit)
+	}
+}
+
+// Without a shared store no decision can ever arrive, so a gated call fails
+// fast instead of burning the full hold: same verdict (denied, failed
+// closed), minutes earlier, audited as its own cause.
+func TestUnsharedStoreFailsFast(t *testing.T) {
+	store := approvals.NewMemoryStore()
+	r := testRelay(store)
+	r.out = &bufWriter{}
+	r.childIn = &bufWriter{}
+
+	line, _, _ := callLine("9", "delete_note", `{"id":"abc"}`)
+	if err := r.pumpPiToChild(strings.NewReader(string(line) + "\n")); err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	if got := r.childIn.(*bufWriter).String(); got != "" {
+		t.Fatalf("unshared relay forwarded the call: %q", got)
+	}
+	if out := r.out.(*bufWriter).String(); !strings.Contains(out, "no shared store") {
+		t.Fatalf("Pi got no unavailable error: %q", out)
+	}
+	if list, _ := store.ListApprovals(context.Background(), approvals.ApprovalFilter{}); len(list) != 0 {
+		t.Fatalf("unshared relay parked an approval: %+v", list)
+	}
+	audit, _ := store.ListAudit(context.Background(), approvals.AuditFilter{})
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionDenied ||
+		!strings.Contains(audit[0].Error, "relay_unavailable") {
+		t.Fatalf("audit = %+v, want one relay_unavailable deny", audit)
 	}
 }

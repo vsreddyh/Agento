@@ -998,9 +998,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // Stale poll (profile switched mid-flight): the old profile's
             // count must not land on the new one.
             if (_state.value.path != path) return@withContext
+            // Assigned, not OR-accumulated: recovery clears via poll, and
+            // only a full sheet load sets it otherwise. A transient degraded
+            // must not stick past recovery behind a stale banner.
             _state.value = _state.value.copy(
                 pendingApprovalCount = n,
-                approvalsDegraded = page.degraded || _state.value.approvalsDegraded,
+                approvalsDegraded = page.degraded,
             )
         }
     }

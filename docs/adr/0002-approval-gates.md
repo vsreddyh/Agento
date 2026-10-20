@@ -82,11 +82,12 @@ memory-fallback shape as runs. The relay and the gateway open the same
 collections from their own processes and fall back independently. That
 independence has one hard edge worth stating plainly: a *decision* needs a
 store both processes see. Without Mongo the relay and the gateway hold
-separate memories, so every gated call waits out its hold and expires — by
-design, loudly (error-level log naming the server, expired audit row). The
-cross-restart record is the convenience; the cross-process record is the
-requirement. A restart expires pending rows (nothing will ever decide them)
-and deletes expired ones.
+separate memories, so a parked hold could never be decided: the relay denies
+gated calls immediately (relay_unavailable, error-level log naming the
+server, denied audit row) instead of burning the full hold. Same verdict as
+expiry, minutes earlier. The cross-restart record is the convenience; the
+cross-process record is the requirement. A restart expires pending rows
+(nothing will ever decide them) and deletes expired ones.
 
 Expiry is visible immediately even though TTL deletion lags: both list paths
 filter `expiresAt > now`, matching the atomic decide boundary, so a row that

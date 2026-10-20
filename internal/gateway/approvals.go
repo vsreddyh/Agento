@@ -186,7 +186,7 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 		// but the 90-day audit row should still say which device decided. A
 		// hash of IP + User-Agent distinguishes devices without storing
 		// either verbatim in the log.
-		s.cfg.Logf("approvals: %s %s decided by client %x", action, id, requestIdentity(r))
+		s.cfg.Logf("approvals: %s %s decided by client %s", action, id, requestIdentity(r))
 		a, err := s.approvals.DecideApproval(ctx, id, action == "approve", "app", time.Now())
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {

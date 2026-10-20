@@ -115,10 +115,14 @@ internal fun parseApprovalList(body: String): ApprovalList {
         runCatching { Log.w("ApprovalsApi", "unparseable approvals body: ${body.take(120)}") }
         return ApprovalList()
     }
+    // Degraded first: a missing array must not drop the flag — the sheet
+    // shows "unavailable" rather than a clean empty that reads as "none".
+    // Key presence, not string content: the wire may evolve to boolean.
+    val degraded = root.has("degraded") && !root.isNull("degraded")
     val arr = root.optJSONArray("approvals")
     if (arr == null) {
         runCatching { Log.w("ApprovalsApi", "approvals body has no array: ${body.take(120)}") }
-        return ApprovalList()
+        return ApprovalList(degraded = degraded)
     }
     var dropped = 0
     for (i in 0 until arr.length()) {
@@ -133,7 +137,7 @@ internal fun parseApprovalList(body: String): ApprovalList {
     if (dropped > 0) {
         runCatching { Log.w("ApprovalsApi", "dropped $dropped id-less approval row(s)") }
     }
-    return ApprovalList(out, root.optString("degraded", "").isNotBlank())
+    return ApprovalList(out, degraded)
 }
 
 class ApprovalsApi(context: Context) {

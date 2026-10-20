@@ -359,8 +359,9 @@ func NewID() string { return primitive.NewObjectID().Hex() }
 //
 // Shared reports whether this store is visible to other processes. Only a
 // shared (Mongo) store lets a relay-held call be decided from the gateway:
-// two memory fallbacks in two processes can never meet, so without Mongo
-// every gated call waits out its hold and expires by design.
+// two memory fallbacks in two processes can never meet, so without Mongo the
+// relay denies gated calls immediately (relay_unavailable) instead of parking
+// a hold no decision could ever release.
 type Store interface {
 	Shared() bool
 	CreateApproval(ctx context.Context, a Approval) error

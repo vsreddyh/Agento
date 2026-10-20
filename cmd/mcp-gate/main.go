@@ -422,6 +422,27 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			}
 			continue
 		}
+		// Checked under the same lock as closing: no Add has happened, so
+		// no Wait can be in flight, and a deny here parks nothing.
+		if !r.store.Shared() {
+			r.auditMu.Unlock()
+			// No shared store means no decision can ever arrive: the
+			// gateway holds a different in-process store (or none), so a
+			// parked hold would burn the full wait and fail closed with
+			// nothing to show for it. Deny now with the reason attached —
+			// same verdict, minutes earlier, and audited as its own cause.
+			// Sync audit like the closing path above: the row must exist
+			// before Pi reads the error that cites it.
+			r.log.Printf("denying %s/%s: approval store is not shared; failing closed", r.server, params.Name)
+			r.audit(params.Name, approvals.Redact(params.Arguments),
+				approvals.DispositionDenied,
+				"relay_unavailable: approval store is not shared across processes; failed closed", "")
+			if werr := r.writePi(rpcError(env.ID, -32000,
+				"approvals unavailable: relay has no shared store; failed closed")); werr != nil {
+				r.log.Printf("write to Pi failed: %v", werr)
+			}
+			continue
+		}
 		r.holdWG.Add(1)
 		r.auditMu.Unlock()
 		go func() {
