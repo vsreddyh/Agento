@@ -58,7 +58,15 @@ internal fun TeachDialog(
     var promoteName by remember(skill.id) { mutableStateOf("") }
     var deleteArmed by remember(skill.id) { mutableStateOf(false) }
     LaunchedEffect(editSaves) {
-        if (editSaves > 0) editing = false
+        // A save retires the whole edit state: the fields reset to the
+        // reloaded row (server-normalized), not the pre-save typing, so a
+        // reopened editor never shows stale text.
+        if (editSaves > 0) {
+            editing = false
+            name = skill.name
+            description = skill.description
+            body = skill.body
+        }
     }
     AlertDialog(
         onDismissRequest = onClose,

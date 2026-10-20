@@ -402,33 +402,36 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                         val n = newName.trim()
                                         val d = newDescription.trim()
                                         val b = newBody.trim()
-                                        managingBusy = true
+                                        composerBusy = true
                                         composerError = ""
                                         scope.launch {
                                             try {
                                                 val path = chatApi.pathFor(profile)
-                                                teachApi.createDraft(path, n, d, b).getOrThrow()
+                                                val (_, clipped) = teachApi.createDraft(path, n, d, b, source = "skills-screen").getOrThrow()
                                                 ensureActive()
                                                 newName = ""
                                                 newDescription = ""
                                                 newBody = ""
                                                 composing = false
+                                                if (clipped) {
+                                                    composerError = "Saved, but the text clipped at the length cap."
+                                                }
                                                 loadTaught(path)
                                             } catch (e: Exception) {
                                                 ensureActive()
                                                 composerError = e.message?.take(120) ?: "failed"
                                             } finally {
-                                                managingBusy = false
+                                                composerBusy = false
                                             }
                                         }
                                     },
                                     // All three: the server requires name,
                                     // description and body, so enabling on a
                                     // subset would only earn a 400.
-                                    enabled = !managingBusy && newName.trim().isNotBlank() &&
+                                    enabled = !composerBusy && newName.trim().isNotBlank() &&
                                         newDescription.trim().isNotBlank() && newBody.trim().isNotBlank(),
                                 ) {
-                                    Text(if (managingBusy) "Saving…" else "Save draft")
+                                    Text(if (composerBusy) "Saving…" else "Save draft")
                                 }
                             }
                         }

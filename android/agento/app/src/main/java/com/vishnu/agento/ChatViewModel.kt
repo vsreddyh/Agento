@@ -515,7 +515,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
-            val result = teachApi.createDraft(path, name.trim(), description.trim(), body)
+            // Source links the draft to its thread: the review surface
+            // shows where the procedure came from.
+            val result = teachApi.createDraft(path, name.trim(), description.trim(), body, source = "thread:$id")
             withContext(Dispatchers.Main) {
                 // Always answered, even across a profile switch: the dialog
                 // spins on this callback, and a stuck "Saving…" is worse
