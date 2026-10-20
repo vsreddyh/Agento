@@ -63,9 +63,16 @@ func TestPolicyGatesMoneyAndDeletes(t *testing.T) {
 }
 
 // TestPolicyTableIsComplete pins the fail-closed contract: every tool the
-// six servers publish must have an explicit rule. A server that gains a tool
-// without a table entry fails this test — which is the point, forcing the
-// author to classify it as free or gated instead of silently allowing it.
+// servers publish must have an explicit rule. The `known` map is hand-written
+// on purpose — there is no shared registry the server binaries export, and
+// generating it would mean refactoring every main for a test.
+//
+// That makes the maintenance rule part of the contract: a PR that adds or
+// renames a tool updates `known` HERE in the same change, exactly as it
+// updates gatedTools. Without both, the test only checks the two hardcoded
+// copies against each other. Runtime stays safe regardless (an unknown tool on
+// a known server holds), so forgetting yields a test that under-reports, never
+// an ungated write.
 func TestPolicyTableIsComplete(t *testing.T) {
 	known := map[string][]string{
 		"miser-money": {"create_account", "list_accounts", "archive_account",

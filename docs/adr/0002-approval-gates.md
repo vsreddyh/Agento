@@ -26,11 +26,18 @@ JSON-RPC both ways:
   waits up to 14 minutes for a decision, then forwards on approve or answers
   Pi with a tool error on deny/expiry — the turn continues, nothing is
   killed;
-- every call is audit-logged, allowed or not, with redacted arguments.
+- every `tools/call` is audit-logged, allowed or not, with redacted arguments.
+  The guarantee is scoped to tool calls, not every frame: `initialize`,
+  `tools/list` and other protocol traffic forward without a row, and JSON-RPC
+  batches (a top-level array) are out of contract — MCP removed batching and
+  Pi/the SDK do not send them, so they forward untouched, unpaired and
+  unaudited rather than being half-parsed.
 
 A held call blocks only itself; other traffic keeps flowing. Everything fails
 closed: store outage, timeout, unknown tool, unknown server — all resolve to
-"not executed".
+"not executed". A framing fault (an oversized line) is dropped and logged, not
+treated as a dead connection: the reader drains to the next boundary and the
+pair keeps serving.
 
 An MCP proxy was chosen over the alternatives because there is nowhere else
 to stand: Pi cannot pause a turn for approval, and the gateway only sees

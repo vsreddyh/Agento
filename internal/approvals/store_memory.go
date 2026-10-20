@@ -195,7 +195,7 @@ func (m *MemoryStore) ListAudit(_ context.Context, f AuditFilter) ([]AuditEntry,
 		if f.Tool != "" && e.Tool != f.Tool {
 			continue
 		}
-		out = append(out, e)
+		out = append(out, e.Clone())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].At > out[j].At })
 	if len(out) > limit {

@@ -286,6 +286,19 @@ func (a Approval) Clone() Approval {
 	return a
 }
 
+// Clone returns a top-level copy of the audit row: Args is a fresh map, but
+// nested values are shared for the same reason as Approval.Clone.
+func (e AuditEntry) Clone() AuditEntry {
+	if e.Args != nil {
+		args := make(map[string]any, len(e.Args))
+		for k, v := range e.Args {
+			args[k] = v
+		}
+		e.Args = args
+	}
+	return e
+}
+
 // NewID returns a hex ObjectID: the Mongo _id and the id the app decides on.
 func NewID() string { return primitive.NewObjectID().Hex() }
 

@@ -216,7 +216,7 @@ func (r *relay) run(
 	// expected consequence of stop() and is not logged.
 	select {
 	case second := <-done:
-		if second != nil && second.Error() != "server process exited" {
+		if second != nil && !errors.Is(second, errServerExited) {
 			r.log.Printf("relay: other direction ended: %v", second)
 		}
 	default:
@@ -236,6 +236,12 @@ func (r *relay) holdCtxOrBackground() context.Context {
 }
 
 // pumpPiToChild forwards Pi traffic, holding gated calls.
+//
+// The audit contract is per tools/call, not per frame: initialize, tools/list
+// and any non-call traffic forward untouched without a row. JSON-RPC batches
+// (a top-level array) are outside the contract — MCP removed them, and Pi/the
+// SDK do not send them — so they forward untouched too, which also means an
+// allowed call inside a batch is not paired with its response.
 func (r *relay) pumpPiToChild(piIn io.Reader) error {
 	rd := bufio.NewReader(piIn)
 	for {
@@ -446,7 +452,7 @@ func (r *relay) pumpChildToPi(childOut io.Reader) error {
 		line, err := readLine(rd)
 		if err != nil {
 			if err == io.EOF {
-				return fmt.Errorf("server process exited")
+				return errServerExited
 			}
 			if errors.Is(err, errFrameTooLarge) {
 				r.log.Printf("dropping oversized frame from server")
@@ -614,10 +620,16 @@ type prefixWriter struct {
 }
 
 func (p *prefixWriter) Write(b []byte) (int, error) {
-	if _, err := p.w.Write(append([]byte(p.prefix), b...)); err != nil {
+	n, err := p.w.Write(append([]byte(p.prefix), b...))
+	if err != nil {
 		return 0, err
 	}
-	return len(b), nil
+	// Report only the caller's bytes: the prefix was not part of b. A short
+	// write under the prefix means none of b was written, never part of it.
+	if n <= len(p.prefix) {
+		return 0, nil
+	}
+	return n - len(p.prefix), nil
 }
 
 // writeFrame writes one newline-terminated frame with a single Write. Two
@@ -634,7 +646,13 @@ func writeFrame(w io.Writer, line []byte) error {
 
 // readLine reads one LF-terminated frame, bounded. The trailing newline is
 // stripped; the returned bytes never include it.
-var errFrameTooLarge = errors.New("frame exceeds the size cap")
+var (
+	errFrameTooLarge = errors.New("frame exceeds the size cap")
+	// errServerExited is returned when the child closes stdout. It is the
+	// expected consequence of teardown, so the second-pump log filters it by
+	// sentinel rather than by matching text a rename could invalidate.
+	errServerExited = errors.New("server process exited")
+)
 
 func readLine(rd *bufio.Reader) ([]byte, error) {
 	var out []byte
