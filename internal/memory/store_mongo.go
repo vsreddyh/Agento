@@ -48,6 +48,9 @@ func FromEnv() (*MongoStore, error) {
 
 // EnsureIndexes creates the profile listing index and the settings lookup.
 // Memory has no TTL: an item lives until it is deleted or forgotten.
+// The compound serves the List sort; topic/status filters scan the profile's
+// rows, which is fine at ListCap=200 — if the cap ever grows, extend this
+// index before the per-turn/per-load reads.
 func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 	_, err := s.items.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
 		Keys: bson.D{

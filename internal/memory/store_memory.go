@@ -19,7 +19,9 @@ import (
 // The gateway still serves the routes and injects what it has, which keeps a
 // development stack usable without pretending it is durable.
 type MemoryStore struct {
-	mu     sync.Mutex
+	// RWMutex: List/Get/PausedTopics are the read-heavy paths (every turn,
+	// every screen load) and take the read lock; writes take it exclusive.
+	mu     sync.RWMutex
 	items  map[string]Item
 	paused map[string]map[string]bool
 }
@@ -69,8 +71,8 @@ func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
 
 // Get returns one item. Profile-scoped: a foreign id is NotFound.
 func (s *MemoryStore) Get(_ context.Context, id, profile string) (Item, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	it, ok := s.items[id]
 	if !ok || it.Profile != profile {
 		return Item{}, &StoreError{Msg: "unknown memory " + id, NotFound: true}
@@ -146,8 +148,8 @@ func (s *MemoryStore) DeleteAll(_ context.Context, profile string) (int64, error
 // stable on purpose: an edit bumps UpdatedAt but does not re-float the item,
 // so the screen and the prompt see the same standing order.
 func (s *MemoryStore) List(_ context.Context, f Filter) ([]Item, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	limit := f.Limit
 	if limit <= 0 || limit > ListCap {
 		limit = ListCap
@@ -201,8 +203,8 @@ func (s *MemoryStore) SetTopicPaused(_ context.Context, profile, topic string, p
 // PausedTopics returns the paused topics for a profile. Never nil: the app
 // screen reads paused as a list, and null is not a list.
 func (s *MemoryStore) PausedTopics(_ context.Context, profile string) ([]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := []string{}
 	for t := range s.paused[profile] {
 		out = append(out, t)

@@ -103,7 +103,7 @@ func main() {
 			"Call this when they correct you or state a lasting preference, not for passing context or anything they have not said. Do not save secrets, credentials or one-off details."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in saveMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			if !memory.UsableTopic(in.Topic) {
-				return result(map[string]any{"ok": false, "error": "topic must contain a letter or digit"})
+				return result(map[string]any{"ok": false, "error": memory.TopicError(in.Topic)})
 			}
 			trimmed := strings.TrimSpace(in.Text)
 			text := memory.CleanText(in.Text)
@@ -170,7 +170,10 @@ func main() {
 			if items == nil {
 				items = []memory.Item{}
 			}
-			return result(map[string]any{"ok": true, "count": len(items), "items": items})
+			// Same ephemeral signal as save_memory: on fallback these rows
+			// live in this process only, and reading them back must not
+			// pass for durable memory.
+			return result(map[string]any{"ok": true, "count": len(items), "items": items, "persistent": !ephemeral})
 		})
 
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

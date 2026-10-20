@@ -165,6 +165,12 @@ func NormalizeTopic(topic string) string {
 // re-categorise the item; a topic that already spells general passes. All
 // three writers (POST, PUT, save_memory) enforce this so no path is lenient
 // where the others are strict.
+//
+// Deliberately a writer contract, not a store invariant: text blankness is
+// rejected in the stores because an empty item is meaningless everywhere,
+// while a normalised topic is still a real topic ("---" stores as general and
+// reads back fine). The writers reject the silent re-categorisation; the
+// stores and SetTopicPaused keep normalising.
 func UsableTopic(raw string) bool {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -172,6 +178,17 @@ func UsableTopic(raw string) bool {
 	}
 	return NormalizeTopic(raw) != DefaultTopic ||
 		strings.EqualFold(trimmed, DefaultTopic)
+}
+
+// TopicError tells the caller what is actually wrong: an empty or
+// punctuation-only topic has nothing usable in it, while "--general--" does
+// have letters but would still be stored as DefaultTopic. Shared by the
+// gateway and the MCP server so both writers misdescribe nothing.
+func TopicError(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return "topic must contain a letter or digit"
+	}
+	return "topic is not usable (it would be stored as \"" + DefaultTopic + "\")"
 }
 
 // CleanText trims an item's text and bounds it by runes. Empty text is

@@ -124,7 +124,7 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request, rest, prof
 		// the same UsableTopic rule as item writes.
 		if !memory.UsableTopic(topic) {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "topic",
-				memoryTopicError(topic))
+				memory.TopicError(topic))
 			return
 		}
 		ctx, cancel := memoryCtx(r)
@@ -188,6 +188,10 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 			}
 			f.Status = st
 		}
+		// Filters forgive where writes reject: ?topic=--- reads as general
+		// with 200, while POST/PUT 400 the same shape. A filter names what
+		// to show, so normalising is harmless; a write names where to store,
+		// so silence would re-categorise.
 		if raw := strings.TrimSpace(r.URL.Query().Get("topic")); raw != "" {
 			f.Topic = memory.NormalizeTopic(raw)
 		}
@@ -262,7 +266,7 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 		}
 		if !memory.UsableTopic(body.Topic) {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "topic",
-				memoryTopicError(body.Topic))
+				memory.TopicError(body.Topic))
 			return
 		}
 		trimmed := strings.TrimSpace(body.Text)
@@ -320,7 +324,7 @@ func (s *Server) handleMemoryUpdate(w http.ResponseWriter, r *http.Request, prof
 	if body.Topic != nil {
 		if !memory.UsableTopic(*body.Topic) {
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "topic",
-				memoryTopicError(*body.Topic))
+				memory.TopicError(*body.Topic))
 			return
 		}
 		upd.Topic = body.Topic
@@ -392,16 +396,6 @@ func memoryFilter(all []memory.Item, f memory.Filter) []memory.Item {
 		}
 	}
 	return out
-}
-
-// memoryTopicError tells the caller what is actually wrong: an empty or
-// punctuation-only topic has nothing usable in it, while "--general--" does
-// have letters but would still be stored as "general".
-func memoryTopicError(raw string) string {
-	if strings.TrimSpace(raw) == "" {
-		return "topic must contain a letter or digit"
-	}
-	return "topic is not usable (it would be stored as \"" + memory.DefaultTopic + "\")"
 }
 
 // memoryTopics unions item topics with paused ones, sorted by first seen.
