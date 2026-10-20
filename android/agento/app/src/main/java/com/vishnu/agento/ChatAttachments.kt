@@ -360,7 +360,10 @@ fun base64Bytes(base64: String): Long {
     return (content / 4L) * 3L - padding
 }
 
-/** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal, never blank.
+/** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal at KB
+ * and above, plain count below 1000 B (never blank) (#339): the old doc
+ * line ("one decimal") overpromised the sub-KB branch, which renders no
+ * decimal by design.
  * Pinned to US formatting (#339): user-visible strings must not render
  * `1,1 MB` under a comma-decimal locale. Never renders `1000 <unit>`
  * (#339): the KB branch stops below 999_500 so rounding carries into MB

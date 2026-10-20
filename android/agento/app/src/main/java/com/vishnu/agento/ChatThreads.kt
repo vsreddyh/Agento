@@ -149,10 +149,12 @@ object ChatThreads {
         // Call-site audit for the IO-and-scan cost below (#339): the scans
         // (whitespace strip + alphabet validation over photo payloads) must
         // never run on Main. VM init + openThread merge call inside
-        // Dispatchers.IO; Settings export the same; TaskInstructReceiver
-        // calls on the broadcast thread where file IO already happens (its
-        // threads carry no attachments — receiver-built — so the scan is a
-        // no-op there). A future Main-thread caller must hop to IO first.
+        // Dispatchers.IO; Settings export the same; Settings backup import
+        // runs inside withContext(IO) (canonicalizeFile rides along there);
+        // TaskInstructReceiver calls on the broadcast thread where file IO
+        // already happens (its threads carry no attachments — receiver-built
+        // — so the scan is a no-op there). A future Main-thread caller must
+        // hop to IO first.
         return runCatching {
             threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText())
                 .filter { it.id.isNotEmpty() }

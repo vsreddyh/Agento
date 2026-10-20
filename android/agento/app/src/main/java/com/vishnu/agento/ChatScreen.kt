@@ -287,6 +287,14 @@ internal fun ChatTab(
     // redelivers to the recreated activity). A stale owner after death can
     // only mismatch, and mismatch drops with notice — never mis-stages.
     var cameraThread by rememberSaveable { mutableStateOf<String?>(null) }
+    // Owning thread of the outstanding gallery pick (#339): same hole as
+    // camera — open the picker, switch thread while it is open, pick, and
+    // result-time homing stages silently into the new composer while the
+    // camera path drops with notice. Snapshot at tap time like the camera
+    // owner above, for the same reason. Plain remember is right: unlike
+    // the camera file there is nothing to sweep-keep — a lost owner only
+    // falls back to current-at-result, the pre-fix behavior.
+    var galleryThread by remember { mutableStateOf<String?>(null) }
     // Thread-scoped transient UI, same as the editor/menu state inside
     // ChatScreen (#339). Split across parent/child by render site (the
     // dialog renders here, the editor/menu render there) — both fire on
@@ -394,10 +402,12 @@ internal fun ChatTab(
         // Best-effort cleanup off-main (#339): exists()/delete() are disk
         // IO, and these early returns run on Main picker/camera callbacks.
         // Fire-and-forget is safe — deletes never gate anything below.
+        // NonCancellable like the batch finally: a tab-leave racing the
+        // return must not cancel the cleanup it just scheduled.
         // Declared first: every return below calls it.
         fun deleteQuietly(f: File?) {
             if (f == null) return
-            scope.launch(Dispatchers.IO) {
+            scope.launch(Dispatchers.IO + NonCancellable) {
                 runCatching { f.takeIf { it.exists() }?.delete() }
             }
         }
@@ -556,7 +566,10 @@ internal fun ChatTab(
     }
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
-    ) { uris -> processUris(uris) }
+    ) { uris ->
+        processUris(uris, homeThread = galleryThread ?: vm.threadIdNow())
+        galleryThread = null
+    }
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture(),
     ) { ok ->
@@ -589,8 +602,8 @@ internal fun ChatTab(
             }, cameraThread ?: vm.threadIdNow())
             cameraThread = null
         } else {
-            // Off-main cleanup like every other delete (#339).
-            scope.launch(Dispatchers.IO) {
+            // Same fire-and-forget cleanup (NonCancellable inside).
+            scope.launch(Dispatchers.IO + NonCancellable) {
                 runCatching { f?.takeIf { it.exists() }?.delete() }
             }
             cameraPath = null
@@ -683,7 +696,7 @@ internal fun ChatTab(
                 }.onFailure {
                     cameraPendingSince = 0L
                     cameraPath = null
-                    scope.launch(Dispatchers.IO) {
+                    scope.launch(Dispatchers.IO + NonCancellable) {
                         runCatching { file.takeIf { it.exists() }?.delete() }
                     }
                     vm.notify("Couldn't start the camera.")
@@ -694,6 +707,10 @@ internal fun ChatTab(
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
+        // Request settled — the launch gate below re-arms whether this was
+        // grant, denial, or permanent denial (all three settle here; only
+        // the launch path re-arms after this).
+        cameraPendingSince = 0L
         if (granted) {
             launchCamera()
         } else if (context.findActivity()?.let {
@@ -734,6 +751,13 @@ internal fun ChatTab(
         ) {
             launchCamera()
         } else {
+            // Permission request armed like the launch gate (#339): rapid
+            // double-tap on a fresh install would otherwise fire two
+            // permission requests (OEM-dependent second-request behavior).
+            // Cleared on settle below; a rotation between request and
+            // result keeps it via saveable, and the stale bound covers
+            // death — same lifecycle as the launch gate.
+            cameraPendingSince = SystemClock.elapsedRealtime()
             cameraPermission.launch(Manifest.permission.CAMERA)
         }
     }
@@ -782,7 +806,12 @@ internal fun ChatTab(
         onNew = vm::newConversation, onRetry = vm::retry,
         onRegenerate = vm::regenerate, onContinue = vm::continueTurn,
         onReplace = vm::replaceAndResend, onFork = vm::forkAndResend,
-        onPickPhotos = { galleryLauncher.launch("image/*") },
+        onPickPhotos = {
+            // Home snapshot at tap time (#339): the callback runs
+            // post-switch, so this — not current-at-result — owns the batch.
+            galleryThread = state.threadId
+            galleryLauncher.launch("image/*")
+        },
         onTakePhoto = ::requestCamera,
         onRemovePhoto = vm::removePendingAttachment,
         onLiveStagedPhotos = {
