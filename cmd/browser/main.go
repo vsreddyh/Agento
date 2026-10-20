@@ -123,12 +123,16 @@ func checkURL(raw string) (*url.URL, error) {
 	if err != nil || len(ips) == 0 {
 		return nil, fmt.Errorf("cannot resolve %q", host)
 	}
+	// Any-may-pass, like the proxy's dial: a multi-record host with one
+	// stale/parked A record still browses via its public addresses (the
+	// dial checks each connection afresh). Rejecting on any-bad would
+	// refuse CDNs for one dead record while the proxy could serve them.
 	for _, ip := range ips {
-		if !publicIP(ip) {
-			return nil, fmt.Errorf("non-public address is not allowed (%s resolves there)", host)
+		if publicIP(ip) {
+			return u, nil
 		}
 	}
-	return u, nil
+	return nil, fmt.Errorf("no public address for %q", host)
 }
 
 // denyCIDRs is the explicit no-browse list. Method checks (IsPrivate and
@@ -325,15 +329,30 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 		s.mu.Unlock()
 		<-ch
 		s.mu.Lock()
+		if s.started {
+			defer s.mu.Unlock()
+			return s.browser, nil
+		}
+		// The first launch failed: retry once under this caller's lock
+		// acquisition instead of wasting the approved turn on a failure
+		// the next tool call would recover from anyway. launchErr carries
+		// the cause if the retry fails too.
+		s.starting = true
+		s.ready = make(chan struct{})
+		dir := s.dir
+		s.mu.Unlock()
+		bctx2, btabCancel2, balloc2, bcancel2, bln2, berr2 := launchBrowser(dir, chrome)
+		s.mu.Lock()
 		defer s.mu.Unlock()
-		if !s.started {
-			// The real error, not a generic concurrent-launch failure:
-			// the waiter retries or reports the same cause.
+		close(s.ready)
+		s.starting = false
+		if berr2 != nil {
 			if s.launchErr != nil {
 				return nil, s.launchErr
 			}
-			return nil, fmt.Errorf("concurrent browser launch failed")
+			return nil, berr2
 		}
+		s.publish(bctx2, btabCancel2, balloc2, bcancel2, bln2)
 		return s.browser, nil
 	}
 	s.starting = true
@@ -351,14 +370,21 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 		s.launchErr = berr
 		return nil, berr
 	}
+	s.publish(bctx, btabCancel, balloc, bcancel, bln)
+	return s.browser, nil
+}
+
+// publish installs a launched browser under the session lock: contexts,
+// listener, cleared error and the resumed shot counter travel together, so
+// the first-launch and retry paths cannot diverge again.
+func (s *session) publish(bctx context.Context, btabCancel context.CancelFunc, balloc context.Context, bcancel context.CancelFunc, bln net.Listener) {
 	// Cleared on success: a stale launch error must not outlive the retry
 	// that fixed it for the next reader to trip over.
 	s.launchErr = nil
 	s.alloc, s.cancel, s.browserCancel, s.browser, s.started = balloc, bcancel, btabCancel, bctx, true
 	s.proxyLn = bln
 	// Resume the shot counter past restarts so a new process never
-	// overwrites the previous run's shot-001.png. Under the session lock
-	// with everything else published above.
+	// overwrites the previous run's shot-001.png.
 	entries, _ := os.ReadDir(s.dir)
 	for _, e := range entries {
 		var n int
@@ -366,7 +392,6 @@ func (s *session) ensure(chrome string) (context.Context, error) {
 			s.shots = n
 		}
 	}
-	return s.browser, nil
 }
 
 // launchBrowser starts Chromium outside any session lock: a slow launch must
@@ -555,7 +580,7 @@ func main() {
 			}
 			text, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx,
-					chromedp.Evaluate[string](`document.body ? document.body.innerText : ""`))
+					chromedp.Evaluate[string](`(() => { const t = document.body ? document.body.innerText : ""; return t.length > 100000 ? t.slice(0, 100000) : t; })()`))
 			})
 			if err != nil {
 				return fail(fmt.Errorf("read failed: %v", err))
@@ -639,7 +664,7 @@ func main() {
 			}
 			text, err := runStep(bctx, readTimeout, func(ctx context.Context) (string, error) {
 				return chromedp.Run(ctx,
-					chromedp.Evaluate[string](`document.body ? document.body.innerText : ""`))
+					chromedp.Evaluate[string](`(() => { const t = document.body ? document.body.innerText : ""; return t.length > 100000 ? t.slice(0, 100000) : t; })()`))
 			})
 			if err != nil {
 				return fail(fmt.Errorf("evidence capture failed: %v", err))
