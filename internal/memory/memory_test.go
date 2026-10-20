@@ -161,6 +161,25 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	if _, err := s.Create(ctx, Item{Profile: "p", Text: "   "}); err == nil {
 		t.Fatal("empty-text create should fail")
 	}
+	// NUL bytes are rejected in topics and stripped from text: every writer
+	// inherits it from UsableTopic/CleanText.
+	if UsableTopic("a\x00b") {
+		t.Fatal("NUL topic usable")
+	}
+	if got := CleanText("a\x00b"); got != "ab" {
+		t.Fatalf("NUL text = %q, want stripped", got)
+	}
+	// A future CreatedAt clamps to now instead of pinning the row on top.
+	future, err := s.Create(ctx, Item{Profile: "p", Text: "clock", Status: StatusConfirmed, CreatedAt: 9999999999999})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if future.CreatedAt > future.UpdatedAt {
+		t.Fatalf("future CreatedAt kept: %+v", future)
+	}
+	if err := s.Delete(ctx, future.ID, "p"); err != nil {
+		t.Fatal(err)
+	}
 	// A caller-supplied ID that already exists is rejected, not overwritten
 	// (Mongo fails the same insert on duplicate key).
 	if _, err := s.Create(ctx, Item{ID: a.ID, Profile: "p", Text: "hijack"}); err == nil {

@@ -40,6 +40,54 @@ func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
 	return nil, map[string]any{"ok": false, "error": err.Error()}, nil
 }
 
+// prepareSave validates one save_memory call into a store-ready item plus
+// the truncation signal, or a caller-facing error. Pure, so the MCP writer's
+// mapping stays pinned by tests the way the HTTP contract is — the two
+// surfaces have drifted twice before.
+func prepareSave(profile string, in saveMemoryInput) (memory.Item, bool, string) {
+	if !memory.UsableTopic(in.Topic) {
+		return memory.Item{}, false, memory.TopicError(in.Topic)
+	}
+	trimmed := strings.TrimSpace(in.Text)
+	text := memory.CleanText(in.Text)
+	if text == "" {
+		return memory.Item{}, false, "text is required: one durable thing the user said"
+	}
+	// CleanText clips at MaxText runes rather than rejecting: the caller gets
+	// the signal so it can rephrase instead of believing a clipped fact
+	// stored whole.
+	return memory.Item{
+		Profile: profile,
+		Topic:   memory.NormalizeTopic(in.Topic),
+		Text:    text,
+		Source:  memory.SourceAgent,
+		Status:  memory.StatusPending,
+	}, text != trimmed, ""
+}
+
+// prepareList maps one list_memory call into a store filter or a
+// caller-facing error. Same contracts as GET: filters forgive where writes
+// reject, statuses are exact lowercase, negative limits fail, and 0 means a
+// small agent working set while the screen lists up to ListCap.
+func prepareList(profile string, in listMemoryInput) (memory.Filter, string) {
+	f := memory.Filter{Profile: profile, Topic: in.Topic}
+	if st := strings.TrimSpace(in.Status); st != "" {
+		status := memory.Status(st)
+		if !status.Valid() {
+			return memory.Filter{}, fmt.Sprintf("unknown status %q: use confirmed or pending", st)
+		}
+		f.Status = status
+	}
+	if in.Limit < 0 {
+		return memory.Filter{}, "limit must be a non-negative number"
+	}
+	f.Limit = in.Limit
+	if f.Limit == 0 {
+		f.Limit = 50
+	}
+	return f, ""
+}
+
 func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 	b, _ := json.Marshal(out)
 	return &mcp.CallToolResult{
@@ -105,25 +153,11 @@ func main() {
 			"\"wants weekly reports as a table\", not \"likes tables\"). The item is saved as PENDING and shown in the app; the user confirms it before it affects answers. " +
 			"Call this when they correct you or state a lasting preference, not for passing context or anything they have not said. Do not save secrets, credentials or one-off details."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in saveMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
-			if !memory.UsableTopic(in.Topic) {
-				return result(map[string]any{"ok": false, "error": memory.TopicError(in.Topic)})
+			item, truncated, errMsg := prepareSave(profile, in)
+			if errMsg != "" {
+				return result(map[string]any{"ok": false, "error": errMsg})
 			}
-			trimmed := strings.TrimSpace(in.Text)
-			text := memory.CleanText(in.Text)
-			if text == "" {
-				return result(map[string]any{"ok": false, "error": "text is required: one durable thing the user said"})
-			}
-			// CleanText clips at MaxText runes rather than rejecting: say so,
-			// so the agent can rephrase instead of believing a clipped fact
-			// stored whole.
-			truncated := text != trimmed
-			it, err := store.Create(ctx, memory.Item{
-				Profile: profile,
-				Topic:   memory.NormalizeTopic(in.Topic),
-				Text:    text,
-				Source:  memory.SourceAgent,
-				Status:  memory.StatusPending,
-			})
+			it, err := store.Create(ctx, item)
 			if err != nil {
 				return fail(err)
 			}
@@ -146,30 +180,9 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "list_memory",
 		Description: "List what is remembered for this profile, newest first, optionally filtered by topic and/or status. Use it when the user asks what you remember, or before saving something that may already be recorded. Items include status: only confirmed items are applied to answers."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
-			// Filters forgive where writes reject (same rule as GET): a
-			// filter names what to show, so normalising "---" to general
-			// is harmless, while a write names where to store.
-			f := memory.Filter{Profile: profile, Topic: in.Topic}
-			// Exact lowercase like the HTTP contract: topics normalise,
-			// enums do not.
-			if st := strings.TrimSpace(in.Status); st != "" {
-				status := memory.Status(st)
-				if !status.Valid() {
-					return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown status %q: use confirmed or pending", st)})
-				}
-				f.Status = status
-			}
-			// Negative is a caller error, not the store cap: the HTTP
-			// contract 400s it, and the MCP surface must not silently mean
-			// 200.
-			if in.Limit < 0 {
-				return result(map[string]any{"ok": false, "error": "limit must be a non-negative number"})
-			}
-			f.Limit = in.Limit
-			if f.Limit == 0 {
-				// Small on purpose: the agent gets a working set, while the
-				// screen lists up to ListCap for its topic list.
-				f.Limit = 50
+			f, errMsg := prepareList(profile, in)
+			if errMsg != "" {
+				return result(map[string]any{"ok": false, "error": errMsg})
 			}
 			items, err := store.List(ctx, f)
 			if err != nil {

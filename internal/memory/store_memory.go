@@ -71,7 +71,9 @@ func (s *MemoryStore) Create(_ context.Context, i Item) (Item, error) {
 		return Item{}, NewStoreError("memory id already exists", false)
 	}
 	now := time.Now().UnixMilli()
-	if i.CreatedAt == 0 {
+	// A future timestamp pins the row atop every newest-first list forever;
+	// the callers never set CreatedAt, so clamp rather than trust it.
+	if i.CreatedAt == 0 || i.CreatedAt > now {
 		i.CreatedAt = now
 	}
 	i.UpdatedAt = now

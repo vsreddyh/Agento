@@ -181,6 +181,12 @@ func NormalizeTopic(topic string) string {
 // reads back fine). The writers reject the silent re-categorisation; the
 // stores and SetTopicPaused keep normalising.
 func UsableTopic(raw string) bool {
+	// NUL is rejected like the id and profile paths reject it: BSON values
+	// would hold it, but a NUL topic key or label is never what a writer
+	// meant, and every writer inherits this check.
+	if strings.ContainsRune(raw, 0) {
+		return false
+	}
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return false
@@ -211,7 +217,9 @@ func TopicError(raw string) string {
 // CleanText trims an item's text and bounds it by runes. Empty text is
 // rejected by the stores; this only normalises.
 func CleanText(text string) string {
-	t := strings.TrimSpace(text)
+	// NUL bytes are stripped, not rejected: this returns a string, and a
+	// pasted control byte should not fail an otherwise good save.
+	t := strings.ReplaceAll(strings.TrimSpace(text), "\x00", "")
 	if utf8.RuneCountInString(t) > MaxText {
 		// Re-trim: rune 1000 can be a space, and a clipped value must not
 		// keep a trailing one.

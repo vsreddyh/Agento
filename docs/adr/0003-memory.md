@@ -118,6 +118,10 @@ available.
   ranking.
 - Agent-side deletion. Deletion is the user's verb; a model that can forget on
   request can also forget on a misreading.
+- A durable marker for clipped text. All three writers return
+  `truncated:true` so the writer can rephrase, but the store keeps no original
+  length: a later reader sees the clipped text as if it were whole. The signal
+  is transient by design — the writer is the one who can act on it.
 - Deduplication or rate-limiting of agent proposals. `save_memory` never checks
   existing text, so a looping agent can fill the 200-item cap with duplicates.
   Pending items are cheap, visible, and confirmed one by one; a dedup heuristic

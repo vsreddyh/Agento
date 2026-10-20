@@ -91,7 +91,7 @@ func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
 		return Item{}, NewStoreError("memory is full for this profile: delete or forget items first", false)
 	}
 	now := time.Now().UnixMilli()
-	if i.CreatedAt == 0 {
+	if i.CreatedAt == 0 || i.CreatedAt > now {
 		i.CreatedAt = now
 	}
 	i.UpdatedAt = now
