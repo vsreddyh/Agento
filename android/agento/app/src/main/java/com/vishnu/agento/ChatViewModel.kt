@@ -990,8 +990,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
         _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path, queued = "")
+        // Stored canonical (#339): whitespace-only text with photos
+        // normalizes to "" (the wire already sends images-only for it, the
+        // bubble already renders thumbs-only) — invisible whitespace must
+        // not persist through every round-trip.
+        val stored = if (text.isEmpty()) "" else rawText
         val history = _state.value.messages +
-            ChatMessage("user", rawText, ChatThreads.now(), attachments = photos)
+            ChatMessage("user", stored, ChatThreads.now(), attachments = photos)
         _state.value = _state.value.copy(
             messages = history, pending = "", pendingAttachments = emptyList(),
             streaming = true, error = "",
@@ -2291,8 +2296,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (q.isEmpty() || _state.value.streaming) return
         // Not ready (connectivity flap): no future Done is coming to fire
         // this, so hand it back to the composer instead of stranding it.
+        // Concatenated when occupied (#339): displacing the live draft
+        // would drop typed text — the reverse of parkQueued's contract.
         if (!_state.value.ready) {
-            _state.value = _state.value.copy(queued = "", pending = q)
+            val live = _state.value.pending
+            _state.value = _state.value.copy(
+                queued = "",
+                pending = if (live.isBlank()) q else "${live.trimEnd()} ${q.trimStart()}",
+            )
             return
         }
         _state.value = _state.value.copy(queued = "")
@@ -2314,7 +2325,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 ToastKind.Info,
             )
         }
-        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+        // Composer text typed after queueing survives the flush (#339):
+        // clearing pending here would discard the new line with no park
+        // and no notice — the same silent loss stop()/New/delete already
+        // concatenate against. The fired turn carries only the queued
+        // text; the draft waits for the next send.
+        _state.value = _state.value.copy(messages = history, streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }
 

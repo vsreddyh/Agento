@@ -2033,14 +2033,17 @@ internal fun ChatScreen(
                                 // Rendered wired, removed by staged index
                                 // (#339): blanks (theoretical only) render
                                 // nothing, while remove still targets the
-                                // staged slot the ViewModel holds.
+                                // staged slot the ViewModel holds. Labeled
+                                // by WIRED position (#339): the staged index
+                                // would read "photo 3 of 2" once blanks stop
+                                // aligning the two orders.
                                 state.pendingAttachments.mapIndexedNotNull { i, a ->
                                     if (a.base64.isNotBlank()) i to a else null
-                                }.forEach { (i, a) ->
+                                }.forEachIndexed { w, (i, a) ->
                                     Box {
                                         AttachmentThumb(
                                             base64 = a.base64,
-                                            label = "Staged photo ${i + 1} of " +
+                                            label = "Staged photo ${w + 1} of " +
                                                 "${stagedWired.size}",
                                             modifier = Modifier.size(64.dp),
                                             slot = i,
@@ -2057,7 +2060,7 @@ internal fun ChatScreen(
                                         ) {
                                             Icon(
                                                 Icons.Filled.Close,
-                                                contentDescription = "Remove photo ${i + 1}",
+                                                contentDescription = "Remove photo ${w + 1}",
                                                 modifier = Modifier.size(16.dp),
                                             )
                                         }
