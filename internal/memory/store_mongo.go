@@ -103,6 +103,11 @@ func (s *MongoStore) Create(ctx context.Context, i Item) (Item, error) {
 		i.Source = SourceUser
 	}
 	if _, err := s.items.InsertOne(ctx, i); err != nil {
+		// A colliding caller-supplied ID is a caller bug, not an outage:
+		// the memory backend 400s the same input, so map it, not 502.
+		if mongoDrv.IsDuplicateKeyError(err) {
+			return Item{}, NewStoreError("memory id already exists", false)
+		}
 		return Item{}, NewStoreError("memory create failed: "+err.Error(), true)
 	}
 	return i, nil

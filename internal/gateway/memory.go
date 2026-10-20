@@ -215,7 +215,9 @@ func (s *Server) handleMemoryCollection(w http.ResponseWriter, r *http.Request, 
 		// sequential calls under one deadline can 502 the third after
 		// doing the first two. The full ListCap read is by choice, not
 		// accident: topics must stay complete under any filter, and at 200
-		// rows it is cheap. If the cap ever grows, bound this query first.
+		// rows it is cheap. It is also the whole profile, not a page: Create
+		// 400s past ListCap, so no row hides beyond this read. If the cap
+		// ever grows, bound this query first.
 		all, err := s.memory.List(ctx, memory.Filter{Profile: profile})
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {

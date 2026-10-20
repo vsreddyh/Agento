@@ -152,6 +152,10 @@ func NormalizeTopic(topic string) string {
 	if t == "" {
 		return DefaultTopic
 	}
+	// Clipped silently, unlike text: a label has no rephrasing to protect,
+	// and every response echoes the stored topic, so the writer sees what
+	// stuck. Text gets truncated:true because a clipped fact misleads; a
+	// clipped toggle does not.
 	if utf8.RuneCountInString(t) > MaxTopic {
 		t = string([]rune(t)[:MaxTopic])
 		t = strings.Trim(t, "-")

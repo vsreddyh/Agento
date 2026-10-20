@@ -87,6 +87,9 @@ func main() {
 	// container's pi-mcp-list gate and take all six servers down with it; an
 	// in-process store with a loud warning keeps the server connectable while
 	// saying plainly that saves here will not reach the app.
+	// Index ownership lives solely in pi-gateway (EnsureIndexes on startup):
+	// a hand-started server must not race it, and an unindexed query still
+	// answers, just slower, until the gateway runs once.
 	if ms, err := memory.FromEnv(); err != nil {
 		log.Printf("memory: no database, using in-process store (saves will not reach the app): %v", err)
 		store = memory.NewMemoryStore()
