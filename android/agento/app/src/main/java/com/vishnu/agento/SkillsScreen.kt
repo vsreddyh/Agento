@@ -426,10 +426,10 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                         composerBusy = true
                                         composerError = ""
                                         composerNotice = ""
+                                        val tapPath = chatApi.pathFor(profile)
                                         scope.launch {
                                             try {
-                                                val path = chatApi.pathFor(profile)
-                                                val (_, clipped) = teachApi.createDraft(path, n, d, b, source = "skills-screen").getOrThrow()
+                                                val (_, clipped) = teachApi.createDraft(tapPath, n, d, b, source = "skills-screen").getOrThrow()
                                                 ensureActive()
                                                 // Fields always clear: keeping them invites
                                                 // a second tap duplicating the draft.
@@ -449,7 +449,7 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                                 // Same guard as mutate: a failed save for
                                                 // the old profile must not surface on
                                                 // the new one.
-                                                if (path == chatApi.pathFor(profile)) {
+                                                if (tapPath == chatApi.pathFor(profile)) {
                                                     composerError = e.message?.take(120) ?: "failed"
                                                 }
                                             } finally {
