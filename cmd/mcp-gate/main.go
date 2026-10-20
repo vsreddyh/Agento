@@ -274,7 +274,10 @@ func (r *relay) holdCall(line []byte, env envelope, params callParams) {
 		Args:   redacted,
 		Status: approvals.StatusPending,
 	}
-	createCtx, cancelCreate := context.WithTimeout(context.Background(), storeTimeout)
+	// Derived from the hold scope, not Background: a create still in flight
+	// when the pair tears down must abort rather than insert a row after
+	// cancelHolds has run, where nothing would ever expire it.
+	createCtx, cancelCreate := context.WithTimeout(r.holdCtxOrBackground(), storeTimeout)
 	err := r.store.CreateApproval(createCtx, a)
 	cancelCreate()
 	if err != nil {
@@ -394,7 +397,9 @@ func (r *relay) pumpChildToPi(childOut io.Reader) error {
 			return err
 		}
 		var env envelope
-		if json.Unmarshal(line, &env) == nil && len(env.ID) > 0 {
+		// hasReplyID, not len(ID) > 0: "null" is four bytes and take() would
+		// reject it anyway, so the null contract stays in one helper.
+		if json.Unmarshal(line, &env) == nil && hasReplyID(env.ID) {
 			if st := r.take(env.ID); st != nil {
 				r.auditResponse(st, line)
 			}
@@ -509,7 +514,10 @@ func (r *relay) track(id json.RawMessage, name string, args map[string]any) {
 	// the eviction writes its own allow row with the reason.
 	if evicted != nil {
 		r.log.Printf("pending call table full: evicted unanswered id %s", evictedKey)
-		go r.audit(evicted.name, evicted.args, approvals.DispositionAllow,
+		// Synchronous, like every other audit: the 5s store bound caps the
+		// stall, and a fire-and-forget row is the one most likely to be lost
+		// to teardown — the exact hole this row exists to close.
+		r.audit(evicted.name, evicted.args, approvals.DispositionAllow,
 			"evicted unanswered at the pending cap; response not observed", "")
 	}
 }
