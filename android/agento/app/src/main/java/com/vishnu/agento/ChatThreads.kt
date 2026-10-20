@@ -187,6 +187,26 @@ object ChatThreads {
     }
 
     /**
+     * Canonical form of a raw thread file for backup import (#339): the
+     * import boundary enforces the same contract the load boundary does,
+     * so a hand-edited backup can't persist wrapped-or-ragged payloads
+     * that load-then-persist would otherwise self-heal a cycle later.
+     * Returns null when the text isn't a threads list — the caller keeps
+     * its skip-invalid behavior. Tasks files never reach here (shape).
+     */
+    fun canonicalizeFile(text: String): String? = runCatching {
+        val threads = threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), text)
+        threadJson.encodeToString(
+            ListSerializer(ChatThread.serializer()),
+            threads.map { t ->
+                t.copy(messages = t.messages.map { m ->
+                    m.copy(attachments = canonicalizeAttachments(m.attachments))
+                })
+            },
+        )
+    }.getOrNull()
+
+    /**
      * Stored string to enum, defensively.
      *
      * The stored value is a free string because a record written before #214 has no such
@@ -235,8 +255,7 @@ object ChatThreads {
             )
         }
 
-    fun toStored(messages: List<ChatMessage>): List<StoredMessage> =
-        messages.map {
+    fun toStored(messages: List<ChatMessage>): List<StoredMessage> =        messages.map {
             StoredMessage(
                 role = it.role,
                 content = it.content,

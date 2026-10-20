@@ -118,12 +118,19 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
  */
 fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachment> =
     attachments.map { a ->
-        val stripped = a.base64.filterNot { c -> c.isWhitespace() }
-        when {
-            stripped.isBlank() -> a.copy(base64 = "")
-            isDecodableBase64(stripped) ->
-                if (stripped.length == a.base64.length) a else a.copy(base64 = stripped)
-            else -> a.copy(base64 = "")
+        // Fast path first (#339): the app only ever writes clean payloads,
+        // so prove-no-whitespace + validity check runs allocation-free on
+        // the common path — the stripping copy below runs solely for
+        // payloads that actually need it (hand-edited or legacy).
+        if (a.base64.none { it.isWhitespace() } && isDecodableBase64(a.base64)) {
+            a
+        } else {
+            val stripped = a.base64.filterNot { c -> c.isWhitespace() }
+            when {
+                stripped.isBlank() -> a.copy(base64 = "")
+                isDecodableBase64(stripped) -> a.copy(base64 = stripped)
+                else -> a.copy(base64 = "")
+            }
         }
     }
 
@@ -297,8 +304,9 @@ fun messageContentJson(
     // blank-turn error instead of a corrupt image part). Ragged payloads
     // (bad length/alphabet) filter here too — validity is send-frequency,
     // so the alphabet scan lives at the wire, never in the hot-path
-    // isWired() predicate.
-    val images = attachments.wiredPhotos().filter { isDecodableBase64(it.base64) }
+    // isWired() predicate. Single pass: blank-check then validity per
+    // attachment, not a wiredPhotos() list followed by a second walk.
+    val images = attachments.filter { it.isWired() && isDecodableBase64(it.base64) }
     if (role != "user" || images.isEmpty() || !includeImages) {
         // Stripped earlier photo turns stay honest (#339): the server
         // prompts with the trailing turn alone, but any other reader of
@@ -608,6 +616,11 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     }
                 }
                 for (quality in listOf(80, 60)) {
+                    // Cooperative cancel like the read loop (#339): two
+                    // full JPEG encodes with no suspension would hold the
+                    // IO thread past tab-leave until both land — the cancel
+                    // surfaces only in finally/remap without this.
+                    ensureActive()
                     // Pre-sized like the read buffer (#339): the default
                     // 32-byte buffer would double its way to ~1.5 MB per
                     // attempt, then toByteArray() copies again.

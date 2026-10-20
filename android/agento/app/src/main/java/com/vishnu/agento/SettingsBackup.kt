@@ -249,8 +249,18 @@ object SettingsBackup {
                         .recoverCatching { org.json.JSONObject(text); true }
                         .getOrDefault(false)
                     if (valid) {
+                        // Thread files canonicalize payloads first (#339):
+                        // a hand-edited backup must not persist wrapped or
+                        // ragged base64 that the load boundary would then
+                        // have to heal. Unparseable-as-threads keeps the
+                        // old skip behavior.
+                        val toWrite = if (name.startsWith("chat_threads_")) {
+                            ChatThreads.canonicalizeFile(text) ?: continue
+                        } else {
+                            text
+                        }
                         runCatching {
-                            java.io.File(context.filesDir, name).writeText(text)
+                            java.io.File(context.filesDir, name).writeText(toWrite)
                             applied++
                         }
                     }

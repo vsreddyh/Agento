@@ -153,12 +153,14 @@ private fun AttachmentThumb(
     // stable across removes — slot is deliberately NOT in the key, so
     // photo 1 keeps its thumbnail when photo 0 leaves (no re-decode, no
     // flicker) — and distinct across identical picks (no aliasing). A
-    // 256-char head/tail sample rides along so a hand-mutated payload
-    // (same id, same length, different middle) still re-keys in practice:
-    // burst-shot headers can share a 64-char prefix, so the sample is wide
-    // enough that only adversarial mutation aliases — which a full-string
-    // walk (the cost this key exists to avoid) could close. Legacy
-    // payloads (id "") key on slot + 128-char sample.
+    // 256-char head/tail sample rides along on the stable branch (128 on
+    // the legacy branch below — scoped per branch, not one claim for
+    // both) so a hand-mutated payload (same id, same length, different
+    // middle) still re-keys in practice: burst-shot headers can share a
+    // 64-char prefix, so the sample is wide enough that only adversarial
+    // mutation aliases — which a full-string walk (the cost this key
+    // exists to avoid) could close. Legacy payloads (id "") key on slot
+    // + 128-char sample.
     // Decoded off-main: ~1 MB Base64.decode + decodeByteArray during
     // composition janks low-end scroll, so produceState moves it to IO
     // (placeholder shows until it lands). No manual recycle: it can pull
