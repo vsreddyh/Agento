@@ -110,7 +110,12 @@ object ChatThreads {
         val base = if (oneLine.length <= avail) {
             oneLine
         } else if (avail >= 1) {
-            oneLine.take(avail - 1) + "…"
+            // Never split a surrogate pair (#339): a high surrogate at the
+            // cut drops with its missing low half rather than rendering �
+            // in the switcher row.
+            oneLine.take(avail - 1).let {
+                if (it.isNotEmpty() && it.last().isHighSurrogate()) it.dropLast(1) else it
+            } + "…"
         } else {
             ""
         }

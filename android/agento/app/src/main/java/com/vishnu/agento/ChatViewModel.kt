@@ -757,9 +757,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         for (m in t.messages) {
             val who = if (m.role == "user") "You" else "Assistant"
             // Photos are payloads, not text: the marker keeps the export
-            // honest about turns whose content is an image (#318). Shared
-            // spelling with search + wire, counted wired (#339).
-            val marker = contentWithMarker(m.content.trim(), m.attachments.wiredPhotoCount())
+            // honest about turns whose content is an image (#318). Photo
+            // turns export verbatim like the wire path (a photo+code turn
+            // keeps the indentation the agent saw); plain text keeps the
+            // long-standing trimmed shape so exports don't gain blank
+            // lines. Counted wired (#339).
+            val wiredCount = m.attachments.wiredPhotoCount()
+            val marker = if (wiredCount > 0) {
+                contentWithMarkerVerbatim(m.content, wiredCount)
+            } else {
+                m.content.trim()
+            }
             sb.append("**$who:** $marker\n\n")
             if (m.role != "user" && (m.tools.isNotEmpty() || m.skills.isNotEmpty())) {
                 // Backticked so a tool/skill name can never break the export's

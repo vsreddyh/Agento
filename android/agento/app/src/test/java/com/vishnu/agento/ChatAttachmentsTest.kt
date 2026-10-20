@@ -345,6 +345,18 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun photoTextTitleNeverSplitsSurrogates() {
+        // Cut landing on an emoji's high surrogate drops the pair rather
+        // than rendering a lone-surrogate � in the switcher row.
+        assertEquals(
+            "a".repeat(40) + "…",
+            ChatThreads.titleFor(
+                listOf(ChatMessage("user", "a".repeat(40) + "\uD83D\uDE00b", 0L)),
+            ),
+        )
+    }
+
+    @Test
     fun storedRoundTripKeepsAttachments() {
         val msgs = listOf(
             ChatMessage("user", "", 1L, attachments = listOf(attachment("AAA="), attachment("BBB="))),

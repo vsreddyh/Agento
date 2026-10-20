@@ -458,10 +458,15 @@ internal fun ChatTab(
                         // State notices, not composition toasts (#339): a
                         // decode failure must survive rotation like the cap
                         // refusals do — same lifetime for every attach error.
+                        // Landed counts actual growth (#339), not attempts:
+                        // the backstop can drop on a concurrent-batch race,
+                        // and the cancel notice must name kept photos, not
+                        // attempted ones.
                         result
                             .onSuccess {
+                                val before = vm.pendingAttachmentCount()
                                 vm.addPendingAttachments(listOf(it))
-                                landed++
+                                if (vm.pendingAttachmentCount() > before) landed++
                             }
                             .onFailure { vm.notify(it.message ?: "Couldn't attach that photo.") }
                     }
@@ -593,12 +598,13 @@ internal fun ChatTab(
         // millisecond twice and point two captures at one file.
         val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
         val uri = runCatching {
-            // packageName, not APPLICATION_ID (#339): BuildConfig is not
-            // generated in this module, and the two are identical while
-            // there are no flavors or applicationIdSuffixes (verified in
-            // build.gradle.kts) — the FileProvider authority in the
-            // manifest is ${applicationId}, same value. If a flavor or a
-            // .debug suffix ever lands, this call is the one that breaks.
+            // packageName tracks applicationId at runtime (#339): the
+            // earlier comment claiming a flavor/suffix would break this
+            // was wrong — Context.getPackageName() returns the runtime
+            // applicationId including any suffix, matching the manifest's
+            // ${applicationId} authority by construction. (BuildConfig is
+            // still not generated in this module — verified by the CI
+            // failure that tried it — but nothing here needs it.)
             FileProvider.getUriForFile(appTapContext, "${appTapContext.packageName}.fileprovider", file)
         }.getOrNull() ?: run {
             vm.notify("Couldn't start the camera.")
