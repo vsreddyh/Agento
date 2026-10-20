@@ -608,8 +608,8 @@ class ChatApi(context: Context) {
         payload.put("stream", true)
         // Client-side preflight (#318): refuse an over-cap turn with a named,
         // actionable error instead of sending it into the gateway's 4 MiB
-        // 413. Only reachable with photos today (per-photo caps bound each
-        // image); a long text thread tripping it gets the same message.
+        // 413. Phrased for the turn's actual contents below: photos when
+        // it carries them, thread-shortening when it doesn't.
         val raw = payload.toString()
         // Sized in bytes at send time (#339): one transient encode of a
         // body already fully in memory, exact where a char count lies for
@@ -621,11 +621,20 @@ class ChatApi(context: Context) {
         // cost.
         val rawBytes = raw.toByteArray(Charsets.UTF_8).size
         if (wireSizeExceeded(rawBytes)) {
+            // Phrased for what's actually in the turn (#339): a long
+            // text-only thread trips the same cap with zero photos, and
+            // "remove a photo" would send it hunting for one.
+            val hasPhotos = lastUserIdx >= 0 &&
+                messages[lastUserIdx].attachments.isNotEmpty()
             trySend(
                 ChatEvent.Error(
                     "Couldn't send: this turn is about ${formatBytes(rawBytes.toLong())} " +
                         "(limit about ${formatBytes(MAX_CHAT_WIRE_BYTES.toLong())}). " +
-                        "Remove a photo or start a new conversation.",
+                        if (hasPhotos) {
+                            "Remove a photo or start a new conversation."
+                        } else {
+                            "Shorten the thread or start a new conversation."
+                        },
                 ),
             )
             close()

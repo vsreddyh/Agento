@@ -173,7 +173,11 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // One bounded read, three uses (#339): bounds + pixels + EXIF
             // previously opened the Uri 3×, which re-fetches cloud picker
             // URIs (Google Photos) twice for nothing. Everything below
-            // decodes from these bytes instead of the stream.
+            // decodes from these bytes instead of the stream. The closing
+            // toByteArray() copies once more (transient ~2x actual size —
+            // single-digit MB for real photos; the 32 MB ceiling only
+            // binds adversarial inputs that fail JPEG validation right
+            // after), which beats re-reading cloud URIs twice.
             val bytes = resolver.openInputStream(uri)?.use { stream ->
                 // Pre-sized 1 MB (#339): the default 32-byte buffer doubles
                 // its way to 32 MB (~64 MB transient at the top copy), and

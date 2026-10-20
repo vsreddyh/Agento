@@ -204,9 +204,6 @@ internal fun ChatTab(
     // Photo attachments (#318): gallery picks need no permission (the picker
     // returns read access to just the chosen images); the camera needs
     // CAMERA plus a FileProvider Uri staged before TakePicture launches.
-    // Photo attachments (#318): gallery picks need no permission (the picker
-    // returns read access to just the chosen images); the camera needs
-    // CAMERA plus a FileProvider Uri staged before TakePicture launches.
     var cameraUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     // File path, not the File (#339 review): rotation while the camera app
     // is foreground destroys this composition, and only saveable state
@@ -249,7 +246,10 @@ internal fun ChatTab(
         // Done fires on early returns too (#339): the camera sets its
         // in-flight flag before calling, so a cap refusal without the
         // callback would stick the flag and leak the capture forever.
+        // The capture itself is deleted here too — the finally below only
+        // runs when the batch body starts.
         if (uris.isEmpty()) {
+            runCatching { cleanup?.takeIf { it.exists() }?.delete() }
             onBatchDone()
             return
         }
@@ -261,16 +261,19 @@ internal fun ChatTab(
             vm.notify(
                 "At most $MAX_IMAGES_PER_TURN photos per turn — remove one first.",
             )
+            // Same leak as above: refusal skips the body, so the capture
+            // is deleted here, not in finally.
+            runCatching { cleanup?.takeIf { it.exists() }?.delete() }
             onBatchDone()
             return
         }
         val take = uris.take(slots)
         if (take.size < uris.size) {
             vm.notify(
-                // No "first" (#339): picker return order is not
-                // selection order, so "first" overpromises.
-                (if (take.size == 1) "Only 1 photo attached " else "Only ${take.size} photos attached ") +
-                    "(at most $MAX_IMAGES_PER_TURN per turn).",
+                // One string + Info for the whole cap family (#339): the
+                // mid-batch exhaustion below says exactly this — nothing
+                // failed, the cap held, so no Error styling either.
+                "At most $MAX_IMAGES_PER_TURN photos per turn — extra photos were dropped.",
                 ToastKind.Info,
             )
         }
@@ -290,7 +293,8 @@ internal fun ChatTab(
                         withContext(Dispatchers.Main) {
                             vm.notify(
                                 "At most $MAX_IMAGES_PER_TURN photos per turn — " +
-                                    "extra photos dropped.",
+                                    "extra photos were dropped.",
+                                ToastKind.Info,
                             )
                         }
                         break
@@ -330,13 +334,20 @@ internal fun ChatTab(
     ) { ok ->
         val u = cameraUri
         val f = cameraPath?.let(::File)
+        // Uri nulls now (single-delivery, never reused); the PATH stays
+        // until the batch completes (#339) so a rotation mid-decode
+        // restores a non-null keep for the startup sweep — nulling it here
+        // would let the sweep delete the file being read.
         cameraUri = null
-        cameraPath = null
         if (ok && u != null) {
             cameraBusy = true
-            processUris(listOf(u), f) { cameraBusy = false }
+            processUris(listOf(u), f) {
+                cameraBusy = false
+                cameraPath = null
+            }
         } else {
             runCatching { f?.takeIf { it.exists() }?.delete() }
+            cameraPath = null
         }
     }
     fun launchCamera() {
