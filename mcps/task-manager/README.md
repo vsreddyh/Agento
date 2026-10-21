@@ -299,7 +299,8 @@ millisecond. Echoing a returned `at` back is exact.
 `limit` is the one lenient filter: unparseable, zero or negative falls back
 to the default (200), and a parseable-but-huge one is clamped to the ceiling
 (500). A limit can only enlarge the page, which is the answer the caller
-already had, so it is never worth a 422. Over MCP a limit of the wrong
+already had, so it is never worth a 422. A blank limit — empty, or only
+whitespace — is the same as no limit at all. Over MCP a limit of the wrong
 *type* (`"200"` instead of `200`) is an argument error, not a value the tool
 quietly rounds — types and values are different layers, and only the value
 layer is lenient.
@@ -346,12 +347,12 @@ that is worth knowing before diffing two rows:
 | `complete`, `skip` | the rollover outcome (`created`, `none`, `custom`, …) |
 | `reopen` | empty over HTTP, `mcp reopen_task` over MCP |
 | `delete` | the door that deleted it (`http DELETE`, `mcp delete_task`) |
-| `duplicate` | empty |
+| `duplicate` | the id of the task this was duplicated from — the row itself is about the COPY, whose id it carries |
 
 `detail` is capped at 300 bytes, so a longer one is stored truncated with
 no marker — the op-specific extras are short by nature (a field list, a
-rollover outcome), and a cap that rewrote the value would change what the
-log says.
+rollover outcome, an id), and a cap that rewrote the value would change
+what the log says.
 
 `at` is RFC3339 **with milliseconds** — unlike the task documents, whose
 `completedAt`/`createdAt` are RFC3339 to the second. Both are valid

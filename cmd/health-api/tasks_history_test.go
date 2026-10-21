@@ -189,6 +189,11 @@ func TestBatchDuplicateIsInTheChangeLog(t *testing.T) {
 	if rows[0].TaskID != copyID {
 		t.Errorf("task_id = %q, want the copy's id %q", rows[0].TaskID, copyID)
 	}
+	// The row names the SOURCE in its detail: the row is about the copy,
+	// and without that the history could not say what it came from.
+	if rows[0].Detail != id {
+		t.Errorf("detail = %q, want the source id %q", rows[0].Detail, id)
+	}
 	// And the op filter alone finds it too — the vocabulary is what the
 	// caller filters on, so a duplicate must be reachable by op alone.
 	rows, _, err = store.ListMutations(ctx, tasks.MutationFilter{Ops: []string{tasks.OpDuplicate}})
