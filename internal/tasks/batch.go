@@ -184,19 +184,22 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 	}
 	seen := make(map[string]bool, len(ops))
 	for i, op := range ops {
-		// Normalized once: the trimmed id is what the guard, the dedupe,
-		// the verbs, and the results all see, so a padded id can neither
-		// slip the duplicate check nor come back padded in a result.
+		// Both halves normalized up front: op names are matched
+		// case-sensitively downstream, so " Complete " must read the same
+		// here as it will in the verb switch — otherwise the transport
+		// (which trims) and a direct store caller would disagree on what a
+		// padded op means.
+		opName := strings.TrimSpace(op.Op)
 		id := strings.TrimSpace(op.ID)
-		switch op.Op {
+		switch opName {
 		case "complete", "skip", "update", "duplicate":
 		default:
-			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
+			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("unknown batch op %q: want complete, skip, update, or duplicate", op.Op)}
 		}
 		if id == "" {
-			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
-				Err: fail("batch op %d (%s) has no id", i, op.Op)}
+			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
+				Err: fail("batch op %d (%s) has no id", i, opName)}
 		}
 		if seen[id] {
 			// The same id twice would self-conflict inside one transaction:
@@ -204,8 +207,8 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			// up front rather than aborting on our own write. Unreachable
 			// from the UI (the selection is a set), so this guards the raw
 			// API.
-			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
-				Err: fail("batch op %d (%s %s) duplicates an earlier op; one op per task", i, op.Op, id)}
+			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
+				Err: fail("batch op %d (%s %s) duplicates an earlier op; one op per task", i, opName, id)}
 		}
 		seen[id] = true
 		// Extras ride only where they are read: a `reason` on anything but
@@ -214,24 +217,24 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// single-task layer rejects at its boundary. Empty counts as absent
 		// (a blank reason, an empty or all-null fields object), the same
 		// "no fields" rule the audit log uses.
-		if op.Op != "skip" && strings.TrimSpace(op.Reason) != "" {
-			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
-				Err: fail("batch op %d (%s) takes no reason; reason rides only on skip", i, op.Op)}
+		if opName != "skip" && strings.TrimSpace(op.Reason) != "" {
+			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
+				Err: fail("batch op %d (%s) takes no reason; reason rides only on skip", i, opName)}
 		}
-		if op.Op != "update" && ChangedFieldNames(op.Fields) != "no fields" {
-			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
-				Err: fail("batch op %d (%s) takes no fields; fields ride only on update", i, op.Op)}
+		if opName != "update" && ChangedFieldNames(op.Fields) != "no fields" {
+			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
+				Err: fail("batch op %d (%s) takes no fields; fields ride only on update", i, opName)}
 		}
 	}
 	// Normalized once into a copy: the caller's slice is untouched, and
-	// every downstream use (verbs, results, errors) sees the trimmed id, so
-	// a padded id can neither slip the duplicate check above nor come back
-	// padded in a result. The copy is shallow: per-op Fields maps are
-	// borrowed read-only (Update and ChangedFieldNames never mutate them),
-	// so a future verb that normalizes fields in place must deep-copy first.
+	// every downstream use (verbs, results, errors) sees the trimmed op and
+	// id. The copy is shallow: per-op Fields maps are borrowed read-only
+	// (Update and ChangedFieldNames never mutate them), so a future verb
+	// that normalizes fields in place must deep-copy first.
 	ops = append([]BatchOp(nil), ops...)
 	for i := range ops {
 		ops[i].ID = strings.TrimSpace(ops[i].ID)
+		ops[i].Op = strings.TrimSpace(ops[i].Op)
 	}
 	if !s.useTransactions(ctx) {
 		return nil, ErrNoTransactions

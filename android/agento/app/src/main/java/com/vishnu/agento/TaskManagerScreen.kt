@@ -893,27 +893,16 @@ internal fun TaskManagerScreen(
         if (ids.isEmpty()) return
         val doneWord = if (verb == "skip") "Skipped" else "Completed"
         val byId = tasks.associateBy { it.id }
-        // Ids that left the fetched page fail closed like a bulk move:
-        // reload underneath and retry once the rows land.
-        if (ids.any { it !in byId }) {
-            silentRefresh = true
-            refreshTick++
-            toasts.toast(
-                "Some selected tasks aren't in view — reloading. Retry once they land.",
-                ToastKind.Error,
-            )
-            return
-        }
-        // Only open rows can resolve: a Done-filter selection may hold
-        // already-resolved tasks, and sending one aborts the whole atomic
-        // batch on a row the user knows is done. Those are set aside with a
-        // count instead; duplicate and move take any state, so the selection
-        // is kept for those.
+        // Act on what's actionable: only open rows in the fetched page can
+        // resolve. Rows that left the page (filter switch) or are already
+        // resolved are set aside with a count instead of failing the whole
+        // atomic batch on one stale row — or going out unguarded. Nothing
+        // here needs a refresh: the list is already current for this filter.
         val actionable = ids.filter { byId[it]?.isOpen() == true }
         val skipped = ids.size - actionable.size
         if (actionable.isEmpty()) {
             toasts.toast(
-                "Selected tasks are already resolved — nothing to ${verb}.",
+                "Nothing to $verb — selected tasks are already resolved or not in view.",
                 ToastKind.Error,
             )
             return
@@ -927,7 +916,7 @@ internal fun TaskManagerScreen(
         runBulkOps(
             actionable.map { BulkOp(verb, it) },
             "$doneWord ${actionable.size} task${if (actionable.size == 1) "" else "s"}." +
-                (if (skipped > 0) " ($skipped already resolved.)" else "") +
+                (if (skipped > 0) " ($skipped skipped.)" else "") +
                 (if (customs > 0) " Recreate custom repeats from Done." else ""),
         )
     }
@@ -945,46 +934,25 @@ internal fun TaskManagerScreen(
         // the list showed, so a task changed elsewhere fails the whole batch
         // instead of overwriting. Complete/skip stay unguarded by design —
         // the single verbs are last-write-wins too, with no revision to
-        // guard on. An id missing from the fetched page fails closed here
-        // rather than going out unguarded: sending it would be a silent
-        // last-write-wins on a row the user can't see.
+        // guard on. Only fetched rows move: rows that left the page are set
+        // aside with a count, since there is no revision to guard them with.
         val byId = tasks.associateBy { it.id }
-        if (ids.any { it !in byId }) {
-            // A selected row left the fetched page (filter switch) or is
-            // gone (deleted elsewhere): sending it unguarded would be a
-            // silent last-write-wins on a row the user can't see. Reload
-            // underneath and keep the selection for retry once the rows
-            // land, like a failed batch does.
-            silentRefresh = true
-            refreshTick++
-            toasts.toast(
-                "Some selected tasks aren't in view — reloading. Retry once they land.",
-                ToastKind.Error,
-            )
+        val ops = ids.mapNotNull { id ->
+            byId[id]?.let { t ->
+                val fields = JSONObject().put("due_date", dueDate)
+                fields.put("expected_revision", t.revision)
+                BulkOp("update", id, fields = fields)
+            }
+        }
+        if (ops.isEmpty()) {
+            toasts.toast("Selected tasks aren't in this view.", ToastKind.Error)
             return
         }
+        val skipped = ids.size - ops.size
         runBulkOps(
-            ids.map { id ->
-                // Fail-closed as defense in depth: the guard above already
-                // proved membership on this thread with no suspension
-                // between, so this cannot fire today — but if that ever
-                // changes, the degradation is reload-and-retry, never an
-                // unguarded write or a crash. `return` here leaves
-                // doBulkMove (map is inline), not just the lambda.
-                val rev = byId[id]?.revision ?: run {
-                    silentRefresh = true
-                    refreshTick++
-                    toasts.toast(
-                        "Some selected tasks aren't in view — reloading. Retry once they land.",
-                        ToastKind.Error,
-                    )
-                    return
-                }
-                val fields = JSONObject().put("due_date", dueDate)
-                fields.put("expected_revision", rev)
-                BulkOp("update", id, fields = fields)
-            },
-            "Moved ${ids.size} task${if (ids.size == 1) "" else "s"} to $whenText, times kept.",
+            ops,
+            "Moved ${ops.size} task${if (ops.size == 1) "" else "s"} to $whenText, times kept." +
+                (if (skipped > 0) " ($skipped not in view skipped.)" else ""),
         )
     }
 

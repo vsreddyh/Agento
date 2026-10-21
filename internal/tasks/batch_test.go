@@ -333,6 +333,24 @@ func TestBatchIgnoresEmptyExtras(t *testing.T) {
 	}
 }
 
+func TestBatchNormalizesOpAndId(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	id := mkBatchTask(t, s, "bulk-a", Repeat{})
+	// Transport trims, but a direct store caller may not: padded op names
+	// and ids must mean the same as trimmed ones.
+	res, err := s.Batch(ctx, []BatchOp{{Op: "  complete  ", ID: "  " + id + "  "}})
+	if err != nil {
+		t.Fatalf("Batch: %v", err)
+	}
+	if len(res) != 1 || res[0].ID != id || res[0].Op != "complete" {
+		t.Fatalf("results name normalized values, got %+v", res)
+	}
+	if n := openCount(t, s); n != 0 {
+		t.Fatalf("task must be done, %d open", n)
+	}
+}
+
 func mustOid(t *testing.T, hex string) primitive.ObjectID {
 	t.Helper()
 	oid, err := primitive.ObjectIDFromHex(hex)
