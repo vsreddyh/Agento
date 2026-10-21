@@ -15,8 +15,6 @@ package main
 import (
 	"context"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
 	"agento/internal/tasks"
@@ -80,14 +78,7 @@ func taskMutations(w http.ResponseWriter, r *http.Request) {
 		writeTaskErr(w, err)
 		return
 	}
-	limit := 0
-	// Non-numeric ?limit= falls back to the store default on purpose: a
-	// stray query param should never nuke the answer.
-	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
-		if n, cerr := strconv.Atoi(raw); cerr == nil {
-			limit = n
-		}
-	}
+	limit := parseLimitParam(q)
 	store, ok := taskStore(w)
 	if !ok {
 		return

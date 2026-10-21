@@ -483,6 +483,37 @@ func TestListMutationsReturnsAnEmptyListNotNil(t *testing.T) {
 	}
 }
 
+// The write side normalizes too. The verbs accept an UPPERCASE hex id —
+// ObjectIDFromHex does — so without this a row would be stored under an
+// upper-case `task_id` that the lowercased read filter can never match: the
+// task was touched, and the history says it never was.
+func TestRecordMutationNormalizesTheTaskID(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	s.RecordMutation(ctx, OpCreate, "0123456789ABCDEF01234567", "mcp", "")
+
+	rows, _, err := s.ListMutations(ctx, MutationFilter{TaskID: "0123456789abcdef01234567"})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1 — the row must be findable", len(rows))
+	}
+	if rows[0].TaskID != "0123456789abcdef01234567" {
+		t.Errorf("task_id = %q, want it stored lowercase", rows[0].TaskID)
+	}
+}
+
+// A filter that was sent and names nothing is refused at the seam too, so
+// a direct caller is not handed the whole log for an empty filter.
+func TestListMutationsRejectsAnOpFilterThatNamesNothing(t *testing.T) {
+	var s Store
+	_, _, err := s.ListMutations(context.Background(), MutationFilter{Ops: []string{"", " "}})
+	if err == nil {
+		t.Fatal("an op filter that names nothing must be rejected, not read as the whole log")
+	}
+}
+
 // The timestamps are stored and returned in UTC, so a log read from two
 // machines does not disagree about when an entry happened.
 func TestListMutationsTimestampsAreUTC(t *testing.T) {

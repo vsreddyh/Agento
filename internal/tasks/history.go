@@ -212,6 +212,12 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	if err := ValidateOps(ops); err != nil {
 		return nil, false, err
 	}
+	// A filter that was sent and names nothing is a filter the caller
+	// sent — the same rule the transport's parser applies, so a direct
+	// caller is not handed the whole log for "Ops: []string{\"\", \" \"}".
+	if len(ops) == 0 && len(f.Ops) > 0 {
+		return nil, false, fail("op filter names no operation; known ops are %s", strings.Join(knownOps, ", "))
+	}
 	// The id is normalized here too, not only in the transports: the store
 	// is the seam, and a caller that reached it directly must not be able to
 	// ask about "not-an-id" or about an id in the wrong case and get an

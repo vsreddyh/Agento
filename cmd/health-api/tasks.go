@@ -16,11 +16,32 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	syncpkg "sync"
 	"time"
 )
+
+// parseLimitParam reads the `limit` query parameter, falling back to the
+// store default (0 = "use the default") when it is missing, unparseable or
+// not a number.
+//
+// Lenient on purpose: a limit can only enlarge the page, which is the answer
+// the caller already had, so a stray query param must never nuke the answer.
+// One helper, because two copies of this rule are two rules — and the next
+// edit to one of them would drift from the other.
+func parseLimitParam(q url.Values) int {
+	raw := strings.TrimSpace(q.Get("limit"))
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0
+	}
+	return n
+}
 
 // listTasks serves the app's Task Manager screen: the user's own tasks from
 // the shared `tasks` collection (the same rows the agent manages over MCP).
@@ -44,14 +65,7 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	limit := 0
-	// Non-numeric ?limit= falls back to the store default (200) on
-	// purpose: a stray query param should never nuke the task list.
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
-			limit = n
-		}
-	}
+	limit := parseLimitParam(r.URL.Query())
 	rows, truncated, err := store.List(ctx, state, false, "", limit)
 	if err != nil {
 		writeTaskErr(w, err)

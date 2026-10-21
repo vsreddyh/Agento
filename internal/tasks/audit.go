@@ -75,6 +75,18 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		log.Printf("tasks: mutation log entry dropped (store is not connected, op=%q task_id=%q)", op, taskID)
 		return
 	}
+	// The id and the op are normalized HERE, on the write side, for the
+	// same reason the read side normalizes them.
+	//
+	// The verbs accept an UPPERCASE hex id — ObjectIDFromHex does — and
+	// would go on to write a row whose `task_id` is upper case, which the
+	// lowercased read filter can never match. The row would be invisible:
+	// the empty history that reads like "this task was never touched",
+	// for a task that was very much touched. The op is normalized for the
+	// same reason: a direct caller passing "CREATE" would otherwise store
+	// a row the filter misses.
+	taskID = strings.ToLower(strings.TrimSpace(taskID))
+	op = strings.ToLower(strings.TrimSpace(op))
 	if op == "" || taskID == "" {
 		// A programmer error, not a caller error: the transports always
 		// pass both, and a dropped entry is a hole in the log. Logged, the
