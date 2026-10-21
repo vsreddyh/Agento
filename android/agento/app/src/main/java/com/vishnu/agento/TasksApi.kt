@@ -113,7 +113,11 @@ data class BulkOp private constructor(
             op = op.trim(),
             id = id.trim(),
             reason = reason?.trim()?.ifEmpty { null },
-            fields = fields,
+            // Defensive copy: the factory borrows nothing. A caller
+            // mutating the object after construction would otherwise change
+            // the wire and the per-item contract assert together, making
+            // the drift self-consistent and invisible.
+            fields = fields?.let { JSONObject(it.toString()) },
         )
     }
 
