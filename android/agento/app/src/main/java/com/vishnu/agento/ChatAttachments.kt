@@ -199,8 +199,13 @@ internal fun requireIoThread(site: String) {
  * Fail-closed preserved: nothing corrupt ever wires; the named-error
  * contract covers user actions (pick/stage/send), not storage repair.
  */
-fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachment> =
-    attachments.map { a ->
+fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachment> {
+    // Empty fast path (#339): most messages hold no photos — returning the
+    // input list untouched skips both the per-message copy and the walk
+    // for every one of them, on every save/load. Same instance back (not
+    // just equal): callers comparing references keep working.
+    if (attachments.isEmpty()) return attachments
+    return attachments.map { a ->
         // Clean-first ordering, stated (#339): the two pre-scans
         // short-circuit (first bad char / first non-space), so clean
         // payloads — everything this app writes — pay one full walk and
@@ -246,6 +251,7 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
             }
         }
     }
+}
 
 /** Max photos per turn (#318). Two is the acceptance bar (two images in one
  * turn render and reach the agent); the cap keeps the wire body under the

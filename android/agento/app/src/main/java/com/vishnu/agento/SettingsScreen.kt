@@ -771,6 +771,14 @@ internal fun NotificationsSection() {
  * restores slowly — worth one line, not a block. */
 private const val BACKUP_LARGE_BYTES = 5_000_000
 
+/** Backup size past which export REFUSES instead of warning (#339): the
+ * 5 MB line above is advisory (explicit tap = consent to proceed), but
+ * past ~100 MB on disk the materialized string (~2x bytes as UTF-16 plus
+ * the JSONObject) reliably OOMs low-end devices mid-export — a crash,
+ * not a slow restore. Refusing with a named error beats that; the meter
+ * is a floor, so the cap errs 20x below the danger zone. */
+private const val BACKUP_HARD_CAP_BYTES = 100_000_000
+
 /** Issue #16: manual settings export/import. SAF pickers need no storage
  * permission; the file the user keeps survives any reinstall gap that outlives
  * cloud backup. [onImported] reloads the on-screen fields from prefs. */
@@ -802,6 +810,15 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // the floor, not the ceiling. Warns up front; the
                     // explicit tap is consent to proceed.
                     val upfront = SettingsBackup.backupFilesBytes(context.filesDir)
+                    // Hard refuse past the cap (#339): the warning below is
+                    // consent-to-proceed, but consent cannot survive an OOM —
+                    // fail with a named error naming the remedy instead.
+                    if (upfront > BACKUP_HARD_CAP_BYTES) {
+                        throw IllegalStateException(
+                            "Backup too large to export safely (${formatBytes(upfront)} on disk). " +
+                                "Delete old photo threads, then try again.",
+                        )
+                    }
                     if (upfront > BACKUP_LARGE_BYTES) {
                         withContext(Dispatchers.Main) {
                             // Floor, not estimate (#339): the export string

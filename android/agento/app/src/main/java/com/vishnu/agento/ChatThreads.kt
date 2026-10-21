@@ -90,7 +90,13 @@ object ChatThreads {
      * decodable, send-frequency). A ragged payload can title a photo the
      * wire drops — but load() blanks ragged on read, so in practice the two
      * agree; title-time decode scans would tax every render for a case the
-     * boundary already heals. */
+     * boundary already heals. Cluster rules are ROOT-pinned, not locale-following
+     * (#339): deterministic across devices (and tests) at the cost of
+     * Thai/Lao cluster subtleties, where ROOT can split mid-cluster. The
+     * alternative — default-locale BreakIterator — would title the same
+     * thread differently per device locale, untestably. Deterministic and
+     * documented beats locale-correct and unpinnable for a 42-char label.
+     */
     fun titleFor(messages: List<ChatMessage>): String {
         // Single pass (#339): first text turn + largest photo count in one
         // walk — this runs per title render and per switcher-search filter
@@ -207,8 +213,11 @@ object ChatThreads {
      * anyway, so the flag only pays off after a full rewrite cycle while
      * the trust-no-caller boundary goes soft in the meantime.
      * Send-frequency, IO-confined (enforced below): accepted, not
-     * overlooked. Full-file every save, BY DESIGN (#339): dirty-thread-only
-     * tracking would need mutable cross-call state (last-saved refs) at a
+     * overlooked. Persist points are turn boundaries (send/done,
+     * thread-ops, stop, recovery) — never the per-token streaming loop —
+     * so "per-send" means per turn, not per keystroke or per chunk; the
+     * review's "per-keystroke-adjacent" premise does not hold.
+     * Full-file every save, BY DESIGN (#339): dirty-thread-only tracking would need mutable cross-call state (last-saved refs) at a
      * boundary that is deliberately stateless — and immutable copies mean
      * the active thread's ref changes on every streaming update anyway, so
      * the flag would only ever skip inactive threads while adding an
