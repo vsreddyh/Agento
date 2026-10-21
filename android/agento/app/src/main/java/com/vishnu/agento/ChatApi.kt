@@ -600,7 +600,7 @@ class ChatApi(context: Context) {
         // or cancels and real bugs get misreported as attach problems.
         // Unreachable via staged UI (stage-time caps hold); hand-edited
         // threads only — but every wire path funnels through dataUri(),
-        // so no caller can bypass the wall, pre-checked or not.
+        // so no caller can bypass the wall.
         val (body, rawBytes) = try {
             withContext(Dispatchers.IO) {
             val payload = JSONObject()

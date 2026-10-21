@@ -222,13 +222,16 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
         // ~1.5 M-char copy to spare the rare wrapped shape its short
         // pre-scans: the wrong tradeoff. No length pre-check before the
         // whitespace walks, also deliberate (#339): a length-only blank
-        // would nuke a valid multi-MB payload that deserves the named
-        // oversize error (dataUri/streamChat), not silent blanking — and
-        // no cap below the 4M ceiling separates "big whitespace" from "big
-        // photo" without walking. The 4M raw ceiling bounds the worst
-        // case; per-save repetition is load-canonical memory re-proving
-        // itself (see save()'s dirty-tracking note), and every walk here
-        // is IO-confined, never Main, never the send path.
+        // (even gated on "whitespace-only over cap") would nuke a valid
+        // multi-MB payload that deserves the named oversize error
+        // (dataUri/streamChat — pinned by dataUriRejectsStorageInjectedOversize),
+        // not silent blanking — and no cap below the 4M ceiling separates
+        // "big whitespace" from "big photo" without walking. Confirming
+        // homogeneity IS the walk; there is no O(1) version of it. The 4M
+        // raw ceiling bounds the worst case; per-save repetition is
+        // load-canonical memory re-proving itself (see save()'s
+        // dirty-tracking note), and every walk here is IO-confined, never
+        // Main, never the send path.
         // Single-walk fast path (#339): isDecodableBase64 already rejects
         // whitespace, so no separate none{isWhitespace} proof walk — clean
         // payloads (everything this app writes) validate allocation-free

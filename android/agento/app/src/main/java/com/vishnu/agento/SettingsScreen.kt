@@ -859,18 +859,16 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // about is exactly base64 blobs nobody reads — the peak
                     // that matters most is the one pretty-printing inflates.
                     val text = SettingsBackup.export(context).toString()
-                    // Re-metered AFTER materializing (#339): the meter above
-                    // judged the floor at meter time, but a concurrent
-                    // turn-boundary save can grow thread files between the
-                    // meter and this read — a backup that crossed the cap
-                    // mid-build must not be written as if it passed. Re-read
-                    // the FILES (metadata only, no new copy), not the string:
-                    // text.length × 2 overstates ASCII ~2x (early-but-safe
-                    // refuse) and understates CJK (3B/char UTF-8 > 2B/char
-                    // UTF-16 — the exact OOM the gate exists to prevent).
-                    // Bytes vs bytes, same units as the cap, same named
-                    // error and remedy as above.
-                    if (SettingsBackup.backupFilesBytes(context.filesDir) + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                    // Post-build peak check (#339): the meter above judged the
+                    // floor at meter time, but a concurrent turn-boundary
+                    // save can grow thread files between the meter and this
+                    // build — a backup that crossed the cap mid-build must
+                    // not be written as if it passed. Measured on the STRING
+                    // ITSELF (text.length × 2 = UTF-16 bytes, exact for every
+                    // script including surrogate pairs), not re-read from
+                    // disk: the string is the peak that actually exists, and
+                    // the write below streams in chunks without adding one.
+                    if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup grew past the safe limit during export. " +
                                 "Delete old photo threads in the thread switcher, then try again.",
