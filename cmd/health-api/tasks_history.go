@@ -47,6 +47,9 @@ import (
 // (validation before connectivity), and it is what makes the filter rules
 // testable without a database.
 //
+// Auth runs before both: an unauthenticated caller gets 401 whatever the
+// filter says, so the 422 contract is "for an authenticated caller".
+//
 // `since` is a query parameter, so an offset with a `+` in it
 // ("2026-10-21T00:00:00+02:00") must arrive percent-encoded as `%2B` — `+`
 // in a query string means a space. `Z` needs no encoding.

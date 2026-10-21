@@ -169,16 +169,17 @@ type deleteTaskInput struct {
 // log is the default reading of the question, and a caller that wants one
 // task's history sends task_id.
 type taskHistoryInput struct {
-	// TaskID restricts to one task (the hex id from create_task). A blank
-	// id means every task; a non-blank one that is not a hex id is refused
-	// rather than answered with an empty history.
+	// TaskID restricts to one task (the hex id from create_task — the
+	// `?task_id=` filter on the HTTP route). A blank id means every task; a
+	// non-blank one that is not a hex id is refused rather than answered
+	// with an empty history.
 	TaskID string `json:"task_id,omitempty"`
 	// Op restricts to a set of ops, ONE comma-separated string (not an
-	// array — an array is an argument type error, not a filter): create,
-	// update, delete, complete, skip, reopen, duplicate. A filter that
-	// names no op (only commas and spaces) is refused rather than read as
-	// the whole log. `duplicate` appears only for duplicates made through
-	// a batch.
+	// array — an array is an argument type error, not a filter; the HTTP
+	// route spells it `?op=`): create, update, delete, complete, skip,
+	// reopen, duplicate. A filter that names no op (only commas and
+	// spaces) is refused rather than read as the whole log. `duplicate`
+	// appears only for duplicates made through a batch.
 	Op string `json:"op,omitempty"`
 	// Since is an INCLUSIVE RFC3339 lower bound on when the change
 	// happened — a string, not an epoch number (a number is an argument
