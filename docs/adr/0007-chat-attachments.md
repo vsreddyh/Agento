@@ -55,12 +55,18 @@ explicitly; keep the fail-closed part-type contract.**
   resend the exact composed turn. Cost: roughly 150–600 KB per photo in
   the thread file; the 200-message cap bounds the file; the Settings
   backup mirrors thread files wholesale so photo threads export larger.
-  Exports refuse past ~25 MB on disk with a named error (the materialized
-  string would OOM first) — remedy is per-thread delete in the thread
-  switcher; text-only backups never approach it. Exports (sharesheet
-  Markdown, skill drafts) carry a `[n photo(s) attached]` marker instead
-  of payloads — the marker is honest about turns whose content is an
-  image.
+  Exports refuse past ~12 MB on disk (~25 MB heap peak, the materialized
+  string would OOM first) with a named error — remedy is per-thread delete
+  in the thread switcher; text-only backups never approach it. Exports
+  (sharesheet Markdown, skill drafts) carry a `[n photo(s) attached]`
+  marker instead of payloads — the marker is honest about turns whose
+  content is an image.
+- Staged (unsent) photos are in-memory only: rotation survives them
+  (ViewModel scope), process death drops them with the draft and the
+  queued text, with no recovery — each payload is ~1.5 MB base64, far past
+  what `SavedStateHandle` should carry, and `persist()` writes sent
+  threads only. Re-pick after a kill. A future "persist staging" change
+  must store refs/Uris (plus the shrink step), never payloads.
 - App-killed-turn resume covers image tails: resending the identical
   history reproduces the identical reattach key (same text + same image
   signature), so it reattaches rather than duplicating, exactly like

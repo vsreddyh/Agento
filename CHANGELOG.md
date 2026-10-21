@@ -16,8 +16,8 @@ see GitHub Releases for older notes.
   the thread. Oversized photos refuse with a named, actionable message
   instead of a silent failure. Limits: 2 photos/turn, ~1.1 MB each after
   shrinking; photo threads cost more on disk and in Settings backups
-  (exports refuse past ~25 MB on disk — delete old photo threads in the
-  thread switcher to shrink; see
+  (exports refuse past ~12 MB on disk, ~25 MB heap peak — delete old photo
+  threads in the thread switcher to shrink; see
   `docs/adr/0007-chat-attachments.md`). Documents stay unsupported — Pi
   takes no file input, so unknown attachment types still refuse rather
   than arrive half-parsed.

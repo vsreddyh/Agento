@@ -206,9 +206,13 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
  * (slot, length, sample), best-effort like everywhere else (slot shifts
  * on remove, so a legacy evict may miss — harmless, LRU covers it).
  */
-internal fun thumbCacheKey(stableId: String, legacySlot: Int, base64: String): Any =
+internal fun thumbCacheKey(stableId: String, legacySlot: Int, base64: String, threadKey: String = ""): Any =
     if (stableId.isNotEmpty()) Triple(stableId, base64.length, base64.sampleKey(64))
-    else Triple("s$legacySlot", base64.length, base64.sampleKey(64))
+    // Legacy branch carries the thread (#339): slot-keyed entries without
+    // it alias across threads (same slot + same shape, two threads, one
+    // per-tab cache). Stable ids need no thread — UUIDs are globally
+    // unique — so only the legacy key pays for the extra component.
+    else Triple("$threadKey/s$legacySlot", base64.length, base64.sampleKey(64))
 
 /**
  * One staged or sent photo (#318): the remembered ~256px thumbnail, or an
@@ -228,14 +232,20 @@ private fun AttachmentThumb(
     // UUID + length alone, so value equality holds across removes.
     legacySlot: Int = 0,
     stableId: String = "",
+    // Owning thread for the legacy cache key (#339): stable ids need no
+    // thread (UUIDs are globally unique), but id-less payloads key on slot
+    // — which repeats per thread — so the legacy key carries it. Defaults
+    // empty (previews, single-use callers with cache = null).
+    threadKey: String = "",
     // Scroll-back memory, hoisted by the caller (#339): null disables the
     // cache (previews, single-use). Stable picks only — see ThumbCache.
-    // (No threadKey: pick UUIDs are globally unique, so the (id, length)
-    // cache key can never alias across threads for stable picks — see
-    // ThumbCache. Legacy id-less payloads key on slot + length + sample
-    // and CAN alias across threads (same slot, same shape, two threads);
-    // harmless by construction (wrong thumb, never wrong send — the wire
-    // always sends current bytes) and self-aging as legacy turns over.
+    // (No threadKey for stable picks: UUIDs are globally unique, so the
+    // (id, length) cache key can never alias across threads — see
+    // ThumbCache. Legacy id-less payloads key on slot + length + sample,
+    // which CAN alias across threads (same slot, same shape, two
+    // threads), so their key also carries threadKey above; harmless by
+    // construction (wrong thumb, never wrong send — the wire always sends
+    // current bytes) and self-aging as legacy turns over.
     cache: ThumbCache? = null,
 ) {
     // Identity without walking the payload (#339): the per-pick UUID is
@@ -273,8 +283,8 @@ private fun AttachmentThumb(
     // (#339): the produce value and the cache key are built once, here,
     // by thumbCacheKey — the key can never disagree with the value
     // because there is only one of each.
-    val thumbKey = remember(stableId, legacySlot, base64.length) {
-        thumbCacheKey(stableId, legacySlot, base64)
+    val thumbKey = remember(stableId, legacySlot, base64.length, threadKey) {
+        thumbCacheKey(stableId, legacySlot, base64, threadKey)
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
         // Explicit try/catch, not runCatching (#339): runCatching would
@@ -286,11 +296,12 @@ private fun AttachmentThumb(
         // so a divergent key can never serve a stale bitmap. Unreachable
         // via the app (picks are immutable, one UUID per pick),
         // storage-edit only. Legacy payloads key on the same slot-based
-        // Triple (no null bypass — the key already carries the slot, and
-        // the remove path evicts by the identical construction). No thread
-        // in the key (#339): UUIDs are globally unique, so cross-thread
-        // aliasing is impossible and forks share the decoded bitmap
-        // for free.
+        // Triple (no null bypass — the key already carries the slot, the
+        // thread, and the remove path evicts by the identical
+        // construction). Stable ids carry no thread (#339): UUIDs are
+        // globally unique, so cross-thread aliasing is impossible and
+        // forks share the decoded bitmap for free; only the id-less
+        // legacy branch needs the thread component.
         val cacheKey = thumbKey
         value = try {
             val hit = cache?.get(cacheKey)
@@ -843,24 +854,26 @@ internal fun ChatTab(
                     }
                 }
             } catch (e: CancellationException) {
-                // Cancelled mid-batch (tab left, #339): staged picks stay,
-                // undecoded ones vanish — said once, and only when something
-                // landed. Zero-landed abort stays silent by design: nothing
-                // changed for the user (composer exactly as left), and a
-                // toast firing on return would report a non-event.
+                // Cancelled mid-batch (tab left, rotation, #339): staged picks
+                // stay, undecoded ones vanish — said once. Zero-landed abort
+                // voices too (#339): a rotation-cancelled pick leaves the
+                // user staring at an unchanged composer with no hint the
+                // batch died mid-decode — silence reads as a dead tap, the
+                // class this PR keeps eliminating. The toast names the
+                // recovery (pick again), not a non-event.
                 // Immediately rethrown: swallowing cancel breaks structured
                 // concurrency.
-                if (landed.get() > 0) {
-                    withContext(Dispatchers.Main + NonCancellable) {
-                        vm.notify(
-                            if (landed.get() == 1) {
-                                "Stopped staging photos — 1 photo kept in the composer."
-                            } else {
-                                "Stopped staging photos — ${landed.get()} photos kept in the composer."
-                            },
-                            ToastKind.Info,
-                        )
-                    }
+                withContext(Dispatchers.Main + NonCancellable) {
+                    vm.notify(
+                        if (landed.get() == 0) {
+                            "Photo pick interrupted — pick again."
+                        } else if (landed.get() == 1) {
+                            "Stopped staging photos — 1 photo kept in the composer."
+                        } else {
+                            "Stopped staging photos — ${landed.get()} photos kept in the composer."
+                        },
+                        ToastKind.Info,
+                    )
                 }
                 throw e
             } finally {
@@ -1280,19 +1293,22 @@ internal fun ChatTab(
             }
         },
         onTakePhoto = ::requestCamera,
-        onRemovePhoto = { i ->
-            // Evict the exact bitmap (#339): the strip knows which attachment
-            // leaves — free it now instead of waiting for LRU pressure.
-            // Key rebuilt with the same helper the produce path uses, so it
-            // can never disagree; a miss (legacy slot shift mid-tap) just
-            // means LRU handles it. Staged index i IS the legacy slot at tap
-            // time (state snapshot, same as the thumb rendered).
-            state.pendingAttachments.getOrNull(i)?.let { a ->
-                thumbCache.remove(thumbCacheKey(a.id, i, a.base64))
+        onRemovePhoto = { id ->
+            // Removed by stable pick id, not staged index (#339): the strip's
+            // index comes from a composition snapshot, and a batch landing
+            // between recomposition and tap shifts indices — removing by
+            // position then drops the WRONG photo. Ids are minted per pick
+            // and immutable, so the id names the photo regardless of
+            // intervening stages. Eviction rebuilds the key with the same
+            // helper the produce path uses (slot is irrelevant for stable
+            // ids — the key carries id/length/sample); a miss just means
+            // LRU handles it.
+            state.pendingAttachments.firstOrNull { it.id == id }?.let { a ->
+                thumbCache.remove(thumbCacheKey(a.id, 0, a.base64, state.threadId))
             }
             // Staging may empty here (#339): reset the slate when it does
             // so the next episode voices anew (see onLiveStagedPhotos).
-            vm.removePendingAttachment(i)
+            vm.removePendingAttachmentById(id)
             if (vm.pendingAttachmentCount() == 0) liveStagedVoicedCount = 0
         },
         // Voiced once per staging episode, not per sentence (#339): rapid
@@ -1888,7 +1904,7 @@ internal fun ChatScreen(
      * removing one staged photo. Wired by ChatTab (launchers live there). */
     onPickPhotos: () -> Unit = {},
     onTakePhoto: () -> Unit = {},
-    onRemovePhoto: (Int) -> Unit = {},
+    onRemovePhoto: (String) -> Unit = {},
     /** Live transcript heard text while photos are staged (#339): the text
      * parks in the composer for a confirming tap instead of auto-sending
      * with the photos. */
@@ -2787,6 +2803,7 @@ internal fun ChatScreen(
                                             modifier = Modifier.size(64.dp),
                                             legacySlot = i,
                                             stableId = a.id,
+                                            threadKey = state.threadId,
                                             cache = thumbCache,
                                         )
                                         // Standard 48dp target (#339): a scanner
@@ -2797,7 +2814,7 @@ internal fun ChatScreen(
                                         // untappable remove. Icon stays 16dp,
                                         // centered. Content description kept.
                                         IconButton(
-                                            onClick = { onRemovePhoto(i) },
+                                            onClick = { onRemovePhoto(a.id) },
                                             modifier = Modifier.align(Alignment.TopEnd).size(48.dp),
                                         ) {
                                             Icon(
@@ -3250,6 +3267,7 @@ internal fun ChatScreen(
                                                                 modifier = Modifier.size(120.dp),
                                                                 legacySlot = ai,
                                                                 stableId = a.id,
+                                                                threadKey = state.threadId,
                                                                 cache = thumbCache,
                                                             )
                                                         }

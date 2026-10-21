@@ -11,6 +11,7 @@ import android.util.Log
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
@@ -869,7 +870,7 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 // Flips included: front-camera selfies commonly carry
                 // FLIP_HORIZONTAL/TRANSVERSE, which a rotation-only mapping
                 // would leave mirrored.
-                val orient = runCatching {
+                val orient = try {
                     // use{} like every other stream here (#339): close is a
                     // no-op on a byte-array stream, but the hygiene is the
                     // same shape as the resolver reads above it.
@@ -879,7 +880,17 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                             ExifInterface.ORIENTATION_NORMAL,
                         )
                     }
-                }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+                } catch (e: CancellationException) {
+                    // Never masked into ORIENTATION_NORMAL (#339): a tab-leave
+                    // cancel landing mid-EXIF-read must surface, not continue
+                    // into rotate/scale/compress with a defaulted orient.
+                    // Same rethrow-both rule as namedReadError/decodeThumbnail.
+                    throw e
+                } catch (e: Error) {
+                    throw e
+                } catch (_: Exception) {
+                    ExifInterface.ORIENTATION_NORMAL
+                }
                 fresh to orient
             }
             var bitmap = decoded.first
@@ -1083,12 +1094,19 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
  * Null when the payload is corrupt — callers show an icon placeholder, so a
  * bad payload degrades to a missing thumbnail, never a crash.
  */
-fun decodeThumbnail(base64: String): Bitmap? {
+suspend fun decodeThumbnail(base64: String): Bitmap? {
     // Explicit try/catch, not runCatching (#339): cancellation must
     // propagate (produceState restart on recompose), never collapse into
     // the null placeholder path like a corrupt payload does. Errors
     // propagate too, matching the stage path — a corrupt payload still
     // lands null via the Exception branch, never via masking the JVM.
+    // IO-ONLY caller contract (#339): Base64.decode + two full
+    // decodeByteArrays run synchronously with no suspension point of
+    // their own — a Main-thread caller would jank the whole decode with
+    // no cancel surface. The gate fails fast instead, and ensureActive()
+    // between bounds and pixels gives tab-leave a place to land before
+    // the heavy decode. All callers today run inside withContext(IO).
+    requireIoThread("decodeThumbnail")
     return try {
         // Absolute raw ceiling first (#339): no scan or decode runs on
         // giants regardless of decoded size (see MAX_RAW_BASE64_CHARS).
@@ -1115,6 +1133,15 @@ fun decodeThumbnail(base64: String): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        // Cancel point before the pixel decode (#339): the bounds probe
+        // above already spent a full decodeByteArray; the sampled decode
+        // below spends another with no suspension inside the native call.
+        // A tab-leave landing here skips the heavy half instead of
+        // finishing pixels nobody will draw. Explicit context receiver:
+        // this function is a bare suspend fun with no CoroutineScope
+        // receiver, so the plain ensureActive() used inside the
+        // withContext(IO) blocks elsewhere would not resolve here.
+        currentCoroutineContext().ensureActive()
         // Long counter like the full-size loop (#339): exits in ~12
         // iterations on real headers (halving toward 256), so the toInt()
         // at the inSampleSize handoff is provably small — an adversarial

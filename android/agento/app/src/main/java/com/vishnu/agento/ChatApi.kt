@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.core.content.edit
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -362,12 +363,12 @@ class ChatApi(context: Context) {
         val m = model.trim()
         var stored = ""
         if (m.isNotEmpty()) {
-            stored = (prefs.getString("effort_${tab}_$m", "") ?: "").trim().lowercase()
-                .ifEmpty { (prefs.getString("effort_god_$m", "") ?: "").trim().lowercase() }
+            stored = (prefs.getString("effort_${tab}_$m", "") ?: "").trim().lowercase(Locale.ROOT)
+                .ifEmpty { (prefs.getString("effort_god_$m", "") ?: "").trim().lowercase(Locale.ROOT) }
         }
         if (stored.isEmpty()) {
-            stored = (prefs.getString("effort_$tab", "") ?: "").trim().lowercase()
-                .ifEmpty { (prefs.getString("effort_god", "") ?: "").trim().lowercase() }
+            stored = (prefs.getString("effort_$tab", "") ?: "").trim().lowercase(Locale.ROOT)
+                .ifEmpty { (prefs.getString("effort_god", "") ?: "").trim().lowercase(Locale.ROOT) }
         }
         if (stored.isEmpty() || m.isEmpty()) return stored
         return stored.takeIf { it in EffortCatalog.optionsFor(m) } ?: ""
@@ -386,7 +387,7 @@ class ChatApi(context: Context) {
         // effortFor, which clamps the same way). Computed before the single
         // commit below: base keys and effort land atomically, so a crash
         // cannot save one without the other.
-        val e = effort.trim().lowercase()
+        val e = effort.trim().lowercase(Locale.ROOT)
         val valid = if (e.isEmpty()) {
             null
         } else if (model.trim().isEmpty()) {
@@ -595,9 +596,11 @@ class ChatApi(context: Context) {
         // fails closed on blank/ragged/oversize, and an uncaught throw
         // would escape this callbackFlow producer with no ChatEvent.Error
         // path — collect throws, the job fails, and the turn wedges
-        // (streaming, no banner, no retry). Catch ONLY the named family:
-        // anything else (including CancellationException) must propagate,
-        // or cancels and real bugs get misreported as attach problems.
+        // (streaming, no banner, no retry). Catch ONLY the two named
+        // classes (NamedAttachError + its oversize sibling, which is an
+        // IllegalStateException and so cannot share the catch): anything
+        // else (including CancellationException) must propagate, or cancels
+        // and real bugs get misreported as attach problems.
         // Unreachable via staged UI (stage-time caps hold); hand-edited
         // threads only — but every wire path funnels through dataUri(),
         // so no caller can bypass the wall.
@@ -614,7 +617,7 @@ class ChatApi(context: Context) {
             if (effort.trim().isNotEmpty()) {
                 payload.put(
                     "model_options",
-                    JSONObject().put("reasoning_effort", effort.trim().lowercase()),
+                    JSONObject().put("reasoning_effort", effort.trim().lowercase(Locale.ROOT)),
                 )
             }
             val arr = JSONArray()
@@ -630,8 +633,13 @@ class ChatApi(context: Context) {
                     is WireContent.Text -> content.text
                     is WireContent.Multipart -> content.parts
                 }
+                // Role whitelisted, not forwarded verbatim (#339): a
+                // hand-edited thread with "role":"system" would otherwise
+                // wire as a privileged turn. Only user/assistant exist on
+                // the wire; anything else rides as user (visible, unprivileged).
+                val wireRole = if (m.role == "assistant") "assistant" else "user"
                 arr.put(
-                    JSONObject().put("role", m.role).put("content", wire),
+                    JSONObject().put("role", wireRole).put("content", wire),
                 )
             }
             payload.put("messages", arr)
@@ -658,6 +666,16 @@ class ChatApi(context: Context) {
             built to built.contentLength()
             }
         } catch (e: NamedAttachError) {
+            trySend(ChatEvent.Error(e.message ?: "Couldn't build that message."))
+            close()
+            return@callbackFlow
+        } catch (e: OversizeAttachError) {
+            // The sibling wall, caught explicitly (#339): dataUri() wraps
+            // oversize as NamedAttachError today, so this is unreachable —
+            // but OversizeAttachError is an IllegalStateException (not a
+            // NamedAttachError), so a future wire edit throwing it directly
+            // would escape the callbackFlow producer with no ChatEvent.Error
+            // and wedge the turn. Same delivery path as the named class.
             trySend(ChatEvent.Error(e.message ?: "Couldn't build that message."))
             close()
             return@callbackFlow

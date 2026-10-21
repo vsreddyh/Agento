@@ -53,7 +53,13 @@ data class ChatUiState(
      * size/emptiness is exact here (#339): staged payloads are never blank
      * (prepareAttachment throws instead of staging one), unlike persisted
      * history, which can be hand-edited — so staged sites read this raw
-     * while every history/display/wire site counts wiredPhotos(). */
+     * while every history/display/wire site counts wiredPhotos().
+     * In-memory ONLY, lost on process death with no notice (#339):
+     * payloads are ~1.5 MB base64 each, far past what SavedStateHandle can
+     * carry, and persist() writes sent threads — never staging. Rotation
+     * survives (VM-scoped); kill wipes photos + draft + queued text and the
+     * user re-picks. Stated here so the next "persist staging" edit knows
+     * the size constraint it must design around (refs/uris, not payloads). */
     val pendingAttachments: List<ChatAttachment> = emptyList(),
     /** Queued notices for the toast host, shown head-first (#339): two
      * rapid notifies (cap refusal + decode failure in one batch) must both
@@ -257,34 +263,72 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private var resumedThreads = mutableSetOf<String>()
     private var threadId: String = ""
     private var threads: List<ChatThread> = emptyList()
+    /** Bumped by threads-mutating user ops so init's async publish can tell
+     * a stale load from the live list (#339). Today every such op is
+     * ready-gated (they return before publishing mid-load), so the load
+     * normally wins by construction; this keeps that true for any future
+     * op that publishes without the gate. Placed after every no-op return
+     * rather than at function entry on purpose: a tap that changed nothing
+     * must never make init discard the loaded list (that would silently
+     * empty the history). */
+    private val initGen = java.util.concurrent.atomic.AtomicInteger(0)
 
     init {
+        // Generation guard for the stale-load clobber (#339): the load runs
+        // on IO while taps (switch/New/delete) run on Main. Every such tap
+        // is ready-gated today, so the load normally publishes unopposed;
+        // the guard keeps the ordering safe for any future publisher that
+        // skips that gate. Load on IO, publish on Main; publish applies
+        // fully only when nothing outranked it, else it just flips ready
+        // (preserving the newer state) and refreshes totals.
         viewModelScope.launch(Dispatchers.IO) {
             val loaded = ChatThreads.load(appCtx, tab)
                 .filter { it.id.isNotEmpty() }
                 .sortedByDescending { it.updatedAt }
             // Empty threads never enter history: drop persisted drafts, keep chats.
-            threads = loaded.filter { it.messages.isNotEmpty() }
-            var active = threads.firstOrNull()
-            if (active == null) {
-                active = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
-                threads = listOf(active)
-                ChatThreads.save(appCtx, tab, threads)
+            val freshThreads = loaded.filter { it.messages.isNotEmpty() }
+            // One thread must exist to open: a fresh empty id when nothing
+            // loaded. Non-null in exactly that case, so threadsFinal is
+            // never empty and first() is safe below.
+            val fresh = if (freshThreads.isEmpty()) {
+                ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
+            } else {
+                null
             }
-            threadId = active.id
-            _state.value = _state.value.copy(
-                messages = ChatThreads.toUi(active.messages),
-                threads = summaries(),
-                threadId = threadId,
-                ready = true,
-            )
+            val threadsFinal = fresh?.let { listOf(it) } ?: freshThreads
+            val activeFinal = threadsFinal.first()
+            if (fresh != null) {
+                // Persist the fresh empty thread on IO (save is IO-gated —
+                // the Main hop below must never call it).
+                ChatThreads.save(appCtx, tab, threadsFinal)
+            }
+            withContext(Dispatchers.Main) {
+                if (initGen.get() == 0) {
+                    threads = threadsFinal
+                    threadId = activeFinal.id
+                    _state.value = _state.value.copy(
+                        messages = ChatThreads.toUi(activeFinal.messages),
+                        threads = summaries(),
+                        threadId = threadId,
+                        ready = true,
+                    )
+                } else {
+                    // A user op already published newer state — don't clobber
+                    // it; just mark ready so the UI unblocks. Totals poll
+                    // below still runs against the live tab.
+                    _state.value = _state.value.copy(ready = true)
+                }
+            }
             refreshServerTotals()
             // Pending proposals badge without opening the sheet: one light
             // list at launch, then again on every retarget below.
             pollMemoryCount(api.pathFor(tab))
             // App-killed turn recovery (#311): an unanswered user tail with
-            // a live server run resends into the existing run.
-            maybeResume(threadId, ChatThreads.toUi(active.messages))
+            // a live server run resends into the existing run. Reads the
+            // LIVE thread (a user op may have replaced the loaded one).
+            threads.firstOrNull { it.id == threadId }?.let {
+                maybeResume(threadId, ChatThreads.toUi(it.messages))
+            }
         }
         checkReachability()
     }
@@ -456,16 +500,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private fun joinPending(first: String, second: String): String =
         if (first.isBlank()) second else "${first.trimEnd()} $second"
 
-    /** Removes a staged composer photo by STAGED slot (#339): the strip
-     * passes `i` from wiredPhotosWithIndex() while labeling by wired
-     * position (`w+1 of N`) — passing the label number removes the wrong
-     * photo once blanks exist. Pinned here so a future caller reading the
-     * labels can't naturally pass `w`. */
-    fun removePendingAttachment(index: Int) {
+    /** Removes a staged composer photo by stable pick id (#339): the strip's
+     * index comes from a state snapshot, and a batch landing between
+     * recomposition and tap shifts indices — removing by position then
+     * drops the WRONG photo. Ids are minted per pick and immutable, so the
+     * id names the photo regardless of intervening stages. Falls back to
+     * nothing (not position) when the id is gone: a concurrent remove
+     * already settled it, and guessing by index would mis-delete. */
+    fun removePendingAttachmentById(id: String) {
+        if (id.isEmpty()) return
         val cur = _state.value.pendingAttachments
-        if (index !in cur.indices) return
+        if (cur.none { it.id == id }) return
         _state.value = _state.value.copy(
-            pendingAttachments = cur.filterIndexed { i, _ -> i != index },
+            pendingAttachments = cur.filterNot { it.id == id },
         )
     }
 
@@ -540,6 +587,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         if (id == threadId || _state.value.streaming) return
         val target = threads.firstOrNull { it.id == id } ?: return
+        // Past every no-op return: this tap really republishes thread state,
+        // so it outranks init's in-flight load (#339). Bumping on a tap that
+        // then returned would have dropped the loaded list for nothing.
+        initGen.incrementAndGet()
         threadId = id
         cancelRecovery()
         runsJob?.cancel()
@@ -632,6 +683,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // retries on the next tap (each tap bumps the gen). Consuming
             // here would lose the tap the moment the turn ends.
             if (_state.value.streaming) return false
+            // Real publish past every no-op return (#339), same rule as
+            // switchThread above.
+            initGen.incrementAndGet()
             threadId = id
             cancelRecovery()
             runsJob?.cancel()
@@ -708,6 +762,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             }
             return
         }
+        // Real publish past the not-ready return (#339): only from here may
+        // this op outrank init's in-flight load.
+        initGen.incrementAndGet()
         streamJob?.cancel()
         streamJob = null
         serverTotalsJob?.cancel()
@@ -790,6 +847,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             }
             return
         }
+        // Real publish past the not-ready return (#339), same rule as
+        // newConversation above.
+        initGen.incrementAndGet()
         streamJob?.cancel()
         streamJob = null
         // Stop the server-side run when deleting the ACTIVE thread (#339):
@@ -2177,6 +2237,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             updatedAt = ChatThreads.now(),
             messages = ChatThreads.toStored(forked),
         )
+        // Real publish past every no-op return above (#339): the fork
+        // becomes live state, so it outranks init's in-flight load.
+        initGen.incrementAndGet()
         threads = listOf(fresh) + threads
         threadId = fresh.id
         cancelRecovery()
