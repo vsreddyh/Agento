@@ -277,10 +277,15 @@ object SettingsBackup {
                         // Thread files canonicalize payloads first (#339):
                         // a hand-edited backup must not persist wrapped or
                         // ragged base64 that the load boundary would then
-                        // have to heal. Unparseable-as-threads keeps the
-                        // old skip behavior.
+                        // have to heal. Valid-JSON-but-wrong-shape falls back
+                        // to raw like export does (#339) — never skip: the old
+                        // code kept any valid-JSON file, and a silent skip on
+                        // fresh reinstall loses the thread with no signal.
+                        // (load() still fails closed on the wrong shape at
+                        // read time — raw here preserves bytes, it never
+                        // executes them.)
                         val toWrite = if (name.startsWith("chat_threads_")) {
-                            ChatThreads.canonicalizeFile(text) ?: continue
+                            ChatThreads.canonicalizeFile(text) ?: text
                         } else {
                             text
                         }

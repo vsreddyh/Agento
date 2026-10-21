@@ -477,7 +477,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Switches to another conversation; the draft stays on the old one. */
     fun switchThread(id: String) {
-        if (id == threadId || _state.value.streaming || !_state.value.ready) return
+        // Voiced on staged content like newConversation()/deleteThread()
+        // (#339): the lumped guard below dead-taps mid-load with a photo
+        // staged — split so !ready voices while same-thread/streaming stays
+        // silent (a live turn owns the tap; nothing to say there).
+        if (!_state.value.ready) {
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notifyLoading()
+            }
+            return
+        }
+        if (id == threadId || _state.value.streaming) return
         val target = threads.firstOrNull { it.id == id } ?: return
         threadId = id
         cancelRecovery()

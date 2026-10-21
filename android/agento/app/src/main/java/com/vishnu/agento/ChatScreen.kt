@@ -787,65 +787,88 @@ internal fun ChatTab(
         // sweep). Cleared on every early IO failure below; the callback
         // clears on settle.
         cameraPendingSince = SystemClock.elapsedRealtime()
+        // Never-fired release (#339): rotation/tab-leave mid-hop cancels
+        // this coroutine before the Main hop runs — without the finally,
+        // the tap-time arm sticks till the 10-min stale bound and every
+        // Take-photo tap reads "already open" with no camera open. Atomic
+        // like the deleteQuietly flag: set on Main before the intent fires,
+        // read on whatever thread the cancel lands on — a stale read only
+        // risks a redundant clear (harmless), never a stuck gate.
+        val intentFired = java.util.concurrent.atomic.AtomicBoolean(false)
         scope.launch(Dispatchers.IO) {
-            val dir = File(appTapContext.cacheDir, "camera")
-            if (!dir.isDirectory && !dir.mkdirs()) {
+            try {
+                val dir = File(appTapContext.cacheDir, "camera")
+                if (!dir.isDirectory && !dir.mkdirs()) {
+                    withContext(Dispatchers.Main) {
+                        cameraPendingSince = 0L
+                        vm.notify("Couldn't start the camera — storage unavailable.")
+                    }
+                    return@launch
+                }
+                // Skip the delete while a capture is decoding (#339): a rapid
+                // re-tap would delete the in-flight file mid-read and turn a good
+                // capture into a "moved or deleted" error. The in-flight batch's
+                // own cleanup deletes its file when it lands.
+                if (!wasBusy) {
+                    runCatching { prevPath?.let(::File)?.takeIf { it.exists() }?.delete() }
+                }
+                // UUID, not millis (#339): a rapid double-tap can mint the same
+                // millisecond twice and point two captures at one file.
+                val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
+                val uri = runCatching {
+                    // packageName tracks applicationId at runtime (#339): the
+                    // earlier comment claiming a flavor/suffix would break this
+                    // was wrong — Context.getPackageName() returns the runtime
+                    // applicationId including any suffix, matching the manifest's
+                    // ${applicationId} authority by construction. (BuildConfig is
+                    // still not generated in this module — verified by the CI
+                    // failure that tried it — but nothing here needs it.)
+                    FileProvider.getUriForFile(appTapContext, "${appTapContext.packageName}.fileprovider", file)
+                }.getOrNull()
                 withContext(Dispatchers.Main) {
-                    cameraPendingSince = 0L
-                    vm.notify("Couldn't start the camera — storage unavailable.")
+                    if (uri == null) {
+                        cameraPendingSince = 0L
+                        vm.notify("Couldn't start the camera.")
+                        // Shared helper (dead-scope-safe), not an inline
+                        // exists()/delete() on Main (#339).
+                        deleteQuietly(file)
+                        return@withContext
+                    }
+                    cameraUri = uri
+                    cameraPath = file.absolutePath
+                    // Owner recorded with the launch (#339): the callback homes the
+                    // batch to this thread even across a switch.
+                    cameraThread = state.threadId
+                    // Re-armed at launch (already armed at tap above, #339): the
+                    // tap-time arm closes the double-tap window across the IO
+                    // hop; refreshing here keeps the stale bound measured from
+                    // the intent, not the tap.
+                    // Guarded: if launch() itself throws (no camera activity to
+                    // resolve, broken FileProvider on an odd OEM), no callback ever
+                    // fires — so the gate resets, the path nulls, and the orphan file
+                    // deletes here instead of sticking the gate till the stale bound.
+                    cameraPendingSince = SystemClock.elapsedRealtime()
+                    intentFired.set(true)
+                    runCatching {
+                        cameraLauncher.launch(uri)
+                    }.onFailure {
+                        cameraPendingSince = 0L
+                        cameraPath = null
+                        deleteQuietly(file)
+                        vm.notify("Couldn't start the camera.")
+                    }
                 }
-                return@launch
-            }
-            // Skip the delete while a capture is decoding (#339): a rapid
-            // re-tap would delete the in-flight file mid-read and turn a good
-            // capture into a "moved or deleted" error. The in-flight batch's
-            // own cleanup deletes its file when it lands.
-            if (!wasBusy) {
-                runCatching { prevPath?.let(::File)?.takeIf { it.exists() }?.delete() }
-            }
-            // UUID, not millis (#339): a rapid double-tap can mint the same
-            // millisecond twice and point two captures at one file.
-            val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
-            val uri = runCatching {
-                // packageName tracks applicationId at runtime (#339): the
-                // earlier comment claiming a flavor/suffix would break this
-                // was wrong — Context.getPackageName() returns the runtime
-                // applicationId including any suffix, matching the manifest's
-                // ${applicationId} authority by construction. (BuildConfig is
-                // still not generated in this module — verified by the CI
-                // failure that tried it — but nothing here needs it.)
-                FileProvider.getUriForFile(appTapContext, "${appTapContext.packageName}.fileprovider", file)
-            }.getOrNull()
-            withContext(Dispatchers.Main) {
-                if (uri == null) {
-                    cameraPendingSince = 0L
-                    vm.notify("Couldn't start the camera.")
-                    // Shared helper (dead-scope-safe), not an inline
-                    // exists()/delete() on Main (#339).
-                    deleteQuietly(file)
-                    return@withContext
-                }
-                cameraUri = uri
-                cameraPath = file.absolutePath
-                // Owner recorded with the launch (#339): the callback homes the
-                // batch to this thread even across a switch.
-                cameraThread = state.threadId
-                // Re-armed at launch (already armed at tap above, #339): the
-                // tap-time arm closes the double-tap window across the IO
-                // hop; refreshing here keeps the stale bound measured from
-                // the intent, not the tap.
-                // Guarded: if launch() itself throws (no camera activity to
-                // resolve, broken FileProvider on an odd OEM), no callback ever
-                // fires — so the gate resets, the path nulls, and the orphan file
-                // deletes here instead of sticking the gate till the stale bound.
-                cameraPendingSince = SystemClock.elapsedRealtime()
-                runCatching {
-                    cameraLauncher.launch(uri)
-                }.onFailure {
-                    cameraPendingSince = 0L
-                    cameraPath = null
-                    deleteQuietly(file)
-                    vm.notify("Couldn't start the camera.")
+            } finally {
+                // Cancel-safe gate release (#339): early failures above
+                // already cleared; a fired intent is settled by its callback
+                // (TakePicture outlives this coroutine). Only the
+                // never-fired path — cancel mid-hop — clears here, on
+                // NonCancellable + Main so the state write survives the
+                // cancel that triggered it.
+                if (!intentFired.get()) {
+                    withContext(NonCancellable + Dispatchers.Main) {
+                        cameraPendingSince = 0L
+                    }
                 }
             }
         }
@@ -942,7 +965,16 @@ internal fun ChatTab(
             cameraPendingSince = SystemClock.elapsedRealtime()
             cameraWasAskedAtRequest = cameraAskedBefore
             cameraAskedBefore = true
-            cameraPermission.launch(Manifest.permission.CAMERA)
+            // Guarded like the camera intent (#339): the callback clears the
+            // gate on settle, but a launch() throw (no handler on an odd
+            // OEM) fires no callback — so reset + voice here instead of
+            // sticking the 10-min gate with no dialog open.
+            runCatching {
+                cameraPermission.launch(Manifest.permission.CAMERA)
+            }.onFailure {
+                cameraPendingSince = 0L
+                vm.notify("Couldn't ask for camera permission.")
+            }
         }
     }
     // ViewModel notices (attach caps, drops, discards) surface as toasts,
@@ -997,7 +1029,15 @@ internal fun ChatTab(
             // Home snapshot at tap time (#339): the callback runs
             // post-switch, so this — not current-at-result — owns the batch.
             galleryThread = state.threadId
-            galleryLauncher.launch("image/*")
+            // Guarded like the camera/permission intents (#339): a launch()
+            // throw (no picker on an odd OEM) fires no callback — so drop
+            // the homed thread + voice here instead of crashing.
+            runCatching {
+                galleryLauncher.launch("image/*")
+            }.onFailure {
+                galleryThread = null
+                vm.notify("Couldn't open the photo picker.")
+            }
         },
         onTakePhoto = ::requestCamera,
         onRemovePhoto = vm::removePendingAttachment,
