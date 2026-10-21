@@ -798,12 +798,16 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // export holds thread files wholesale, payloads
                     // included, so photo-heavy threads make for slow
                     // restores — worth one line when large, silent when not.
-                    // Streamed in chunks, not via toByteArray(): the pretty
+                    // Streamed in chunks, not via toByteArray(): the compact
                     // string (~2x the bytes as UTF-16) must exist to write
                     // at all, but the duplicate byte[] copy is avoidable —
                     // count bytes while streaming instead, so the peak is
-                    // the string plus one 64 KB window.
-                    val text = SettingsBackup.export(context).toString(2)
+                    // the string plus one 64 KB window. Compact, not pretty
+                    // (#339): toString(2) materializes the same payload plus
+                    // indentation whitespace, and the large case this warns
+                    // about is exactly base64 blobs nobody reads — the peak
+                    // that matters most is the one pretty-printing inflates.
+                    val text = SettingsBackup.export(context).toString()
                     var written = 0L
                     val opened = context.contentResolver.openOutputStream(uri)
                         ?: throw IllegalStateException("Could not open the selected file for writing")

@@ -161,33 +161,44 @@ private fun AttachmentThumb(
     stableId: String = "",
 ) {
     // Identity without walking the payload (#339): the per-pick UUID is
-    // stable across removes — slot is deliberately NOT in the key, so
-    // photo 1 keeps its thumbnail when photo 0 leaves (no re-decode, no
+    // stable across removes — slot is deliberately NOT in the stable key,
+    // so photo 1 keeps its thumbnail when photo 0 leaves (no re-decode, no
     // flicker) — and distinct across identical picks (no aliasing). A
-    // 256-char head/tail sample rides along on the stable branch (128 on
-    // the legacy branch below — scoped per branch, not one claim for
-    // both) so a hand-mutated payload (same id, same length, different
-    // middle) still re-keys in practice: burst-shot headers can share a
-    // 64-char prefix, so the sample is wide enough that only adversarial
-    // mutation aliases — which a full-string walk (the cost this key
-    // exists to avoid) could close. Legacy payloads (id "") key on slot
-    // + 128-char sample.
+    // 256-char head/tail sample rides along in the stable value (64-char
+    // in the legacy value below) as a second disambiguator for DISTINCT
+    // payloads: burst-shot headers can share a 64-char prefix, so the
+    // sample is wide enough that only adversarial mutation aliases — which
+    // a full-string walk (the cost this key exists to avoid) could close.
+    // Honestly scoped (#339): the remember keys are the cheap identity
+    // (UUID + length) WITHOUT the sample, so a same-id + same-length +
+    // mutated-middle payload would reuse the cached Triple and never
+    // re-fire produceState. Impossible in practice — payloads are immutable
+    // from pick time, one UUID per pick — so the sample guards distinct
+    // payloads, not mutation. Legacy payloads (id "") key on slot + length
+    // with the same non-mutation caveat, best-effort by construction: two
+    // different pre-id photos with same length + same head/tail CAN alias
+    // here (no crash, no placeholder — just the wrong thumb). Self-aging
+    // as old threads turn over; new picks never land here.
     // Decoded off-main: ~1 MB Base64.decode + decodeByteArray during
     // composition janks low-end scroll, so produceState moves it to IO
     // (placeholder shows until it lands). No manual recycle: it can pull
     // pixels from under a late outgoing draw ("trying to use a recycled
     // bitmap") — ~256px thumbnails are GC-cheap, and prompt freeing is
     // not worth a crash.
-    // Remembered, not rebuilt per recomposition (#339): the 256-char sample
-    // string otherwise allocates fresh on every scroll frame per visible
-    // thumb. Cache key is the cheap identity (UUID + slot + length — tens
-    // of chars compared) so the sample rebuilds only when the payload
-    // actually changed; Triple equality per frame then compares stored
-    // strings without allocating.
-    val thumbKey = remember(stableId, legacySlot, base64.length) {
-        if (stableId.isNotEmpty()) {
+    // Remembered, not rebuilt per recomposition (#339): the sample string
+    // otherwise allocates fresh on every scroll frame per visible thumb.
+    // The remember is SPLIT per branch (#339): the stable branch ignores
+    // legacySlot, so sharing one key on it would rebuild every survivor's
+    // sample string on each remove (indices shift i: 1→0) for Triples that
+    // compare equal anyway — key each branch only on what its value
+    // carries. (A conditional remember is safe here: flipping branches
+    // forgets the old slot, which is exactly the desired re-key.)
+    val thumbKey = if (stableId.isNotEmpty()) {
+        remember(stableId, base64.length) {
             Triple(stableId, base64.length, base64.sampleKey(128))
-        } else {
+        }
+    } else {
+        remember(legacySlot, base64.length) {
             // Legacy fallback, best-effort by construction (#339): two
             // different pre-id photos with same length + same head/tail CAN
             // alias here (no crash, no placeholder — just the wrong thumb).
@@ -372,16 +383,29 @@ internal fun ChatTab(
         // needed. Only a truly fresh process clears the gate; rotation
         // keeps it via the timestamp bound.
         val keep = cameraPath
-        if (vm.consumeSweepGateReset()) {
+        // Fresh-process vs rotation, told apart by the VM (#339): the sweep
+        // gate reset fires once, only when the ViewModel died with the
+        // process — saveable state alone can't tell rotation from
+        // kill-with-bundle (both restore). Only a truly fresh process
+        // clears the gate below; rotation keeps it via the timestamp bound.
+        val freshProcess = vm.consumeSweepGateReset()
+        if (freshProcess) {
             cameraPendingSince = 0L
         }
         // Age out orphans, keep the live capture UNCONDITIONALLY (#339):
         // a restored keep older than the bound is still the file the
         // returning camera may be writing to — death with camera
         // foreground long ago restores keep + aged file, and sweeping it
-        // turns a good capture into "moved or deleted". Only non-keep
-        // orphans age out (mtime-persisted across the death that orphaned
-        // them); the keep file's own batch/callback owns its lifecycle.
+        // turns a good capture into "moved or deleted". The keep file's own
+        // batch/callback owns its lifecycle.
+        // Fresh-process path deletes every non-keep file UNCONDITIONALLY
+        // (#339): after a kill all of them are ownerless by construction
+        // (in-flight batches clean their own files via finally), so the
+        // mtime age gate would only defer bounding the litter to the next
+        // launch 10+ min later. The rotation path keeps the age gate: a
+        // young non-keep file there can be an older flight still decoding
+        // (a rapid re-tap overwrites cameraPath while the first batch reads
+        // its own file — only the keep is provably live).
         val sweepDir = appCacheDir.resolve("camera")
         withContext(Dispatchers.IO) {
             runCatching {
@@ -389,7 +413,7 @@ internal fun ChatTab(
                 sweepDir.takeIf { it.exists() }?.listFiles()
                     ?.filter {
                         it.absolutePath != keep &&
-                            now - it.lastModified() > CAMERA_SWEEP_STALE_MS
+                            (freshProcess || now - it.lastModified() > CAMERA_SWEEP_STALE_MS)
                     }
                     ?.forEach { runCatching { it.delete() } }
             }
