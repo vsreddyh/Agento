@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -286,6 +287,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 maybeResume(threadId, ChatThreads.toUi(it.messages))
             }
         }
+        // Out-of-band rewrite (backup import) → re-read the file (#339):
+        // the import writes it directly, so the in-memory list is stale and
+        // the next persist would write it back over the restore.
+        viewModelScope.launch {
+            var seen = ChatThreads.rewrites.value[tab] ?: 0L
+            ChatThreads.rewrites.collect { map ->
+                val v = map[tab] ?: 0L
+                if (v != seen) {
+                    seen = v
+                    onThreadFileRewritten()
+                }
+            }
+        }
         checkReachability()
     }
 
@@ -422,10 +436,79 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
 
     private fun persist() {
+        // A pending rewrite (backup import) merges FIRST: the restored file
+        // is newer than this list for every thread but the live one (#339),
+        // so persisting the list alone would resurrect the pre-import
+        // conversations over the restore.
+        val merged = consumePendingRewrite()
         // Drafts never hit disk: only threads with chats are worth keeping.
-        val snapshot = threads.filter { it.messages.isNotEmpty() }
+        val snapshot = merged ?: threads.filter { it.messages.isNotEmpty() }
         viewModelScope.launch(Dispatchers.IO) {
             ChatThreads.save(appCtx, tab, snapshot)
+        }
+    }
+
+    /** The restored threads of a rewrite that landed mid-turn (#339): the
+     * live turn's messages are not in the file yet, so the file is adopted
+     * at the next persist instead of immediately. */
+    private var pendingRestored: List<ChatThread>? = null
+
+    /** Merges a pending rewrite into the in-memory list (#339): the
+     * restored file wins for every thread but the live one, whose
+     * just-produced messages would otherwise be lost. */
+    private fun consumePendingRewrite(): List<ChatThread>? {
+        val restored = pendingRestored ?: return null
+        pendingRestored = null
+        val live = threads.firstOrNull { it.id == threadId }
+        val merged = restored.filter { it.id != threadId } + listOfNotNull(live)
+        threads = merged
+        _state.value = _state.value.copy(threads = summaries())
+        return merged.filter { it.messages.isNotEmpty() }
+    }
+
+    /** A thread file was rewritten out-of-band (#339): the backup import
+     * writes it directly, so the in-memory list is stale. Re-read it, or
+     * the next persist writes the pre-import threads back over the
+     * restore. */
+    private fun onThreadFileRewritten() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val restored = ChatThreads.load(appCtx, tab)
+                .filter { it.id.isNotEmpty() }
+                .sortedByDescending { it.updatedAt }
+                .filter { it.messages.isNotEmpty() }
+            withContext(Dispatchers.Main) {
+                if (_state.value.streaming) {
+                    // Mid-turn: the file predates the live turn, so
+                    // adopting it now would drop that turn. Merge at the
+                    // next persist instead.
+                    pendingRestored = restored
+                } else {
+                    applyRewrite(restored)
+                }
+            }
+        }
+    }
+
+    /** Adopts a rewritten thread file (#339): the restored list is
+     * authoritative, and a conversation it no longer holds must not stay
+     * on screen (its next persist would put it back). */
+    private fun applyRewrite(restored: List<ChatThread>) {
+        val active = restored.firstOrNull { it.id == threadId }
+        if (active != null) {
+            threads = restored
+            _state.value = _state.value.copy(
+                messages = ChatThreads.toUi(active.messages),
+                threads = summaries(),
+            )
+        } else {
+            val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
+            threads = listOf(fresh) + restored
+            threadId = fresh.id
+            _state.value = _state.value.copy(
+                messages = emptyList(),
+                threads = summaries(),
+                threadId = threadId,
+            )
         }
     }
 
@@ -524,9 +607,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         viewModelScope.launch {
             if (threads.none { it.id == id }) {
                 val loaded = withContext(Dispatchers.IO) {
-                    ChatThreads.load(appCtx, tab).filter { it.id.isNotEmpty() }
+                    ChatThreads.load(appCtx, tab)
+                        .filter { it.id.isNotEmpty() && it.messages.isNotEmpty() }
                 }
-                threads = threads + loaded.filter { l -> threads.none { it.id == l.id } }
+                // Newest-first, like init's load (#339): the append path
+                // left the switcher out of order, and a persisted empty
+                // draft must not enter history.
+                threads = (threads + loaded.filter { l -> threads.none { it.id == l.id } })
+                    .sortedByDescending { it.updatedAt }
             }
             // Consumed only when the open was not blocked on a live turn:
             // a streaming-blocked tap keeps its target and retries on re-tap.
@@ -614,6 +702,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         // Real publish past the not-ready return: only from here may this op outrank init's load.
         initGen.incrementAndGet()
+        // Bump the generation like stop(): a Done/Error already buffered in
+        // the callbackFlow channel must go stale, or it lands on the fresh
+        // thread and persists the old turn's assistant message there.
+        sendGen++
         streamJob?.cancel()
         streamJob = null
         serverTotalsJob?.cancel()
@@ -688,6 +780,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         // Real publish past the not-ready return, same rule as newConversation.
         initGen.incrementAndGet()
+        // Bump the generation like stop(): a buffered Done/Error must go
+        // stale, or it lands on the fallback thread and persists there.
+        sendGen++
         streamJob?.cancel()
         streamJob = null
         // Stop the server-side run when deleting the ACTIVE thread: same orphan class New closes above.
@@ -1823,9 +1918,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             "user",
             "Continue",
             ChatThreads.now(),
-            // Carry the interrupted turn's photos: the "Continue" turn keeps image parts.
-            attachments = msgs.lastOrNull { it.role == "user" }
-                ?.attachments?.wiredPhotos().orEmpty(),
+            // Carry the interrupted turn's photos: the "Continue" turn keeps
+            // image parts. The LAST photo-carrying user turn, not just the
+            // last user turn (#339): the wire keeps image parts on the
+            // trailing user turn only, so a last text-only user turn would
+            // leave an earlier photo riding as a text marker — the model's
+            // photo context lost exactly when it is needed.
+            attachments = msgs.lastOrNull {
+                it.role == "user" && it.attachments.wiredPhotoCount() > 0
+            }?.attachments?.wiredPhotos().orEmpty(),
         )
         // Typed draft survives like retry()/regenerate(): never vaporize a typed draft.
         _state.value = _state.value.copy(messages = history, streaming = true, error = "")

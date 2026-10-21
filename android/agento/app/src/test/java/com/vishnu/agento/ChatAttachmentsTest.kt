@@ -716,4 +716,32 @@ class ChatAttachmentsTest {
         assertEquals(2L, base64Bytes("AB=C"))
         assertEquals(0L, base64Bytes("=="))
     }
+
+    // ── thread-file boundaries (#339) ─────────────────────────────────────
+
+    @Test
+    fun `canonicalizeFile caps messages like save`() {
+        // load()/import must trim to the same cap save() applies (#339):
+        // a 250-message file that loads whole is silently cut to 200 by
+        // the next save, and the loss lands after the restore.
+        val msgs = (1..250).joinToString(",") { """{"role":"user","content":"m$it"}""" }
+        val text = """[{"id":"t1","messages":[$msgs]}]"""
+        val out = ChatThreads.canonicalizeFile(text)
+        assertTrue("canonicalizeFile must accept a valid thread file", out != null)
+        val messages = org.json.JSONArray(out!!).getJSONObject(0).getJSONArray("messages")
+        assertEquals(200, messages.length())
+        // The newest survive: save() trims the oldest.
+        assertEquals("m250", messages.getJSONObject(199).getString("content"))
+    }
+
+    @Test
+    fun `rewrite counter is per tab`() {
+        // The import announces the tab it rewrote (#339): a counter per tab
+        // keeps one tab's restore from disturbing another's ViewModel.
+        val before = ChatThreads.rewrites.value["chat"] ?: 0L
+        ChatThreads.notifyRewritten("chat")
+        ChatThreads.notifyRewritten("story")
+        assertEquals(before + 1L, ChatThreads.rewrites.value["chat"])
+        assertEquals(1L, ChatThreads.rewrites.value["story"])
+    }
 }

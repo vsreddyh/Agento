@@ -776,6 +776,14 @@ private const val BACKUP_LARGE_BYTES = 5_000_000
 // The hard cap (BACKUP_HARD_CAP_BYTES) and its floor slack live on
 // SettingsBackup: export() enforces the same wall at the boundary.
 
+/** Names the first few skipped/unreadable files (#339): the count alone
+ * says a conversation was lost, the name says which. */
+private fun namesOf(names: List<String>): String {
+    val shown = names.take(3).joinToString(", ")
+    val more = if (names.size > 3) " (+${names.size - 3} more)" else ""
+    return shown + more
+}
+
 /** Issue #16: manual settings export/import. SAF pickers need no storage
  * permission; the file the user keeps survives any reinstall gap that outlives
  * cloud backup. [onImported] reloads the on-screen fields from prefs. */
@@ -878,7 +886,7 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     val missing = if (unreadable.isEmpty()) {
                         ""
                     } else {
-                        " " + unreadable.size + " file(s) could not be read and are missing."
+                        " " + unreadable.size + " file(s) could not be read: " + namesOf(unreadable)
                     }
                     if (size > BACKUP_LARGE_BYTES) {
                         Toasts.EXPORTED + " Large backup (${formatBytes(size)}) — " +
@@ -974,7 +982,7 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     val skippedNote = if (outcome.skipped.isEmpty()) {
                         ""
                     } else {
-                        " " + outcome.skipped.size + " file(s) skipped (invalid or unreadable)."
+                        " " + outcome.skipped.size + " file(s) skipped: " + namesOf(outcome.skipped)
                     }
                     status = "Restored ${outcome.applied} setting(s).$skippedNote"
                     onImported()
@@ -999,7 +1007,12 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                 Text("Export settings")
             }
             OutlinedButton(
-                onClick = { importPicker.launch(arrayOf("application/json")) },
+                onClick = {
+                    // Wide mime list (#339): many file managers report a
+                    // .json backup as text/plain, and a filtered picker
+                    // would then hide the user's only backup file.
+                    importPicker.launch(arrayOf("application/json", "text/plain", "*/*"))
+                },
                 enabled = !busy,
                 modifier = Modifier.weight(1f),
             ) {

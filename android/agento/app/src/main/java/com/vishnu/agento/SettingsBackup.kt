@@ -322,7 +322,13 @@ object SettingsBackup {
             if (files != null) {
                 for (name in backupFiles()) {
                     val text = files.optString(name, "")
-                    if (text.isEmpty()) continue
+                    if (text.isEmpty()) {
+                        // An empty entry is not restored, so it counts as
+                        // skipped (#339) — a silent drop reads as a clean
+                        // restore.
+                        skipped += name
+                        continue
+                    }
                     if (name.startsWith("chat_threads_")) {
                         // Single parse, not probe-then-parse: the old org.json
                         // probe decoded the multi-MB string just to check shape,
@@ -339,14 +345,17 @@ object SettingsBackup {
                             skipped += name
                             continue
                         }
+                        val tab = name.removePrefix("chat_threads_").removeSuffix(".json")
                         runCatching {
                             java.io.File(context.filesDir, name).writeText(toWrite, Charsets.UTF_8)
                             // Invalidate the save cache: the import bypasses
                             // save(), so a stale snapshot would write the
                             // pre-import bytes back over the restored file.
-                            ChatThreads.invalidate(
-                                name.removePrefix("chat_threads_").removeSuffix(".json"),
-                            )
+                            ChatThreads.invalidate(tab)
+                            // Tell the live ViewModel too: it still holds the
+                            // pre-import threads, and its next persist would
+                            // write them back over this file.
+                            ChatThreads.notifyRewritten(tab)
                             applied++
                         }.onFailure { skipped += name }
                         continue

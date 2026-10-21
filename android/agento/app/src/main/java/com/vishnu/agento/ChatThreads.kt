@@ -2,6 +2,8 @@ package com.vishnu.agento
 
 import android.content.Context
 import java.io.File
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -155,12 +157,21 @@ object ChatThreads {
             threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText(Charsets.UTF_8))
                 .filter { it.id.isNotEmpty() }
                 .take(MAX_THREADS)
+                // Same message cap as save() (#339): a file with 1000
+                // messages would load whole and then be silently trimmed to
+                // 200 by the next save — the trim must happen at the
+                // boundary that reads, or the loss is invisible.
                 // Canonicalized on load: storage is hand-editable, so memory
                 // holds no wrapped-or-ragged payloads — that is what lets the
                 // hot-path isWired() stay a blank check while the wire filter
                 // asserts decode-validity. The next persist writes it back.
                 .map { t ->
-                    t.copy(messages = t.messages.map { m ->
+                    val capped = if (t.messages.size > MAX_MESSAGES) {
+                        t.copy(messages = t.messages.takeLast(MAX_MESSAGES))
+                    } else {
+                        t
+                    }
+                    capped.copy(messages = capped.messages.map { m ->
                         m.copy(attachments = canonicalizeAttachments(m.attachments))
                     })
                 }
@@ -204,6 +215,25 @@ object ChatThreads {
      * invalidate it, or the next save restores the pre-import bytes. */
     internal fun invalidate(tab: String) {
         lastCanonical.remove(tab)
+    }
+
+    /** Tabs whose thread file was rewritten out-of-band, with a per-tab
+     * counter (#339): the backup import writes the file directly, so a live
+     * ViewModel still holds the pre-import threads and its next persist
+     * would write them back over the restore. A counter per tab (not a
+     * global flag) so a rewrite of one tab never disturbs another, and
+     * replayed through a StateFlow so a ViewModel that starts after the
+     * rewrite still sees the newest count. */
+    private val rewriteCounters = kotlinx.coroutines.flow.MutableStateFlow<Map<String, Long>>(emptyMap())
+
+    /** The rewrite counters, for ViewModels to watch. */
+    val rewrites: kotlinx.coroutines.flow.StateFlow<Map<String, Long>> = rewriteCounters.asStateFlow()
+
+    /** Announces that [tab]'s thread file was rewritten out-of-band. */
+    internal fun notifyRewritten(tab: String) {
+        rewriteCounters.update { current ->
+            current + (tab to ((current[tab] ?: 0L) + 1L))
+        }
     }
 
     /** Last save's (input, canonicalized-output) snapshot per tab: the
@@ -253,7 +283,15 @@ object ChatThreads {
             threadJson.encodeToString(
                 ListSerializer(ChatThread.serializer()),
                 threads.map { t ->
-                    t.copy(messages = t.messages.map { m ->
+                    // Same message cap as load()/save() (#339): an imported
+                    // file must not carry messages the next save would
+                    // silently drop.
+                    val capped = if (t.messages.size > MAX_MESSAGES) {
+                        t.copy(messages = t.messages.takeLast(MAX_MESSAGES))
+                    } else {
+                        t
+                    }
+                    capped.copy(messages = capped.messages.map { m ->
                         m.copy(attachments = canonicalizeAttachments(m.attachments))
                     })
                 },
