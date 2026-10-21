@@ -140,14 +140,16 @@ object ChatThreads {
         val photos = maxPhotos
         val oneLine = first.replace(titleWhitespace, " ")
         // Photo signal with the budget kept (#339): the marker reserves
-        // its width first, so the row never exceeds 42 chars. avail == 0
+        // its width first, so the row never exceeds 42 chars. avail < 2
         // yields the bare suffix (unreachable today — suffixes are short —
-        // but the budget math must hold for all inputs, not just short ones).
+        // but the budget math must hold for all inputs, not just short
+        // ones): one grapheme plus "…" needs two cells, and a lone "…"
+        // is not a title — the photo signal is the useful half there.
         val suffix = if (photos == 0) "" else if (photos == 1) " [photo]" else " [$photos photos]"
         val avail = maxOf(0, 42 - suffix.length)
         val base = if (oneLine.length <= avail) {
             oneLine
-        } else if (avail >= 1) {
+        } else if (avail >= 2) {
             // Grapheme-safe cut via the shared walker (#339): the last
             // boundary within budget, so ZWJ sequences, flag pairs, and
             // surrogate pairs never split mid-cluster in the switcher row.
@@ -164,7 +166,16 @@ object ChatThreads {
             }
             // Drop the retained title string now, not on the next render.
             breaks.setText("")
-            oneLine.substring(0, end) + "…"
+            // A cluster wider than the budget leaves end == 0: fall back
+            // like avail < 2 — the suffix carries the signal, and only a
+            // no-suffix title keeps the bare ellipsis (nothing else fits).
+            if (end > 0) {
+                oneLine.substring(0, end) + "…"
+            } else if (suffix.isEmpty()) {
+                "…"
+            } else {
+                ""
+            }
         } else {
             ""
         }

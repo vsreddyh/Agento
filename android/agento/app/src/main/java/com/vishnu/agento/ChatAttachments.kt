@@ -98,7 +98,16 @@ internal fun List<ChatAttachment>.hasDecodablePhoto(): Boolean =
  * wire/display/cap contract. Blank-only: decode-validity (ragged alphabet,
  * bad padding) is checked at the wire filter, not here — a full or even
  * regex validation per call would run on search keystrokes, while sends
- * (the only place validity matters) are rare. */
+ * (the only place validity matters) are rare.
+ * Wrapped payloads count here and never wire (#339), deliberately: this
+ * is the DISPLAY predicate (counts, chips, titles, search markers), where
+ * framing whitespace is invisible — the strict gate lives in
+ * isDecodableBase64. So a 76-col-wrapped payload shows as a photo until
+ * the next load() strips it; load heals every app path (save writes
+ * canonical bytes) and only a raw out-of-band read can show the split.
+ * The surfaces that must agree with the wire use hasDecodablePhoto()
+ * instead (the preflight "remove a photo" advice), so a marked-but-
+ * unwirable turn is never told to remove a photo it never sends. */
 private fun ChatAttachment.isWired(): Boolean = base64.isNotBlank()
 
 /** Absolute raw-length ceiling for untrusted payloads (#339): no scan,
@@ -172,10 +181,16 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
  * export/import contracts all CLAIM Main-never, and a comment alone never
  * stopped a future Main-thread caller. Looper-exact on device
  * (myLooper() === mainLooper); on JVM unit tests the android.jar stubs
- * throw, which reads as "no Looper, no Main thread here" and passes —
- * the suite therefore CANNOT pin the throw path (documented, not hidden:
- * a device-only Main-thread call is caught on-device, and every caller
- * today runs inside withContext(Dispatchers.IO) anyway). No thread-name
+ * throw, which reads as "no Looper, no Main thread here" and passes, so
+ * the suite cannot pin this path either way.
+ * NEVER FATAL, on purpose (#339): the work produces the right bytes on
+ * any thread — Main-ness is a jank bug, not a correctness bug — so
+ * crashing in production would take the whole chat tab (thread
+ * load/save) down to punish a performance slip, while a debug-only
+ * `check` would need BuildConfig, which this module does not generate
+ * (buildFeatures has only `compose = true`). It logs a stacked error
+ * instead: site + trace stay diagnosable in logcat, and the fix is still
+ * "hop to IO", not "recover the tab". No thread-name
  * heuristic: any executor may name a worker "main", which would
  * false-positive, while the Looper identity already proves Main-ness
  * where it matters. The pre-prepare window (myLooper() null
@@ -196,8 +211,10 @@ internal fun requireIoThread(site: String) {
         val mainLooper = android.os.Looper.getMainLooper()
         android.os.Looper.myLooper() !== null && android.os.Looper.myLooper() === mainLooper
     }.getOrDefault(false)
-    check(!onMain) {
-        "$site must run on an IO thread, never Main"
+    if (onMain) {
+        // Stacked, not thrown (#339): see the KDoc — a Main-thread caller
+        // still does the right work, it only costs frames.
+        Log.e("ChatAttachments", "$site ran on Main (should be IO)", IllegalStateException(site))
     }
 }
 
