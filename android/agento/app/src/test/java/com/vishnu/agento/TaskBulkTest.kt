@@ -115,6 +115,15 @@ class TaskBulkTest {
     }
 
     @Test
+    fun `bulk op normalizes at construction`() {
+        val op = BulkOp("  skip  ", "  x  ", "  busy  ")
+        assertEquals("skip", op.op)
+        assertEquals("x", op.id)
+        assertEquals("busy", op.reason)
+        assertNull(BulkOp("skip", "a", "   ").reason)
+    }
+
+    @Test
     fun `bulk update sent reads present fields only`() {
         val sent = bulkUpdateSent(
             JSONObject().put("due_date", "2026-12-01").put("expected_revision", 3),

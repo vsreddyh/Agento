@@ -13,7 +13,7 @@ Bulk task actions run as one atomic server batch (`POST /api/tasks/batch`): one 
 - Duplicate is a canonical server op, not a client `create` copy.
 - Custom-repeat follow-ups stay post-commit; move conflicts fail the whole batch for retry after refresh (complete/skip are unguarded by design — only move carries a revision guard).
 - 503 + no blind retry: a deployment without transactions refuses the batch, and a timeout leaves the outcome unknown — refresh via the changes marker and resend rather than retrying blind (a retry would duplicate twice).
-- Guard split: bulk move carries `expected_revision` per op; selected rows that left the fetched page fail closed client-side (reload underneath, selection kept for retry) instead of going out unguarded. Bulk complete/skip stay unguarded, like the single verbs.
+- Guard split: bulk move carries `expected_revision` per op; bulk resolve filters to open rows in the fetched page. Anything else selected (left the page, already resolved) is set aside with a count — no fail-closed reload, no unguarded send. Bulk complete/skip stay unguarded, like the single verbs.
 - Bulk move is all-or-nothing: one row failing validation (e.g. a selected-days date mismatch) aborts the batch with the item named — fix the row or deselect it and retry. The batch never partially applies.
 - Single duplicate inherits the batch's transaction requirement (it rides a one-op batch).
 - Bulk move is date-only: each row keeps its own stored time. A mixed selection (timed + untimed rows) lands on one date with per-row times, said once in the toast, never per row.

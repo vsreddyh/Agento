@@ -91,23 +91,40 @@ data class ChangeMarker(
  * task by id. `reason` rides only on skip; `fields` only on update (the same
  * partial-update map the single-task update takes, e.g. due_date for a move
  * plus expected_revision for the concurrency guard).
+ *
+ * Normalized once, at construction: op/id trimmed, blank reason dropped to
+ * null — so the set, the wire, the busy set, and the error all name the same
+ * values, and no call site needs to trim. A private constructor forces every
+ * construction through the normalizing factory below.
  */
-data class BulkOp(
+data class BulkOp private constructor(
     val op: String,
     val id: String,
     val reason: String? = null,
     val fields: JSONObject? = null,
 ) {
+    companion object {
+        operator fun invoke(
+            op: String,
+            id: String,
+            reason: String? = null,
+            fields: JSONObject? = null,
+        ): BulkOp = BulkOp(
+            op = op.trim(),
+            id = id.trim(),
+            reason = reason?.trim()?.ifEmpty { null },
+            fields = fields,
+        )
+    }
+
     // Fail fast on misplaced extras: the server 422s a reason on non-skip
     // and fields on non-update, aborting the whole atomic batch — so a
     // caller bug here must read as a programming error, not a runtime 422.
-    // Blank counts as absent on both sides (the server trims/skips empties),
-    // so only a real value on the wrong verb throws. Compared trimmed, like
-    // the wire the body builder sends.
+    // Blank counts as absent (a blank reason arrives here as null), so only
+    // a real value on the wrong verb throws.
     init {
-        val cleanOp = op.trim()
-        require(reason == null || reason.isBlank() || cleanOp == "skip") { "reason rides only on skip" }
-        require(fields == null || fields.isEmptyOrNullOnly() || cleanOp == "update") { "fields ride only on update" }
+        require(reason == null || op == "skip") { "reason rides only on skip" }
+        require(fields == null || fields.isEmptyOrNullOnly() || op == "update") { "fields ride only on update" }
     }
 }
 
@@ -126,12 +143,11 @@ data class BulkItemResult(
 internal fun bulkOpsBody(ops: List<BulkOp>): JSONObject {
     val arr = JSONArray()
     for (op in ops) {
-        // Normalized once, here: op/id trimmed like the selection set is,
-        // blank reason omitted as absent, null-only/empty fields omitted as
-        // absent — so set, wire, and error all name the same values.
-        val o = JSONObject().put("op", op.op.trim()).put("id", op.id.trim())
-        val reason = op.reason?.trim()
-        if (!reason.isNullOrEmpty()) o.put("reason", reason)
+        // Values arrive normalized from BulkOp's factory; the body only
+        // omits what counts as absent — a blank reason, a null-only or empty
+        // fields object — mirroring the server's empty-as-absent rule.
+        val o = JSONObject().put("op", op.op).put("id", op.id)
+        if (!op.reason.isNullOrEmpty()) o.put("reason", op.reason)
         if (op.fields != null && !op.fields.isEmptyOrNullOnly()) o.put("fields", op.fields)
         arr.put(o)
     }
