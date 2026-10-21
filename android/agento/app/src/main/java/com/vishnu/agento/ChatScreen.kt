@@ -357,7 +357,10 @@ internal fun ChatTab(
     // Staged-toast episode marker (#339): which staged count the "photo
     // still staged" notice already voiced for. Declared before first use —
     // reset by the send/remove wrappers and thread changes below.
-    var liveStagedVoicedCount by remember { mutableStateOf(0) }
+    // Saveable, not plain remember (#339): a rotation mid-dictation would
+    // otherwise reset the slate to 0 and re-toast the identical notice for
+    // the same staged set on the next live sentence.
+    var liveStagedVoicedCount by rememberSaveable { mutableStateOf(0) }
     // Scroll-back thumbnail memory (#339): AttachmentThumb's produceState
     // remembers per composition, so scrolling away disposes the bitmap and
     // scrolling back re-decodes. Hoisted here so the cache outlives any
@@ -424,6 +427,16 @@ internal fun ChatTab(
     // dialog renders here, the editor/menu render there) — both fire on
     // the same key, so a new transient-UI addition belongs in whichever
     // effect owns its render site, not whichever is nearer.
+    // Deliberately NOT cleared here: the camera/permission gates, owners,
+    // and paths (#339). An in-flight TakePicture survives the switch and
+    // its callback still needs cameraUri/cameraPath/cameraThread to home
+    // or drop-with-notice; clearing the intent gate would let a new tap
+    // overwrite the in-flight capture (two outstanding intents, one Uri
+    // slot — the double-launch overwrite). The intent gate correctly
+    // refuses cross-thread taps while an intent is outstanding ("Camera
+    // is already open" is TRUE — the camera app is open); the split
+    // permission gate does the same for its own window with its own
+    // message, so no thread ever refuses for another thread's dialog.
     LaunchedEffect(state.threadId) { showCameraSettings = false }
     // True while a camera batch is decoding (#339): launchCamera's
     // delete-previous must skip a file with an in-flight decode, or a
@@ -439,6 +452,23 @@ internal fun ChatTab(
     // will ever clear it), so staleness bounds it — an intent older than
     // the bound is treated as dead and the launch proceeds.
     var cameraPendingSince by rememberSaveable { mutableStateOf(0L) }
+    // Separate gate for the permission-request window (#339): the intent
+    // gate above covers an outstanding TakePicture; this one covers an
+    // outstanding system permission dialog. One timestamp for both meant a
+    // restored permission arm blocked Take-photo taps with the wrong
+    // "already open" copy (a permission dialog is not a camera), and a
+    // stale intent arm blocked fresh permission requests. Split gates,
+    // correct messages: each window arms and clears only its own.
+    // Saveable like the intent gate (rotation between request and result
+    // must not lose it); the startup sweep always clears it on a fresh
+    // process, since system permission dialogs never survive death.
+    var cameraPermSince by rememberSaveable { mutableStateOf(0L) }
+    /** True while a camera permission request is outstanding (unanswered dialog). */
+    fun isCameraPermPending(): Boolean {
+        if (cameraPermSince == 0L) return false
+        val age = SystemClock.elapsedRealtime() - cameraPermSince
+        return age >= 0 && age < CAMERA_PENDING_STALE_MS
+    }
     // In-memory double-tap guard for the launchCamera IO window (#339):
     // the saveable gate arms only in the Main hop AFTER IO, so a second
     // tap landing mid-hop would otherwise pass both checks. Deliberately
@@ -496,6 +526,16 @@ internal fun ChatTab(
         // no outstanding capture clears the gate below (see keep guard);
         // rotation keeps it via the timestamp bound.
         val freshProcess = vm.consumeSweepGateReset()
+        // Permission gate ALWAYS clears on a fresh process (#339): unlike
+        // a camera intent (whose TakePicture result may still arrive after
+        // a kill-with-camera-foreground), a system permission dialog never
+        // survives process death — no callback will ever settle it, so any
+        // restored permission arm is stale by construction, keep or no keep.
+        // The intent gate below is pickier (see keep guard) because its
+        // callback may legitimately still fire.
+        if (freshProcess) {
+            cameraPermSince = 0L
+        }
         // Cleared only with no outstanding capture (#339): a kill with the
         // camera foreground restores BOTH the timestamp and cameraPath, and
         // zeroing the gate would let a second Take-photo overwrite the
@@ -1066,10 +1106,10 @@ internal fun ChatTab(
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        // Request settled — the launch gate below re-arms whether this was
-        // grant, denial, or permanent denial (all three settle here; only
-        // the launch path re-arms after this).
-        cameraPendingSince = 0L
+        // Request settled — the permission gate below clears on every
+        // outcome (grant, denial, permanent denial); only the launch path
+        // re-arms the *intent* gate after this (on grant).
+        cameraPermSince = 0L
         if (granted) {
             launchCamera()
         } else if (currentActivity.value?.let {
@@ -1109,7 +1149,7 @@ internal fun ChatTab(
             PackageManager.PERMISSION_GRANTED
         ) {
             launchCamera()
-        } else if (isCameraPending()) {
+        } else if (isCameraPermPending()) {
             // Double-request gate (#339): a second tap while the permission
             // dialog is outstanding would otherwise fire two permission
             // requests (OEM-dependent second-request behavior) — the same
@@ -1123,16 +1163,16 @@ internal fun ChatTab(
             // still the safer lie: it names the recovery, "try again".)
             vm.notify("Camera permission request is already open — answer it first.", ToastKind.Info)
         } else {
-            // Permission request armed like the launch gate (#339): rapid
-            // double-tap on a fresh install would otherwise fire two
-            // permission requests (OEM-dependent second-request behavior).
-            // Cleared on settle below; a rotation between request and
-            // result keeps it via saveable, and the stale bound covers
-            // death — same lifecycle as the launch gate. Asked flag arms
+            // Permission request armed in its OWN gate (#339): the intent
+            // gate stays disarmed here — arming it would make a restored
+            // permission arm block Take-photo taps with the wrong
+            // "already open" copy. Cleared on settle in the callback above;
+            // a rotation between request and result keeps it via saveable,
+            // and the stale bound covers abandonment. Asked flag arms
             // alongside for rationale routing (first vs permanent denial),
             // with the pre-request value snapshotted: the callback routes
             // on the snapshot, not the flag (always true at result time).
-            cameraPendingSince = SystemClock.elapsedRealtime()
+            cameraPermSince = SystemClock.elapsedRealtime()
             cameraWasAskedAtRequest = cameraAskedBefore
             cameraAskedBefore = true
             // Guarded like the camera intent (#339): the callback clears the
@@ -1142,7 +1182,7 @@ internal fun ChatTab(
             runCatching {
                 cameraPermission.launch(Manifest.permission.CAMERA)
             }.onFailure {
-                cameraPendingSince = 0L
+                cameraPermSince = 0L
                 vm.notify("Couldn't ask for camera permission.")
             }
         }

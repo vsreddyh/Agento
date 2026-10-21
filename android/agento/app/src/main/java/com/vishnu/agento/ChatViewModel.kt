@@ -414,6 +414,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private fun stagedDiscardedNotice() =
         notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
 
+    /** Notices that survive a thread change (#339): every thread-change
+     * site (switch/open/new/delete/fork) clears the composer, so Info
+     * toasts tied to the old composer's staging (cap refusals, decode
+     * failures mid-batch) must not render over the new composer's first
+     * paint — but Error toasts are failure reports the user may not have
+     * seen yet, and wiping them loses the failure silently. Keep Errors,
+     * drop Infos; the staged-discarded notice (Info) is still appended
+     * after, so the immediate discard stays narrated. */
+    private fun retainedNotices(): List<ToastNotice> =
+        _state.value.notices.filter { it.kind == ToastKind.Error }
+
     /** Single pending-joint spelling (#339): the gap is exactly one space
      * while BOTH sides ride verbatim (pasted-code indentation included) —
      * the second side is NOT trimmed: a queued code paste handed back into
@@ -524,11 +535,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             threadId = id,
             error = "",
             pending = "",
-            // The notice queue dies with them: a cap toast triggered on the
-            // old thread must not render over the new composer's first
-            // paint (the discard notice below is the only carry-over).
+            // The notice queue drops Infos with them: a cap toast triggered on
+            // the old thread must not render over the new composer's first
+            // paint (Errors survive via retainedNotices(); the discard notice
+            // below is the only Info carry-over).
             pendingAttachments = emptyList(),
-            notices = emptyList(),
+            notices = retainedNotices(),
             activeTools = emptyList(),
             activeToolLabel = "",
             serverTokens = null,
@@ -601,10 +613,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 pending = "",
                 // Staged photos die with the text draft (#339): the composer
                 // belongs to the thread being left, and a parked photo firing
-                // into the wrong thread is a silent mis-send. The notice dies
-                // with them (same leak as switchThread above).
+                // into the wrong thread is a silent mis-send. Infos die with
+                // them like switchThread above (Errors survive via
+                // retainedNotices()).
                 pendingAttachments = emptyList(),
-                notices = emptyList(),
+                notices = retainedNotices(),
                 activeTools = emptyList(),
                 activeToolLabel = "",
                 serverTokens = null,
@@ -692,9 +705,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             messages = emptyList(), error = "", streaming = false, pending = parked,
             // Staged photos die with the draft like every other thread
             // change (#339): a New with a parked photo must not fire it
-            // into the fresh thread. The notice dies with them.
+            // into the fresh thread. Infos die with them (Errors survive via
+            // retainedNotices()).
             pendingAttachments = emptyList(),
-            notices = emptyList(),
+            notices = retainedNotices(),
             threads = summaries(), threadId = threadId,
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
@@ -775,9 +789,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = kept,
                 // Same staged-photos-die-with-the-draft rule as the other
-                // thread changes above (#339). The notice dies with them.
+                // thread changes above (#339). Infos die with them (Errors
+                // survive via retainedNotices()).
                 pendingAttachments = emptyList(),
-                notices = emptyList(),
+                notices = retainedNotices(),
                 serverTokens = null, queued = "",
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
@@ -1201,6 +1216,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      */
     fun steer() {
         val text = _state.value.pending.trim()
+        // Raw snapshot for the settle-time strip below (#339): the API
+        // takes the trimmed instruction, but the composer holds the raw
+        // text — and stripping must match what the composer actually
+        // contains, not the trimmed copy. Indented paste ("  code") trims
+        // to "code", which never prefixes the raw composer, so the old
+        // trim-then-strip silently kept the steered text for a re-send.
+        val sentRaw = _state.value.pending
         // Ready-gated with a voice like send() (#339): the Steer affordance
         // only shows with non-blank text, so the empty-text half is
         // UI-unreachable — but !ready is reachable (streaming during load),
@@ -1241,19 +1263,22 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 when (outcome) {
                     // Strip only what this steer sent (#339): typing that landed
                     // mid-round-trip belongs to the user, not the turn.
-                    // Prefix, not equality: composer "ABC" + steered "ABC" +
-                    // typed "DEF" joins to "ABC DEF" behind the IO — the old
-                    // exact-match clear would keep the whole field and
-                    // re-send ABC on the next send. One joint space dropped
-                    // (the joinPending separator), the remainder verbatim —
-                    // a head edit (no prefix) keeps the field untouched:
+                    // Prefix on the RAW snapshot, not the trimmed
+                    // instruction: an indented paste ("  code") steers as
+                    // "code" (trimmed for the API), but only the raw form
+                    // prefixes what's actually in the composer — trimming
+                    // first would never match and would re-send the steered
+                    // text on the next turn. One joint space dropped (the
+                    // joinPending separator), the remainder verbatim; a head
+                    // edit (no prefix) keeps the field untouched:
                     // unsplittable, so the whole draft stays and nothing is
                     // lost (the steer already fired).
                     is SteerOutcome.Queued -> {
                         val curPending = _state.value.pending
+                        val sentBase = sentRaw.trimEnd()
                         _state.value = _state.value.copy(
-                            pending = if (curPending.startsWith(text)) {
-                                curPending.removePrefix(text).removePrefix(" ")
+                            pending = if (sentBase.isNotEmpty() && curPending.startsWith(sentBase)) {
+                                curPending.removePrefix(sentBase).removePrefix(" ")
                             } else {
                                 curPending
                             },
@@ -2119,8 +2144,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // not eat composer text either — it stays sendable behind the turn
         // on the new thread. Staged photos do NOT park — they die with the
         // thread being left, said out loud like every other thread change
-        // (switchThread/newConversation/deleteThread): the notice dies with
-        // them too, and only this carry-over survives.
+        // (switchThread/newConversation/deleteThread): Infos die with them
+        // too (Errors survive via retainedNotices()), and only this
+        // carry-over survives.
         val forkDraft = _state.value.pending
         val hadStagedFork = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
@@ -2128,7 +2154,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             messages = forked, threads = summaries(), threadId = threadId,
             error = "", pending = forkDraft, streaming = true, queued = "",
             pendingAttachments = emptyList(),
-            notices = emptyList(),
+            notices = retainedNotices(),
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
             activeRunId = "", busyRunId = "",
