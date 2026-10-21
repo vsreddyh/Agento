@@ -255,10 +255,18 @@ names for an update, the rollover outcome for a completion). Newest first,
 `at` then `_id` as the tiebreak, so two mutations in the same millisecond do
 not reshuffle between two reads of the same window.
 
-`since` is **inclusive** and must be RFC3339. A malformed `since` or `op` is
-a 422, not a silently widened answer: "the whole log" is the wrong data, not
-merely more of it. A malformed `limit` falls back to the default, like
-`?limit=` on the task list.
+`since` is **inclusive** and must be RFC3339. A malformed `since`, `op` or
+`task_id` is a 422, not a silently widened answer: "the whole log" is the
+wrong data, not merely more of it. A malformed `limit` falls back to the
+default, like `?limit=` on the task list.
+
+The `task_id` check is shared by both transports (`tasks.NormalizeTaskID`),
+so the agent and the app are told the same thing: a typo'd id is refused
+rather than answered with an empty history that reads like "this task was
+never touched".
+
+The `at` a caller is handed is usable as the `since` it sends back — the
+timestamps carry milliseconds, and the filter accepts that shape.
 
 `source` is a self-attested LABEL (`mcp` for the agent, the app's own
 `X-Agento-Source` otherwise), not an authenticated identity — see the tamper

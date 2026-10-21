@@ -38,4 +38,6 @@ _Avoid_: bulk request
 
 **Change log**:
 The record of every task mutation — what changed, which task, which caller, when — kept 90 days and outliving the task it describes, since a completed task is deleted after 3 days.
-_Avoid_: transaction (that means a money record here), history, activity log
+_Avoid_: transaction (that means a money record here), activity log
+
+Its surfaces are named after it: the `task_history` agent tool and `GET /api/tasks/mutations`. "History" there is the name of the surface, not a synonym to reach for in prose — the concept is the change log.

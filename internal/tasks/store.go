@@ -135,8 +135,27 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	_, err = s.db.Collection(auditCollection).Indexes().CreateMany(ctx, []mongoDrv.IndexModel{
 		{Keys: bson.D{{Key: "at", Value: 1}}, Options: options.Index().SetName("at_1")},
 		{Keys: bson.D{{Key: "task_id", Value: 1}}, Options: options.Index().SetName("task_id_1")},
+		// One task's history, newest first — the query the change log is
+		// mostly read for (#350). The single-field indexes above serve the
+		// whole-log read and the task lookup; this one serves both filters
+		// AND the order in one pass, so a per-task history does not sort a
+		// collection that only grows.
+		{Keys: bson.D{{Key: "task_id", Value: 1}, {Key: "at", Value: -1}}, Options: options.Index().SetName("task_id_at")},
 	})
 	return err
+}
+
+// Close disconnects the store's client.
+//
+// The store owns its connection, so it is the only thing that can close it:
+// a caller that opened a store and kept it alive forever leaks a connection
+// pool per instance, which is how a test suite ends up exhausting the
+// database's connection budget.
+func (s *Store) Close(ctx context.Context) error {
+	if s == nil || s.client == nil {
+		return nil
+	}
+	return s.client.Disconnect(ctx)
 }
 
 func checkDue(dueDate, dueTime string) error {

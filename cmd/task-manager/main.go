@@ -15,7 +15,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"agento/internal/mongostore"
 	"agento/internal/tasks"
@@ -245,17 +244,20 @@ func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (
 	if err != nil {
 		return nil, err
 	}
-	var since time.Time
-	if raw := strings.TrimSpace(in.Since); raw != "" {
-		t, perr := time.Parse(time.RFC3339, raw)
-		if perr != nil {
-			return nil, &tasks.StoreError{
-				Msg: "since must be an RFC3339 timestamp, e.g. 2026-10-21T00:00:00Z"}
-		}
-		since = t
+	since, err := tasks.ParseSince(in.Since)
+	if err != nil {
+		return nil, err
+	}
+	// The same validation the HTTP route applies: a typo'd id would match
+	// nothing, and an empty history reads like "this task was never
+	// touched" — the wrong answer, and the same wrong answer the app would
+	// get. One helper, so the two transports cannot disagree.
+	taskID, err := tasks.NormalizeTaskID(in.TaskID)
+	if err != nil {
+		return nil, err
 	}
 	rows, truncated, err := store.ListMutations(ctx, tasks.MutationFilter{
-		TaskID: strings.TrimSpace(in.TaskID),
+		TaskID: taskID,
 		Ops:    ops,
 		Since:  since,
 		Limit:  in.Limit,
@@ -474,7 +476,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "task_history",
-		Description: "Read the change log: every create, update, complete, skip, reopen and delete, with the op, the task id, who made it (source) and when (at). The log is kept 90 days, so it still answers for a task that was completed and auto-deleted after 3 days — use it when the user asks what happened to a task, or when a task changed without the agent doing it. Filters: task_id (one task), op (comma-separated: create, update, delete, complete, skip, reopen, duplicate), since (INCLUSIVE RFC3339 timestamp, e.g. 2026-10-21T00:00:00Z), limit (default 200, max 500). Newest first. `source` is a self-attested LABEL ('mcp' for this server, the app's own label otherwise), not an authenticated identity."},
+		Description: "Read the change log: every create, update, complete, skip, reopen and delete, with the op, the task id, who made it (source) and when (at). The log is kept 90 days, so it still answers for a task that was completed and auto-deleted after 3 days — use it when the user asks what happened to a task, or when a task changed without the agent doing it. Filters: task_id (one task — the 24-character hex id create_task returned), op (comma-separated: create, update, delete, complete, skip, reopen, duplicate), since (INCLUSIVE RFC3339 timestamp, e.g. 2026-10-21T00:00:00Z), limit (default 200, max 500). Newest first. A malformed task_id, op or since is refused rather than answered with an empty history. `source` is a self-attested LABEL ('mcp' for this server, the app's own label otherwise), not an authenticated identity."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in taskHistoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := taskHistory(ctx, store, in)
 			if err != nil {

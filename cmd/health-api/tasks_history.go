@@ -22,7 +22,6 @@ import (
 	"agento/internal/tasks"
 
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // taskMutations serves the change log.
@@ -31,11 +30,15 @@ import (
 // `since` (an inclusive RFC3339 lower bound on `at`) and `limit`.
 //
 // The filter params are STRICT and the limit is LENIENT, and the difference
-// is deliberate: a malformed `since` or `op` would silently widen the answer
-// to "the whole log", which is the wrong data rather than merely more of it,
-// so it is a 422 that names the mistake. A malformed `limit` can only make
-// the page bigger, which is the same answer the caller already had, so it
-// falls back to the default exactly like ?limit= on the task list.
+// is deliberate: a malformed `since`, `op` or `task_id` would silently widen
+// the answer to "the whole log", which is the wrong data rather than merely
+// more of it, so it is a 422 that names the mistake. A malformed `limit` can
+// only make the page bigger, which is the same answer the caller already
+// had, so it falls back to the default exactly like ?limit= on the task list.
+//
+// The `task_id` and `since` rules are shared with the agent's `task_history`
+// tool (tasks.NormalizeTaskID / tasks.ParseSince), so the app and the agent
+// are told the same thing about the same mistake.
 func taskMutations(w http.ResponseWriter, r *http.Request) {
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
@@ -56,29 +59,22 @@ func taskMutations(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	// The log stores the task's hex id, so a malformed one can only ever
 	// match nothing. Saying so beats an empty history that reads like "this
-	// task was never touched".
-	taskID := strings.TrimSpace(q.Get("task_id"))
-	if taskID != "" {
-		if _, err := primitive.ObjectIDFromHex(taskID); err != nil {
-			writeJSON(w, http.StatusUnprocessableEntity,
-				bson.M{"detail": "task_id must be a 24-character hex id"})
-			return
-		}
+	// task was never touched" — and the agent's tool says the same thing,
+	// because both validate through the same helper.
+	taskID, err := tasks.NormalizeTaskID(q.Get("task_id"))
+	if err != nil {
+		writeTaskErr(w, err)
+		return
 	}
 	ops, err := tasks.ParseOps(q.Get("op"))
 	if err != nil {
 		writeTaskErr(w, err)
 		return
 	}
-	var since time.Time
-	if raw := strings.TrimSpace(q.Get("since")); raw != "" {
-		t, perr := time.Parse(time.RFC3339, raw)
-		if perr != nil {
-			writeJSON(w, http.StatusUnprocessableEntity,
-				bson.M{"detail": "since must be an RFC3339 timestamp, e.g. 2026-10-21T00:00:00Z"})
-			return
-		}
-		since = t
+	since, err := tasks.ParseSince(q.Get("since"))
+	if err != nil {
+		writeTaskErr(w, err)
+		return
 	}
 	limit := 0
 	// Non-numeric ?limit= falls back to the store default on purpose: a

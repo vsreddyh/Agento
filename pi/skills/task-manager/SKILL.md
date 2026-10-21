@@ -69,9 +69,12 @@ after 3 days.
 
 Use it when the user asks what happened to a task, or when a task changed
 without the agent doing it. Every argument is optional: `task_id` (one
-task), `op` (comma-separated: create, update, delete, complete, skip,
-reopen, duplicate), `since` (INCLUSIVE RFC3339 timestamp, e.g.
-`2026-10-21T00:00:00Z`), `limit` (default 200, max 500). Newest first.
+task — the 24-character hex id `create_task` returned), `op`
+(comma-separated: create, update, delete, complete, skip, reopen,
+duplicate), `since` (INCLUSIVE RFC3339 timestamp, e.g.
+`2026-10-21T00:00:00Z`), `limit` (default 200, max 500). Newest first. A
+malformed `task_id`, `op` or `since` is refused, not answered with an
+empty history.
 
 `source` is a self-attested LABEL — `mcp` for the agent, the app's own label
 otherwise — not an authenticated identity. Say "the app changed it", not

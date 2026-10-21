@@ -23,6 +23,7 @@ import (
 	"agento/internal/mongostore"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -68,14 +69,17 @@ type MutationFilter struct {
 //
 // An empty string means EVERY op, not none: the whole log is the default
 // reading of the question, and "op=" is a caller who asked for the log.
+// Repeats are dropped, so "create,create" is one op and not two.
 func ParseOps(s string) ([]string, error) {
 	parts := strings.Split(s, ",")
 	ops := make([]string, 0, len(parts))
+	seen := map[string]bool{}
 	for _, p := range parts {
 		p = strings.ToLower(strings.TrimSpace(p))
-		if p == "" {
+		if p == "" || seen[p] {
 			continue
 		}
+		seen[p] = true
 		ops = append(ops, p)
 	}
 	if err := ValidateOps(ops); err != nil {
@@ -91,11 +95,50 @@ func ParseOps(s string) ([]string, error) {
 // typo, and "you asked for a thing that does not exist" is the right one.
 func ValidateOps(ops []string) error {
 	for _, op := range ops {
-		if !slices.Contains(KnownOps, op) {
-			return fail("unknown op %q; known ops are %s", op, strings.Join(KnownOps, ", "))
+		if !slices.Contains(knownOps, op) {
+			return fail("unknown op %q; known ops are %s", op, strings.Join(knownOps, ", "))
 		}
 	}
 	return nil
+}
+
+// ParseSince parses the `since` filter: an INCLUSIVE lower bound on when the
+// change happened.
+//
+// An empty string means no bound. The layout is RFC3339Nano because the
+// `at` this filter is fed back from carries milliseconds — a caller that
+// echoes a returned timestamp back must not be told it is malformed — and
+// Nano accepts plain RFC3339 too.
+//
+// The error is a StoreError, so both transports answer it the same way: a
+// 422 on HTTP, a plain message over MCP.
+func ParseSince(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, fail("since must be an RFC3339 timestamp, e.g. 2026-10-21T00:00:00Z")
+	}
+	return t, nil
+}
+
+// NormalizeTaskID validates a task id and returns it trimmed.
+//
+// The log stores the task's hex id, so a malformed one can only ever match
+// nothing — and an empty history reads like "this task was never touched",
+// which is the wrong answer to a typo. Both transports validate through
+// here, so the agent and the app are told the same thing.
+func NormalizeTaskID(id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", nil
+	}
+	if _, err := primitive.ObjectIDFromHex(id); err != nil {
+		return "", fail("task_id must be a 24-character hex id")
+	}
+	return id, nil
 }
 
 // ListMutations returns change-log entries, newest first.

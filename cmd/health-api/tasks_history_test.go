@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -188,5 +189,30 @@ func TestTaskMutationsResponseShape(t *testing.T) {
 	}
 	if older.Source != "mcp" {
 		t.Errorf("second source = %q, want mcp", older.Source)
+	}
+
+	// The `at` a caller is given must be usable as the `since` it sends
+	// back: the timestamp carries milliseconds, and a filter that rejected
+	// the format the read path hands out would 422 a client doing exactly
+	// what it was told.
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks/mutations?task_id="+id+"&since="+url.QueryEscape(first.At), nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	taskMutations(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("since=%s: got %d (%s)", first.At, w.Code, w.Body.String())
+	}
+	var round struct {
+		Mutations []struct {
+			Op string `json:"op"`
+		} `json:"mutations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &round); err != nil {
+		t.Fatalf("decoding %s: %v", w.Body.String(), err)
+	}
+	// Inclusive: the entry whose `at` was echoed back is still in the
+	// window.
+	if len(round.Mutations) != 1 || round.Mutations[0].Op != tasks.OpCreate {
+		t.Fatalf("round-tripped since = %d rows (%s), want the echoed entry", len(round.Mutations), w.Body.String())
 	}
 }

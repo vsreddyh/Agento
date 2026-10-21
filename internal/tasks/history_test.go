@@ -47,6 +47,89 @@ func TestParseOpsEmptyMeansEveryOp(t *testing.T) {
 	}
 }
 
+// A repeated op is one op: the filter is a set, and a duplicate in it is a
+// caller being redundant, not a different question.
+func TestParseOpsDropsRepeats(t *testing.T) {
+	ops, err := ParseOps("create,create,update")
+	if err != nil {
+		t.Fatalf("ParseOps: %v", err)
+	}
+	if len(ops) != 2 || ops[0] != OpCreate || ops[1] != OpUpdate {
+		t.Fatalf("ops = %v, want [create update]", ops)
+	}
+}
+
+// The op set is the validation rule, so a caller must not be able to edit it
+// for everyone else by accident.
+func TestKnownOpsHandsOutACopy(t *testing.T) {
+	ops := KnownOps()
+	if len(ops) == 0 {
+		t.Fatal("KnownOps is empty")
+	}
+	ops[0] = "frobnicate"
+	// The rule itself must be untouched.
+	if err := ValidateOps([]string{KnownOps()[0]}); err != nil {
+		t.Errorf("editing a copy changed the validation set: %v", err)
+	}
+}
+
+// The `since` filter is fed back from the `at` the read path hands out, so
+// it must accept that shape — milliseconds included — and reject a value
+// that is not a timestamp at all.
+func TestParseSince(t *testing.T) {
+	// Empty means no bound.
+	at, err := ParseSince("  ")
+	if err != nil {
+		t.Fatalf("ParseSince: %v", err)
+	}
+	if !at.IsZero() {
+		t.Errorf("at = %v, want the zero time", at)
+	}
+	// Plain RFC3339.
+	at, err = ParseSince("2026-10-21T00:00:00Z")
+	if err != nil {
+		t.Fatalf("ParseSince: %v", err)
+	}
+	if at.Year() != 2026 || at.Month() != time.October || at.Day() != 21 {
+		t.Errorf("at = %v, want 2026-10-21", at)
+	}
+	// With milliseconds — the format the log's own timestamps come back in.
+	at, err = ParseSince("2026-10-21T00:00:00.123Z")
+	if err != nil {
+		t.Fatalf("ParseSince: %v", err)
+	}
+	if at.Nanosecond() != 123000000 {
+		t.Errorf("at = %v, want the milliseconds kept", at)
+	}
+	// Not a timestamp.
+	if _, err := ParseSince("yesterday"); err == nil {
+		t.Error("a non-timestamp must be rejected")
+	}
+}
+
+// A malformed task id can only ever match nothing, and an empty history
+// reads like "this task was never touched" — so it is rejected, by name.
+func TestNormalizeTaskID(t *testing.T) {
+	id, err := NormalizeTaskID("  0123456789abcdef01234567  ")
+	if err != nil {
+		t.Fatalf("NormalizeTaskID: %v", err)
+	}
+	if id != "0123456789abcdef01234567" {
+		t.Errorf("id = %q, want it trimmed", id)
+	}
+	// Empty means no filter, not an error.
+	id, err = NormalizeTaskID("")
+	if err != nil {
+		t.Fatalf("NormalizeTaskID: %v", err)
+	}
+	if id != "" {
+		t.Errorf("id = %q, want empty", id)
+	}
+	if _, err := NormalizeTaskID("not-an-id"); err == nil {
+		t.Error("a malformed id must be rejected")
+	}
+}
+
 // Validation is a pure rule, so it is testable without a database — and the
 // store applies it BEFORE touching MongoDB, which is why a zero-value Store
 // is enough to prove it.

@@ -43,7 +43,7 @@ func testStore(t *testing.T) *Store {
 	// which is a long way from the cause.
 	t.Cleanup(func() {
 		_ = c.Disconnect(context.Background())
-		_ = s.client.Disconnect(context.Background())
+		_ = s.Close(context.Background())
 	})
 	return s
 }

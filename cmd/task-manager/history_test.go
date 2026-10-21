@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"agento/internal/tasks"
@@ -23,6 +24,7 @@ func TestTaskHistoryReadsTheAgentsOwnWrites(t *testing.T) {
 	if err != nil {
 		t.Skipf("mongo unreachable: %v", err)
 	}
+	defer store.Close(context.Background())
 	ctx := context.Background()
 
 	doc, err := createTask(ctx, store, createTaskInput{
@@ -79,6 +81,7 @@ func TestTaskHistoryFilters(t *testing.T) {
 	if err != nil {
 		t.Skipf("mongo unreachable: %v", err)
 	}
+	defer store.Close(context.Background())
 	ctx := context.Background()
 
 	doc, err := createTask(ctx, store, createTaskInput{
@@ -125,8 +128,32 @@ func TestTaskHistoryRejectsUnknownOp(t *testing.T) {
 	if err != nil {
 		t.Skipf("mongo unreachable: %v", err)
 	}
+	defer store.Close(context.Background())
 	_, err = taskHistory(context.Background(), store, taskHistoryInput{Op: "frobnicate"})
 	if err == nil {
 		t.Fatal("unknown op must be rejected")
+	}
+}
+
+// The agent and the app read the same log through different doors, so a
+// typo'd task id must be refused by BOTH. The HTTP route already refuses it;
+// a tool that answered with an empty history would be the wrong answer the
+// route exists to avoid.
+func TestTaskHistoryRejectsMalformedTaskID(t *testing.T) {
+	uri := os.Getenv("MONGODB_URI")
+	if uri == "" {
+		t.Skip("MONGODB_URI not set")
+	}
+	store, err := tasks.New(uri, "task_manager_history_test")
+	if err != nil {
+		t.Skipf("mongo unreachable: %v", err)
+	}
+	defer store.Close(context.Background())
+	_, err = taskHistory(context.Background(), store, taskHistoryInput{TaskID: "not-an-id"})
+	if err == nil {
+		t.Fatal("a malformed task id must be rejected")
+	}
+	if !strings.Contains(err.Error(), "task_id") {
+		t.Errorf("the error must name the field: %v", err)
 	}
 }
