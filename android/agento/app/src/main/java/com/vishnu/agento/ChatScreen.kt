@@ -732,10 +732,19 @@ internal fun ChatTab(
         // touches snapshot state again.
         val wasBusy = cameraBusy
         val prevPath = cameraPath
+        // Arm synchronously at tap (#339): the gate above is checked here
+        // on Main, but the old code armed only after the IO hop below —
+        // a rapid double-tap passed both gates, minted two files + two
+        // intents, and the second overwrote cameraUri/cameraPath so the
+        // first callback decoded the wrong file (leaking the first to the
+        // sweep). Cleared on every early IO failure below; the callback
+        // clears on settle.
+        cameraPendingSince = SystemClock.elapsedRealtime()
         scope.launch(Dispatchers.IO) {
             val dir = File(appTapContext.cacheDir, "camera")
             if (!dir.isDirectory && !dir.mkdirs()) {
                 withContext(Dispatchers.Main) {
+                    cameraPendingSince = 0L
                     vm.notify("Couldn't start the camera — storage unavailable.")
                 }
                 return@launch
@@ -762,6 +771,7 @@ internal fun ChatTab(
             }.getOrNull()
             withContext(Dispatchers.Main) {
                 if (uri == null) {
+                    cameraPendingSince = 0L
                     vm.notify("Couldn't start the camera.")
                     // Shared helper (dead-scope-safe), not an inline
                     // exists()/delete() on Main (#339).
@@ -773,8 +783,10 @@ internal fun ChatTab(
                 // Owner recorded with the launch (#339): the callback homes the
                 // batch to this thread even across a switch.
                 cameraThread = state.threadId
-                // Armed before launch, cleared in the callback (#339): the gate at
-                // the top of this function makes overlapping intents impossible.
+                // Re-armed at launch (already armed at tap above, #339): the
+                // tap-time arm closes the double-tap window across the IO
+                // hop; refreshing here keeps the stale bound measured from
+                // the intent, not the tap.
                 // Guarded: if launch() itself throws (no camera activity to
                 // resolve, broken FileProvider on an odd OEM), no callback ever
                 // fires — so the gate resets, the path nulls, and the orphan file
@@ -797,6 +809,13 @@ internal fun ChatTab(
     // false+never-asked → toast; false+asked → Settings. Saveable: a
     // rotation between request and result must not lose the ask.
     var cameraAskedBefore by rememberSaveable { mutableStateOf(false) }
+    // Pre-request snapshot for rationale routing (#339): cameraAskedBefore
+    // is set at request time and read at result time, so reading it in the
+    // callback is always true — a first denial on OEMs where rationale is
+    // false on first denial would jump straight to Settings instead of the
+    // gentle toast. Snapshot the pre-request value at request time and route
+    // on that (false + never-asked → toast is reachable again).
+    var cameraWasAskedAtRequest by rememberSaveable { mutableStateOf(false) }
     // Fresh Activity at callback time (#339): the launcher registration
     // must not pin the pre-rotation Activity for rationale routing or the
     // Settings intent — updated-state always holds the latest composition's
@@ -821,7 +840,7 @@ internal fun ChatTab(
                 androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
                     it, Manifest.permission.CAMERA,
                 )
-            } != true && cameraAskedBefore
+            } != true && cameraWasAskedAtRequest
         ) {
             // Permanent denial ("Don't allow again"): the request UI will
             // never show again, so a re-toast loops forever (#339). The
@@ -866,8 +885,11 @@ internal fun ChatTab(
             // Cleared on settle below; a rotation between request and
             // result keeps it via saveable, and the stale bound covers
             // death — same lifecycle as the launch gate. Asked flag arms
-            // alongside for rationale routing (first vs permanent denial).
+            // alongside for rationale routing (first vs permanent denial),
+            // with the pre-request value snapshotted: the callback routes
+            // on the snapshot, not the flag (always true at result time).
             cameraPendingSince = SystemClock.elapsedRealtime()
+            cameraWasAskedAtRequest = cameraAskedBefore
             cameraAskedBefore = true
             cameraPermission.launch(Manifest.permission.CAMERA)
         }
@@ -1890,7 +1912,11 @@ internal fun ChatScreen(
                 livePartial = ""
                 transientRetries = 0
                 if (!liveMode) {
-                    onPending(heard)
+                    // Append like every other voice path (#339): the stale
+                    // result arrives after endLive() but the user may have
+                    // typed meanwhile — replacing would overwrite it with
+                    // stale speech.
+                    onAppendPending(heard)
                     return
                 }
                 if (heard.trimEnd('.', '!', '?').equals("stop", ignoreCase = true)) {

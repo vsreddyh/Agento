@@ -1158,18 +1158,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             return
         }
         // Steering carries text only (#339): staged photos park with no
-        // part in the steered turn — said here like every other narrowing,
+        // part in the steered turn — said out loud like every other narrowing,
         // or the steer button silently drops the user's staging. Info:
-        // parked, not failed. Counted wired.
+        // parked, not failed. Counted wired. Voiced only on the Queued
+        // outcome below (#339): notifying here claims success before the
+        // steer resolves, and the Conflict branch calls send() which voices
+        // its own "Queued behind this reply…" with the same photos — one
+        // tap, two toasts, the first false on that path.
         val parkedSteerCount = _state.value.pendingAttachments.wiredPhotoCount()
-        if (parkedSteerCount > 0) {
-            notify(
-                "Steered the text — " +
-                    attachmentMarker(parkedSteerCount) +
-                    " stays staged for your next message.",
-                ToastKind.Info,
-            )
-        }
         val runId = _state.value.activeRunId
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
@@ -1182,10 +1178,23 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 when (outcome) {
                     // Clear only what this steer sent: typing that landed
                     // mid-round-trip belongs to the user, not the turn.
-                    is SteerOutcome.Queued ->
+                    is SteerOutcome.Queued -> {
                         if (_state.value.pending.trim() == text) {
                             _state.value = _state.value.copy(pending = "")
                         }
+                        // Parked-photos voice lives here, not pre-launch
+                        // (#339): the Conflict branch below calls send(),
+                        // which voices its own queued notice with the same
+                        // photos — notifying there too double-toasts one tap.
+                        if (parkedSteerCount > 0) {
+                            notify(
+                                "Steered the text — " +
+                                    attachmentMarker(parkedSteerCount) +
+                                    " stays staged for your next message.",
+                                ToastKind.Info,
+                            )
+                        }
+                    }
                     // Settled race: the text becomes the next turn. When the
                     // queue was already occupied send() parks nothing and the
                     // composer keeps the text, so say the queue is full
@@ -1778,6 +1787,22 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 }
                 val cur = _state.value.messages
                 if (cur.lastOrNull()?.role != "user") return@withContext
+                // Prompt-identity re-check under Main (#339): entry matched
+                // the live run against `last`, but the user may have sent a
+                // new turn during the list() window — cur is then a newer
+                // tail and resending it under the old match re-fires the NEW
+                // history. Re-verify cur.last still matches the same
+                // run (same promptMatches/image-signature condition) before
+                // doSend.
+                val curLast = cur.lastOrNull() ?: return@withContext
+                if (!messageHasContent(curLast)) return@withContext
+                val curImageOnly = curLast.content.isBlank() &&
+                    curLast.attachments.wiredPhotoCount() > 0
+                if (!(promptMatches(curLast.content, run.prompt) ||
+                        (curImageOnly && run.prompt.isBlank()))
+                ) {
+                    return@withContext
+                }
                 // Re-check under Main: two concurrent opens would otherwise
                 // both pass the entry check and resend twice.
                 if (threadId in resumedThreads) return@withContext
@@ -1935,6 +1960,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 ChatThreads.now(),
                 attachments = msgs[index].attachments.wiredPhotos(),
             )
+        // Staged composer photos sit out like every other resend (#339):
+        // retry/regenerate/continue all voice it via noteParkedPhotos —
+        // Replace/Fork carry the EDITED turn's photos but leave the
+        // composer's staging parked with no voice otherwise.
+        noteParkedPhotos("Replaced")
         _state.value = _state.value.copy(messages = history, pending = draft, streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }
@@ -1988,6 +2018,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // not eat composer text either — it stays sendable behind the turn
         // on the new thread.
         val forkDraft = _state.value.pending
+        // Same staged-photos voice as Replace above (#339): the forked turn
+        // carries the edited turn's photos while the composer's staging
+        // parks unexplained without it.
+        noteParkedPhotos("Forked")
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
