@@ -261,8 +261,11 @@ object SettingsBackup {
         // oversize payload would be built anyway, which is the very peak the
         // cap exists to prevent. Measured from the strings already read (no
         // second materialization): their UTF-16 size is the export's bulk.
+        // The prefs block rides along (it is small, but it is part of the
+        // export, so it counts).
         val readChars = files.keys().asSequence()
-            .sumOf { files.optString(it, "").length.toLong() }
+            .sumOf { files.optString(it, "").length.toLong() } +
+            values.toString().length.toLong()
         if (readChars * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
             throw IllegalStateException(backupTooLargeMessage(backupFilesBytes(context.filesDir)))
         }
@@ -271,7 +274,6 @@ object SettingsBackup {
             unreadable,
         )
     }
-
     /** Applies a backup produced by [export]; unknown keys and mistyped values
      * are skipped. Version 1 backups (prefs only) still import. Returns the
      * number of prefs + files applied, plus the files that were skipped.
@@ -340,6 +342,18 @@ object SettingsBackup {
             // conversation reads as a clean success.
             val skipped = mutableListOf<String>()
             if (files != null) {
+                // Size gate, the export's twin (#339): a hand-crafted
+                // backup can carry a thread file far past the cap, and
+                // canonicalizing it would parse a 100 MB string on the very
+                // device the export cap protects. Measured from the strings
+                // already in memory (no second copy).
+                val incomingChars = files.keys().asSequence()
+                    .sumOf { files.optString(it, "").length.toLong() }
+                if (incomingChars * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                    return Result.failure(
+                        IllegalStateException(backupTooLargeMessage(incomingChars * 2)),
+                    )
+                }
                 for (name in backupFiles()) {
                     // Absent entry, not a broken one (#339): a backup
                     // exported before the file existed simply has no entry

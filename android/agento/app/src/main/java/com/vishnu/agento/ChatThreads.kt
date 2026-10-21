@@ -220,6 +220,13 @@ object ChatThreads {
             val out = canonicalizeUnchanged(cached?.first, cached?.second, capped)
             file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), out), Charsets.UTF_8)
             lastCanonical[tab] = capped to out
+        }.onFailure { e ->
+            // Logged, not swallowed (#339): a failed write (disk full, an
+            // OOM) leaves memory and disk diverging, and the next cold
+            // start would load stale threads with no sign of a failure.
+            // The JVM stub of Log throws, and this path is unit tested, so
+            // the call is guarded.
+            runCatching { android.util.Log.e("ChatThreads", "save failed for $tab", e) }
         }
     }
 

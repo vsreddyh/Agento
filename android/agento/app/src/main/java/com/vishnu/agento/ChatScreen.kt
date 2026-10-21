@@ -146,7 +146,10 @@ private fun String.sampleKey(half: Int): String =
  * NEVER CANCELLED, BY DESIGN (#339): a cleanup that is cancelled by a
  * tab-leave would leak the file it was meant to delete. Named
  * `processCleanupScope` so the lifetime is explicit — do NOT launch real
- * work here (it would inherit a process-lifetime scope by accident).
+ * work here (it would inherit a process-lifetime scope by accident). A
+ * global scope IS the load-bearing choice: the ViewModel's scope dies with
+ * the tab, and the composition's with the screen, and a delete cancelled
+ * by either is a delete that never happened.
  */
 private val processCleanupScope =
     kotlinx.coroutines.CoroutineScope(
@@ -176,7 +179,8 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
      * comes back, so a decode that finishes AFTER the eviction must not
      * re-pin its bitmap. Grows by one short id per deleted thread and is
      * NOT cleared by evictAll() — clearing it would reopen the very race
-     * it closes (a late put re-pinning a dead thread's bitmap). */
+     * it closes (a late put re-pinning a dead thread's bitmap). Bounded in
+     * practice by the ViewModel's lifetime: the cache dies with it. */
     private val deadThreads: MutableSet<String> =
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
 
