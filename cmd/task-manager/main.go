@@ -173,10 +173,12 @@ type taskHistoryInput struct {
 	// id means every task; a non-blank one that is not a hex id is refused
 	// rather than answered with an empty history.
 	TaskID string `json:"task_id,omitempty"`
-	// Op restricts to a set of ops, comma-separated: create, update, delete,
-	// complete, skip, reopen, duplicate. A filter that names no op (only
-	// commas and spaces) is refused rather than read as the whole log.
-	// `duplicate` appears only for duplicates made through a batch.
+	// Op restricts to a set of ops, ONE comma-separated string (not an
+	// array — an array is an argument type error, not a filter): create,
+	// update, delete, complete, skip, reopen, duplicate. A filter that
+	// names no op (only commas and spaces) is refused rather than read as
+	// the whole log. `duplicate` appears only for duplicates made through
+	// a batch.
 	Op string `json:"op,omitempty"`
 	// Since is an INCLUSIVE RFC3339 lower bound on when the change
 	// happened. Fractional seconds are accepted.
@@ -494,7 +496,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "task_history",
-		Description: "Read the change log: every create, update, complete, skip, reopen and delete, with the op, the task id, who made it (source) and when (at). The log is kept 90 days, so it still answers for a task that was completed and auto-deleted after 3 days — use it when the user asks what happened to a task, or when a task changed without the agent doing it. Filters: task_id (one task — the 24-character hex id create_task returned), op (comma-separated: create, update, delete, complete, skip, reopen, duplicate — duplicate appears only for duplicates made through a batch), since (INCLUSIVE RFC3339 timestamp, fractional seconds accepted, e.g. 2026-10-21T00:00:00Z), limit (default 200, max 500; zero or negative gives the default, a huge one is clamped). Newest first. A malformed task_id, op or since is refused rather than answered with an empty history. `source` is a self-attested LABEL ('mcp' for this server, the app's own label otherwise), not an authenticated identity."},
+		Description: "Read the change log: every create, update, complete, skip, reopen and delete, with the op, the task id, who made it (source) and when (at). The log is kept 90 days, so it still answers for a task that was completed and auto-deleted after 3 days — use it when the user asks what happened to a task, or when a task changed without the agent doing it. Filters: task_id (one task — the 24-character hex id create_task returned), op (a single comma-separated string, not an array: create, update, delete, complete, skip, reopen, duplicate — duplicate appears only for duplicates made through a batch), since (INCLUSIVE RFC3339 timestamp, fractional seconds accepted, e.g. 2026-10-21T00:00:00Z), limit (default 200, max 500; zero or negative gives the default, a huge one is clamped). Newest first. A malformed task_id, op or since is refused rather than answered with an empty history. `source` is a self-attested LABEL ('mcp' for this server, the app's own label otherwise), not an authenticated identity."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in taskHistoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := taskHistory(ctx, store, in)
 			if err != nil {

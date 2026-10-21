@@ -39,6 +39,13 @@ import (
 // tool (tasks.NormalizeTaskID / tasks.ParseSince), so the app and the agent
 // are told the same thing about the same mistake.
 //
+// The filters are parsed BEFORE the store is opened, so a malformed filter
+// answers 422 even on a server whose Mongo is unreachable: the filter is
+// the caller's mistake, and naming it is more useful than a 500 that says
+// nothing about the request. The same precedence is deliberate in the store
+// (validation before connectivity), and it is what makes the filter rules
+// testable without a database.
+//
 // `since` is a query parameter, so an offset with a `+` in it
 // ("2026-10-21T00:00:00+02:00") must arrive percent-encoded as `%2B` — `+`
 // in a query string means a space. `Z` needs no encoding.

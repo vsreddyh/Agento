@@ -264,9 +264,9 @@ The two envelopes differ, on purpose:
 
 `count` is the number of rows in THIS PAGE, not a total: there is no total
 anywhere, and `truncated` is the only signal that more exist. A repeated
-filter parameter reads its FIRST value only (`?op=create&op=delete` filters
-by `create`), which is Go's standard query handling — the same the task list
-already has.
+parameter reads its FIRST value only (`?op=create&op=delete` filters by
+`create`, `?limit=5&limit=500` returns 5), which is Go's standard query
+handling — the same the task list already has.
 
 The delete envelopes differ too, and predates this reader: the MCP tool
 answers `{"deleted": "<canonical id>"}` while the HTTP route answers
