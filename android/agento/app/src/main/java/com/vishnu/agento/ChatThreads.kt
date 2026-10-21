@@ -328,7 +328,6 @@ object ChatThreads {
             )
         }
 }
-}
 
 /**
  * Marks a message as cut off by a dead connection (#214).
