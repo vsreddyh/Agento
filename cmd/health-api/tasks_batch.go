@@ -6,6 +6,8 @@ package main
 // "id": "...", "reason": "...", "fields": {...}}]} answers 200 with
 // {"results": [{"index": 0, "id": "...", "op": "complete", "task": {...},
 // "next": {...}, "rollover": "created", "needs_attention": "..."}]}.
+// Op names are lowercase-exact (`Complete` 422s in the store); reason rides
+// only on skip and fields only on update (verified above, before any write).
 // "id" names the row the op produced: the task itself, except duplicate,
 // whose copy is a new row. Any hard failure aborts the whole batch and
 // answers with the single-verb status for the failing op (404 unknown id,
