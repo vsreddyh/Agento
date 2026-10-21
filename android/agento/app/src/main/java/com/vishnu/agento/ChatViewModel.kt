@@ -645,6 +645,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         streamJob?.cancel()
         streamJob = null
         serverTotalsJob?.cancel()
+        // Stop the server-side run too, not just the local socket (#339):
+        // like stop(), a New that stayed local would leave the agent running
+        // invisibly — and the Runs sheet is scoped to the fresh threadId, so
+        // the orphan would no longer be listed anywhere. Same fire-and-forget
+        // shape as stop(): captured before clearing, failures logged.
+        val newRunToCancel = _state.value.activeRunId
+        val newCancelPath = _state.value.path
+        if (newRunToCancel.isNotBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { runsApi.cancel(newCancelPath, newRunToCancel) }
+                    .onFailure { runCatching { Log.w("ChatRuns", "cancel $newRunToCancel failed", it) } }
+            }
+        }
         val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
         threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
         threadId = fresh.id
@@ -711,6 +724,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         streamJob?.cancel()
         streamJob = null
+        // Stop the server-side run when deleting the ACTIVE thread (#339):
+        // same orphan class New closes above — the run belongs to the turn
+        // being abandoned, and the Runs sheet re-scopes to the fallback
+        // thread. Deleting an inactive thread never touches the active run.
+        // Fire-and-forget like stop(), captured before clearing.
+        val deleteRunToCancel = _state.value.activeRunId
+        val deleteCancelPath = _state.value.path
+        val deletingActive = threadId == id
+        if (deletingActive && deleteRunToCancel.isNotBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { runsApi.cancel(deleteCancelPath, deleteRunToCancel) }
+                    .onFailure { runCatching { Log.w("ChatRuns", "cancel $deleteRunToCancel failed", it) } }
+            }
+        }
         threads = threads.filterNot { it.id == id }
         if (threadId == id) {
             // `id` is already filtered out above, so the second fallback is
@@ -1190,8 +1217,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // outcome below (#339): notifying here claims success before the
         // steer resolves, and the Conflict branch calls send() which voices
         // its own "Queued behind this reply…" with the same photos — one
-        // tap, two toasts, the first false on that path.
-        val parkedSteerCount = _state.value.pendingAttachments.wiredPhotoCount()
+        // tap, two toasts, the first false on that path. Recounted live at
+        // settle time (staging may change behind the IO round-trip), so
+        // nothing is captured here — only the run identity and path the
+        // steer needs.
         val runId = _state.value.activeRunId
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
@@ -1202,20 +1231,36 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // the composer text belongs to whatever the user does next.
                 if (!_state.value.streaming || _state.value.activeRunId != runId) return@withContext
                 when (outcome) {
-                    // Clear only what this steer sent: typing that landed
+                    // Strip only what this steer sent (#339): typing that landed
                     // mid-round-trip belongs to the user, not the turn.
+                    // Prefix, not equality: composer "ABC" + steered "ABC" +
+                    // typed "DEF" joins to "ABC DEF" behind the IO — the old
+                    // exact-match clear would keep the whole field and
+                    // re-send ABC on the next send. One joint space dropped
+                    // (the joinPending separator), the remainder verbatim —
+                    // a head edit (no prefix) keeps the field untouched:
+                    // unsplittable, so the whole draft stays and nothing is
+                    // lost (the steer already fired).
                     is SteerOutcome.Queued -> {
-                        if (_state.value.pending.trim() == text) {
-                            _state.value = _state.value.copy(pending = "")
-                        }
+                        val curPending = _state.value.pending
+                        _state.value = _state.value.copy(
+                            pending = if (curPending.startsWith(text)) {
+                                curPending.removePrefix(text).removePrefix(" ")
+                            } else {
+                                curPending
+                            },
+                        )
                         // Parked-photos voice lives here, not pre-launch
                         // (#339): the Conflict branch below calls send(),
                         // which voices its own queued notice with the same
                         // photos — notifying there too double-toasts one tap.
-                        if (parkedSteerCount > 0) {
+                        // Recounted live, not pre-launch: staging may have
+                        // changed behind the IO round-trip.
+                        val liveParked = _state.value.pendingAttachments.wiredPhotoCount()
+                        if (liveParked > 0) {
                             notify(
                                 "Steered the text — " +
-                                    attachmentMarker(parkedSteerCount) +
+                                    attachmentMarker(liveParked) +
                                     " stays staged for your next message.",
                                 ToastKind.Info,
                             )
@@ -1927,7 +1972,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             provider = provider, model = model, effort = effort, path = path, queued = "",
         )
         val history = msgs + ChatMessage("user", "Continue", ChatThreads.now())
-        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+        // Typed draft survives like retry()/regenerate() (#339): blanking
+        // pending here would vaporize a draft typed while the interrupted
+        // reply offered Continue — the same silent-loss class the parked
+        // siblings (joinPending restores, replace/fork carries) closed
+        // everywhere else. Continue sends history, never the composer.
+        _state.value = _state.value.copy(messages = history, streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }
 

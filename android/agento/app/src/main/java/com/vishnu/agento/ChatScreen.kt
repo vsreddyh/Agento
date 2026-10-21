@@ -425,10 +425,18 @@ internal fun ChatTab(
         // Fresh-process vs rotation, told apart by the VM (#339): the sweep
         // gate reset fires once, only when the ViewModel died with the
         // process — saveable state alone can't tell rotation from
-        // kill-with-bundle (both restore). Only a truly fresh process
-        // clears the gate below; rotation keeps it via the timestamp bound.
+        // kill-with-bundle (both restore). Only a truly fresh process with
+        // no outstanding capture clears the gate below (see keep guard);
+        // rotation keeps it via the timestamp bound.
         val freshProcess = vm.consumeSweepGateReset()
-        if (freshProcess) {
+        // Cleared only with no outstanding capture (#339): a kill with the
+        // camera foreground restores BOTH the timestamp and cameraPath, and
+        // zeroing the gate would let a second Take-photo overwrite the
+        // restored Uri/path mid-flight (the double-launch overwrite reopened
+        // for the kill case). keep != null means an intent may still be
+        // outstanding — retain the timestamp and let the staleness bound
+        // expire it; keep == null proves nothing is open.
+        if (freshProcess && keep == null) {
             cameraPendingSince = 0L
         }
         // Age out orphans, keep the live capture UNCONDITIONALLY (#339):
