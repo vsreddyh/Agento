@@ -155,7 +155,16 @@ func NormalizeTaskID(id string) (string, error) {
 func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation, bool, error) {
 	// Validated BEFORE any store use, so an unknown op costs no database
 	// round trip to discover — and so this rule is testable without one.
-	if err := ValidateOps(f.Ops); err != nil {
+	//
+	// The ops are lowercased here, on a copy: the stored ops are lowercase,
+	// and a caller that reaches the store directly (bypassing ParseOps)
+	// must not be told "create" is an unknown op — the same id in the wrong
+	// case is the same task, and so is the same op.
+	ops := make([]string, len(f.Ops))
+	for i, op := range f.Ops {
+		ops[i] = strings.ToLower(strings.TrimSpace(op))
+	}
+	if err := ValidateOps(ops); err != nil {
 		return nil, false, err
 	}
 	// The id is normalized here too, not only in the transports: the store
@@ -166,12 +175,18 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	if err != nil {
 		return nil, false, err
 	}
+	// A store that was never connected is a programmer error, and a
+	// programmer error that reads as a nil-pointer panic costs the reader
+	// the stack that says where. The message says it instead.
+	if s == nil || s.db == nil {
+		return nil, false, fail("store is not connected")
+	}
 	filt := bson.M{}
 	if taskID != "" {
 		filt["task_id"] = taskID
 	}
-	if len(f.Ops) > 0 {
-		filt["op"] = bson.M{"$in": f.Ops}
+	if len(ops) > 0 {
+		filt["op"] = bson.M{"$in": ops}
 	}
 	if !f.Since.IsZero() {
 		filt["at"] = bson.M{"$gte": f.Since}

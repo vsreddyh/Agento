@@ -232,4 +232,27 @@ func TestTaskMutationsResponseShape(t *testing.T) {
 	if len(round.Mutations) != 1 || round.Mutations[0].Op != tasks.OpCreate {
 		t.Fatalf("round-tripped since = %d rows (%s), want the echoed entry", len(round.Mutations), w.Body.String())
 	}
+
+	// A malformed limit is LENIENT, unlike the filters above: it can only
+	// make the page bigger, which is the answer the caller already had.
+	// A stray query param must never nuke the answer.
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks/mutations?task_id="+id+"&limit=garbage", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	taskMutations(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("limit=garbage: got %d (%s)", w.Code, w.Body.String())
+	}
+	var lenient struct {
+		Mutations []struct {
+			Op string `json:"op"`
+		} `json:"mutations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &lenient); err != nil {
+		t.Fatalf("decoding %s: %v", w.Body.String(), err)
+	}
+	if len(lenient.Mutations) != 2 {
+		t.Fatalf("limit=garbage returned %d rows (%s), want the default page of 2",
+			len(lenient.Mutations), w.Body.String())
+	}
 }

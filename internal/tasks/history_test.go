@@ -328,7 +328,7 @@ func TestListMutationsReportsTruncation(t *testing.T) {
 
 // A limit above the ceiling is clamped, not rejected: a caller asking for a
 // huge page gets the biggest page the store serves, and the truncation flag
-// tells it there was more.
+// tells it there was more. A limit below zero is the DEFAULT, not an error.
 func TestListMutationsClampsTheLimit(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -341,6 +341,42 @@ func TestListMutationsClampsTheLimit(t *testing.T) {
 	}
 	if len(rows) != 3 {
 		t.Fatalf("rows = %d, want 3", len(rows))
+	}
+	rows, truncated, err := s.ListMutations(ctx, MutationFilter{Limit: -5})
+	if err != nil {
+		t.Fatalf("a negative limit must fall back to the default: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(rows))
+	}
+	if truncated {
+		t.Error("three rows under the default limit must not be truncated")
+	}
+}
+
+// The ops are lowercased at the store seam, so a caller that bypasses
+// ParseOps is answered the same way: "CREATE" is the op the log holds.
+func TestListMutationsAcceptsOpsInAnyCase(t *testing.T) {
+	var s Store
+	_, _, err := s.ListMutations(context.Background(), MutationFilter{Ops: []string{"CREATE"}})
+	if err == nil {
+		return // a connected store answered, which is the point
+	}
+	if strings.Contains(err.Error(), "unknown op") {
+		t.Fatalf("an op in the wrong case must be accepted: %v", err)
+	}
+}
+
+// A store that was never connected is a programmer error, and it must say
+// so rather than panic on a nil pointer.
+func TestListMutationsOnAnUnconnectedStore(t *testing.T) {
+	var s Store
+	_, _, err := s.ListMutations(context.Background(), MutationFilter{})
+	if err == nil {
+		t.Fatal("an unconnected store must say so")
+	}
+	if !strings.Contains(err.Error(), "not connected") {
+		t.Errorf("the error must name the cause: %v", err)
 	}
 }
 
