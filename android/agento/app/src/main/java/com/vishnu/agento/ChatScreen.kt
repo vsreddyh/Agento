@@ -245,16 +245,21 @@ private fun AttachmentThumb(
     // surviving thumb on a remove (a rare user action); the legacy rebuild
     // rides the same event on self-aging payloads. Value equality holds
     // either way, so produceState never restarts for a remove.
-    val thumbKey = remember(stableId, legacySlot, base64.length, base64.sampleKey(64)) {
+    val thumbKey = remember(stableId, legacySlot, base64.length) {
         if (stableId.isNotEmpty()) {
-            // Same head/tail sample as the legacy branch (#339): a
-            // hand-edited same-length/middle-changed payload keeps its id
-            // (load() blanks only the undecodable), so without the sample
-            // the cache would serve the stale thumbnail while the wire
-            // sends the new bytes. Best-effort like the legacy branch —
-            // head+tail narrows, never closes, the window — but built
-            // inside this remember (no per-recomposition alloc) while the
-            // decode it guards stays on IO.
+            // Same head/tail sample as the legacy branch (#339), computed
+            // INSIDE the remember: the key comparison stays a cheap
+            // identity check (UUID + slot + length) instead of rebuilding a
+            // 128-char sample string on every scroll frame per visible
+            // thumb. Accepted staleness, stated: a hand-edited
+            // same-id/same-length/middle-changed payload never recomputes
+            // this Triple, so produceState keeps the old key and the cache
+            // may serve a stale thumbnail. Display-only and adversarial-only
+            // (impossible via the app — picks are immutable): the wire
+            // always sends the current payload bytes, never the cached
+            // picture, so no send can go wrong from a stale thumb.
+            // Best-effort like the legacy branch otherwise: head+tail
+            // narrows the alias window without closing it.
             Triple(stableId, base64.length, base64.sampleKey(64))
         } else {
             // Legacy fallback, best-effort by construction (#339): two
@@ -361,9 +366,9 @@ internal fun ChatTab(
     // one composition; the cache itself is bounded (see ThumbCache).
     val thumbCache = remember(tab) { ThumbCache() }
     // New thread, new staging episode (#339): the voice slate belongs to
-    // the old thread's staged set. (The cache is NOT evicted here — keys
-    // carry the thread, so old entries age out via LRU instead of forcing
-    // a re-decode round-trip on every switch-back.)
+    // the old thread's staged set. (The thumb cache is per-tab and dies
+    // with it — switch-back re-decodes; keys carry no thread since UUIDs
+    // are globally unique, and the LRU bound keeps the residency small.)
     LaunchedEffect(state.threadId) {
         liveStagedVoicedCount = 0
     }

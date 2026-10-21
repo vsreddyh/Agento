@@ -300,6 +300,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * failed, the cap held, so no Error styling anywhere. Blanks filtered
      * up front: only wired photos occupy cap slots, so a future caller
      * passing storage-read attachments can't spend the cap on blanks.
+     * Growth accounting (`after - before`, see the strip) is exact for the
+     * same reason: both sides count wired only, so a blank already in the
+     * composer can never make `after <= before` while a photo staged —
+     * `take.size` would overcount when the backstop drops part of the take
+     * on a concurrent-batch race, while the before/after diff measures
+     * what actually landed.
      */
     fun addPendingAttachments(items: List<ChatAttachment>) {
         val wired = items.wiredPhotos()
@@ -803,7 +809,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // Per-message predicate lives with the marker helpers
                     // (#339): one folding rule (region-matching) shared by
                     // title, raw text, and marker — see messageMatchesQuery.
-                    t.messages.any { messageMatchesQuery(it, q) }
+                    t.messages.any { messageMatchesQuery(it.role, it.content, it.attachments, q) }
                 )
         }.map {
             ThreadSummary(

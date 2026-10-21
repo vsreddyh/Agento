@@ -408,9 +408,9 @@ class ChatAttachmentsTest {
         // everything shape ("I"→"i" vs query "ı") it missed. A future
         // "restore lowercase" edit must keep this green — i.e., keep the
         // shared predicate in messageMatchesQuery.
-        assertTrue(messageMatchesQuery(ChatMessage("user", "I"), "ı"))
-        assertTrue(messageMatchesQuery(ChatMessage("user", "I"), "i"))
-        assertTrue(messageMatchesQuery(ChatMessage("user", "photo", 0L), "PHOTO"))
+        assertTrue(messageMatchesQuery("user", "I", emptyList(), "ı"))
+        assertTrue(messageMatchesQuery("user", "I", emptyList(), "i"))
+        assertTrue(messageMatchesQuery("user", "photo", emptyList(), "PHOTO"))
     }
 
     @Test
@@ -418,14 +418,9 @@ class ChatAttachmentsTest {
         // Marker-only findability (#339): an image turn's text need not
         // mention photos for "photo" to find the thread — but an assistant
         // turn never claims photos (user-only marker rule).
-        val pic = ChatMessage("user", "look", 0L, attachments = listOf(attachment()))
-        assertTrue(messageMatchesQuery(pic, "photo"))
-        assertFalse(
-            messageMatchesQuery(
-                ChatMessage("assistant", "look", 0L, attachments = listOf(attachment())),
-                "photo",
-            ),
-        )
+        val pic = listOf(attachment())
+        assertTrue(messageMatchesQuery("user", "look", pic, "photo"))
+        assertFalse(messageMatchesQuery("assistant", "look", pic, "photo"))
     }
 
     @Test

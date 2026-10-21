@@ -345,11 +345,16 @@ internal fun oversizeMessageFor(base64: String): String {
  * predicate. Same rule on both branches (raw and marker): one folding,
  * no split-brain locale behavior.
  */
-internal fun messageMatchesQuery(m: ChatMessage, query: String): Boolean {
-    if (m.content.contains(query, ignoreCase = true)) return true
-    val photoCount = if (m.role == "user") m.attachments.wiredPhotoCount() else 0
+internal fun messageMatchesQuery(
+    role: String,
+    content: String,
+    attachments: List<ChatAttachment>,
+    query: String,
+): Boolean {
+    if (content.contains(query, ignoreCase = true)) return true
+    val photoCount = if (role == "user") attachments.wiredPhotoCount() else 0
     return photoCount > 0 &&
-        contentWithMarker(m.content, photoCount).contains(query, ignoreCase = true)
+        contentWithMarker(content, photoCount).contains(query, ignoreCase = true)
 }
 
 /** Wire form of one attachment: the `image_url` data URI the gateway's
