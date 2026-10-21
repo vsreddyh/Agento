@@ -195,7 +195,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * costs time, not data. */
     private val trimCallback = object : android.content.ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: android.content.res.Configuration) = Unit
-        override fun onLowMemory() = Unit
+        override fun onLowMemory() {
+            // The legacy low-memory signal: free the bitmaps here too (#339).
+            thumbCache.evictAll()
+        }
         override fun onTrimMemory(level: Int) {
             if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
                 thumbCache.evictAll()

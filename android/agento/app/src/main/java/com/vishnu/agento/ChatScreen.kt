@@ -154,7 +154,9 @@ private val processCleanupScope =
  * thread + id + length + head/tail sample, never the id alone) — a weaker
  * shadow could serve a stale bitmap. Legacy id-less payloads key on the
  * staged slot and can alias across threads (wrong thumb, never wrong send).
- * Bounded by BYTES (~8 MB), not entries — no onTrimMemory hook exists.
+ * Bounded by BYTES (~8 MB), not entries — and dropped on a memory trim
+ * (the ViewModel registers the ComponentCallbacks2 hook) and when the
+ * ViewModel is cleared.
  */
 internal class ThumbCache(maxKb: Int = 8 * 1024) {
     private val cache = object : android.util.LruCache<ThumbKey, android.graphics.Bitmap>(maxKb) {

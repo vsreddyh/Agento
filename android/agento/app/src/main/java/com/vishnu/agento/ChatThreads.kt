@@ -261,8 +261,16 @@ object ChatThreads {
         current: List<ChatThread>,
     ): List<ChatThread> {
         if (prevIn == null || prevOut == null) return current.map(::canonicalizeThread)
-        return current.mapIndexed { i, t ->
-            if (prevIn.getOrNull(i) === t) prevOut[i] else canonicalizeThread(t)
+        // By ID, not by position (#339): a new thread is PREPENDED, so a
+        // positional compare shifts every index and the next save
+        // re-canonicalizes the whole list (a full payload walk per thread).
+        // The id map keeps the hits; the identity check (same instance)
+        // still decides whether the content changed.
+        val prevById = HashMap<String, Pair<ChatThread, ChatThread>>(prevIn.size)
+        prevIn.forEachIndexed { i, t -> prevById[t.id] = t to prevOut[i] }
+        return current.map { t ->
+            val entry = prevById[t.id]
+            if (entry != null && entry.first === t) entry.second else canonicalizeThread(t)
         }
     }
 

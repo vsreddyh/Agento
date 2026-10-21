@@ -643,6 +643,12 @@ class ChatApi(context: Context) {
             // carries them, thread-shortening when it doesn't. Sized from the
             // built body, not a second encode: contentLength() is the bytes
             // OkHttp will write. -1 (unknown) refuses too.
+            // PEAK SHAPE, named (#339): this block holds the JSONObject
+            // tree, the `raw` string (UTF-16) and the `built` byte copy at
+            // once, and OkHttp's write buffer joins them at send time — so
+            // the worst case is roughly 2x the wire size plus the JSON
+            // tree, all inside this IO block. The cap is checked against
+            // the BUILT length, which is the part that reaches the wire.
             val raw = payload.toString()
             val built = raw.toRequestBody(JSON)
             built to built.contentLength()
