@@ -252,16 +252,18 @@ fun attachmentMarker(n: Int): String =
 private val literalMarker = Regex("""\[(\d+ photos?) attached\]$""")
 
 /**
- * Backslash-escapes a user-typed trailing marker lookalike (#339): a user
- * who literally types `[1 photo attached]` would otherwise render
+ * Quotes a user-typed trailing marker lookalike (#339): a user who
+ * literally types `[1 photo attached]` would otherwise read
  * `"<typed> [1 photo attached]"`, indistinguishable from a real photo
- * turn on text surfaces. The escape keeps the typed text visible
- * (Markdown renders `\[` as `[`) while marking it as typed, not produced.
- * The wire parts stay authoritative — this only disambiguates the hint,
- * never the send.
+ * turn on text surfaces. Quoted, not backslash-escaped: the escape
+ * (`\[`) renders as `[` in Markdown (an invisible distinction) and leaks
+ * as a stray backslash in plain-Text surfaces — user bubbles are Text(),
+ * and the sharesheet shares raw text — while quotes disambiguate in every
+ * render. The wire parts stay authoritative — this only disambiguates the
+ * hint, never the send.
  */
-private fun escapeLiteralMarker(content: String): String =
-    literalMarker.replace(content) { m -> "\\" + m.value }
+private fun quoteLiteralMarker(content: String): String =
+    literalMarker.replace(content) { m -> "\"" + m.value + "\"" }
 
 /**
  * Text plus its photo marker for trim-tolerant surfaces (#339): search
@@ -274,7 +276,7 @@ private fun escapeLiteralMarker(content: String): String =
  */
 fun contentWithMarker(content: String, n: Int): String =
     if (n <= 0) content
-    else (escapeLiteralMarker(content.trim()) + " " + attachmentMarker(n)).trim()
+    else (quoteLiteralMarker(content.trim()) + " " + attachmentMarker(n)).trim()
 
 /**
  * Verbatim twin of [contentWithMarker] for the wire history path (#339):
@@ -284,7 +286,7 @@ fun contentWithMarker(content: String, n: Int): String =
  * visibly paired and the next edit can't silently re-split them.
  * Trim/preserve split, stated once: export uses this too (reproducing
  * what the agent saw); search uses the trimming twin (matching is
- * trim-tolerant). A literal trailing lookalike escapes like the twin.
+ * trim-tolerant). A literal trailing lookalike quotes like the twin.
  */
 fun contentWithMarkerVerbatim(content: String, n: Int): String =
     if (n <= 0) {
@@ -292,7 +294,7 @@ fun contentWithMarkerVerbatim(content: String, n: Int): String =
     } else if (content.isBlank()) {
         attachmentMarker(n)
     } else {
-        escapeLiteralMarker(content) + " " + attachmentMarker(n)
+        quoteLiteralMarker(content) + " " + attachmentMarker(n)
     }
 
 /** True when the message carries anything the agent should see. Text-only

@@ -153,25 +153,28 @@ private fun AttachmentThumb(
     base64: String,
     label: String,
     modifier: Modifier = Modifier,
-    // Legacy-only (#339): the stable-id key ignores this — it exists
-    // solely for the id == "" fallback. Named legacySlot (not slot) so
-    // the stable path can't accidentally consume it: re-adding it to the
-    // stable key would reintroduce the shift-reload the UUID fixed.
+    // Legacy-only for identity (#339): the stable VALUE ignores this — it
+    // exists for the id == "" fallback. Named legacySlot (not slot) so
+    // the stable value can't accidentally consume it. It IS a remember
+    // key (single-slot safety — see below), but a slot shift only rebuilds
+    // the stable sample string, never re-decodes: the value still keys on
+    // UUID + length, so Triple equality holds across removes.
     legacySlot: Int = 0,
     stableId: String = "",
 ) {
     // Identity without walking the payload (#339): the per-pick UUID is
-    // stable across removes — slot is deliberately NOT in the stable key,
-    // so photo 1 keeps its thumbnail when photo 0 leaves (no re-decode, no
-    // flicker) — and distinct across identical picks (no aliasing). A
-    // 256-char head/tail sample rides along in the stable value (64-char
-    // in the legacy value below) as a second disambiguator for DISTINCT
+    // stable across removes — the stable VALUE ignores slot, so photo 1
+    // keeps its thumbnail when photo 0 leaves (Triple equality holds, no
+    // re-decode, no flicker) — and distinct across identical picks (no
+    // aliasing). A
+    // 256-char-total head/tail sample (128+128) rides along in the stable
+    // value (128-char total, 64+64, in the legacy value below) as a second disambiguator for DISTINCT
     // payloads: burst-shot headers can share a 64-char prefix, so the
     // sample is wide enough that only adversarial mutation aliases — which
     // a full-string walk (the cost this key exists to avoid) could close.
     // Honestly scoped (#339): the remember keys are the cheap identity
-    // (UUID + length) WITHOUT the sample, so a same-id + same-length +
-    // mutated-middle payload would reuse the cached Triple and never
+    // (UUID + slot + length) WITHOUT the sample, so a same-id +
+    // same-length + mutated-middle payload would reuse the cached Triple and never
     // re-fire produceState. Impossible in practice — payloads are immutable
     // from pick time, one UUID per pick — so the sample guards distinct
     // payloads, not mutation. Legacy payloads (id "") key on slot + length
@@ -187,18 +190,19 @@ private fun AttachmentThumb(
     // not worth a crash.
     // Remembered, not rebuilt per recomposition (#339): the sample string
     // otherwise allocates fresh on every scroll frame per visible thumb.
-    // The remember is SPLIT per branch (#339): the stable branch ignores
-    // legacySlot, so sharing one key on it would rebuild every survivor's
-    // sample string on each remove (indices shift i: 1→0) for Triples that
-    // compare equal anyway — key each branch only on what its value
-    // carries. (A conditional remember is safe here: flipping branches
-    // forgets the old slot, which is exactly the desired re-key.)
-    val thumbKey = if (stableId.isNotEmpty()) {
-        remember(stableId, base64.length) {
+    // ONE remember slot with the branch inside (#339): stable ignores
+    // legacySlot, so a shared key rebuilds every survivor's sample string
+    // on each remove (indices shift i: 1→0) — accepted, because the
+    // alternative (conditional remember, one slot per branch) splits the
+    // slot by call position, and a future edit migrating an id in place
+    // would unmount/remount instead of re-keying. The rebuild cost is one
+    // 256-char alloc per surviving thumb on a remove (a rare user action),
+    // and Triple equality holds so produceState never restarts — the
+    // shift-reload fix holds either way.
+    val thumbKey = remember(stableId, legacySlot, base64.length) {
+        if (stableId.isNotEmpty()) {
             Triple(stableId, base64.length, base64.sampleKey(128))
-        }
-    } else {
-        remember(legacySlot, base64.length) {
+        } else {
             // Legacy fallback, best-effort by construction (#339): two
             // different pre-id photos with same length + same head/tail CAN
             // alias here (no crash, no placeholder — just the wrong thumb).

@@ -1,5 +1,8 @@
 package com.vishnu.agento
 
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -86,5 +89,43 @@ class SettingsBackupTest {
         assertFalse(SettingsBackup.isEffortMemoryKey("effort_chat_"))
         assertFalse(SettingsBackup.isEffortMemoryKey("effort_bogus-model_x"))
         assertFalse(SettingsBackup.isEffortMemoryKey("effort_"))
+    }
+
+    // ── pretty → compact format change (#339) ───────────────────────────
+
+    @Test
+    fun `legacy pretty backup parses and photo payload survives compact rewrite`() {
+        // Export switched from toString(2) to toString(): the reader
+        // (JSONObject) ignores whitespace, but nothing pinned that an old
+        // pretty backup still restores — or that the compact rewrite keeps
+        // a photo payload byte-identical. Both pinned here at the JSON
+        // layer (export/importFrom need a Context; the compatibility lives
+        // in the format, not the prefs wiring).
+        val payload = "QUJD".repeat(512) // valid base64, decodes to ~1.5 KB
+        val threadsText = """[{"id":"t1","messages":[{"role":"user","content":"","attachments":[{"id":"u1","base64":"$payload"}]}]}]"""
+        val pretty = JSONObject()
+            .put("version", 2)
+            .put("values", JSONObject())
+            .put("files", JSONObject().put("chat_threads_chat", threadsText))
+            .toString(2)
+        // Legacy pretty parses with the thread file intact.
+        val parsed = JSONObject(pretty)
+        assertEquals(
+            threadsText,
+            parsed.getJSONObject("files").getString("chat_threads_chat"),
+        )
+        // Compact rewrite (what export writes now) re-parses with the
+        // photo blob byte-identical — the format change is
+        // reader-compatible in both directions.
+        val reparsed = JSONObject(parsed.toString())
+        val threads = JSONArray(
+            reparsed.getJSONObject("files").getString("chat_threads_chat"),
+        )
+        assertEquals(
+            payload,
+            threads.getJSONObject(0).getJSONArray("messages")
+                .getJSONObject(0).getJSONArray("attachments")
+                .getJSONObject(0).getString("base64"),
+        )
     }
 }
