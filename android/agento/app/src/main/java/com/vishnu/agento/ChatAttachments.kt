@@ -152,6 +152,16 @@ internal fun requireIoThread(site: String) {
 }
 
 /**
+ * Log line for a healed payload (#339): logcat only, never a toast (a
+ * toast per healed payload would storm on every cold start). The JVM
+ * stub of android.util.Log throws, and this path is unit tested, so the
+ * call is guarded.
+ */
+private fun logHeal(reason: String) {
+    runCatching { Log.w("ChatAttachments", reason) }
+}
+
+/**
  * Canonical form of persisted attachments: storage is hand-editable, so framing
  * whitespace is stripped and anything still undecodable blanks out. Applied
  * once at the load boundary, so the hot-path [isWired] can
@@ -184,7 +194,7 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
             // payload wrapped past the ceiling is therefore blanked on
             // purpose: it wires as no-photo instead of costing a 4 M-char
             // copy, and the app never writes wrapped payloads at all.
-            Log.w("ChatAttachments", "blanked an over-ceiling payload (${a.base64.length} chars)")
+            logHeal("blanked an over-ceiling payload (${a.base64.length} chars)")
             a.copy(base64 = "")
         } else if (a.base64.all { it.isWhitespace() }) {
             // All-whitespace just under the ceiling: blank without building the copy.
@@ -196,7 +206,7 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
             // length is over the ceiling, blank without building it.
             val strippedLen = a.base64.count { !it.isWhitespace() }
             if (strippedLen > MAX_RAW_BASE64_CHARS) {
-                Log.w("ChatAttachments", "blanked an over-ceiling wrapped payload")
+                logHeal("blanked an over-ceiling wrapped payload")
                 a.copy(base64 = "")
             } else {
                 val stripped = a.base64.filterNot { c -> c.isWhitespace() }
@@ -207,7 +217,7 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
                         // Ragged payload: blanked AND logged (#339) — a
                         // hand-edited photo would otherwise disappear with
                         // no trace at all (logcat only, never a toast storm).
-                        Log.w("ChatAttachments", "blanked a ragged payload (${stripped.length} chars)")
+                        logHeal("blanked a ragged payload (${stripped.length} chars)")
                         a.copy(base64 = "")
                     }
                 }

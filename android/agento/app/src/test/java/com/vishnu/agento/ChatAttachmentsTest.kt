@@ -439,7 +439,9 @@ class ChatAttachmentsTest {
         val first = ChatThreads.canonicalizeUnchanged(null, null, listOf(t1))
         assertEquals(1, first.size)
         // Same input refs in, cached output out: zero re-validation on a
-        // no-op save. Shifted lists degrade to full canonicalize (safe).
+        // no-op save. A SHIFTED list still hits the cache (#339): the
+        // tracking is keyed by thread id, so a prepended thread no longer
+        // re-walks every payload.
         val second = ChatThreads.canonicalizeUnchanged(listOf(t1), first, listOf(t1))
         assertTrue(second[0] === first[0])
         // Payload strings are shared, not copied (#339): the cache pins
