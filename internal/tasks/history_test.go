@@ -222,6 +222,11 @@ func TestListMutationsSinceIsInclusive(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
+	// The two writes must land in DIFFERENT milliseconds: `at` is stored at
+	// millisecond precision, and two entries sharing one timestamp would
+	// make the lower bound below match both — the test would then measure
+	// the clock, not the contract.
+	time.Sleep(2 * time.Millisecond)
 	s.RecordMutation(ctx, OpUpdate, "task-a", "mcp", "name")
 
 	all, _, err := s.ListMutations(ctx, MutationFilter{})

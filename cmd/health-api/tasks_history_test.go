@@ -114,6 +114,10 @@ func TestTaskMutationsResponseShape(t *testing.T) {
 	if err != nil {
 		t.Skipf("mongo unreachable: %v", err)
 	}
+	// The store opened here is the test's own; the store the handler uses
+	// comes from the process-wide cache and lives as long as the process,
+	// exactly as it does in the server.
+	defer store.Close(context.Background())
 	ctx := context.Background()
 	// The store is cached process-wide, and the cache is filled from the
 	// environment — so the test points the environment at its own database
@@ -133,6 +137,11 @@ func TestTaskMutationsResponseShape(t *testing.T) {
 	// assertions would be measuring history instead of the contract.
 	id := primitive.NewObjectID().Hex()
 	store.RecordMutation(ctx, tasks.OpComplete, id, "mcp", "none")
+	// The two writes must land in DIFFERENT milliseconds: `at` is stored at
+	// millisecond precision, and two entries sharing one timestamp would
+	// make the inclusive `since` below match both — the test would then
+	// measure the clock, not the contract.
+	time.Sleep(2 * time.Millisecond)
 	store.RecordMutation(ctx, tasks.OpCreate, id, "http", "http POST /api/tasks")
 
 	t.Setenv("PASSWORD", "test-secret-12345678")
