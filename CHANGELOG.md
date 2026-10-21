@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.11.0]
+- **Task Manager bulk select + per-task Skip (#341).** Long-press or the
+  Select action enters selection mode (checkboxes, tap-to-toggle, up to 50
+  tasks); the bulk bar completes or skips the whole set in one atomic batch
+  — either everything applies or nothing does, with the failing item named.
+  The detail sheet gains a Skip button next to Complete. Server adds
+  `POST /api/tasks/batch` and a canonical duplicate used by bulk duplicate.
+
 ## [5.10.1]
 - **Fixed:** the connection test counts only real model names. Blank entries
   in the provider catalog no longer inflate the reported model count,

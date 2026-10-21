@@ -86,6 +86,72 @@ data class ChangeMarker(
     val changed: Boolean,
 )
 
+/**
+ * One op inside a bulk batch (#345): complete, skip, update, or duplicate a
+ * task by id. `reason` rides only on skip; `fields` only on update (the same
+ * partial-update map the single-task update takes, e.g. due_date for a move
+ * plus expected_revision for the concurrency guard).
+ */
+data class BulkOp(
+    val op: String,
+    val id: String,
+    val reason: String? = null,
+    val fields: JSONObject? = null,
+)
+
+/** What one committed batch item produced: the fresh task, plus the next
+ * occurrence's due date when a structured cadence rolled over. */
+data class BulkItemResult(
+    val index: Int,
+    val id: String,
+    val op: String,
+    val task: ServerTask,
+    val nextDueDate: String = "",
+)
+
+/** Builds the `{"ops": [...]}` body for a bulk batch. Top-level (not a
+ * member) so the shape is unit-testable without a Context. */
+internal fun bulkOpsBody(ops: List<BulkOp>): JSONObject {
+    val arr = JSONArray()
+    for (op in ops) {
+        val o = JSONObject().put("op", op.op).put("id", op.id)
+        if (op.reason != null) o.put("reason", op.reason)
+        if (op.fields != null) o.put("fields", op.fields)
+        arr.put(o)
+    }
+    return JSONObject().put("ops", arr)
+}
+
+/**
+ * Which item of a bulk batch failed, recovered from the HTTP error text
+ * (#345). The batch endpoint answers a failed op with the single-verb
+ * status plus the op's index, id, and op, e.g.
+ * `HTTP 409: {"detail": "conflict: ...", "index": 2, "id": "...", "op": "update"}`.
+ */
+internal data class BatchFailure(
+    val detail: String,
+    val index: Int,
+    val id: String,
+    val op: String,
+)
+
+/** Recovers a [BatchFailure] from an HTTP error message, or null when the
+ * message carries no batch envelope (a network failure, a proxy hint). */
+internal fun parseBatchError(message: String): BatchFailure? {
+    val start = message.indexOf('{')
+    if (start < 0) return null
+    val o = runCatching { JSONObject(message.substring(start)) }.getOrNull() ?: return null
+    if (o.isNull("detail")) return null
+    val detail = o.optString("detail", "").trim()
+    if (detail.isEmpty()) return null
+    return BatchFailure(
+        detail = detail,
+        index = o.optInt("index", -1),
+        id = if (o.isNull("id")) "" else o.optString("id", ""),
+        op = if (o.isNull("op")) "" else o.optString("op", ""),
+    )
+}
+
 /** The deadline as an instant, or null when it cannot be parsed. */
 fun ServerTask.dueMillisOrNull(): Long? = dueMillisOrNull(dueDate, dueTime)
 
@@ -739,6 +805,55 @@ class TasksApi(context: Context) {
                     // literal string "null" and reach the toast.
                     task.copy(nextDueDate = optStr(next, "due_date"))
                 }
+            }
+        }
+
+    /**
+     * One atomic bulk run (#345): complete, skip, update, or duplicate a set
+     * of tasks in one server transaction. The whole batch commits or nothing
+     * does; a hard failure names the failing op (index/id/op) with the
+     * single-verb status, so the screen can report WHICH item failed and keep
+     * the selection for retry.
+     */
+    suspend fun batch(ops: List<BulkOp>): Result<List<BulkItemResult>> =
+        withContext(Dispatchers.IO) {
+            if (ops.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Nothing to send"))
+            }
+            call("POST", "/api/tasks/batch", bulkOpsBody(ops)).map { text ->
+                val arr = JSONObject(text).optJSONArray("results")
+                    ?: throw RuntimeException("Unexpected response shape")
+                val out = mutableListOf<BulkItemResult>()
+                for (i in 0 until arr.length()) {
+                    val item = arr.optJSONObject(i)
+                        ?: throw RuntimeException("Unexpected response shape")
+                    val root = item.optJSONObject("task")
+                        ?: throw RuntimeException("Unexpected response shape")
+                    var task = parseTask(root)
+                        ?: throw RuntimeException("Unexpected response shape")
+                    // Version handling mirrors resolve(): each half versioned
+                    // on its own, warn-not-throw on disagreement.
+                    val next = item.optJSONObject("next")
+                    val nextVersion =
+                        next?.let { parseContractVersion(it.opt("contract_version")) }
+                    if (completeVersionMismatch(task.contractVersion, nextVersion)) {
+                        ContractWarnings.report(listOf("contract_version"), task.name)
+                    }
+                    noteContractVersion(maxOf(task.contractVersion, nextVersion ?: 0))
+                    if (next != null) {
+                        task = task.copy(nextDueDate = optStr(next, "due_date"))
+                    }
+                    out.add(
+                        BulkItemResult(
+                            index = item.optInt("index", i),
+                            id = optStr(item, "id").ifEmpty { task.id },
+                            op = optStr(item, "op"),
+                            task = task,
+                            nextDueDate = task.nextDueDate,
+                        ),
+                    )
+                }
+                out.toList()
             }
         }
 
