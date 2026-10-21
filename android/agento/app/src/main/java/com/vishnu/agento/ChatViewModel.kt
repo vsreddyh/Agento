@@ -201,8 +201,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * every visible thumb on return. The VM (keyed per-tab like the cache
      * was) survives rotation, so the cache does too — same per-tab
      * scoping, no re-decode. Bitmaps in a VM are safe here: bounded
-     * (~8 MB LRU), UI-only, never persisted. */
+     * (~8 MB LRU), UI-only, never persisted. Evicted on clear so native
+     * bitmaps don't outlive the VM to process death. */
     internal val thumbCache = ThumbCache()
+
+    override fun onCleared() {
+        super.onCleared()
+        thumbCache.evictAll()
+    }
 
     private val _state = mutableStateOf(
         ChatUiState(
@@ -540,26 +546,23 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         stopApprovalWatch()
         retargetApprovals()
         retargetMemory()
-        // Queued text parks in the composer like newConversation/delete
-        // (#339): the composer belongs to the thread being left, but typed
-        // words are not a mis-send risk the way staged photos are — photos
-        // fire into the wrong thread silently, while text just sits visibly
-        // in the box for review. New/delete already keep every word via
-        // joinPending; switch/open now do the same so a fast switch never
-        // eats a draft silently. Staged photos still discard with notice.
+        // Composer clears on switch (#339): the composer belongs to the
+        // thread being left, and carrying typed text into the new thread
+        // would fire A's draft into B on the next send — the same
+        // cross-thread mis-send class the staged-photo discard exists for.
+        // New/delete DOES park text (explicit fresh-thread action, no turn
+        // to confuse); navigation does not. Both drops voice instead of
+        // vanishing: the photo notice below, plus the typed-text notice
+        // when a draft was present.
         val sw = _state.value
-        val parkedSwitch = when {
-            sw.queued.isBlank() -> sw.pending
-            sw.pending.isBlank() -> sw.queued
-            else -> joinPending(sw.pending, sw.queued)
-        }
+        val hadTypedSwitch = sw.pending.isNotBlank() || sw.queued.isNotBlank()
         val hadStaged = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
             threadId = id,
             error = "",
-            pending = parkedSwitch,
+            pending = "",
             // The notice queue drops Infos with them: a cap toast triggered on
             // the old thread must not render over the new composer's first
             // paint (Errors survive via retainedNotices(); the discard notice
@@ -577,6 +580,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
         if (hadStaged) {
             stagedDiscardedNotice()
+        }
+        if (hadTypedSwitch) {
+            notify("Typed draft discarded — it belonged to the previous thread.", ToastKind.Info)
         }
         refreshServerTotals()
         maybeResume(id, ChatThreads.toUi(target.messages))
@@ -628,15 +634,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             stopApprovalWatch()
             retargetApprovals()
             retargetMemory()
-            // Same text-park as switchThread/newConversation (#339): typed
-            // words survive the open visibly in the composer; staged photos
-            // still discard with notice below (silent mis-send risk).
+            // Composer clears on open like switchThread (#339): carrying text
+            // across threads risks firing the old draft into the new thread.
+            // Drops voice instead of vanishing (see switchThread).
             val op = _state.value
-            val parkedOpen = when {
-                op.queued.isBlank() -> op.pending
-                op.pending.isBlank() -> op.queued
-                else -> joinPending(op.pending, op.queued)
-            }
+            val hadTypedOpen = op.pending.isNotBlank() || op.queued.isNotBlank()
             // Same staged-discard voice as switchThread above (#339).
             val hadStagedOpen = _state.value.pendingAttachments.wiredPhotoCount() > 0
             _state.value = _state.value.copy(
@@ -644,7 +646,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 threads = summaries(),
                 threadId = id,
                 error = "",
-                pending = parkedOpen,
+                pending = "",
                 // Staged photos die with the text draft (#339): the composer
                 // belongs to the thread being left, and a parked photo firing
                 // into the wrong thread is a silent mis-send. Infos die with
@@ -661,6 +663,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             )
             if (hadStagedOpen) {
                 stagedDiscardedNotice()
+            }
+            if (hadTypedOpen) {
+                notify("Typed draft discarded — it belonged to the previous thread.", ToastKind.Info)
             }
             refreshServerTotals()
             maybeResume(id, ChatThreads.toUi(target.messages))

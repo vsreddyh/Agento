@@ -369,6 +369,11 @@ internal fun messageMatchesQuery(
     query: String,
 ): Boolean {
     if (content.contains(query, ignoreCase = true)) return true
+    // Search stays lenient on role casing (#339): this only decides
+    // findability, never what wires — so a hand-edited "User" turn still
+    // shows its marker in search. The wire gates below stay strict
+    // (== "user"): an unknown-cased role must fail closed to bare text,
+    // never widen into a multipart with images.
     val photoCount = if (role.equals("user", ignoreCase = true)) attachments.wiredPhotoCount() else 0
     return photoCount > 0 &&
         contentWithMarker(content, photoCount).contains(query, ignoreCase = true)
@@ -429,8 +434,8 @@ fun attachmentMarker(n: Int): String =
  * Case-insensitive by design (#339): a user-typed "[1 Photo Attached]"
  * must quote like the lowercase form — otherwise the mixed-case lookalike
  * bypasses the quote rule while the canonical marker stays lowercase.
- * Role checks use equals(ignoreCase) for the same reason: a future
- * "User"-cased writer must not silently bypass the wire/search rules. */
+ * Search role checks are lenient the same way (see messageMatchesQuery);
+ * the wire gates stay strict == "user" so unknown casing fails closed. */
 private val literalMarker = Regex("""\[(\d+ photos?) attached\]""", RegexOption.IGNORE_CASE)
 
 /**
@@ -487,7 +492,7 @@ fun contentWithMarkerVerbatim(content: String, n: Int): String =
  * assistant photo turn filters as content-less (it would wire as bare
  * text with no marker), so resends never carry a turn the wire drops. */
 fun messageHasContent(m: ChatMessage): Boolean =
-    m.content.isNotBlank() || (m.role.equals("user", ignoreCase = true) && m.attachments.wiredPhotoCount() > 0)
+    m.content.isNotBlank() || (m.role == "user" && m.attachments.wiredPhotoCount() > 0)
 
 /**
  * Dimensions fitting `w`×`h` inside [MAX_IMAGE_SIDE_PX] on the long side,
@@ -563,13 +568,13 @@ fun messageContentJson(
     // but never wires — both positions reasoned, disagreeing only on that
     // hand-edited shape, which load() heals on read anyway.
     val markerCount = attachments.wiredPhotoCount()
-    if (!role.equals("user", ignoreCase = true) || !includeImages) {
+    if (role != "user" || !includeImages) {
         // Stripped earlier photo turns stay honest (#339): the server
         // prompts with the trailing turn alone, but any other reader of
         // this history should see that photos were here — not a blank.
         // Verbatim twin (NOT the trimming helper): history rides exactly
         // as typed, marker only appended.
-        if (role.equals("user", ignoreCase = true) && markerCount > 0 && !includeImages) {
+        if (role == "user" && markerCount > 0 && !includeImages) {
             return WireContent.Text(contentWithMarkerVerbatim(content, markerCount))
         }
         // Assistant turns never stage photos: the marker rule above is

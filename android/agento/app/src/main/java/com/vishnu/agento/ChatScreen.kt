@@ -161,11 +161,14 @@ private val cleanupScope =
  * re-runs Base64.decode + decodeByteArray per photo. Keyed by the full
  * stable identity (id + length + head/tail sample, never the id alone):
  * same id + different length restarts produceState, and the key IS the
- * produce key — a weaker shadow could serve a stale bitmap. Deliberately
- * no thread in the key (#339): UUIDs are globally unique, so no two
- * threads can alias it, and forks share the decoded bitmap for free.
- * Legacy (id-less) payloads bypass the cache (slot-keyed entries would
- * alias across removes). Bounded by BYTES, not entries (#339): sizeOf
+ * produce key — a weaker shadow could serve a stale bitmap. The
+ * no-cross-thread-aliasing invariant holds for the STABLE path only
+ * (#339): pick UUIDs are globally unique, so no two threads can alias
+ * those keys, and forks share the decoded bitmap for free. Legacy
+ * (id-less) payloads key on (slot, length, sample) instead — same slot +
+ * same shape in two threads CAN alias (wrong thumb, never wrong send:
+ * the wire always sends current bytes), best-effort by construction and
+ * self-aging as legacy turns over. Bounded by BYTES, not entries (#339): sizeOf
  * reports kilobytes so the LRU evicts by footprint (~8 MB cap) instead of
  * holding a fixed count under memory pressure with no trim hook. A
  * composition-local cache has no lifecycle for onTrimMemory; the byte
@@ -191,6 +194,7 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
     fun remove(key: Any) {
         cache.remove(key)
     }
+    fun evictAll() = cache.evictAll()
 }
 
 /**
@@ -227,7 +231,11 @@ private fun AttachmentThumb(
     // Scroll-back memory, hoisted by the caller (#339): null disables the
     // cache (previews, single-use). Stable picks only — see ThumbCache.
     // (No threadKey: pick UUIDs are globally unique, so the (id, length)
-    // cache key can never alias across threads — see ThumbCache.)
+    // cache key can never alias across threads for stable picks — see
+    // ThumbCache. Legacy id-less payloads key on slot + length + sample
+    // and CAN alias across threads (same slot, same shape, two threads);
+    // harmless by construction (wrong thumb, never wrong send — the wire
+    // always sends current bytes) and self-aging as legacy turns over.
     cache: ThumbCache? = null,
 ) {
     // Identity without walking the payload (#339): the per-pick UUID is
@@ -363,10 +371,12 @@ internal fun ChatTab(
     var liveStagedVoicedCount by rememberSaveable { mutableStateOf(0) }
     // Scroll-back thumbnail memory (#339): AttachmentThumb's produceState
     // remembers per composition, so scrolling away disposes the bitmap and
-    // scrolling back re-decodes. Hoisted to the ViewModel (per-tab keyed,
-    // rotation-surviving) instead of remember(tab) here — see
-    // ChatViewModel.thumbCache. The cache itself is bounded (see ThumbCache).
-    val thumbCache = remember(tab) { vm.thumbCache }
+    // scrolling back re-decodes. VM-held (per-tab keyed, rotation-
+    // surviving) — see ChatViewModel.thumbCache. No remember wrapper: the
+    // VM instance is already stable across recompositions and rotations,
+    // and a remember(tab) would pin the FIRST VM's cache if the VM were
+    // ever recreated without a tab change.
+    val thumbCache = vm.thumbCache
     // New thread, new staging episode (#339): the voice slate belongs to
     // the old thread's staged set. The thumb cache is NOT evicted here by
     // design: keys carry no thread (UUIDs are globally unique, so no two

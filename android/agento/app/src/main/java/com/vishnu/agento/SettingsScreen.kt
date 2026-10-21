@@ -983,6 +983,20 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                         // default must not decide how a backup decodes.
                         input.bufferedReader(Charsets.UTF_8).readText()
                     } ?: throw IllegalStateException("Could not open the selected file for reading")
+                    // Post-read peak gate, mirroring the export post-build
+                    // check (#339): the SIZE pre-read above trusts provider
+                    // metadata, which cloud providers may omit (-1) or
+                    // understate — a lying provider would otherwise sail the
+                    // pre-read refuse straight into an OOM readText() +
+                    // JSONObject() (both ~2x heap). The string already
+                    // exists here (this guards the PARSE, not the read),
+                    // measured exactly in chars × UTF-16 plus the same slack.
+                    if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                        throw IllegalStateException(
+                            "Backup too large to import safely. " +
+                                "Delete old photo threads in the switcher, export a smaller backup, then try again.",
+                        )
+                    }
                     SettingsBackup.importFrom(context, org.json.JSONObject(text)).getOrThrow()
                 }
             }
