@@ -491,19 +491,22 @@ internal fun SettingsScreen(
 @Composable
 internal fun UsageSection() {
     val context = LocalContext.current
+    // Application context for the IO block below (#339): thread/usage reads
+    // may outlive the screen, so the hop must not hold the Activity.
+    val appContext = context.applicationContext
     var rows by remember { mutableStateOf<List<UsageRow>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val data = withContext(Dispatchers.IO) {
-            UsageStore.clearLegacy(context)
+            UsageStore.clearLegacy(appContext)
             // Single chat tab since #289 (retired god/story/resumes thread
             // files stay on disk, orphaned — only chat is read).
             listOf(
                 "chat" to "Chat",
             ).map { (tab, label) ->
-                val threads = ChatThreads.load(context, tab)
-                val t = UsageStore.load(context, tab)
+                val threads = ChatThreads.load(appContext, tab)
+                val t = UsageStore.load(appContext, tab)
                 // Replies with no usable report (failed/interrupted turns,
                 // or history from before per-message tracking) surface as
                 // explicit gaps instead of silent skips.
@@ -771,23 +774,9 @@ internal fun NotificationsSection() {
  * restores slowly — worth one line, not a block. */
 private const val BACKUP_LARGE_BYTES = 5_000_000
 
-/** Backup size past which export REFUSES instead of warning (#339): the
- * 5 MB line above is advisory (explicit tap = consent to proceed), but
- * past ~25 MB of heap peak the materialized string (~2x bytes as UTF-16
- * plus the JSONObject) reliably OOMs low-end 1–2 GB-RAM devices mid-export —
- * a crash, not a slow restore. 25 MB ≈ a dozen capped photos; text-only
- * backups never approach it. Refusing with a named error (naming the
- * per-thread delete path as the remedy) beats that. The meter is disk
- * bytes, the cap is heap peak — so the gate compares upfront×2 + 1 MB
- * slack; a backup at 12 MB on disk peaks ~25 MB and must refuse, not sail
- * past on raw-length comparison. Fails closed, not approximately.
- */
-private const val BACKUP_HARD_CAP_BYTES = 25_000_000
-
-/** Headroom added to the floor meter before the hard-cap compare (#339):
- * prefs + JSON framing + JSONObject wrapper. KBs in practice, but the
- * gate must judge the sum, not just the files. */
-private const val BACKUP_FLOOR_SLACK_BYTES = 1_000_000
+// The hard cap (BACKUP_HARD_CAP_BYTES) and its floor slack live on
+// SettingsBackup (#339): export() enforces the same wall at the boundary,
+// so the UI pre-meter and the boundary can never name different limits.
 
 /** Issue #16: manual settings export/import. SAF pickers need no storage
  * permission; the file the user keeps survives any reinstall gap that outlives
@@ -795,6 +784,12 @@ private const val BACKUP_FLOOR_SLACK_BYTES = 1_000_000
 @Composable
 internal fun SettingsBackupSection(onImported: () -> Unit) {
     val context = LocalContext.current
+    // Application context for everything that crosses a suspend boundary
+    // (#339): filesDir/contentResolver/export/import run on IO while the
+    // composable may be leaving, and an Activity reference held across that
+    // hop outlives the screen. UI-only work (toasts, pickers) keeps the
+    // Activity-bound `context`.
+    val appContext = context.applicationContext
     val scope = rememberCoroutineScope()
 
     var status by remember { mutableStateOf("") }
@@ -819,7 +814,7 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // display. Sum lengths first (metadata only, no reads):
                     // the floor, not the ceiling. Warns up front; the
                     // explicit tap is consent to proceed.
-                    val upfront = SettingsBackup.backupFilesBytes(context.filesDir)
+                    val upfront = SettingsBackup.backupFilesBytes(appContext.filesDir)
                     // Hard refuse past the cap (#339): the warning below is
                     // consent-to-proceed, but consent cannot survive an OOM —
                     // fail with a named error naming the remedy (per-thread
@@ -830,10 +825,7 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // unscaled compare would let 12 MB on disk (~25 MB peak)
                     // sail past. Fails closed on the estimated peak.
                     if (upfront * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
-                        throw IllegalStateException(
-                            "Backup too large to export safely (${formatBytes(upfront)} on disk). " +
-                                "Delete old photo threads in the thread switcher, then try again.",
-                        )
+                        throw IllegalStateException(SettingsBackup.backupTooLargeMessage(upfront))
                     }
                     if (upfront > BACKUP_LARGE_BYTES) {
                         withContext(Dispatchers.Main) {
@@ -860,7 +852,7 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // indentation whitespace, and the large case this warns
                     // about is exactly base64 blobs nobody reads — the peak
                     // that matters most is the one pretty-printing inflates.
-                    val text = SettingsBackup.export(context).toString()
+                    val text = SettingsBackup.export(appContext).toString()
                     // Post-build peak check (#339): the meter above judged the
                     // floor at meter time, but a concurrent turn-boundary
                     // save can grow thread files between the meter and this
@@ -877,7 +869,7 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                         )
                     }
                     var written = 0L
-                    val opened = context.contentResolver.openOutputStream(uri)
+                    val opened = appContext.contentResolver.openOutputStream(uri)
                         ?: throw IllegalStateException("Could not open the selected file for writing")
                     val counting = object : java.io.FilterOutputStream(opened) {
                         override fun write(b: Int) {
@@ -953,7 +945,7 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // unknown (-1) skips the warning, not the import. The
                     // explicit tap is consent to proceed.
                     val pickedBytes = runCatching {
-                        context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                        appContext.contentResolver.query(uri, null, null, null, null)?.use { c ->
                             val i = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
                             if (i >= 0 && c.moveToFirst()) c.getLong(i) else -1L
                         } ?: -1L
@@ -977,7 +969,7 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                                 "Delete old photo threads in the switcher, export a smaller backup, then try again.",
                         )
                     }
-                    val text = context.contentResolver.openInputStream(uri)?.use { input ->
+                    val text = appContext.contentResolver.openInputStream(uri)?.use { input ->
                         // Pinned UTF-8 like the writer side (#339): the SAF
                         // stream carries no charset, and the platform
                         // default must not decide how a backup decodes.
@@ -1021,7 +1013,7 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                                 "Delete old photo threads in the switcher, export a smaller backup, then try again.",
                         )
                     }
-                    SettingsBackup.importFrom(context, org.json.JSONObject(text)).getOrThrow()
+                    SettingsBackup.importFrom(appContext, org.json.JSONObject(text)).getOrThrow()
                 }
             }
             result.fold(
@@ -1306,6 +1298,9 @@ internal fun WidgetSettingsSection() {
 @Composable
 internal fun WidgetDiagnosticsCard() {
     val context = LocalContext.current
+    // Application context for the diagnostics reads (#339): they run on IO
+    // and may outlive the screen; the chooser stays on the Activity.
+    val appContext = context.applicationContext
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     var summary by remember { mutableStateOf("") }
@@ -1319,7 +1314,7 @@ internal fun WidgetDiagnosticsCard() {
     var cleared by remember { mutableStateOf("") }
     // Prefs/AppWidgetManager reads stay off Main (same as the log dump).
     LaunchedEffect(Unit) {
-        summary = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
+        summary = withContext(Dispatchers.IO) { TaskWidget.diagnostics(appContext) }
         budget = TaskReminders.budget(context)
     }
     SectionCard(
@@ -1351,7 +1346,7 @@ internal fun WidgetDiagnosticsCard() {
                 copied = false
                 scope.launch {
                     try {
-                        val fresh = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
+                        val fresh = withContext(Dispatchers.IO) { TaskWidget.diagnostics(appContext) }
                         summary = fresh
                         // Re-read with it: the banner above is derived from
                         // the same prefs, and a copy is a refresh.
@@ -1392,9 +1387,9 @@ internal fun WidgetDiagnosticsCard() {
                 saved = ""
                 scope.launch {
                     runCatching {
-                        val report = withContext(Dispatchers.IO) { TaskWidget.buildReport(context) }
+                        val report = withContext(Dispatchers.IO) { TaskWidget.buildReport(appContext) }
                         val file = withContext(Dispatchers.IO) {
-                            saveDiagnosticsFile(context, report)
+                            saveDiagnosticsFile(appContext, report)
                         }
                         val uri = androidx.core.content.FileProvider.getUriForFile(
                             context, "${context.packageName}.fileprovider", file)

@@ -486,6 +486,21 @@ internal fun ChatTab(
     // must not lose it); the startup sweep always clears it on a fresh
     // process, since system permission dialogs never survive death.
     var cameraPermSince by rememberSaveable { mutableStateOf(0L) }
+    // Asked-before flag for rationale routing (#339): the API returns
+    // false for both first-denial (some OEMs) and permanent denial, so
+    // without history a first deny jumps straight to the Settings dialog.
+    // false+never-asked → toast; false+asked → Settings. Saveable: a
+    // rotation between request and result must not lose the ask — but a
+    // fresh process clears it below, because no permission result survives
+    // death and a restored true would misroute the next first denial.
+    var cameraAskedBefore by rememberSaveable { mutableStateOf(false) }
+    // Pre-request snapshot for rationale routing (#339): cameraAskedBefore
+    // is set at request time and read at result time, so reading it in the
+    // callback is always true — a first denial on OEMs where rationale is
+    // false on first denial would jump straight to Settings instead of the
+    // gentle toast. Snapshot the pre-request value at request time and route
+    // on that (false + never-asked → toast is reachable again).
+    var cameraWasAskedAtRequest by rememberSaveable { mutableStateOf(false) }
     /** True while a camera permission request is outstanding (unanswered dialog). */
     fun isCameraPermPending(): Boolean {
         if (cameraPermSince == 0L) return false
@@ -558,6 +573,12 @@ internal fun ChatTab(
         // callback may legitimately still fire.
         if (freshProcess) {
             cameraPermSince = 0L
+            // Asked-before state resets with it (#339): a restored true
+            // would send the first denial after a kill straight to the
+            // Settings dialog instead of the gentle toast — the exact
+            // first-vs-permanent misroute the flag exists to prevent.
+            cameraAskedBefore = false
+            cameraWasAskedAtRequest = false
         }
         // Cleared only with no outstanding capture (#339): a kill with the
         // camera foreground restores BOTH the timestamp and cameraPath, and
@@ -1108,19 +1129,6 @@ internal fun ChatTab(
             }
         }
     }
-    // Asked-before flag for rationale routing (#339): the API returns
-    // false for both first-denial (some OEMs) and permanent denial, so
-    // without history a first deny jumps straight to the Settings dialog.
-    // false+never-asked → toast; false+asked → Settings. Saveable: a
-    // rotation between request and result must not lose the ask.
-    var cameraAskedBefore by rememberSaveable { mutableStateOf(false) }
-    // Pre-request snapshot for rationale routing (#339): cameraAskedBefore
-    // is set at request time and read at result time, so reading it in the
-    // callback is always true — a first denial on OEMs where rationale is
-    // false on first denial would jump straight to Settings instead of the
-    // gentle toast. Snapshot the pre-request value at request time and route
-    // on that (false + never-asked → toast is reachable again).
-    var cameraWasAskedAtRequest by rememberSaveable { mutableStateOf(false) }
     // Fresh Activity at callback time (#339): the launcher registration
     // must not pin the pre-rotation Activity for rationale routing or the
     // Settings intent — updated-state always holds the latest composition's
@@ -1391,8 +1399,16 @@ internal fun ChatTab(
                         type = "text/plain"
                         putExtra(android.content.Intent.EXTRA_TEXT, text)
                     }
-                    runCatching {
+                    // Failure voices (#339): a device with no share target
+                    // used to swallow the tap entirely (runCatching with no
+                    // else) — the user retapped a dead button. The text is
+                    // still exported, so say what failed (sharing, not the
+                    // export) and what to do.
+                    val shared = runCatching {
                         context.startActivity(android.content.Intent.createChooser(intent, "Share conversation"))
+                    }.isSuccess
+                    if (!shared) {
+                        toasts.toast("No app can share that conversation.", ToastKind.Error)
                     }
                 }
             },
@@ -1674,6 +1690,10 @@ internal fun TabModelSheet(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
+    // Application context for the prefs/catalog reads (#339): the effect's
+    // network hop suspends while the sheet may be dismissed, so it must not
+    // pin the Activity. UI-only work never needs the Activity here.
+    val appContext = context.applicationContext
     var provider by remember { mutableStateOf("") }
     var model by remember { mutableStateOf("") }
     var effort by remember { mutableStateOf("") }
@@ -1683,11 +1703,11 @@ internal fun TabModelSheet(
     LaunchedEffect(tab) {
         loading = true
         error = ""
-        val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        val prefs = appContext.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         provider = (prefs.getString("provider_$tab", "") ?: "").trim()
         model = (prefs.getString("model_$tab", "") ?: "").trim()
-        effort = ChatApi(context).effortFor(tab, model).ifEmpty { EffortCatalog.defaultFor(model) }
-        val api = ChatApi(context)
+        effort = ChatApi(appContext).effortFor(tab, model).ifEmpty { EffortCatalog.defaultFor(model) }
+        val api = ChatApi(appContext)
         catalog = runCatching {
             api.fetchCatalog(catalogPath(api)).getOrThrow()
         }.getOrElse { e ->
@@ -1697,7 +1717,7 @@ internal fun TabModelSheet(
         loading = false
     }
     fun save(p: String, m: String, e: String) {
-        val api = ChatApi(context)
+        val api = ChatApi(appContext)
         api.setChatConfig(api.baseUrl(), api.password(), tab, p, m, e)
         onChanged()
     }

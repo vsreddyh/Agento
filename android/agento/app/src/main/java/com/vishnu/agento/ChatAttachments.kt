@@ -521,6 +521,75 @@ fun downscaledSize(w: Int, h: Int): Pair<Int, Int> {
 }
 
 /**
+ * EXIF orientation → affine matrix (#339), or null for NORMAL/unknown —
+ * the transform BitmapFactory ignores, so a portrait capture would stage,
+ * send, and render sideways. Shared by the stage path (full-size rotate)
+ * and the thumbnail decode (display-only), one table for both.
+ *
+ * Mapping follows the EXIF orientation semantics (CIPA DC-008 / AOSP
+ * ExifInterface: TRANSPOSE = 90° + horizontal mirror, TRANSVERSE = 270° +
+ * horizontal mirror). The mirror composes AFTER the rotation, so the
+ * rotated result is what gets mirrored — mirroring first would swap the
+ * two cases (verified by the 2x1 corner probe in ExifMatrixTest, not just
+ * by reading the reference). Every case maps to POSITIVE coordinates
+ * explicitly (#339): the pure negative-scale flip recipe renders into
+ * negative space and relies on createBitmap to re-normalize — which the
+ * rotation cases visibly get (they need it just as much) but must never
+ * be load-bearing. The postTranslate companions below make each matrix
+ * positive by construction, correct with or without normalization. POST
+ * reads in POINT order (#339): per the platform contract postFoo(op) is
+ * M' = op * M, so each call applies AFTER everything above it — the block
+ * below reads top-down as the pixel flows (rotate, shift positive, mirror,
+ * shift positive). preFoo would read bottom-up (M' = M * op, op applied
+ * FIRST) and invite exactly the translate-backwards bug — verified against
+ * developer.android.com/reference/android/graphics/Matrix, not from
+ * memory. The Bitmap path is JVM-untestable by design (stubbed android.jar),
+ * so the affine math — not just the prose — is pinned by ExifMatrixTest's
+ * 2x1 corner probe, which replicates these documented post identities (not
+ * the code's call order) and asserts the CIPA geometric outcomes; do not
+ * "simplify" the mirror cases into pure rotations, and keep the explicit
+ * translates. Pinned matrix, all 8 values (#339): 1=identity, 2=flip-H,
+ * 3=rot180, 4=flip-V, 5=transpose(rot90 then flip-H), 6=rot90,
+ * 7=transverse(rot270 then flip-H), 8=rot270.
+ */
+internal fun orientationMatrix(orientation: Int, w: Float, h: Float): Matrix? =
+    when (orientation) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> Matrix().apply {
+            postRotate(90f)
+            postTranslate(h, 0f)
+        }
+        ExifInterface.ORIENTATION_ROTATE_180 -> Matrix().apply {
+            postRotate(180f)
+            postTranslate(w, h)
+        }
+        ExifInterface.ORIENTATION_ROTATE_270 -> Matrix().apply {
+            postRotate(270f)
+            postTranslate(0f, w)
+        }
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> Matrix().apply {
+            postScale(-1f, 1f)
+            postTranslate(w, 0f)
+        }
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> Matrix().apply {
+            postScale(1f, -1f)
+            postTranslate(0f, h)
+        }
+        ExifInterface.ORIENTATION_TRANSPOSE -> Matrix().apply {
+            postRotate(90f)
+            postTranslate(h, 0f)
+            postScale(-1f, 1f)
+            postTranslate(h, 0f)
+        }
+        ExifInterface.ORIENTATION_TRANSVERSE -> Matrix().apply {
+            postRotate(270f)
+            postTranslate(0f, w)
+            postScale(-1f, 1f)
+            postTranslate(h, 0f)
+        }
+        else -> null
+    }
+
+/**
  * Wire shape of one message's content (#339): a bare string normally, the
  * conventional multipart array when the turn carries photos. Sealed (not
  * `Any`) so callers branch exhaustively with compiler help — the next edit
@@ -574,6 +643,13 @@ fun messageContentJson(
     // but never wires — both positions reasoned, disagreeing only on that
     // hand-edited shape, which load() heals on read anyway.
     val markerCount = attachments.wiredPhotoCount()
+    // Role check is strict == "user" here (#339), the wire half of the
+    // deliberate split documented on messageMatchesQuery (lenient search)
+    // and messageHasContent (strict content): a hand-edited "User" turn is
+    // findable by its search marker but never widens the wire — it rides
+    // as bare text here, and the request builder then clamps the wire role
+    // to "user", so no marker can ever claim an image part that was not
+    // sent.
     if (role != "user" || !includeImages) {
         // Stripped earlier photo turns stay honest (#339): the server
         // prompts with the trailing turn alone, but any other reader of
@@ -834,7 +910,11 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 }
                 out.toByteArray()
             } ?: throw NamedAttachError(
-                "Couldn't read that photo — it may have been moved or deleted. Pick it again.",
+                // A null stream is not proof of deletion (#339): some
+                // providers return null for a still-valid pick (transient
+                // quirk), so the wording names what happened — "open" —
+                // instead of asserting the file moved.
+                "Couldn't open that photo — pick it again.",
             )
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
@@ -885,8 +965,13 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     // cancel landing mid-EXIF-read must surface, not continue
                     // into rotate/scale/compress with a defaulted orient.
                     // Same rethrow-both rule as namedReadError/decodeThumbnail.
+                    // The decoded bitmap is recycled first (#339): this throw
+                    // happens before the try/finally below owns it, so
+                    // without this the 1568px bitmap leaks until GC.
+                    fresh.recycle()
                     throw e
                 } catch (e: Error) {
+                    fresh.recycle()
                     throw e
                 } catch (_: Exception) {
                     ExifInterface.ORIENTATION_NORMAL
@@ -913,76 +998,16 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             var lastCandidate = ""
             try {
                 ensureActive()
-                // Null means no transform: transposes and flips compose a mirror
-                // via negative scale, which createBitmap applies directly.
-                // Mapping follows the EXIF orientation semantics (CIPA DC-008 /
-                // AOSP ExifInterface: TRANSPOSE = 90° + horizontal mirror,
-                // TRANSVERSE = 270° + horizontal mirror). The mirror composes
-                // AFTER the rotation, so the rotated result is what gets
-                // mirrored — mirroring first would swap the two cases
-                // (verified by the 2x1 corner probe in ExifMatrixTest, not
-                // just by reading the reference). Every case maps to
-                // POSITIVE coordinates explicitly (#339): the pure
-                // negative-scale flip recipe renders into negative space and
-                // relies on createBitmap to re-normalize — which the rotation
-                // cases visibly get (they need it just as much) but must
-                // never be load-bearing. The postTranslate companions below
-                // make each matrix positive by construction, correct with or
-                // without normalization. POST reads in POINT order (#339):
-                // per the platform contract postFoo(op) is M' = op * M, so
-                // each call applies AFTER everything above it — the block
-                // below reads top-down as the pixel flows (rotate, shift
-                // positive, mirror, shift positive). preFoo would read
-                // bottom-up (M' = M * op, op applied FIRST) and invite
-                // exactly the translate-backwards bug — verified against
-                // developer.android.com/reference/android/graphics/Matrix,
-                // not from memory. The Bitmap path is JVM-untestable by
-                // design (stubbed android.jar), so the affine math — not
-                // just the prose — is pinned by ExifMatrixTest's 2x1 corner
-                // probe, which replicates these documented post identities
-                // (not the code's call order) and asserts the CIPA geometric
-                // outcomes; do not "simplify" the mirror cases into pure
-                // rotations, and keep the explicit translates. Pinned
-                // matrix, all 8 values (#339): 1=identity, 2=flip-H, 3=rot180,
-                // 4=flip-V, 5=transpose(rot90 then flip-H), 6=rot90,
-                // 7=transverse(rot270 then flip-H), 8=rot270.
-                val w = bitmap.width.toFloat()
-                val h = bitmap.height.toFloat()
-                val matrix: Matrix? = when (orientation) {
-                    ExifInterface.ORIENTATION_ROTATE_90 -> Matrix().apply {
-                        postRotate(90f)
-                        postTranslate(h, 0f)
-                    }
-                    ExifInterface.ORIENTATION_ROTATE_180 -> Matrix().apply {
-                        postRotate(180f)
-                        postTranslate(w, h)
-                    }
-                    ExifInterface.ORIENTATION_ROTATE_270 -> Matrix().apply {
-                        postRotate(270f)
-                        postTranslate(0f, w)
-                    }
-                    ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> Matrix().apply {
-                        postScale(-1f, 1f)
-                        postTranslate(w, 0f)
-                    }
-                    ExifInterface.ORIENTATION_FLIP_VERTICAL -> Matrix().apply {
-                        postScale(1f, -1f)
-                        postTranslate(0f, h)
-                    }
-                    ExifInterface.ORIENTATION_TRANSPOSE -> Matrix().apply {
-                        postRotate(90f)
-                        postTranslate(h, 0f)
-                        postScale(-1f, 1f)
-                        postTranslate(h, 0f)
-                    }
-                    ExifInterface.ORIENTATION_TRANSVERSE -> Matrix().apply {
-                        postRotate(270f)
-                        postTranslate(0f, w)
-                        postScale(-1f, 1f)
-                        postTranslate(h, 0f)
-                    }
-                    else -> null
-                }
+                // Mapping lives in orientationMatrix (#339): one table for
+                // the stage path and the thumbnail decode, so a portrait
+                // photo is upright everywhere it renders and the affine math
+                // has a single owner (see the doc there for the POST-order
+                // and mirror reasoning).
+                val matrix: Matrix? = orientationMatrix(
+                    orientation,
+                    bitmap.width.toFloat(),
+                    bitmap.height.toFloat(),
+                )
                 if (matrix != null) {
                     val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
                     // Referential on purpose: equality is referential for Bitmaps,
@@ -1154,10 +1179,44 @@ suspend fun decodeThumbnail(base64: String): Bitmap? {
         ) {
             sample *= 2
         }
-        BitmapFactory.decodeByteArray(
+        var bmp = BitmapFactory.decodeByteArray(
             bytes, 0, bytes.size,
             BitmapFactory.Options().apply { inSampleSize = sample.toInt() },
-        )
+        ) ?: return null
+        // EXIF rotate (#339): BitmapFactory ignores orientation, so a
+        // portrait capture rendered sideways here while the staged bubble
+        // showed upright — same orientationMatrix table as the stage path.
+        // Display-only: the wire always sends the staged bytes, so a
+        // mis-read here is a tilted thumbnail, never a wrong send.
+        val orientation = try {
+            java.io.ByteArrayInputStream(bytes).use {
+                ExifInterface(it).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL,
+                )
+            }
+        } catch (e: CancellationException) {
+            // Same rethrow-both rule as the stage path (#339); no
+            // suspension lives between, so an unreadable header (Exception)
+            // is the only realistic outcome and it leaves the decode as-is.
+            bmp.recycle()
+            throw e
+        } catch (e: Error) {
+            bmp.recycle()
+            throw e
+        } catch (_: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+        val matrix = orientationMatrix(orientation, bmp.width.toFloat(), bmp.height.toFloat())
+        if (matrix != null) {
+            val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
+            // Referential on purpose: only a new instance may recycle the old.
+            if (rotated !== bmp) {
+                bmp.recycle()
+                bmp = rotated
+            }
+        }
+        bmp
     } catch (e: CancellationException) {
         throw e
     } catch (e: Error) {

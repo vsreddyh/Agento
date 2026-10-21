@@ -4,6 +4,21 @@ import android.content.Context
 import androidx.core.content.edit
 import org.json.JSONObject
 
+/** Hard cap on the backup peak, bytes (#339): past ~25 MB of heap peak the
+ * materialized string (~2x bytes as UTF-16 plus the JSONObject) reliably
+ * OOMs low-end 1–2 GB-RAM devices mid-export — a crash, not a slow restore.
+ * The meter is DISK bytes but the cap is HEAP, hence the ×2 + slack compare:
+ * a backup at 12 MB on disk peaks ~25 MB and is refused. Shared by the
+ * export boundary (the wall every caller hits) and the Settings pre-meter
+ * (the friendly, tap-consent warning), so the two can never name different
+ * limits. */
+internal const val BACKUP_HARD_CAP_BYTES: Long = 25_000_000
+
+/** Headroom added to the floor meter before the hard-cap compare (#339):
+ * prefs + JSON framing + JSONObject wrapper. KBs in practice, but the gate
+ * must judge the sum, not just the files. */
+internal const val BACKUP_FLOOR_SLACK_BYTES: Long = 1_000_000
+
 /**
  * Issue #16: settings survive upgrade, reinstall, and reinstall-after-gap.
  *
@@ -16,6 +31,13 @@ import org.json.JSONObject
  * clobber unrelated state (WorkManager DB, installer cache, …).
  */
 object SettingsBackup {
+
+    /** Named over-cap remedy (#339): one spelling for the pre-meter, the
+     * in-boundary wall, and the import gate — the next reword fixes every
+     * path instead of one. */
+    internal fun backupTooLargeMessage(onDisk: Long): String =
+        "Backup too large to export safely (${formatBytes(onDisk)} on disk). " +
+            "Delete old photo threads in the thread switcher, then try again."
 
     // NOTE: stays 1 — import skips unknown keys and never reads the
     // version, so removing the retired story/resumes keys (#289) neither
@@ -183,6 +205,17 @@ object SettingsBackup {
     @androidx.annotation.WorkerThread
     fun export(context: Context): JSONObject {
         requireIoThread("SettingsBackup.export")
+        // The cap lives HERE, not only in the caller (#339): every caller
+        // materializes the same string peak, so the wall belongs on the
+        // boundary that builds it — a share-sheet or future caller that
+        // skips the Settings meter still fails closed with the named
+        // remedy. Settings keeps its own pre-meter for the warning (the
+        // floor is cheaper to judge before this runs); this is the
+        // backstop, and both use the same constant + wording.
+        val onDisk = backupFilesBytes(context.filesDir)
+        if (onDisk * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+            throw IllegalStateException(backupTooLargeMessage(onDisk))
+        }
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
         val values = JSONObject()
         // Single snapshot, type-guarded reads (#339): contains()+get throws

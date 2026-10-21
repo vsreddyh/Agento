@@ -740,9 +740,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
+        // Photos sit out an autosend like every other resend (#339).
+        noteParkedPhotos("Opened")
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
-            pending = "", streaming = true, error = "", queued = "",
+            // Draft and queue stay in the composer (#339): autosend fires the
+            // thread's own tail, never the composer's input — wiping it would
+            // lose text the user typed while the deep link resolved.
+            pending = withParkedQueue(_state.value.pending),
+            streaming = true, error = "", queued = "",
         )
         doSend(msgs, path, provider, model, effort)
         return true
@@ -1160,6 +1166,22 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
+    /** Queued text merged into a draft, for every path that republishes the
+     * composer (#339): stop()/retry()/flushQueued park the queue instead of
+     * dropping it, and every other path that clears `queued` must do the
+     * same — a manual send, regenerate, continue, replace, fork or autosend
+     * is not a reason to lose text the user typed mid-stream. Returns
+     * [draft] unchanged when nothing is queued; the joint is the same
+     * trimEnd/trimStart one every other merge uses. */
+    private fun withParkedQueue(draft: String): String {
+        val queued = _state.value.queued
+        return when {
+            queued.isBlank() -> draft
+            draft.isBlank() -> queued
+            else -> joinPending(draft, queued)
+        }
+    }
+
     /** Toasts that staged photos sit out this resend (#339):
      * retry/regenerate/continue resend history, never the composer's
      * staging — said out loud like every other narrowing in this file.
@@ -1294,6 +1316,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
+        // Queued text survives this send (#339): it was typed for the NEXT
+        // turn (kept by a 429 or a stop) and the manual send supersedes the
+        // auto-fire, so hand it back to the composer instead of clearing it
+        // — the same park as stop()/retry()/flush. Computed before the
+        // queued field is cleared below.
+        val draftAfterSend = withParkedQueue("")
         _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path, queued = "")
         // Stored canonical AND wired (#339): whitespace-only text with
         // photos normalizes to "" (the wire already sends images-only for
@@ -1305,7 +1333,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val history = _state.value.messages +
             ChatMessage("user", stored, ChatThreads.now(), attachments = photos.wiredPhotos())
         _state.value = _state.value.copy(
-            messages = history, pending = "", pendingAttachments = emptyList(),
+            messages = history, pending = draftAfterSend, pendingAttachments = emptyList(),
             streaming = true, error = "",
         )
         doSend(history, path, provider, model, effort)
@@ -2029,6 +2057,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 _state.value = _state.value.copy(
                     provider = provider, model = model, effort = effort, path = path,
                 )
+                // Photos sit out a resume like every other resend (#339).
+                noteParkedPhotos("Resumed")
                 doSend(cur, path, provider, model, effort)
             }
         }
@@ -2076,8 +2106,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
+        // Queued text parks back with the draft (#339): same rule as send()
+        // — a regenerate is not a reason to lose a mid-stream queue.
+        val draftParked = withParkedQueue(_state.value.pending)
         _state.value = _state.value.copy(
-            provider = provider, model = model, effort = effort, path = path, queued = "",
+            provider = provider, model = model, effort = effort, path = path,
+            pending = draftParked, queued = "",
         )
         doSend(trimmed, path, provider, model, effort)
     }
@@ -2105,8 +2139,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
+        // Queued text parks back with the draft (#339), same rule as send().
+        val draftParked = withParkedQueue(_state.value.pending)
         _state.value = _state.value.copy(
-            provider = provider, model = model, effort = effort, path = path, queued = "",
+            provider = provider, model = model, effort = effort, path = path,
+            pending = draftParked, queued = "",
         )
         val history = msgs + ChatMessage(
             "user",
@@ -2158,6 +2195,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
+        // Draft AND queue park back (#339), read before the queue is cleared
+        // below — same rule as send()/regenerate()/continue().
+        val draft = withParkedQueue(_state.value.pending)
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path, queued = "",
         )
@@ -2177,7 +2217,6 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // composer's unrelated staging would destroy user input. Same for
         // typed text (#339): the draft parks back in the composer instead
         // of vaporizing — it stays sendable/queueable behind the new turn.
-        val draft = _state.value.pending
         val history = msgs.take(index) +
             ChatMessage(
                 "user",
@@ -2247,14 +2286,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         stopApprovalWatch()
         retargetApprovals()
         retargetMemory()
-        // Typed draft parks back like Replace above (#339): forking must
-        // not eat composer text either — it stays sendable behind the turn
-        // on the new thread. Staged photos do NOT park — they die with the
+        // Typed draft (and any queued text) parks back like Replace above
+        // (#339): forking must not eat composer text either — it stays
+        // sendable behind the turn on the new thread. Staged photos do NOT
+        // park — they die with the
         // thread being left, said out loud like every other thread change
         // (switchThread/newConversation/deleteThread): Infos die with them
         // too (Errors survive via retainedNotices()), and only this
         // carry-over survives.
-        val forkDraft = _state.value.pending
+        val forkDraft = withParkedQueue(_state.value.pending)
         val hadStagedFork = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
