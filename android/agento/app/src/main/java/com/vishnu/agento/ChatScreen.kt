@@ -979,6 +979,10 @@ internal fun ChatTab(
                 // every later tap in THIS composition reads "starting"
                 // forever.
                 ioGuard.set(false)
+                // The homed owner (cameraThread) deliberately SURVIVES here:
+                // it is the tap-time owner the result callback homes the
+                // capture with. A cancel leaves it stale, which is
+                // harmless — the next launchCamera overwrites it at tap.
             }
         }
     }

@@ -185,8 +185,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private val serverApi = ServerApi(app)
     private val appCtx: Application = app
 
-    /** Decoded-thumbnail memory, VM-held so it survives rotation; evicted on clear. */
-    internal val thumbCache = ThumbCache()
+    /** Decoded-thumbnail memory, VM-held so it survives rotation; evicted on
+     * clear. Lazy (#339): constructing android.util.LruCache touches the
+     * android.jar stubs, which would make a plain-JUnit ViewModel test
+     * impossible — the cache is only needed once a photo renders. */
+    private val thumbCacheDelegate = lazy { ThumbCache() }
+    internal val thumbCache by thumbCacheDelegate
+
+    /** Evict the thumbnails IF the cache exists (#339): the cache is lazy,
+     * and a trim or a clear must not construct it just to empty it. */
+    private fun evictThumbs() {
+        if (thumbCacheDelegate.isInitialized()) thumbCache.evictAll()
+    }
 
     /** Memory-trim hook (#339): the cache is byte-bounded (~8 MB) but that
      * is still a lot to hold while the app sits in the background on a
@@ -197,11 +207,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         override fun onConfigurationChanged(newConfig: android.content.res.Configuration) = Unit
         override fun onLowMemory() {
             // The legacy low-memory signal: free the bitmaps here too (#339).
-            thumbCache.evictAll()
+            evictThumbs()
         }
         override fun onTrimMemory(level: Int) {
             if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-                thumbCache.evictAll()
+                evictThumbs()
             }
         }
     }
@@ -213,7 +223,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     override fun onCleared() {
         super.onCleared()
         appCtx.unregisterComponentCallbacks(trimCallback)
-        thumbCache.evictAll()
+        evictThumbs()
     }
 
     private val _state = mutableStateOf(
