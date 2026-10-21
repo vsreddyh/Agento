@@ -804,7 +804,12 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     val upfront = SettingsBackup.backupFilesBytes(context.filesDir)
                     if (upfront > BACKUP_LARGE_BYTES) {
                         withContext(Dispatchers.Main) {
-                            status = "Large backup (${formatBytes(upfront)} on disk) — " +
+                            // Floor, not estimate (#339): the export string
+                            // runs ~2x bytes as UTF-16 plus framing, so the
+                            // on-disk size understates the peak — said
+                            // plainly so a borderline backup isn't trusted
+                            // to fit.
+                            status = "Large backup (${formatBytes(upfront)} on disk; runs larger in memory) — " +
                                 "exporting now, this may take a moment."
                             failed = false
                         }
@@ -899,13 +904,17 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     }.getOrDefault(-1L)
                     if (pickedBytes > BACKUP_LARGE_BYTES) {
                         withContext(Dispatchers.Main) {
-                            status = "Large backup (${formatBytes(pickedBytes)}) — " +
+                            // Same floor caveat as the export meter (#339).
+                            status = "Large backup (${formatBytes(pickedBytes)} on disk; runs larger in memory) — " +
                                 "restoring may take a moment."
                             failed = false
                         }
                     }
                     val text = context.contentResolver.openInputStream(uri)?.use { input ->
-                        input.bufferedReader().readText()
+                        // Pinned UTF-8 like the writer side (#339): the SAF
+                        // stream carries no charset, and the platform
+                        // default must not decide how a backup decodes.
+                        input.bufferedReader(Charsets.UTF_8).readText()
                     } ?: throw IllegalStateException("Could not open the selected file for reading")
                     SettingsBackup.importFrom(context, org.json.JSONObject(text)).getOrThrow()
                 }

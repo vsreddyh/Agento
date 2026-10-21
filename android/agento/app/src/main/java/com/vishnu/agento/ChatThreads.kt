@@ -169,7 +169,7 @@ object ChatThreads {
         // — so the scan is a no-op there). A future Main-thread caller must
         // hop to IO first.
         return runCatching {
-            threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText())
+            threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText(Charsets.UTF_8))
                 .filter { it.id.isNotEmpty() }
                 .take(MAX_THREADS)
                 // Canonicalized on load via canonicalizeAttachments (#339):
@@ -231,7 +231,7 @@ object ChatThreads {
                     },
                 )
             }
-            file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), capped))
+            file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), capped), Charsets.UTF_8)
         }
     }
 

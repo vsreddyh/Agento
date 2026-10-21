@@ -229,8 +229,12 @@ object SettingsBackup {
                 // JSONObject copy, no re-encode) with no contract loss; the
                 // toStored precedent (raw on Main, canonicalize at the
                 // boundary) already works this way.
+                // Pinned UTF-8 (#339): the platform default happens to be
+                // UTF-8 on Android, but the backup crosses devices (and the
+                // wire path pins it explicitly) — the contract belongs in
+                // the call, not in the platform's happenstance.
                 runCatching {
-                    files.put(name, f.readText())
+                    files.put(name, f.readText(Charsets.UTF_8))
                 }
             }
         }
@@ -330,7 +334,7 @@ object SettingsBackup {
                             text
                         }
                         runCatching {
-                            java.io.File(context.filesDir, name).writeText(toWrite)
+                            java.io.File(context.filesDir, name).writeText(toWrite, Charsets.UTF_8)
                             applied++
                         }
                     }

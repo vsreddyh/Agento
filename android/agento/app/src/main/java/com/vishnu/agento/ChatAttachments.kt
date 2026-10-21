@@ -32,7 +32,16 @@ import org.json.JSONObject
 @Serializable
 data class ChatAttachment(
     val mimeType: String = "image/jpeg",
-    /** Raw bytes as base64, no `data:` prefix — [dataUri] adds it for the wire. */
+    /** Raw bytes as base64, no `data:` prefix — [dataUri] adds it for the wire.
+     * Counting rule, stated where the payload lives (#339): a non-blank
+     * payload counts as a photo on every DISPLAY surface (titles, search,
+     * export, strip, markers) — including a ragged one load() never saw.
+     * The wire is stricter (wired AND decodable) and fails closed on the
+     * rest. Intentional, not drift: display answers "was a photo staged",
+     * the wire answers "what may send", and load() blanks ragged on read
+     * so the two agree in practice. Do not "fix" display to re-validate —
+     * the alphabet scan would run per keystroke and per title render for a
+     * case the boundary already heals. */
     val base64: String = "",
     /** Stable per-pick id, minted at stage time (#339): thumbnail keys and
      * any future per-photo identity use this, never the payload — so

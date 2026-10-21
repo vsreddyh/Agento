@@ -320,7 +320,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         val take = wired.take(room)
         val dropped = wired.size - take.size
-        _state.value = _state.value.copy(pendingAttachments = cur + take)
+        // Stored canonical-filtered, not raw (#339): the comment above
+        // promises only wired photos occupy slots, and a blank already in
+        // cur must not persist into the strip/title count without spending
+        // room either. Same shape as send()'s stored photos.wiredPhotos().
+        _state.value = _state.value.copy(pendingAttachments = cur.wiredPhotos() + take)
         if (dropped > 0) {
             notify(capRefused(), ToastKind.Info)
         }
@@ -897,13 +901,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         for (m in t.messages) {
             val who = if (m.role == "user") "You" else "Assistant"
             // Photos are payloads, not text: the marker keeps the export
-            // honest about turns whose content is an image (#318). Photo
-            // turns export verbatim like the wire path (a photo+code turn
-            // keeps the indentation the agent saw); plain text keeps the
-            // long-standing trimmed shape so exports don't gain blank
-            // lines. Render-trimmed like the bubble (#339): trailing
-            // newlines would export a blank line per turn that the bubble
-            // doesn't show. Counted wired and user-only like the wire rule
+            // honest about turns whose content is an image (#318). Text
+            // (photo turns included) is render-trimmed like the bubble
+            // (#339): trailing newlines would export a blank line per turn
+            // that the bubble doesn't show. Deliberate split from the wire
+            // (#339): the wire preserves trailing newlines exactly
+            // (verbatim send guarantee — a photo+code turn sends the
+            // indentation the agent saw), while the export matches what the
+            // bubble SHOWED. Named here so the next edit doesn't "fix" one
+            // to match the other: the export is a reading record, the wire
+            // is the send record, and they differ on trailing whitespace by
+            // design. Counted wired and user-only like the wire rule
             // (#339): a hypothetical assistant attachment must not export
             // a marker the wire would never send.
             val wiredCount = if (m.role == "user") m.attachments.wiredPhotoCount() else 0
