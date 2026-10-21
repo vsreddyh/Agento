@@ -135,7 +135,10 @@ func (s *Store) transact(ctx context.Context, fn func(ctx context.Context) error
 			return err
 		}
 		err = func() error {
-			defer sess.EndSession(ctx)
+			// Cleanup runs detached: the request ctx may already be
+			// cancelled on the slow path, and ending the session must not
+			// depend on it.
+			defer sess.EndSession(context.Background())
 			_, txErr := sess.WithTransaction(ctx, func(sc mongoDrv.SessionContext) (any, error) {
 				return nil, fn(sc)
 			})
