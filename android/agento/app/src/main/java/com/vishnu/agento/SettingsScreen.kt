@@ -491,8 +491,8 @@ internal fun SettingsScreen(
 @Composable
 internal fun UsageSection() {
     val context = LocalContext.current
-    // Application context for the IO block below (#339): thread/usage reads
-    // may outlive the screen, so the hop must not hold the Activity.
+    // Application context for the IO block below: thread/usage reads may
+    // outlive the screen, so the hop must not hold the Activity.
     val appContext = context.applicationContext
     var rows by remember { mutableStateOf<List<UsageRow>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
@@ -769,14 +769,12 @@ internal fun NotificationsSection() {
     }
 }
 
-/** Backup size past which the export status warns (#339): thread files
- * ride wholesale (photo payloads included), so a photo-heavy backup
- * restores slowly — worth one line, not a block. */
+/** Backup size past which the export status warns: thread files ride
+ * wholesale (photo payloads included), so restores are slow. */
 private const val BACKUP_LARGE_BYTES = 5_000_000
 
 // The hard cap (BACKUP_HARD_CAP_BYTES) and its floor slack live on
-// SettingsBackup (#339): export() enforces the same wall at the boundary,
-// so the UI pre-meter and the boundary can never name different limits.
+// SettingsBackup: export() enforces the same wall at the boundary.
 
 /** Issue #16: manual settings export/import. SAF pickers need no storage
  * permission; the file the user keeps survives any reinstall gap that outlives
@@ -784,11 +782,8 @@ private const val BACKUP_LARGE_BYTES = 5_000_000
 @Composable
 internal fun SettingsBackupSection(onImported: () -> Unit) {
     val context = LocalContext.current
-    // Application context for everything that crosses a suspend boundary
-    // (#339): filesDir/contentResolver/export/import run on IO while the
-    // composable may be leaving, and an Activity reference held across that
-    // hop outlives the screen. UI-only work (toasts, pickers) keeps the
-    // Activity-bound `context`.
+    // Application context for everything that crosses a suspend boundary: the
+    // IO hops must not hold the Activity. UI-only work (toasts, pickers) does.
     val appContext = context.applicationContext
     val scope = rememberCoroutineScope()
 
@@ -807,61 +802,37 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    // Metered BEFORE materializing (#339): export() builds
-                    // the whole compact string (~2x bytes as UTF-16) before
-                    // the first chunk writes — a hundreds-of-MB backup OOMs
-                    // before the post-hoc large-backup warning below could
-                    // display. Sum lengths first (metadata only, no reads):
-                    // the floor, not the ceiling. Warns up front; the
-                    // explicit tap is consent to proceed.
+                    // Metered BEFORE materializing: export() builds the whole
+                    // compact string (~2x bytes as UTF-16) before the first
+                    // chunk writes, so a huge backup OOMs before any warning
+                    // could display. Lengths only (metadata, no reads).
                     val upfront = SettingsBackup.backupFilesBytes(appContext.filesDir)
-                    // Hard refuse past the cap (#339): the warning below is
+                    // Hard refuse past the cap: the warning below is
                     // consent-to-proceed, but consent cannot survive an OOM —
-                    // fail with a named error naming the remedy (per-thread
-                    // delete in the thread switcher — no bulk prune exists
-                    // yet, so the message must say where to go). Disk×2 +
-                    // slack, not raw disk: the meter is file bytes but the
-                    // cap is heap peak (UTF-16 string + JSONObject), so an
-                    // unscaled compare would let 12 MB on disk (~25 MB peak)
-                    // sail past. Fails closed on the estimated peak.
+                    // fail with a named error naming the remedy. Disk×2 +
+                    // slack: the cap is heap peak, the meter is file bytes.
                     if (upfront * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(SettingsBackup.backupTooLargeMessage(upfront))
                     }
                     if (upfront > BACKUP_LARGE_BYTES) {
                         withContext(Dispatchers.Main) {
-                            // Floor, not estimate (#339): the export string
-                            // runs ~2x bytes as UTF-16 plus framing, so the
-                            // on-disk size understates the peak — said
-                            // plainly so a borderline backup isn't trusted
-                            // to fit.
+                            // Floor, not estimate: the export string runs ~2x
+                            // bytes as UTF-16, so the on-disk size understates
+                            // the peak.
                             status = "Large backup (${formatBytes(upfront)} on disk; runs larger in memory) — " +
                                 "exporting now, this may take a moment."
                             failed = false
                         }
                     }
-                    // Sized for the photo-thread warning below (#339): the
-                    // export holds thread files wholesale, payloads
-                    // included, so photo-heavy threads make for slow
-                    // restores — worth one line when large, silent when not.
-                    // Streamed in chunks, not via toByteArray(): the compact
-                    // string (~2x the bytes as UTF-16) must exist to write
-                    // at all, but the duplicate byte[] copy is avoidable —
-                    // count bytes while streaming instead, so the peak is
-                    // the string plus one 64 KB window. Compact, not pretty
-                    // (#339): toString(2) materializes the same payload plus
-                    // indentation whitespace, and the large case this warns
-                    // about is exactly base64 blobs nobody reads — the peak
-                    // that matters most is the one pretty-printing inflates.
+                    // Sized for the photo-thread warning: the export holds
+                    // thread files wholesale, so photo-heavy threads make for
+                    // slow restores. Streamed in chunks, not via toByteArray():
+                    // the string must exist to write at all, but the duplicate
+                    // byte[] copy is avoidable. Compact, not pretty.
                     val text = SettingsBackup.export(appContext).toString()
-                    // Post-build peak check (#339): the meter above judged the
-                    // floor at meter time, but a concurrent turn-boundary
-                    // save can grow thread files between the meter and this
-                    // build — a backup that crossed the cap mid-build must
-                    // not be written as if it passed. Measured on the STRING
-                    // ITSELF (text.length × 2 = UTF-16 bytes, exact for every
-                    // script including surrogate pairs), not re-read from
-                    // disk: the string is the peak that actually exists, and
-                    // the write below streams in chunks without adding one.
+                    // Post-build peak check: a concurrent save can grow the
+                    // thread files between the meter and this build. Measured
+                    // on the STRING ITSELF (length × 2 = UTF-16 bytes).
                     if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup grew past the safe limit during export. " +
@@ -880,14 +851,8 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                             out.write(b, off, len)
                             written += len
                         }
-                        // Pinned explicitly (#339): the 3-arg form is what
-                        // counts, and single-arg write(ByteArray) only
-                        // counts via FilterOutputStream's delegation to it —
-                        // a future wrapper-base swap (or a direct
-                        // opened.write(bytes) added later) would silently
-                        // undercount and suppress the large-backup warning.
-                        // Overriding here makes the count independent of
-                        // delegation behavior.
+                        // Pinned explicitly: the 3-arg form is what counts, and
+                        // single-arg write(ByteArray) only counts via delegation.
                         override fun write(b: ByteArray) {
                             write(b, 0, b.size)
                         }
@@ -895,14 +860,10 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     java.io.OutputStreamWriter(counting, Charsets.UTF_8).use { w ->
                         var off = 0
                         while (off < text.length) {
-                            // Char-index split is safe (#339): the Writer
-                            // carries an unpaired high surrogate across the
-                            // write() boundary (StreamEncoder keeps the
-                            // state), so a split pair never becomes a
-                            // replacement char. Do NOT "fix" this by
-                            // switching to byte-counted chunks or a raw
-                            // OutputStream write without a codepoint boundary
-                            // — that WOULD corrupt emoji-heavy threads.
+                            // Char-index split is safe: the Writer carries an
+                            // unpaired high surrogate across the write()
+                            // boundary, so a split pair never becomes a
+                            // replacement char. Byte-counted chunks would.
                             val end = minOf(off + 65536, text.length)
                             w.write(text, off, end - off)
                             off = end
@@ -938,12 +899,9 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    // Metered BEFORE reading (#339): symmetric with the
-                    // export pre-peak warning — a photo-heavy backup reads
-                    // + parses the whole file before any warning could
-                    // display. SIZE via the provider (metadata, no read);
-                    // unknown (-1) skips the warning, not the import. The
-                    // explicit tap is consent to proceed.
+                    // Metered BEFORE reading: symmetric with the export
+                    // pre-peak warning. SIZE via the provider (metadata, no
+                    // read); unknown (-1) skips the warning, not the import.
                     val pickedBytes = runCatching {
                         appContext.contentResolver.query(uri, null, null, null, null)?.use { c ->
                             val i = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
@@ -952,17 +910,15 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     }.getOrDefault(-1L)
                     if (pickedBytes > BACKUP_LARGE_BYTES) {
                         withContext(Dispatchers.Main) {
-                            // Same floor caveat as the export meter (#339).
+                            // Same floor caveat as the export meter.
                             status = "Large backup (${formatBytes(pickedBytes)} on disk; runs larger in memory) — " +
                                 "restoring may take a moment."
                             failed = false
                         }
                     }
-                    // Symmetric hard refuse with the export path (#339):
-                    // readText() + JSONObject() hold ~2x the file bytes in
-                    // memory, so an unbounded import OOMs the same way an
-                    // unbounded export would. Estimated peak is file×2 +
-                    // slack, judged against the same heap cap and remedy.
+                    // Symmetric hard refuse with the export path: readText() +
+                    // JSONObject() hold ~2x the file bytes, so an unbounded
+                    // import OOMs the same way an unbounded export would.
                     if (pickedBytes >= 0 && pickedBytes * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup too large to import safely (${formatBytes(pickedBytes)} on disk). " +
@@ -970,18 +926,12 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                         )
                     }
                     val text = appContext.contentResolver.openInputStream(uri)?.use { input ->
-                        // Pinned UTF-8 like the writer side (#339): the SAF
-                        // stream carries no charset, and the platform
-                        // default must not decide how a backup decodes.
-                        // BOUNDED read with early abort (#339): the SIZE
-                        // pre-read trusts provider metadata, which cloud
-                        // providers may omit (-1) or understate — readText()
-                        // would then materialize an unbounded string before
-                        // any gate runs. Chunks abort mid-read once the
-                        // estimated peak (chars × UTF-16 + slack) crosses
-                        // the same heap cap the post-read gate below judges,
-                        // so a lying provider OOMs nothing. Same named error
-                        // and remedy either way.
+                        // Pinned UTF-8 like the writer side: the SAF stream
+                        // carries no charset, so the platform default must not decide.
+                        // BOUNDED read with early abort: the SIZE pre-read
+                        // trusts provider metadata, which cloud providers may
+                        // omit or understate — readText() would then materialize
+                        // an unbounded string. Chunks abort mid-read on the cap.
                         val sb = StringBuilder()
                         input.bufferedReader(Charsets.UTF_8).use { r ->
                             val buf = CharArray(65536)
@@ -1000,13 +950,8 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                         sb.toString()
                     } ?: throw IllegalStateException("Could not open the selected file for reading")
                     // Post-read peak gate, mirroring the export post-build
-                    // check (#339): the SIZE pre-read above trusts provider
-                    // metadata, which cloud providers may omit (-1) or
-                    // understate — a lying provider would otherwise sail the
-                    // pre-read refuse straight into an OOM readText() +
-                    // JSONObject() (both ~2x heap). The string already
-                    // exists here (this guards the PARSE, not the read),
-                    // measured exactly in chars × UTF-16 plus the same slack.
+                    // check: a lying provider would otherwise sail the pre-read
+                    // refuse into an OOM readText() + JSONObject().
                     if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup too large to import safely. " +
@@ -1298,8 +1243,8 @@ internal fun WidgetSettingsSection() {
 @Composable
 internal fun WidgetDiagnosticsCard() {
     val context = LocalContext.current
-    // Application context for the diagnostics reads (#339): they run on IO
-    // and may outlive the screen; the chooser stays on the Activity.
+    // Application context for the diagnostics reads: they run on IO and may
+    // outlive the screen; the chooser stays on the Activity.
     val appContext = context.applicationContext
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -1393,9 +1338,8 @@ internal fun WidgetDiagnosticsCard() {
                         }
                         val uri = androidx.core.content.FileProvider.getUriForFile(
                             context, "${context.packageName}.fileprovider", file)
-                        // Grant via ClipData on both intents: the flag on
-                        // the inner intent alone isn't reliably forwarded
-                        // by createChooser() on all API levels.
+                        // Grant via ClipData on both intents: the flag on the
+                        // inner intent alone isn't reliably forwarded.
                         val share = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                             type = "text/plain"
                             clipData = android.content.ClipData.newUri(

@@ -107,48 +107,35 @@ import kotlinx.coroutines.withContext
  * wording, so the two can never disagree above 99. */
 private fun pendingCountLabel(count: Int): String = if (count > 99) "99+" else "$count"
 
-/** Unwraps a possibly-wrapped Context to its Activity, if any (#339). */
+/** Unwraps a possibly-wrapped Context to its Activity, if any. */
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null
 }
 
-/** A camera intent older than this is treated as dead (#339): no callback
- * will ever settle it, so the double-launch gate must not hold past here
- * or one killed process disables the camera until reinstall. 10 minutes
- * bounds a stuck gate far above any real camera session (single-digit
- * minutes at most) — while a session interrupted past even that reads as
- * dead and re-opens the overwrite race, which is the documented cost of
- * bounding the stuck gate at all. MONOTONIC domain: always compared
- * against elapsedRealtime(), never wall-clock — a user clock jump must
- * not age a live intent into a dead one. */
+/** A camera intent older than this is treated as dead: no callback will ever
+ * settle it, so the double-launch gate must not stick forever. Ten minutes
+ * bounds a stuck gate far above any real camera session. MONOTONIC domain. */
 private const val CAMERA_PENDING_STALE_MS = 10 * 60 * 1000L
 
-/** Sweep age-out for non-keep camera orphans (#339): same duration, WALL
- * domain — file mtimes are wall-clock, so this constant is compared
- * against currentTimeMillis(), never elapsedRealtime(). Deliberately a
- * separate constant despite the equal value: the two numbers live in
- * different clock domains (a clock jump ages mtimes but not intents),
- * and sharing one name would let a future edit retune the gate while
- * silently retuning the sweep. */
+/** Sweep age-out for non-keep camera orphans: same duration, WALL domain —
+ * file mtimes are wall-clock, so compare against currentTimeMillis(). A
+ * separate constant despite the equal value: different clock domains. */
 private const val CAMERA_SWEEP_STALE_MS = 10 * 60 * 1000L
 
 /**
- * Head/tail content sample for thumbnail keys (#339): a true prefix/suffix
- * pair on normal payloads, the whole string when it fits — so the sample
- * invariant (prefix + suffix, no overlap) holds exactly at every size
- * instead of double-counting tiny payloads.
+ * Head/tail content sample for thumbnail keys: a true prefix/suffix pair on
+ * normal payloads, the whole string when it fits — the sample invariant
+ * (prefix + suffix, no overlap) holds at every size.
  */
 private fun String.sampleKey(half: Int): String =
     if (length <= half * 2) this else take(half) + takeLast(half)
 
 /**
- * Process-lifetime IO scope for fire-and-forget file cleanup (#339):
- * deleteQuietly must survive tab-leave, rotation, AND composition death
- * without extending any of their lifetimes — so it launches here, not on
- * a composition scope. One SupervisorJob for the process; children are
- * runCatching-guarded, so nothing ever fails the scope.
+ * Process-lifetime IO scope for fire-and-forget file cleanup: deleteQuietly
+ * must survive tab-leave, rotation AND composition death — so it launches
+ * here, not on a composition scope.
  */
 private val cleanupScope =
     kotlinx.coroutines.CoroutineScope(
@@ -156,27 +143,12 @@ private val cleanupScope =
     )
 
 /**
- * Bounded decoded-thumbnail memory (#339): produceState remembers per
- * composition, so scrolling away disposes the bitmap and scrolling back
- * re-runs Base64.decode + decodeByteArray per photo. Keyed by the full
- * stable identity (id + length + head/tail sample, never the id alone):
- * same id + different length restarts produceState, and the key IS the
- * produce key — a weaker shadow could serve a stale bitmap. The
- * no-cross-thread-aliasing invariant holds for the STABLE path only
- * (#339): pick UUIDs are globally unique, so no two threads can alias
- * those keys, and forks share the decoded bitmap for free. Legacy
- * (id-less) payloads key on (slot, length, sample) instead — same slot +
- * same shape in two threads CAN alias (wrong thumb, never wrong send:
- * the wire always sends current bytes), best-effort by construction and
- * self-aging as legacy turns over. Bounded by BYTES, not entries (#339): sizeOf
- * reports kilobytes so the LRU evicts by footprint (~8 MB cap) instead of
- * holding a fixed count under memory pressure with no trim hook. A
- * composition-local cache has no lifecycle for onTrimMemory; the byte
- * bound is the pressure valve, and it needs no callback to work. Still
- * no recycle on evict — GC reclaims, because recycling risks pulling
- * pixels from under a late outgoing draw (the same class the no-recycle
- * rule in AttachmentThumb exists for). LruCache is internally
- * synchronized, so Main gets and IO puts are safe.
+ * Bounded decoded-thumbnail memory: produceState remembers per composition,
+ * so scrolling back re-decodes. The key IS the produce key (id + length +
+ * head/tail sample, never the id alone) — a weaker shadow could serve a
+ * stale bitmap. Legacy id-less payloads key on (slot, length, sample) and
+ * can alias across threads (wrong thumb, never wrong send). Bounded by BYTES
+ * (~8 MB), not entries — no onTrimMemory hook exists.
  */
 internal class ThumbCache(maxKb: Int = 8 * 1024) {
     private val cache = object : android.util.LruCache<Any, android.graphics.Bitmap>(maxKb) {
@@ -187,10 +159,9 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
     fun put(key: Any, bmp: android.graphics.Bitmap) {
         cache.put(key, bmp)
     }
-    /** Explicit invalidation for staged-remove (#339): the strip knows the
-     * exact attachment leaving, so its bitmap frees immediately instead of
-     * waiting for LRU pressure. Thread-delete relies on pressure instead
-     * (below) — removals are user-paced and precise, thread exit is not. */
+    /** Explicit invalidation for staged-remove: the strip knows the exact
+     * attachment leaving, so its bitmap frees immediately instead of waiting
+     * for LRU pressure. Thread-delete rides LRU pressure instead. */
     fun remove(key: Any) {
         cache.remove(key)
     }
@@ -198,110 +169,65 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
 }
 
 /**
- * Cache-key construction for an attachment's thumbnail (#339): the
- * produce path ([AttachmentThumb]) uses the returned Triple AS its
- * remember value AND its cache key — identical object, zero drift — and
- * the staged-remove path rebuilds it to evict the exact entry.
- * Stable ids key on (id, length, sample); legacy id-less payloads key on
- * (slot, length, sample), best-effort like everywhere else (slot shifts
- * on remove, so a legacy evict may miss — harmless, LRU covers it).
+ * Cache-key construction for an attachment's thumbnail: the produce path
+ * ([AttachmentThumb]) uses the returned Triple AS its remember value AND its
+ * cache key — identical object, zero drift — and the staged-remove path
+ * rebuilds it to evict the exact entry.
  */
 internal fun thumbCacheKey(stableId: String, legacySlot: Int, base64: String, threadKey: String = ""): Any =
     if (stableId.isNotEmpty()) Triple(stableId, base64.length, base64.sampleKey(64))
-    // Legacy branch carries the thread (#339): slot-keyed entries without
-    // it alias across threads (same slot + same shape, two threads, one
-    // per-tab cache). Stable ids need no thread — UUIDs are globally
-    // unique — so only the legacy key pays for the extra component.
+    // Legacy branch carries the thread: slot-keyed entries without it alias
+    // across threads (same slot + same shape, two threads, one per-tab
+    // cache). Stable ids need no thread — UUIDs are globally unique.
     else Triple("$threadKey/s$legacySlot", base64.length, base64.sampleKey(64))
 
 /**
- * One staged or sent photo (#318): the remembered ~256px thumbnail, or an
- * icon placeholder when the payload won't decode (a corrupt payload
- * degrades to a missing thumbnail, never a crash).
+ * One staged or sent photo: the remembered ~256px thumbnail, or an icon
+ * placeholder when the payload won't decode — a corrupt payload degrades to
+ * a missing thumbnail, never a crash.
  */
 @Composable
 private fun AttachmentThumb(
     base64: String,
     label: String,
     modifier: Modifier = Modifier,
-    // Legacy-only for identity (#339): the stable VALUE ignores this — it
-    // exists for the id == "" fallback. Named legacySlot (not slot) so
-    // the stable value can't accidentally consume it. It IS a remember
-    // key (single-slot safety — see below), but a slot shift only rebuilds
-    // the legacy sample string, never re-decodes: the stable value keys on
-    // UUID + length alone, so value equality holds across removes.
+    // Legacy-only for identity: the stable VALUE ignores this — it exists for
+    // the id == "" fallback. Named legacySlot (not slot) so the stable value
+    // can't accidentally consume it; a slot shift only rebuilds the legacy
+    // sample string, never re-decodes.
     legacySlot: Int = 0,
     stableId: String = "",
-    // Owning thread for the legacy cache key (#339): stable ids need no
-    // thread (UUIDs are globally unique), but id-less payloads key on slot
-    // — which repeats per thread — so the legacy key carries it. Defaults
-    // empty (previews, single-use callers with cache = null).
+    // Owning thread for the legacy cache key: id-less payloads key on slot,
+    // which repeats per thread — so the legacy key carries it. Defaults empty
+    // (previews, single-use callers with cache = null).
     threadKey: String = "",
-    // Scroll-back memory, hoisted by the caller (#339): null disables the
-    // cache (previews, single-use). Stable picks only — see ThumbCache.
-    // (No threadKey for stable picks: UUIDs are globally unique, so the
-    // (id, length) cache key can never alias across threads — see
-    // ThumbCache. Legacy id-less payloads key on slot + length + sample,
-    // which CAN alias across threads (same slot, same shape, two
-    // threads), so their key also carries threadKey above; harmless by
-    // construction (wrong thumb, never wrong send — the wire always sends
-    // current bytes) and self-aging as legacy turns over.
+    // Scroll-back memory, hoisted by the caller: null disables the cache
+    // (previews, single-use). Stable picks need no threadKey — UUIDs are
+    // globally unique, so the (id, length) key can never alias across threads.
     cache: ThumbCache? = null,
 ) {
-    // Identity without walking the payload (#339): the per-pick UUID is
-    // stable across removes — the stable VALUE ignores slot, so photo 1
-    // keeps its thumbnail when photo 0 leaves (value equality holds, no
-    // re-decode, no flicker) — and distinct across identical picks (no
-    // aliasing). The value carries the same head/tail sample as the
-    // legacy branch — best-effort: head+tail narrows the alias window
-    // without closing it. Pick-time immutability (one UUID per pick,
-    // payloads never mutated) is what the common path rests on.
-    // Legacy payloads (id "") have no UUID, so the legacy value keeps its
-    // 128-char-total sample (64+64): same slot + same length + same
-    // head/tail CAN still alias (no crash, no placeholder — just the wrong
-    // thumb), best-effort by construction. Self-aging as old threads turn
-    // over; new picks never land here.
+    // Identity without walking the payload: the per-pick UUID is stable
+    // across removes — the stable VALUE ignores slot, so photo 1 keeps its
+    // thumbnail when photo 0 leaves (no re-decode, no flicker) — and distinct
+    // across identical picks. Legacy payloads (id "") have no UUID, so their
+    // 128-char sample can still alias — wrong thumb, no crash.
     // Decoded off-main: ~1 MB Base64.decode + decodeByteArray during
-    // composition janks low-end scroll, so produceState moves it to IO
-    // (placeholder shows until it lands). No manual recycle: it can pull
-    // pixels from under a late outgoing draw ("trying to use a recycled
-    // bitmap") — ~256px thumbnails are GC-cheap, and prompt freeing is
-    // not worth a crash.
-    // Remembered, no per-recomposition alloc (#339): the remember keys are
-    // the cheap identity (UUID + slot + length — tens of chars compared),
-    // and the value (with its sample) builds ONLY when the keys change.
-    // A hand-edited same-id/same-length/middle-changed payload never
-    // re-keys — accepted: the sample cannot see the middle, and walking
-    // the full payload on every recomposition to catch it would cost
-    // every scroll for an adversarial-only case. Display-only in any
-    // event: the wire always sends the current bytes, never the cached
-    // picture, so no send can go wrong from a stale thumb. ONE remember
-    // slot with the branch inside (#339): a shared key means remove
-    // (indices shift i: 1→0) recomputes Triples that compare equal —
-    // value equality holds, so produceState never restarts for a remove.
-    // Single construction shared with the staged-remove eviction
-    // (#339): the produce value and the cache key are built once, here,
-    // by thumbCacheKey — the key can never disagree with the value
-    // because there is only one of each.
+    // composition janks low-end scroll, so produceState moves it to IO. No
+    // manual recycle: it can pull pixels from under a late outgoing draw.
+    // Remembered, no per-recomposition alloc: the remember keys are the cheap
+    // identity (UUID + slot + length) and the value builds ONLY when they
+    // change. A hand-edited same-id/same-length payload never re-keys —
+    // accepted: display-only anyway (the wire always sends the current
+    // bytes). ONE remember slot with the branch inside, so a remove
+    // (indices shift 1→0) never restarts produceState.
     val thumbKey = remember(stableId, legacySlot, base64.length, threadKey) {
         thumbCacheKey(stableId, legacySlot, base64, threadKey)
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
-        // Explicit try/catch, not runCatching (#339): runCatching would
-        // swallow the producer's own CancellationException into a null
-        // placeholder — the same cancel-masking fixed inside
-        // decodeThumbnail must not be reintroduced at its call site.
-        // Cache lookup uses the produce key ITSELF — never a weaker
-        // shadow: the identical Triple is built once above and read here,
-        // so a divergent key can never serve a stale bitmap. Unreachable
-        // via the app (picks are immutable, one UUID per pick),
-        // storage-edit only. Legacy payloads key on the same slot-based
-        // Triple (no null bypass — the key already carries the slot, the
-        // thread, and the remove path evicts by the identical
-        // construction). Stable ids carry no thread (#339): UUIDs are
-        // globally unique, so cross-thread aliasing is impossible and
-        // forks share the decoded bitmap for free; only the id-less
-        // legacy branch needs the thread component.
+        // Explicit try/catch, not runCatching: runCatching would swallow the
+        // producer's own CancellationException into a null placeholder. Cache
+        // lookup uses the produce key ITSELF — the identical Triple built
+        // above, so a divergent key can never serve a stale bitmap.
         val cacheKey = thumbKey
         value = try {
             val hit = cache?.get(cacheKey)
@@ -316,7 +242,7 @@ private fun AttachmentThumb(
             null
         }
     }
-    // Local, not the delegate (#339): smart cast is impossible on a
+    // Local, not the delegate: smart cast is impossible on a
     // delegated property, so snapshot it once per composition.
     val bmp = produced
     if (bmp != null) {
@@ -373,29 +299,17 @@ internal fun ChatTab(
     val state by vm.state
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    // Staged-toast episode marker (#339): which staged count the "photo
-    // still staged" notice already voiced for. Declared before first use —
-    // reset by the send/remove wrappers and thread changes below.
-    // Saveable, not plain remember (#339): a rotation mid-dictation would
-    // otherwise reset the slate to 0 and re-toast the identical notice for
-    // the same staged set on the next live sentence.
+    // Staged-toast episode marker: which staged count the "photo still
+    // staged" notice already voiced for. Saveable, not plain remember: a
+    // rotation mid-dictation would re-toast the identical notice.
     var liveStagedVoicedCount by rememberSaveable { mutableStateOf(0) }
-    // Scroll-back thumbnail memory (#339): AttachmentThumb's produceState
-    // remembers per composition, so scrolling away disposes the bitmap and
-    // scrolling back re-decodes. VM-held (per-tab keyed, rotation-
-    // surviving) — see ChatViewModel.thumbCache. No remember wrapper: the
-    // VM instance is already stable across recompositions and rotations,
-    // and a remember(tab) would pin the FIRST VM's cache if the VM were
-    // ever recreated without a tab change.
+    // Scroll-back thumbnail memory: AttachmentThumb's produceState remembers
+    // per composition, so scrolling back re-decodes. VM-held (per-tab keyed,
+    // rotation-surviving) — see ChatViewModel.thumbCache.
     val thumbCache = vm.thumbCache
-    // New thread, new staging episode (#339): the voice slate belongs to
-    // the old thread's staged set. The thumb cache is NOT evicted here by
-    // design: keys carry no thread (UUIDs are globally unique, so no two
-    // threads can alias — a dead thread's bitmaps are unreachable, only
-    // LRU pressure remains), and switch-back reuses them with no
-    // re-decode. Staged-remove evicts explicitly (it knows the exact key
-    // leaving); thread delete rides the same LRU — no per-thread
-    // bookkeeping for a bounded 8 MB cache.
+    // New thread, new staging episode: the voice slate belongs to the old
+    // thread's staged set. The thumb cache is NOT evicted here by design —
+    // keys carry no thread, so a dead thread's bitmaps are unreachable.
     LaunchedEffect(state.threadId) {
         liveStagedVoicedCount = 0
     }
@@ -415,91 +329,56 @@ internal fun ChatTab(
     // description, then the transcript becomes a draft for review in Skills.
     var savingSkillId by remember { mutableStateOf<String?>(null) }
     val toasts = remember(scope) { ToastCenter(scope) }
-    // Photo attachments (#318): gallery picks need no permission (the picker
-    // returns read access to just the chosen images); the camera needs
-    // CAMERA plus a FileProvider Uri staged before TakePicture launches.
+    // Photo attachments: gallery picks need no permission (the picker returns
+    // read access to just the chosen images); the camera needs CAMERA plus a
+    // FileProvider Uri staged before TakePicture launches.
     var cameraUri by rememberSaveable { mutableStateOf<Uri?>(null) }
-    // File path, not the File (#339 review): rotation while the camera app
-    // is foreground destroys this composition, and only saveable state
-    // survives — a lost Uri/File silently drops the capture (TakePicture
-    // returns with nothing to decode). Uri is Parcelable; the path is a
-    // String; both restore.
+    // File path, not the File: rotation while the camera app is foreground
+    // destroys this composition and only saveable state survives — a lost
+    // Uri/File silently drops the capture.
     var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
-    // Confirm dialog before the Settings escape hatch (#339): auto-opening
-    // Settings on every tap would surprise-navigate on accidental taps.
-    // Saveable like the camera path (rotation must not lose the dialog).
-    // Closed on thread switch below: it belongs to the old thread's
-    // Take-photo tap, not the new composer.
+    // Confirm dialog before the Settings escape hatch: auto-opening Settings
+    // on every tap would surprise-navigate on accidental taps. Saveable like
+    // the camera path; closed on thread switch.
     var showCameraSettings by rememberSaveable { mutableStateOf(false) }
-    // Owning thread of the outstanding capture (#339): the callback runs
-    // post-switch, so processUris must be told which thread the photo was
-    // taken for — defaulting to current-at-callback would home it wrong.
-    // Saveable like the path: rotation must not lose the owner (the result
-    // redelivers to the recreated activity). A stale owner after death can
-    // only mismatch, and mismatch drops with notice — never mis-stages.
+    // Owning thread of the outstanding capture: the callback runs post-switch,
+    // so processUris must be told which thread the photo was taken for. A
+    // stale owner can only mismatch, and mismatch drops with notice.
     var cameraThread by rememberSaveable { mutableStateOf<String?>(null) }
-    // Owning thread of the outstanding gallery pick (#339): same hole as
-    // camera — open the picker, switch thread while it is open, pick, and
-    // result-time homing stages silently into the new composer while the
-    // camera path drops with notice. Saveable like the camera owner: the
-    // picker result redelivers across rotation, and a stale owner after
-    // death can only mismatch (drop with notice, never mis-stage).
+    // Owning thread of the outstanding gallery pick: same hole as camera — a
+    // thread switch while the picker is open would stage into the new composer.
     var galleryThread by rememberSaveable { mutableStateOf<String?>(null) }
     // Thread-scoped transient UI, same as the editor/menu state inside
-    // ChatScreen (#339). Split across parent/child by render site (the
-    // dialog renders here, the editor/menu render there) — both fire on
-    // the same key, so a new transient-UI addition belongs in whichever
-    // effect owns its render site, not whichever is nearer.
-    // Deliberately NOT cleared here: the camera/permission gates, owners,
-    // and paths (#339). An in-flight TakePicture survives the switch and
-    // its callback still needs cameraUri/cameraPath/cameraThread to home
-    // or drop-with-notice; clearing the intent gate would let a new tap
-    // overwrite the in-flight capture (two outstanding intents, one Uri
-    // slot — the double-launch overwrite). The intent gate correctly
-    // refuses cross-thread taps while an intent is outstanding ("Camera
-    // is already open" is TRUE — the camera app is open); the split
-    // permission gate does the same for its own window with its own
-    // message, so no thread ever refuses for another thread's dialog.
+    // ChatScreen. Split across parent/child by render site — both fire on the
+    // same key, so a new addition belongs in whichever effect owns its site.
+    // Deliberately NOT cleared here: the camera/permission gates, owners and
+    // paths — an in-flight TakePicture still needs cameraUri/cameraPath/
+    // cameraThread to home or drop-with-notice, and clearing the intent gate
+    // would let a new tap overwrite the in-flight capture.
     LaunchedEffect(state.threadId) { showCameraSettings = false }
-    // True while a camera batch is decoding (#339): launchCamera's
-    // delete-previous must skip a file with an in-flight decode, or a
-    // rapid re-tap deletes it mid-read and turns a good capture into a
-    // "moved or deleted" error. Plain remember is right — a rotation
-    // during decode cancels the batch anyway, so no restore is needed.
+    // True while a camera batch is decoding: launchCamera's delete-previous
+    // must skip a file with an in-flight decode, or a rapid re-tap deletes it
+    // mid-read. Plain remember — a rotation during decode cancels the batch.
     var cameraBusy by remember { mutableStateOf(false) }
-    // True while a camera intent is outstanding (#339): launchCamera
-    // overwrites the shared Uri/path on every tap, so a second tap before
-    // the first returns would make the first callback decode the wrong
-    // file (and leak the first until the sweep). Saveable timestamp, not a
-    // boolean: process death must not stick the gate forever (no callback
-    // will ever clear it), so staleness bounds it — an intent older than
-    // the bound is treated as dead and the launch proceeds.
+    // True while a camera intent is outstanding: launchCamera overwrites the
+    // shared Uri/path on every tap, so a second tap before the first returns
+    // would make the first callback decode the wrong file. Saveable timestamp,
+    // not a boolean: death must not stick the gate forever.
     var cameraPendingSince by rememberSaveable { mutableStateOf(0L) }
-    // Separate gate for the permission-request window (#339): the intent
-    // gate above covers an outstanding TakePicture; this one covers an
-    // outstanding system permission dialog. One timestamp for both meant a
-    // restored permission arm blocked Take-photo taps with the wrong
-    // "already open" copy (a permission dialog is not a camera), and a
-    // stale intent arm blocked fresh permission requests. Split gates,
-    // correct messages: each window arms and clears only its own.
-    // Saveable like the intent gate (rotation between request and result
-    // must not lose it); the startup sweep always clears it on a fresh
-    // process, since system permission dialogs never survive death.
+    // Separate gate for the permission-request window: the intent gate above
+    // covers an outstanding TakePicture, this one an outstanding system
+    // permission dialog — one timestamp for both meant a restored permission
+    // arm blocked Take-photo taps with the wrong "already open" copy. Each
+    // window arms and clears only its own.
     var cameraPermSince by rememberSaveable { mutableStateOf(0L) }
-    // Asked-before flag for rationale routing (#339): the API returns
-    // false for both first-denial (some OEMs) and permanent denial, so
-    // without history a first deny jumps straight to the Settings dialog.
-    // false+never-asked → toast; false+asked → Settings. Saveable: a
-    // rotation between request and result must not lose the ask — but a
-    // fresh process clears it below, because no permission result survives
-    // death and a restored true would misroute the next first denial.
+    // Asked-before flag for rationale routing: the API returns false for both
+    // first-denial (some OEMs) and permanent denial, so without history a
+    // first deny jumps straight to Settings. false+never-asked → toast;
+    // false+asked → Settings. Saveable, but cleared on a fresh process.
     var cameraAskedBefore by rememberSaveable { mutableStateOf(false) }
-    // Pre-request snapshot for rationale routing (#339): cameraAskedBefore
-    // is set at request time and read at result time, so reading it in the
-    // callback is always true — a first denial on OEMs where rationale is
-    // false on first denial would jump straight to Settings instead of the
-    // gentle toast. Snapshot the pre-request value at request time and route
-    // on that (false + never-asked → toast is reachable again).
+    // Pre-request snapshot for rationale routing: cameraAskedBefore is set at
+    // request time, so reading it in the callback is always true — route on
+    // the snapshot (false + never-asked → toast is reachable again).
     var cameraWasAskedAtRequest by rememberSaveable { mutableStateOf(false) }
     /** True while a camera permission request is outstanding (unanswered dialog). */
     fun isCameraPermPending(): Boolean {
@@ -507,115 +386,63 @@ internal fun ChatTab(
         val age = SystemClock.elapsedRealtime() - cameraPermSince
         return age >= 0 && age < CAMERA_PENDING_STALE_MS
     }
-    // In-memory double-tap guard for the launchCamera IO window (#339):
-    // the saveable gate arms only in the Main hop AFTER IO, so a second
-    // tap landing mid-hop would otherwise pass both checks. Deliberately
-    // NOT saveable (see launchCamera): a rotation disposes this
-    // composition and cancels the IO work with it, so a restored true
-    // would stick with nothing outstanding. Atomic: armed on Main, dropped
-    // on IO/cancel threads — no snapshot involvement either way.
+    // In-memory double-tap guard for the launchCamera IO window: the saveable
+    // gate arms only in the Main hop AFTER IO, so a second tap landing
+    // mid-hop would otherwise pass both checks. Deliberately NOT saveable —
+    // a rotation cancels the IO work with the composition.
     val ioGuard = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     /** True while a camera intent launched recently enough to still return.
-     * Monotonic clock (#339): wall-clock jumps (user-set time, NTP slew)
-     * would age a 1-minute-old intent into a 31-minute-old one and reopen
-     * the overwrite — or future-date it and stick the gate. A negative age
-     * means reboot since arming (boot clock reset): no intent survives
-     * that, so the gate reads open instead of stuck. */
+     * Monotonic clock: a wall-clock jump would age a 1-minute-old intent into
+     * a 31-minute-old one. A negative age means reboot since arming. */
     fun isCameraPending(): Boolean {
         if (cameraPendingSince == 0L) return false
         val age = SystemClock.elapsedRealtime() - cameraPendingSince
         return age >= 0 && age < CAMERA_PENDING_STALE_MS
     }
-    // Startup sweep (#339): a process kill between the TakePicture write
-    // and the decode leaves a capture with no owner — per-batch finally
-    // covers cancel/leave-tab, not death. The cache dir holds ONLY these
-    // captures, so clearing it here bounds the litter to zero with no
-    // bookkeeping. Once per composition-creation, not per recomposition —
-    // and sparing the restored capture: rotation/death while the camera
-    // app is foreground restores cameraPath, and sweeping its file would
-    // turn the returning capture into a "moved or deleted" error.
-    // Hoisted above the effect (#339): the sweep must not dereference
-    // the Activity at all — not even for the resolve line — so the
-    // effect closure never holds it, even briefly.
+    // Startup sweep: a process kill between the TakePicture write and the
+    // decode leaves a capture with no owner — per-batch finally covers
+    // cancel/leave-tab, not death. The cache dir holds ONLY these captures,
+    // so clearing it here bounds the litter to zero. Sparing the restored
+    // capture: sweeping the file cameraPath points at would turn the
+    // returning capture into a "moved or deleted" error.
     val appCacheDir = context.applicationContext.cacheDir
     LaunchedEffect(Unit) {
-        // Off-main (#339): directory listing + deletes are disk IO, and
-        // this effect runs on every first composition including post-rotation.
-        // The keep-path reads on Main (snapshot state stays on-thread), and
-        // the dir resolves BEFORE the IO block (#339): evaluating
-        // context.cacheDir here retains nothing — the withContext closure
-        // captures only the resulting File — so no rotation can leak the
-        // Activity through this effect. Same class as the batch decode,
-        // fixed the same way.
-        // Fresh-process gate reset via the ViewModel (#339): saveable
-        // state restores on rotation AND on kill-with-bundle, so a local
-        // first-run flag can't tell them apart — but the VM dies with the
-        // process and survives rotation, which is exactly the distinction
-        // needed. Only a truly fresh process clears the gate; rotation
-        // keeps it via the timestamp bound.
-        // Snapshot on Main, compared as absolute below (#339): cameraPath
-        // is remember-backed snapshot state — snapshotting the plain value
-        // here keeps the IO block from touching snapshot state off-thread.
+        // Off-main: directory listing + deletes are disk IO, and this effect
+        // runs on every first composition including post-rotation. The dir
+        // resolves BEFORE the IO block, so no rotation can leak the Activity.
+        // Fresh-process gate reset via the ViewModel: saveable state restores
+        // on rotation AND on kill-with-bundle, so a local first-run flag can't
+        // tell them apart — the VM dies with the process but survives rotation.
+        // Snapshot on Main: cameraPath is snapshot state.
         val keep = cameraPath
-        // Fresh-process vs rotation, told apart by the VM (#339): the sweep
-        // gate reset fires once, only when the ViewModel died with the
-        // process — saveable state alone can't tell rotation from
-        // kill-with-bundle (both restore). Only a truly fresh process with
-        // no outstanding capture clears the gate below (see keep guard);
-        // rotation keeps it via the timestamp bound.
         val freshProcess = vm.consumeSweepGateReset()
-        // Permission gate ALWAYS clears on a fresh process (#339): unlike
-        // a camera intent (whose TakePicture result may still arrive after
-        // a kill-with-camera-foreground), a system permission dialog never
-        // survives process death — no callback will ever settle it, so any
-        // restored permission arm is stale by construction, keep or no keep.
-        // The intent gate below is pickier (see keep guard) because its
-        // callback may legitimately still fire.
+        // Permission gate ALWAYS clears on a fresh process: unlike a camera
+        // intent (whose TakePicture result may still arrive after a
+        // kill-with-camera-foreground), a system permission dialog never
+        // survives process death. The intent gate below is pickier.
         if (freshProcess) {
             cameraPermSince = 0L
-            // Asked-before state resets with it (#339): a restored true
-            // would send the first denial after a kill straight to the
-            // Settings dialog instead of the gentle toast — the exact
-            // first-vs-permanent misroute the flag exists to prevent.
+            // Asked-before state resets with it: a restored true would send
+            // the first denial after a kill straight to Settings.
             cameraAskedBefore = false
             cameraWasAskedAtRequest = false
         }
-        // Cleared only with no outstanding capture (#339): a kill with the
-        // camera foreground restores BOTH the timestamp and cameraPath, and
-        // zeroing the gate would let a second Take-photo overwrite the
-        // restored Uri/path mid-flight (the double-launch overwrite reopened
-        // for the kill case). keep != null means an intent may still be
-        // outstanding — retain the timestamp and let the staleness bound
-        // expire it; keep == null proves nothing is open.
+        // Intent gate cleared only with no outstanding capture: a kill with
+        // the camera foreground restores BOTH the timestamp and cameraPath,
+        // and zeroing the gate would let a second Take-photo overwrite the
+        // restored Uri/path mid-flight.
         if (freshProcess && keep == null) {
             cameraPendingSince = 0L
         }
-        // Age out orphans, keep the live capture UNCONDITIONALLY (#339):
-        // a restored keep older than the bound is still the file the
-        // returning camera may be writing to — death with camera
-        // foreground long ago restores keep + aged file, and sweeping it
-        // turns a good capture into "moved or deleted". The keep file's own
-        // batch/callback owns its lifecycle.
-        // Fresh-process path deletes every non-keep file UNCONDITIONALLY
-        // (#339): after a kill all of them are ownerless by construction
-        // (in-flight batches clean their own files via finally), so the
-        // mtime age gate would only defer bounding the litter to the next
-        // launch 10+ min later. The rotation path keeps the age gate: a
-        // young non-keep file there can be an older flight still decoding
-        // (a rapid re-tap overwrites cameraPath while the first batch reads
-        // its own file — only the keep is provably live). Inherent
-        // wall-clock risk (#339): lastModified is wall-clock by contract
-        // (no monotonic alternative for mtimes), so a user clock jump
-        // forward ages a young protected non-keep past the gate and deletes
-        // a capture still decoding — the keep is spared unconditionally, so
-        // the live capture survives, but the older flight errors "moved or
-        // deleted". Narrow (jump + rapid re-tap + rotation mid-decode).
-        // Compared as absolute Files, not raw strings (#339): `keep` is a
-        // saveable path string, and a future writer storing a relative or
-        // Uri-derived display path would silently un-keep the live capture
-        // — the sweep would delete the file being written. File() wrap is
-        // identity for absolute inputs, so this costs nothing today and
-        // can't drift from the writer tomorrow.
+        // Age out orphans, keep the live capture UNCONDITIONALLY: a restored
+        // keep older than the bound is still the file the returning camera may
+        // be writing to. Fresh-process path deletes every non-keep file
+        // UNCONDITIONALLY (after a kill they are ownerless by construction);
+        // the rotation path keeps the age gate — a young non-keep file there
+        // can be an older flight still decoding. Wall-clock risk: a clock jump
+        // can age a young non-keep past the gate (the live capture is spared).
+        // Compared as absolute Files, not raw strings: a relative path would
+        // silently un-keep the live capture.
         val keepAbs = keep?.let { java.io.File(it).absolutePath }
         val sweepDir = appCacheDir.resolve("camera")
         withContext(Dispatchers.IO) {
@@ -632,35 +459,15 @@ internal fun ChatTab(
     }
     // One decode at a time, in pick order: each photo lands (or its named
     // error toasts) as it finishes, so a slow second image never blocks the
-    // first one's thumbnail. Failures name the fix (too large, unreadable)
-    // rather than dropping the pick silently. [cleanup] is the camera's
-    // temp file for a capture batch (deleted once decoded; gallery Uris
-    // are not ours, so gallery batches pass none) — passed explicitly so
-    // a concurrent gallery batch can never delete a capture still decoding.
-    // [onBatchDone] fires on Main after the batch (camera uses it to drop
-    // its in-flight flag). [homeThread] is the thread the batch belongs
-    // to — gallery captures it at tap time, camera at launch time (passed
-    // explicitly, since the callback runs post-switch) — and a mismatch
-    // at any Main hop drops the batch with notice instead of staging
-    // thread-A photos into thread B (see isThreadCurrent).
-    // Best-effort file cleanup, shared by every delete below (#339):
-    // exists()/delete() are disk IO, and callers run on Main
-    // picker/camera callbacks — so fire-and-forget, never blocking the
-    // callback. NonCancellable like the batch finally: a tab-leave racing
-    // the call must not cancel the cleanup it just scheduled — and as the
-    // launch context's Job it DETACHES the child from this scope, so even
-    // a dead scope can't stop it. When the scope is already dead the child
-    // is skipped and the unlink runs inline instead: a metadata op, safe
-    // on Main as a last resort, strictly better than an orphan.
-    // Declared before first use: batch returns, camera callback, and
-    // launch-failure path all call it. True fire-and-forget (#339): the
-    // cleanup must survive tab-leave, rotation, AND composition death
-    // without extending any of their lifetimes or joining their completion
-    // — so it launches on the process-lifetime cleanupScope, not on the
-    // composition scope at all. No isActive check (nothing to check
-    // against), no completion callback to race, no Main-thread disk IO on
-    // the caller — exists()-gated, so a second unlink from any path is a
-    // harmless no-op.
+    // first one's thumbnail. [cleanup] is the camera's temp file for a capture
+    // batch — passed explicitly so a concurrent gallery batch can never delete
+    // a capture still decoding. [homeThread] is the owning thread; a mismatch
+    // at any Main hop drops the batch with notice instead of staging thread-A
+    // photos into thread B.
+    // Best-effort file cleanup, shared by every delete below: disk IO on Main
+    // picker/camera callbacks, so fire-and-forget. It must survive tab-leave,
+    // rotation AND composition death, so it launches on the process-lifetime
+    // cleanupScope; when that scope is dead the unlink runs inline.
     fun deleteQuietly(f: File?) {
         if (f == null) return
         cleanupScope.launch {
@@ -673,110 +480,78 @@ internal fun ChatTab(
         onBatchDone: () -> Unit = {},
         homeThread: String = vm.threadIdNow(),
     ) {
-        // Done fires on early returns too (#339): the camera sets its
-        // in-flight flag before calling, so a cap refusal without the
-        // callback would stick the flag and leak the capture forever.
-        // The capture itself is deleted here too — the finally below only
-        // runs when the batch body starts.
+        // Done fires on early returns too: the camera sets its in-flight flag
+        // before calling, so a cap refusal without the callback would stick
+        // the flag and leak the capture.
         if (uris.isEmpty()) {
             deleteQuietly(cleanup)
             onBatchDone()
             return
         }
-        // Unified on vm.notify (#339): the same cap refused here and
-        // mid-batch below must have one lifetime — a composition toast is
-        // lost on rotation while a state notice survives it. Count read
-        // live from the ViewModel, not the last recomposition (#339).
+        // Unified on vm.notify: the same cap refused here and mid-batch must
+        // have one lifetime — a composition toast is lost on rotation while a
+        // state notice survives it.
         val slots = MAX_IMAGES_PER_TURN - vm.pendingAttachmentCount()
         if (slots <= 0) {
-            // One cap string + Info, shared with the backstop (#339).
+            // One cap string + Info, shared with the backstop.
             vm.notify(capRefused(slots), ToastKind.Info)
-            // Same leak as above: refusal skips the body, so the capture
-            // is deleted here, not in finally.
+            // Refusal skips the body, so the capture is deleted here, not
+            // in finally.
             deleteQuietly(cleanup)
             onBatchDone()
             return
         }
-        // Deduped at tap time (#339): a double-selected image otherwise
-        // runs two full decodes and spends both turn slots on identical
-        // payloads (distinct UUIDs, so not even the thumb keys alias).
-        // Uri-equality only: two Uris aliasing one image (re-pick across
-        // providers, cloud-picker aliases) still decode twice — exact
-        // dedupe would need a post-read content hash, i.e. decoding first,
-        // which is the cost dedupe exists to avoid.
+        // Deduped at tap time: a double-selected image otherwise runs two
+        // full decodes and spends both turn slots. Uri-equality only — exact
+        // dedupe would need a post-read content hash, i.e. the cost dedupe
+        // exists to avoid.
         val unique = uris.distinct()
-        // Duplicates collapse into one copy — said out loud, but DEFERRED
-        // (#339): the tap can't know whether the deduped set still
-        // overflows (corrupt-first yields may free slots, making the
-        // duplicate the only toast — correct — or a clean overflow, making
-        // it two back-to-back for one tap — noisy). The loop voices the
-        // dedupe at the end, only when no cap toast fired: one gesture,
-        // one toast about what actually happened.
+        // Duplicates collapse into one copy — said out loud, but DEFERRED: the
+        // tap can't know whether the deduped set still overflows, so the loop
+        // voices the dedupe at the end, only when no cap toast fired.
         val hadDupes = unique.size < uris.size
         val capToasted = java.util.concurrent.atomic.AtomicBoolean(false)
-        // Hoisted ABOVE the launch (#339): the resolver is all the batch
-        // needs, and declaring it inside would still capture the Activity
-        // in the closure until that line runs — narrowing the leak, not
-        // removing it.
+        // Hoisted ABOVE the launch: the resolver is all the batch needs, and
+        // declaring it inside would still capture the Activity in the closure.
         val appContext = context.applicationContext
-        // Settled inline when the scope is already dead (#339): a
-        // navigate-away + result race can deliver picker output after the
-        // composition scope died — launching then is a no-op whose body
-        // (and its onBatchDone flag reset) never runs, sticking cameraBusy.
-        // Silent by design: the batch never started and nothing staged, so
-        // there is nothing to report — same rationale as the zero-landed
-        // cancel silence in the loop below.
-        // Undispatched for the same reason: the body starts synchronously,
-        // so the try/finally below is entered before any later cancel can
-        // land — no window between launch and first suspension skips it.
+        // Settled inline when the scope is already dead: a navigate-away +
+        // result race can deliver picker output after the composition scope
+        // died — launching then is a no-op whose body never runs, sticking
+        // cameraBusy. Undispatched for the same reason: the body starts
+        // synchronously, so the try/finally is entered before any cancel.
         if (!scope.isActive) {
             deleteQuietly(cleanup)
             onBatchDone()
             return
         }
-        // Try-entry proof for the TOCTOU below (#339). Atomic like every
-        // other cross-thread flag in this file (cameraBusy is snapshot,
-        // ioGuard/started are atomics): the write lands on the IO thread
-        // and the read on Main — plain ordering would hold by construction
-        // (same launch-then-read sequence as deleteQuietly's old flag),
-        // but the file gates every cross-thread write the same way.
+        // Try-entry proof for the TOCTOU below. Atomic like every other
+        // cross-thread flag here: the write lands on the IO thread and the
+        // read on Main.
         val batchStarted = java.util.concurrent.atomic.AtomicBoolean(false)
         scope.launch(Dispatchers.IO, CoroutineStart.UNDISPATCHED) {
-            // First statement: try-entry proof (#339). Combined with
-            // UNDISPATCHED (body starts synchronously inside launch()),
-            // the post-launch check below can tell "body never ran"
-            // (scope died between the isActive check and launch) from
-            // "body ran" — and settle the never-ran case inline, since
-            // its finally/onBatchDone will never fire.
+            // First statement: try-entry proof. Combined with UNDISPATCHED,
+            // the post-launch check below can tell "body never ran" from
+            // "body ran" — and settle the never-ran case inline.
             batchStarted.set(true)
             // Landed count for the cancel notice below: only a batch that
-            // staged something before dying has anything to report. Atomic
-            // with the same reasoning: written on Main hops, read on the
-            // IO-thread catch below.
+            // staged something before dying has anything to report.
             val landed = java.util.concurrent.atomic.AtomicInteger(0)
-            // Consecutive-failure abort (#339): failures yield to the next
-            // Uri by design (a bad pick must not cost a later good one its
-            // slot), but 50 corrupt URIs would each burn a full
-            // prepareAttachment (up to 32 MB read + decodes + EXIF) before
-            // the room check fills. Three in a row aborts the rest with a
-            // named notice — a mixed batch (bad, good, bad) still stages
-            // the good ones, since only CONSECUTIVE failures count.
+            // Consecutive-failure abort: failures yield to the next Uri by
+            // design (a bad pick must not cost a later good one its slot),
+            // but 50 corrupt URIs would each burn a full prepareAttachment
+            // (up to 32 MB read + decodes + EXIF). Three in a row aborts the
+            // rest with a named notice.
             val consecutiveFailures = java.util.concurrent.atomic.AtomicInteger(0)
             val batchAborted = java.util.concurrent.atomic.AtomicBoolean(false)
             try {
-                // No pre-truncation (#339): a failed pick must not cost a
-                // later good pick its slot — the room re-check below stops
-                // the loop exactly when full, so failures simply yield to
-                // the next Uri.
+                // No pre-truncation: a failed pick must not cost a later
+                // good pick its slot — the room re-check below stops the
+                // loop exactly when full.
                 for (u in unique) {
-                    // Home + room re-check per pick (#339): two rapid
-                    // batches both snapshot free slots at tap time, so
-                    // without this both decode fully and the loser drops
-                    // AFTER the expensive part — and a thread switch
-                    // mid-batch would stage into the wrong composer.
-                    // addPendingAttachments stays as backstop. Noisy only
-                    // when tap-time stayed quiet: if the tap already
-                    // toasted the cap, repeating it per pick nags.
+                    // Home + room re-check per pick: two rapid batches both
+                    // snapshot free slots at tap time, so without this both
+                    // decode fully and the loser drops AFTER the expensive
+                    // part. addPendingAttachments stays as backstop.
                     val gate = withContext(Dispatchers.Main) {
                         vm.hasAttachmentRoom() to vm.isThreadCurrent(homeThread)
                     }
@@ -791,20 +566,14 @@ internal fun ChatTab(
                         break
                     }
                     if (!room) {
-                        // Toasted on the ACTUAL drop (#339), not predicted at
-                        // tap time: corrupt-first picks can free the slots a
+                        // Toasted on the ACTUAL drop, not predicted at tap
+                        // time: corrupt-first picks can free the slots a
                         // tap-time prediction assumed lost. First !room ends
                         // the loop, so this fires at most once per batch.
-                        // Flag set AFTER the toast inside the same Main hop
-                        // (#339): the IO-thread set raced a tab-leave
-                        // cancelling the hop — the cap toast never rendered
-                        // yet the deferred duplicate notice stayed
-                        // suppressed, reporting neither. Same Main block =
-                        // no suspension between voice and mark.
+                        // Flag set AFTER the toast in the same Main hop.
                         withContext(Dispatchers.Main) {
-                            // Free slots re-read live (#339): room is a
-                            // boolean, but the cap wording needs the
-                            // count (full composer vs excess drop).
+                            // Free slots re-read live: room is a boolean,
+                            // but the cap wording needs the count.
                             vm.notify(
                                 capRefused(MAX_IMAGES_PER_TURN - vm.pendingAttachmentCount()),
                                 ToastKind.Info,
@@ -813,20 +582,15 @@ internal fun ChatTab(
                         }
                         break
                     }
-                    // Application context, hoisted above the launch (#339):
-                    // the closure never sees the Activity, so no rotation
-                    // can leak it for the batch. The resolver is all this
-                    // needs.
+                    // Application context, hoisted above the launch: the
+                    // closure never sees the Activity, so no rotation can
+                    // leak it for the batch.
                     val result = prepareAttachment(appContext, u)
                     withContext(Dispatchers.Main) {
-                        // Home re-checked AFTER the decode (#339): the
-                        // pre-decode gate above and this hop bracket ~100ms
-                        // of blocking IO per photo — a thread switch landing
-                        // inside would otherwise stage thread-A photos into
-                        // thread B's composer, the exact mis-send class
-                        // homeThread exists to prevent. Drops with notice;
-                        // the photo is decoded and discarded (no restage —
-                        // the user re-picks in the right thread).
+                        // Home re-checked AFTER the decode: the pre-decode gate
+                        // and this hop bracket ~100ms of blocking IO per photo
+                        // — a thread switch landing inside would stage thread-A
+                        // photos into thread B's composer. Drops with notice.
                         if (!vm.isThreadCurrent(homeThread)) {
                             vm.notify(
                                 "Thread switched — photos dropped, pick again.",
@@ -834,16 +598,10 @@ internal fun ChatTab(
                             )
                             return@withContext
                         }
-                        // State notices, not composition toasts (#339): a
-                        // decode failure must survive rotation like the cap
-                        // refusals do — same lifetime for every attach error.
-                        // Landed counts actual growth (#339), not attempts:
-                        // the backstop can drop on a concurrent-batch race,
-                        // and the cancel notice must name kept photos, not
-                        // attempted ones. A failure yields to the next Uri —
-                        // unless failures run consecutively past the abort
-                        // bound, which ends the batch instead of burning a
-                        // full prepareAttachment per corrupt pick.
+                        // State notices, not composition toasts: a decode
+                        // failure must survive rotation like the cap refusals
+                        // do — same lifetime for every attach error. Landed
+                        // counts actual growth, not attempts.
                         result
                             .onSuccess {
                                 val before = vm.pendingAttachmentCount()
@@ -864,26 +622,20 @@ internal fun ChatTab(
                     }
                     if (batchAborted.get()) break
                 }
-                // Deferred duplicate voice (#339): the tap can't know whether
-                // the deduped set still overflows, so the notice waits for the
-                // loop outcome — voiced only when something staged AND no cap
-                // toast fired. Cap-hit batches already said their piece; a
-                // clean dedupe-only batch still names the collapsed picks.
+                // Deferred duplicate voice: the tap can't know whether the
+                // deduped set still overflows, so the notice waits for the
+                // loop outcome — voiced only when something staged AND no
+                // cap toast fired.
                 if (hadDupes && landed.get() > 0 && !capToasted.get()) {
                     withContext(Dispatchers.Main) {
                         vm.notify("Duplicate photos attached once.", ToastKind.Info)
                     }
                 }
             } catch (e: CancellationException) {
-                // Cancelled mid-batch (tab left, rotation, #339): staged picks
-                // stay, undecoded ones vanish — said once. Zero-landed abort
-                // voices too (#339): a rotation-cancelled pick leaves the
-                // user staring at an unchanged composer with no hint the
-                // batch died mid-decode — silence reads as a dead tap, the
-                // class this PR keeps eliminating. The toast names the
-                // recovery (pick again), not a non-event.
-                // Immediately rethrown: swallowing cancel breaks structured
-                // concurrency.
+                // Cancelled mid-batch (tab left, rotation): staged picks stay,
+                // undecoded ones vanish — said once, including the zero-landed
+                // abort, because silence reads as a dead tap. Immediately
+                // rethrown: swallowing cancel breaks structured concurrency.
                 withContext(Dispatchers.Main + NonCancellable) {
                     vm.notify(
                         if (landed.get() == 0) {
@@ -898,31 +650,19 @@ internal fun ChatTab(
                 }
                 throw e
             } finally {
-                // In finally, not after the loop (#339 review): leaving the
-                // tab mid-decode cancels this coroutine, and a trailing
-                // delete would be skipped — littering one capture per
-                // cancel. File IO is fine here; no state is touched. The
-                // completion callback runs on Main for the same reason —
-                // NonCancellable so a cancelled batch still drops the flag
-                // (otherwise every later launch skips its cleanup forever).
-                // Dead-composition write is INTENTIONAL (#339): after a tab
-                // leave the finally still fires onBatchDone into the disposed
-                // composition — but the flag MUST drop even when the home
-                // thread is gone (the photos already settled via the
-                // isThreadCurrent drop above, while a stuck cameraBusy
-                // would break every later launch). Snapshot writes
-                // post-dispose are accepted, never crashing; the VM side
-                // already made its keep/drop decision.
+                // In finally, not after the loop: leaving the tab mid-decode
+                // cancels this coroutine, and a trailing delete would be
+                // skipped — littering one capture per cancel. The completion
+                // callback runs on Main, NonCancellable, so a cancelled batch
+                // still drops the flag. Dead-composition write is INTENTIONAL.
                 runCatching { cleanup?.takeIf { it.exists() }?.delete() }
                 withContext(Dispatchers.Main + NonCancellable) { onBatchDone() }
             }
         }
-        // Never-ran settle (#339): with UNDISPATCHED above, a live scope
-        // runs the body (and its first statement) synchronously inside
-        // launch() — so batchStarted.get() == false here proves the scope
-        // died in the TOCTOU window and the finally above never ran. Settle
-        // inline on Main (this thread): the capture deletes best-effort
-        // via helper (IO), the flag resets directly.
+        // Never-ran settle: with UNDISPATCHED above, a live scope runs the
+        // body synchronously inside launch() — so batchStarted.get() == false
+        // proves the scope died in the TOCTOU window and the finally never
+        // ran. Settle inline on Main.
         if (!batchStarted.get()) {
             deleteQuietly(cleanup)
             onBatchDone()
@@ -942,26 +682,23 @@ internal fun ChatTab(
         // Intent settled — the launch gate below re-arms for the next tap.
         cameraPendingSince = 0L
         // Uri nulls now (single-delivery, never reused); the PATH stays
-        // until the batch completes (#339) so a rotation mid-decode
-        // restores a non-null keep for the startup sweep — nulling it here
-        // would let the sweep delete the file being read.
+        // until the batch completes so a rotation mid-decode restores a
+        // non-null keep for the startup sweep.
         cameraUri = null
         // ok=false is cancel AND camera-error alike (indistinguishable by
-        // contract), so silence is correct for cancels and merely quiet
-        // for errors — a toast on every false would nag every backing-out.
-        // ok=true with a lost Uri is the third case (launcher restore miss):
-        // unreachable by construction, but a good capture deleted in
-        // silence would be the worst outcome — so it voices.
+        // contract), so silence is correct for cancels — a toast on every
+        // false would nag every backing-out. ok=true with a lost Uri is the
+        // third case: unreachable by construction, but a good capture deleted
+        // in silence would be the worst outcome.
         if (ok && u != null) {
             cameraBusy = true
             processUris(listOf(u), f, {
                 cameraBusy = false
-                // Conditional clear (#339): a rapid re-tap overwrites the
-                // path with the second capture while the first still
-                // decodes — blanking unconditionally would strand the
-                // second flight with keep == null, letting a rotation
-                // sweep delete the file being read. Only the owning batch
-                // retires the path.
+                // Conditional clear: a rapid re-tap overwrites the path with
+                // the second capture while the first still decodes —
+                // blanking unconditionally would strand the second flight
+                // with keep == null, letting a rotation sweep delete the file
+                // being read. Only the owning batch retires the path.
                 if (f != null && cameraPath == f.absolutePath) cameraPath = null
             }, cameraThread ?: vm.threadIdNow())
             cameraThread = null
@@ -969,9 +706,9 @@ internal fun ChatTab(
             // Shared dead-scope-safe cleanup (inline when the scope died).
             deleteQuietly(f)
             cameraPath = null
-            // Owner clears with the path (#339): the else branch previously
-            // left cameraThread set — harmless (next launch overwrites), but
-            // a rotation restores a stale owner with no outstanding intent
+            // Owner clears with the path: the else branch previously left
+            // cameraThread set — harmless (next launch overwrites), but a
+            // rotation restores a stale owner with no outstanding intent
             // that the next reader must then prove dead.
             cameraThread = null
             // The third case above (ok + lost Uri): a capture deleted with
@@ -983,12 +720,9 @@ internal fun ChatTab(
     fun launchCamera() {
         // Single outstanding intent + hardware gate first (both Main-safe,
         // both synchronous reads): overlapping launches and camera-less
-        // devices refuse here, before any work starts. Two gates, two
-        // windows (#339): the saveable timestamp covers the outstanding
-        // intent (survives rotation AND death), while ioGuard covers the
-        // IO prep window below — the saveable gate arms only in the Main
-        // hop after IO, so without ioGuard a rapid double-tap would pass
-        // both checks and mint two files + two intents.
+        // devices refuse here, before any work starts. Two gates, two windows:
+        // the saveable timestamp covers the outstanding intent (survives
+        // rotation AND death), while ioGuard covers the IO prep window below.
         if (isCameraPending() || ioGuard.get()) {
             vm.notify(
                 if (isCameraPending()) "Camera is already open — finish it first."
@@ -997,76 +731,51 @@ internal fun ChatTab(
             )
             return
         }
-        // Hardware gate, idempotent (#339): requestCamera refuses first so
-        // no permission prompt fires on camera-less devices, and the same
-        // guard holds AT the launch so a future direct call refuses
-        // identically instead of reintroducing permission-before-refusal.
-        // Cheap (one PackageManager call), silent on the pass path. Read
-        // off the application context like every other resolve in this
-        // handler — the tap must not touch the Activity at all.
+        // Hardware gate, idempotent: requestCamera refuses first so no
+        // permission prompt fires on camera-less devices, and the same guard
+        // holds AT the launch. Read off the application context — the tap
+        // must not touch the Activity at all.
         val appTapContext = context.applicationContext
         if (!appTapContext.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
             vm.notify("No camera on this device — use Choose photos instead.", ToastKind.Info)
             return
         }
-        // File prep off-main (#339): mkdirs, exists/delete, and the
-        // FileProvider query are disk/package-manager IO on the tap
-        // handler's Main thread. Everything below runs in one IO hop;
-        // state writes + launcher fire hop back to Main at the end.
-        // Checked, not assumed: full storage fails mkdirs, and a bare
-        // TakePicture failure (ok=false) would leave the user with no hint
-        // why no camera appeared. State notice, not a composition toast:
-        // same rotation-proof lifetime as every other attach error.
-        // isDirectory, not exists: a stray FILE at this path would
-        // otherwise pass the check and fail downstream as a generic
-        // couldn't-start-the-camera instead of storage-unavailable.
-        // No snapshot locals (#339): the old code snapshotted
-        // cameraBusy/cameraPath here for the IO-block delete below — but a
-        // batch finishing mid-hop left the snapshot stale-true and leaked
-        // a capture until the sweep. The delete moved to the Main hop,
-        // where both reads are live and Main-safe; the IO block never
-        // touches snapshot state at all.
-        // Arm the IO-window guard synchronously at tap (#339): the check
-        // above runs on Main, and this closes the double-tap window across
-        // the IO hop below. The SAVEABLE gate stays disarmed until the Main
-        // hop after IO — arming it here would stick across rotation (the
-        // new composition restores the timestamp while the old coroutine's
-        // cancel-settle writes to a dead object). ioGuard is deliberately
-        // in-memory: a rotation disposes this composition and cancels the
-        // IO work with it, so there is nothing outstanding to guard — the
-        // fresh composition mints a fresh false. Death is covered by the
-        // saveable gate (armed only once an intent actually exists);
-        // strays by the staleness bound.
+        // File prep off-main: mkdirs, exists/delete, and the FileProvider
+        // query are disk/package-manager IO on the tap handler's Main thread.
+        // Everything below runs in one IO hop; state writes + launcher fire
+        // hop back to Main at the end. Checked, not assumed: full storage fails
+        // mkdirs, and a bare TakePicture failure (ok=false) would leave the
+        // user with no hint why no camera appeared. isDirectory, not exists: a
+        // stray FILE at this path would fail downstream generically.
+        // Arm the IO-window guard synchronously at tap: the check above runs
+        // on Main, and this closes the double-tap window across the IO hop.
+        // The SAVEABLE gate stays disarmed until the Main hop after IO —
+        // arming it here would stick across rotation. ioGuard is deliberately
+        // in-memory: a rotation cancels the IO work with the composition.
         ioGuard.set(true)
-        // Homed LIVE at tap time like the gallery path (#339): same
-        // stale-snapshot class — reading state.threadId in the Main hop
-        // after the IO hop widens the lag window (mkdirs + FileProvider),
-        // homing the capture to a thread the user already left. Saved
-        // (restore keeps the owner across rotation/death with the path).
+        // Homed LIVE at tap time like the gallery path: reading
+        // state.threadId in the Main hop after the IO hop widens the lag
+        // window, homing the capture to a thread the user already left.
         cameraThread = vm.threadIdNow()
         scope.launch(Dispatchers.IO) {
             try {
                 val dir = File(appTapContext.cacheDir, "camera")
                 if (!dir.isDirectory && !dir.mkdirs()) {
                     withContext(Dispatchers.Main) {
-                        // Gate untouched: it arms only in the success Main
-                        // hop below, so nothing is outstanding to release —
-                        // the try/finally drops ioGuard on the way out.
+                        // Gate untouched: it arms only in the success Main hop
+                        // below; the try/finally drops ioGuard.
                         vm.notify("Couldn't start the camera — storage unavailable.")
                     }
                     return@launch
                 }
-                // UUID, not millis (#339): a rapid double-tap can mint the same
+                // UUID, not millis: a rapid double-tap can mint the same
                 // millisecond twice and point two captures at one file.
                 val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
                 val uri = runCatching {
-                    // packageName tracks applicationId at runtime (#339): the
-                    // earlier comment claiming a flavor/suffix would break this
-                    // was wrong — Context.getPackageName() returns the runtime
-                    // applicationId including any suffix, matching the manifest's
-                    // ${applicationId} authority by construction. (BuildConfig is
-                    // still not generated in this module — verified by the CI
-                    // failure that tried it — but nothing here needs it.)
+                    // packageName tracks applicationId at runtime:
+                    // Context.getPackageName() returns the runtime applicationId
+                    // including any suffix, matching the manifest's
+                    // ${applicationId} authority.
                     FileProvider.getUriForFile(appTapContext, "${appTapContext.packageName}.fileprovider", file)
                 }.getOrNull()
                 withContext(Dispatchers.Main) {
@@ -1075,17 +784,15 @@ internal fun ChatTab(
                         // let the finally drop ioGuard.
                         vm.notify("Couldn't start the camera.")
                         // Shared helper (dead-scope-safe), not an inline
-                        // exists()/delete() on Main (#339).
+                        // exists()/delete() on Main.
                         deleteQuietly(file)
                         return@withContext
                     }
-                    // Delete-before-replace, liveness re-checked HERE (#339):
-                    // the pre-IO snapshot this replaces could go stale if the
-                    // in-flight batch finished mid-hop (stale-true leak until
-                    // the sweep). On Main both reads are fresh: skip only
-                    // while a capture is actively decoding (its own cleanup
-                    // owns the file), and the delete rides deleteQuietly
-                    // (async IO, Main-safe to call).
+                    // Delete-before-replace, liveness re-checked HERE: the
+                    // pre-IO snapshot this replaces could go stale if the
+                    // in-flight batch finished mid-hop. On Main both reads
+                    // are fresh: skip only while a capture is actively
+                    // decoding. The delete rides deleteQuietly (async IO).
                     if (!cameraBusy) {
                         cameraPath?.let(::File)?.takeIf { it.exists() }?.let { deleteQuietly(it) }
                     }
@@ -1093,17 +800,13 @@ internal fun ChatTab(
                     cameraPath = file.absolutePath
                     // Owner homed at tap time (see launchCamera above): the
                     // callback reads the tap-time owner, never current state.
-                    // Armed at launch, cleared in the callback (#339): from
-                    // here on the saveable gate owns the outstanding intent
-                    // (survives rotation AND death — the keep!=null sweep
-                    // rule and the callback settle it). ioGuard's job ends
-                    // here: drop it so the gate below is the single
-                    // authority — a second tap now reads "already open",
-                    // not silence.
-                    // Guarded: if launch() itself throws (no camera activity to
-                    // resolve, broken FileProvider on an odd OEM), no callback ever
-                    // fires — so the gate resets, the path nulls, and the orphan file
-                    // deletes here instead of sticking the gate till the stale bound.
+                    // Armed at launch, cleared in the callback: from here on the
+                    // saveable gate owns the outstanding intent (survives
+                    // rotation AND death). ioGuard's job ends here — a second
+                    // tap now reads "already open", not silence.
+                    // Guarded: if launch() itself throws (no camera activity,
+                    // broken FileProvider on an odd OEM), no callback ever fires
+                    // — so the gate resets and the orphan file deletes here.
                     cameraPendingSince = SystemClock.elapsedRealtime()
                     ioGuard.set(false)
                     runCatching {
@@ -1116,63 +819,52 @@ internal fun ChatTab(
                     }
                 }
             } finally {
-                // IO-window guard release, cancel-safe (#339): a rotation or
+                // IO-window guard release, cancel-safe: a rotation or
                 // tab-leave mid-hop cancels this coroutine before the Main
-                // hop runs — the saveable gate was never armed, so there is
-                // nothing stale to clear there; but ioGuard was armed at tap
-                // and must drop, or every later tap in THIS composition
-                // reads "starting" forever. Plain AtomicBoolean: no Main hop
-                // needed (no snapshot state), thread-safe on whatever thread
-                // the cancel lands on. A post-dispose write targets a dead
-                // instance the fresh composition never reads — harmless.
+                // hop runs — but ioGuard was armed at tap and must drop, or
+                // every later tap in THIS composition reads "starting"
+                // forever.
                 ioGuard.set(false)
             }
         }
     }
-    // Fresh Activity at callback time (#339): the launcher registration
-    // must not pin the pre-rotation Activity for rationale routing or the
-    // Settings intent — updated-state always holds the latest composition's
-    // Activity, and package/launch work uses the app context (never an
-    // Activity at all).
+    // Fresh Activity at callback time: the launcher registration must not
+    // pin the pre-rotation Activity for rationale routing or the Settings
+    // intent — updated-state always holds the latest composition's Activity.
     val appPermContext = context.applicationContext
     val currentActivity = rememberUpdatedState(context.findActivity())
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        // Request settled — the permission gate below clears on every
-        // outcome (grant, denial, permanent denial); only the launch path
-        // re-arms the *intent* gate after this (on grant).
+        // Request settled — the permission gate clears on every outcome;
+        // only the launch path re-arms the *intent* gate (on grant).
         cameraPermSince = 0L
         if (granted) {
             launchCamera()
         } else if (currentActivity.value?.let {
-                // Unknown (null Activity) defaults to Settings (#339):
-                // without an Activity there is no rationale UI to consult,
-                // and the re-toast branch would loop forever — the escape
-                // hatch must be the default, not the special case.
+                // Unknown (null Activity) defaults to Settings: without an
+                // Activity there is no rationale UI to consult, and the
+                // re-toast branch would loop forever.
                 androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
                     it, Manifest.permission.CAMERA,
                 )
             } != true && cameraWasAskedAtRequest
         ) {
             // Permanent denial ("Don't allow again"): the request UI will
-            // never show again, so a re-toast loops forever (#339). The
-            // only path forward is app Settings — offered as a confirm
-            // dialog (below), never auto-opened, so an accidental tap
-            // can't surprise-navigate away.
+            // never show again, so a re-toast loops forever. The only path
+            // forward is app Settings — offered as a confirm dialog
+            // (below), never auto-opened.
             showCameraSettings = true
         } else {
-            // State notice like every other attach refusal (#339).
+            // State notice like every other attach refusal.
             vm.notify("Camera permission is needed to take photos.")
         }
     }
     fun requestCamera() {
-        // Hardware gate first (#339): on a camera-less device (kept
-        // installable by uses-feature required=false) a permission prompt
-        // before the refusal is a pointless dialog — refuse directly.
-        // Application context for both resolves (#339): the tap handler
-        // never touches the Activity (the permission launcher and the
-        // denial dialog own the Activity-bound work).
+        // Hardware gate first: on a camera-less device (kept installable by
+        // uses-feature required=false) a permission prompt before the refusal
+        // is a pointless dialog — refuse directly. Application context for
+        // both resolves: the tap handler never touches the Activity.
         val appReqContext = context.applicationContext
         if (!appReqContext.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
             vm.notify("No camera on this device — use Choose photos instead.", ToastKind.Info)
@@ -1183,35 +875,26 @@ internal fun ChatTab(
         ) {
             launchCamera()
         } else if (isCameraPermPending()) {
-            // Double-request gate (#339): a second tap while the permission
-            // dialog is outstanding would otherwise fire two permission
-            // requests (OEM-dependent second-request behavior) — the same
-            // class the launch gate closed for the intent. Voiced like the
-            // launch gate (#339), not silent: the first tap's dialog IS up
-            // answering, but a tap with zero feedback reads dead — the
-            // class this PR keeps eliminating. (The launch gate stays
-            // authoritative for the intent itself; this only guards the
-            // request window. A stale timestamp here can only come from a
-            // dead process, where nothing is open — but voicing there is
-            // still the safer lie: it names the recovery, "try again".)
+            // Double-request gate: a second tap while the permission dialog
+            // is outstanding would otherwise fire two permission requests
+            // (OEM-dependent second-request behavior). Voiced, not silent: the
+            // first tap's dialog IS up answering, but a tap with zero feedback
+            // reads dead. This guards the request window only.
             vm.notify("Camera permission request is already open — answer it first.", ToastKind.Info)
         } else {
-            // Permission request armed in its OWN gate (#339): the intent
-            // gate stays disarmed here — arming it would make a restored
-            // permission arm block Take-photo taps with the wrong
-            // "already open" copy. Cleared on settle in the callback above;
-            // a rotation between request and result keeps it via saveable,
-            // and the stale bound covers abandonment. Asked flag arms
-            // alongside for rationale routing (first vs permanent denial),
-            // with the pre-request value snapshotted: the callback routes
-            // on the snapshot, not the flag (always true at result time).
+            // Permission request armed in its OWN gate: the intent gate stays
+            // disarmed here — arming it would make a restored permission arm
+            // block Take-photo taps with the wrong "already open" copy. Cleared
+            // on settle in the callback above; the stale bound covers
+            // abandonment. Asked flag arms alongside for rationale routing,
+            // with the pre-request value snapshotted.
             cameraPermSince = SystemClock.elapsedRealtime()
             cameraWasAskedAtRequest = cameraAskedBefore
             cameraAskedBefore = true
-            // Guarded like the camera intent (#339): the callback clears the
-            // gate on settle, but a launch() throw (no handler on an odd
-            // OEM) fires no callback — so reset + voice here instead of
-            // sticking the 10-min gate with no dialog open.
+            // Guarded like the camera intent: the callback clears the gate
+            // on settle, but a launch() throw (no handler on an odd OEM)
+            // fires no callback — so reset + voice here instead of sticking
+            // the 10-min gate with no dialog open.
             runCatching {
                 cameraPermission.launch(Manifest.permission.CAMERA)
             }.onFailure {
@@ -1220,22 +903,14 @@ internal fun ChatTab(
             }
         }
     }
-    // ViewModel notices (attach caps, drops, discards) surface as toasts,
-    // not the error banner: the banner's Retry resends a TURN, which is
-    // wrong for a staging problem. Head-first through the queue (#339):
-    // two rapid notifies both surface instead of the second overwriting
-    // the first. Consume-BEFORE-toast: a rotation landing between show and
-    // consume would otherwise replay the head in the new composition
-    // (double toast). Safe ordering only because toast() is synchronous —
-    // no suspension point sits between the two where cancel could land.
-    // Keyed on the entry (text+kind+seq) so identical repeats re-fire
-    // rather than deduping into a dead second tap. runCatching, not bare
-    // (#339): the ordering above is rotation-safe but not throw-safe — a
-    // toast-path throw with the head already consumed would eat the notice
-    // AND kill this effect (no retry surfaces it). Swallowing the throw
-    // still loses this one notice, but the effect — and the queue behind
-    // it — survives. Consume-after-success would need a rotation guard
-    // against the double-fire above; this is the smaller invariant.
+    // ViewModel notices (attach caps, drops, discards) surface as toasts, not
+    // the error banner: the banner's Retry resends a TURN, which is wrong for
+    // a staging problem. Head-first through the queue: two rapid notifies both
+    // surface instead of the second overwriting the first. Consume-BEFORE-toast:
+    // a rotation landing between show and consume would otherwise replay the
+    // head in the new composition. Keyed on the entry (text+kind+seq) so
+    // identical repeats re-fire. runCatching, not bare: a toast-path throw
+    // would eat the notice AND kill this effect.
     val headNotice = state.notices.firstOrNull()
     LaunchedEffect(headNotice) {
         if (headNotice != null) {
@@ -1255,10 +930,8 @@ internal fun ChatTab(
         onHistory = { showThreads = true },
         onCheckConnection = vm::checkReachability,
         onPending = vm::onPending, onSend = {
-            // Staging empties on send (#339): the next live sentence starts
-            // a new voicing episode. Queued-while-streaming keeps staging —
-            // but the slate reset only re-arms a future toast, and a future
-            // sentence with the same photos staged IS a new episode.
+            // Staging empties on send: the next live sentence starts a new
+            // voicing episode. Queued-while-streaming keeps staging.
             liveStagedVoicedCount = 0
             vm.send()
         }, onStop = vm::stop,
@@ -1282,17 +955,15 @@ internal fun ChatTab(
         onRegenerate = vm::regenerate, onContinue = vm::continueTurn,
         onReplace = vm::replaceAndResend, onFork = vm::forkAndResend,
         onPickPhotos = {
-            // Home snapshot LIVE at tap time (#339): the callback runs
-            // post-switch, so the tap — not current-at-result — owns the
-            // batch. vm.threadIdNow(), not the composition snapshot:
-            // state.threadId can lag the VM by a recomposition (switch
-            // thread, tap attach before recomposition lands), homing the
-            // batch to the old thread and dropping good picks with a
-            // "Thread switched" notice for a switch that already happened.
+            // Home snapshot LIVE at tap time: the callback runs post-switch,
+            // so the tap — not current-at-result — owns the batch.
+            // vm.threadIdNow(), not the composition snapshot: state.threadId
+            // can lag the VM by a recomposition, homing the batch to the old
+            // thread and dropping good picks for a switch that already happened.
             galleryThread = vm.threadIdNow()
-            // Guarded like the camera/permission intents (#339): a launch()
-            // throw (no picker on an odd OEM) fires no callback — so drop
-            // the homed thread + voice here instead of crashing.
+            // Guarded like the camera/permission intents: a launch() throw
+            // fires no callback — so drop the homed thread + voice here
+            // instead of crashing.
             runCatching {
                 galleryLauncher.launch("image/*")
             }.onFailure {
@@ -1302,30 +973,23 @@ internal fun ChatTab(
         },
         onTakePhoto = ::requestCamera,
         onRemovePhoto = { id ->
-            // Removed by stable pick id, not staged index (#339): the strip's
-            // index comes from a composition snapshot, and a batch landing
-            // between recomposition and tap shifts indices — removing by
-            // position then drops the WRONG photo. Ids are minted per pick
-            // and immutable, so the id names the photo regardless of
-            // intervening stages. Eviction rebuilds the key with the same
-            // helper the produce path uses (slot is irrelevant for stable
-            // ids — the key carries id/length/sample); a miss just means
-            // LRU handles it.
+            // Removed by stable pick id, not staged index: the strip's index
+            // comes from a composition snapshot, and a batch landing between
+            // recomposition and tap shifts indices — removing by position then
+            // drops the WRONG photo. Ids are minted per pick and immutable, so
+            // the id names the photo regardless of intervening stages.
             state.pendingAttachments.firstOrNull { it.id == id }?.let { a ->
                 thumbCache.remove(thumbCacheKey(a.id, 0, a.base64, state.threadId))
             }
-            // Staging may empty here (#339): reset the slate when it does
-            // so the next episode voices anew (see onLiveStagedPhotos).
+            // Staging may empty here: reset the slate when it does so the
+            // next episode voices anew (see onLiveStagedPhotos).
             vm.removePendingAttachmentById(id)
             if (vm.pendingAttachmentCount() == 0) liveStagedVoicedCount = 0
         },
-        // Voiced once per staging episode, not per sentence (#339): rapid
-        // multi-sentence speech would otherwise queue identical "photo
-        // still staged" notices back to back for one ongoing condition.
-        // Re-voices when the staged COUNT changes (a new episode), and the
-        // slate clears when staging empties (sent or removed) — same count
-        // re-staged stays silent, which is the accepted miss (a rare
-        // re-stage reads as a continuation, not a new condition).
+        // Voiced once per staging episode, not per sentence: rapid
+        // multi-sentence speech would otherwise queue identical "photo still
+        // staged" notices back to back. Re-voices when the staged COUNT
+        // changes; the slate clears when staging empties.
         onLiveStagedPhotos = {
             val n = vm.pendingAttachmentCount()
             if (n > 0 && n != liveStagedVoicedCount) {
@@ -1342,10 +1006,9 @@ internal fun ChatTab(
         hasStagedPhotos = { vm.pendingAttachmentCount() > 0 },
         thumbCache = thumbCache,
     )
-    // Camera permanently denied (#339): the request UI never shows again,
-    // so the dialog — not an auto-open — offers the Settings escape hatch.
-    // Explicit tap required; an accidental Take-photo tap must not
-    // surprise-navigate away.
+    // Camera permanently denied: the request UI never shows again, so the
+    // dialog — not an auto-open — offers the Settings escape hatch. Explicit
+    // tap required; an accidental tap must not surprise-navigate away.
     if (showCameraSettings) {
         AlertDialog(
             onDismissRequest = { showCameraSettings = false },
@@ -1357,8 +1020,8 @@ internal fun ChatTab(
                 TextButton(
                     onClick = {
                         showCameraSettings = false
-                        // App context, not the composition Activity (#339):
-                        // the dialog may outlive a rotation, and the intent
+                        // App context, not the composition Activity: the
+                        // dialog may outlive a rotation, and the intent
                         // carries NEW_TASK already — no Activity needed.
                         val appDlgContext = context.applicationContext
                         runCatching {
@@ -1399,11 +1062,10 @@ internal fun ChatTab(
                         type = "text/plain"
                         putExtra(android.content.Intent.EXTRA_TEXT, text)
                     }
-                    // Failure voices (#339): a device with no share target
-                    // used to swallow the tap entirely (runCatching with no
-                    // else) — the user retapped a dead button. The text is
-                    // still exported, so say what failed (sharing, not the
-                    // export) and what to do.
+                    // Failure voices: a device with no share target used to
+                    // swallow the tap entirely (runCatching with no else) —
+                    // the user retapped a dead button. The text is still
+                    // exported, so say what failed and what to do.
                     val shared = runCatching {
                         context.startActivity(android.content.Intent.createChooser(intent, "Share conversation"))
                     }.isSuccess
@@ -1920,24 +1582,24 @@ internal fun ChatScreen(
     onContinue: () -> Unit = {},
     onReplace: (Int, String) -> Unit = { _, _ -> },
     onFork: (Int, String) -> Unit = { _, _ -> },
-    /** Photo attachments (#318): gallery picker, camera capture, and
-     * removing one staged photo. Wired by ChatTab (launchers live there). */
+    /** Photo attachments: gallery picker, camera capture, and removing one
+     * staged photo. Wired by ChatTab (launchers live there). */
     onPickPhotos: () -> Unit = {},
     onTakePhoto: () -> Unit = {},
     onRemovePhoto: (String) -> Unit = {},
-    /** Live transcript heard text while photos are staged (#339): the text
-     * parks in the composer for a confirming tap instead of auto-sending
-     * with the photos. */
+    /** Live transcript heard text while photos are staged: the text parks in
+     * the composer for a confirming tap instead of auto-sending with the
+     * photos. */
     onLiveStagedPhotos: () -> Unit = {},
-    /** Live result accumulation (#339): appends heard text atomically in
-     * the ViewModel so rapid results can't clobber on a stale snapshot. */
+    /** Live result accumulation: appends heard text atomically in the
+     * ViewModel so rapid results can't clobber on a stale snapshot. */
     onAppendPending: (String) -> Unit = {},
-    /** Live read of staged-photo state (#339): the listener closure must
-     * not use the composition snapshot (recomposition lag), so ChatTab
-     * supplies the ViewModel read directly. */
+    /** Live read of staged-photo state: the listener closure must not use
+     * the composition snapshot (recomposition lag), so ChatTab supplies the
+     * ViewModel read directly. */
     hasStagedPhotos: () -> Boolean = { false },
-    /** Scroll-back thumbnail memory (#339): hoisted in ChatTab, shared
-     * with the composer strip so one bounded cache serves both. */
+    /** Scroll-back thumbnail memory: hoisted in ChatTab, shared with the
+     * composer strip so one bounded cache serves both. */
     thumbCache: ThumbCache? = null,
     autoLiveGen: Int = 0,
 ) {
@@ -1978,16 +1640,15 @@ internal fun ChatScreen(
     var editingIndex by remember(tab) { mutableStateOf<Int?>(null) }
     var editDraft by remember(tab) { mutableStateOf("") }
     var confirmReplace by remember(tab) { mutableStateOf<Pair<Int, String>?>(null) }
-    // Photo attach menu (#318): gallery vs camera. Plain dialog state —
-    // the pickers themselves live in ChatTab (onPickPhotos/onTakePhoto).
+    // Photo attach menu: gallery vs camera. Plain dialog state — the
+    // pickers themselves live in ChatTab (onPickPhotos/onTakePhoto).
     var showAttachMenu by remember(tab) { mutableStateOf(false) }
     // Edit state belongs to one thread: a switch or a fresh thread closes it.
-    // The attach menu closes too (#339): it is keyed on tab, so without
-    // this a thread switch leaves it open over the new thread's composer.
-    // The draft text clears with them: opening the editor always overwrites
-    // it, but a stale draft from the old thread must not linger in state.
-    // (The camera Settings dialog closes in ChatTab's effect on the same
-    // key — it renders there, so its reset lives there too.)
+    // The attach menu closes too: it is keyed on tab, so without this a
+    // thread switch leaves it open over the new thread's composer. The draft
+    // text clears with them: a stale draft from the old thread must not
+    // linger in state. (The camera Settings dialog closes in ChatTab's effect
+    // on the same key — it renders there, so its reset lives there too.)
     LaunchedEffect(state.threadId) {
         editingIndex = null
         editDraft = ""
@@ -2193,8 +1854,8 @@ internal fun ChatScreen(
         }
         // One-shot mic only: live sessions listen headless via LiveRecognizer,
         // so there is no live branch here (its retry path is onNoSpeech/onRetry).
-        // Accumulated in the VM like live results (#339): the callback's
-        // snapshot can lag a fast typist the same way.
+        // Accumulated in the VM like live results: the callback's snapshot can
+        // lag a fast typist the same way.
         if (heard.isNotEmpty()) {
             onAppendPending(heard)
         }
@@ -2310,46 +1971,39 @@ internal fun ChatScreen(
                 livePartial = ""
                 transientRetries = 0
                 if (!liveMode) {
-                    // Append like every other voice path (#339): the stale
-                    // result arrives after endLive() but the user may have
-                    // typed meanwhile — replacing would overwrite it with
-                    // stale speech.
+                    // Append like every other voice path: the stale result
+                    // arrives after endLive() but the user may have typed
+                    // meanwhile — replacing would overwrite it with stale
+                    // speech.
                     onAppendPending(heard)
                     return
                 }
                 if (heard.trimEnd('.', '!', '?').equals("stop", ignoreCase = true)) {
                     endLive()
                 } else {
-                    // Blank results (silence frames) park nothing (#339):
-                    // without this, an empty heard takes the staged branch
-                    // and toasts "photo still staged" for literal silence —
-                    // but the loop still re-arms (the round-57 stall fix
-                    // applies to silence too: the cycle is over either way).
+                    // Blank results (silence frames) park nothing: without
+                    // this, an empty heard takes the staged branch and toasts
+                    // "photo still staged" for literal silence — but the loop
+                    // still re-arms.
                     if (heard.isBlank()) {
                         liveListen()
                         return
                     }
                     silentRounds = 0
-                    // Staging reads come from the callback, not the snapshot
-                    // (#339): the composition state can lag by a
-                    // recomposition, and a stale-empty read here takes the
-                    // auto-send branch — the exact wrong-image send the
-                    // gate exists to prevent.
+                    // Staging reads come from the callback, not the snapshot:
+                    // the composition state can lag by a recomposition, and a
+                    // stale-empty read here takes the auto-send branch — the
+                    // exact wrong-image send the gate exists to prevent.
                     val staged = hasStagedPhotos()
-                    // Append when photos are staged (#339): the confirming
-                    // tap comes later, so each sentence must accumulate like
-                    // the one-shot mic path below — replacing would discard
-                    // every sentence but the last. Accumulated inside the
-                    // VM (same lag class as the gate): a snapshot base here
-                    // would drop the previous sentence on rapid results.
+                    // Append when photos are staged: the confirming tap comes
+                    // later, so each sentence must accumulate like the one-shot
+                    // mic path below — replacing would discard every sentence
+                    // but the last.
                     onAppendPending(heard)
-                    // Photos need a confirming tap (#339): live transcripts
-                    // auto-send by design, but background speech firing a
-                    // staged-photo turn with no confirmation is a
-                    // wrong-image send. Text parks for the tap instead —
-                    // but the loop must still re-arm: the recognizer cycle
-                    // is over either way, and without a fresh liveListen()
-                    // the session would sit in the overlay hearing nothing.
+                    // Photos need a confirming tap: live transcripts auto-send
+                    // by design, but background speech firing a staged-photo
+                    // turn with no confirmation is a wrong-image send. Text
+                    // parks for the tap instead — but the loop must re-arm.
                     if (!staged) {
                         onSend()
                     } else {
@@ -2781,10 +2435,9 @@ internal fun ChatScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End,
                         ) {
-                            // Both stop the readout first, like the IME send
-                            // (#339): a spoken reply must not keep playing
-                            // over the state these buttons change — the
-                            // keyboard path already did this via stopThen.
+                            // Both stop the readout first, like the IME send:
+                            // a spoken reply must not keep playing over the
+                            // state these buttons change.
                             if (state.activeRunId.isNotBlank()) {
                                 TextButton(onClick = { tts.stop(); onSteer() }) { Text("Steer") }
                             }
@@ -2802,22 +2455,18 @@ internal fun ChatScreen(
                                 .padding(horizontal = 16.dp, vertical = 2.dp),
                         )
                     }
-                    // Staged photos (#318): thumbnails with per-photo remove.
-                    // They send with the next turn even when the turn has no
-                    // text; the count line states the per-turn cap up front.
-                    // One wired list for gate + row + labels (#339): the
-                    // pairs carry their staged index (for remove) alongside
-                    // the wired payload (for render), so a single pass
-                    // drives everything and no count can disagree with it.
+                    // Staged photos: thumbnails with per-photo remove. They
+                    // send with the next turn even when the turn has no text;
+                    // the count line states the per-turn cap up front. One
+                    // wired list drives gate + row + labels.
                     val stagedSlots = state.pendingAttachments.wiredPhotosWithIndex()
                     if (stagedSlots.isNotEmpty()) {
                         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                // Labeled by WIRED position (#339): the staged
-                                // index would read "photo 3 of 2" once blanks
-                                // stop aligning the two orders — while remove
-                                // still targets the staged slot the ViewModel
-                                // holds.
+                                // Labeled by WIRED position: the staged index
+                                // would read "photo 3 of 2" once blanks stop
+                                // aligning the two orders — remove still
+                                // targets the staged slot the ViewModel holds.
                                 stagedSlots.forEachIndexed { w, (i, a) ->
                                     Box {
                                         AttachmentThumb(
@@ -2830,13 +2479,10 @@ internal fun ChatScreen(
                                             threadKey = state.threadId,
                                             cache = thumbCache,
                                         )
-                                        // Standard 48dp target (#339): a scanner
-                                        // fails anything smaller, and the
-                                        // #283 overlay exception is withdrawn
-                                        // here — covering the thumbnail corner
-                                        // is the lesser evil next to an
-                                        // untappable remove. Icon stays 16dp,
-                                        // centered. Content description kept.
+                                        // Standard 48dp target: a scanner fails
+                                        // anything smaller, and covering the
+                                        // thumbnail corner is the lesser evil
+                                        // next to an untappable remove.
                                         IconButton(
                                             onClick = { onRemovePhoto(a.id) },
                                             modifier = Modifier.align(Alignment.TopEnd).size(48.dp),
@@ -2863,15 +2509,14 @@ internal fun ChatScreen(
                         modifier = Modifier.fillMaxWidth().padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Photo attachments (#318): gallery or camera, staged
+                        // Photo attachments: gallery or camera, staged
                         // thumbnails above, sent as image parts with the turn.
                         // Stays live while streaming — staged photos park in
                         // the composer until the next explicit send.
                         Box {
-                            // Gated on ready like send (#339): staging work
-                            // before the thread loads just parks photos that
-                            // sit through the load into a "still loading"
-                            // notice at send time.
+                            // Gated on ready like send: staging work before
+                            // the thread loads just parks photos that sit
+                            // through the load into a "still loading" notice.
                             IconButton(
                                 onClick = { showAttachMenu = true },
                                 enabled = state.ready,
@@ -2974,9 +2619,9 @@ internal fun ChatScreen(
                         } else {
                             FilledIconButton(
                                 onClick = stopThen(onSend),
-                                // Photos send without text (#318): an
-                                // image-only turn is a real turn. Counted
-                                // wired like the cap math (#339).
+                                // Photos send without text: an image-only turn
+                                // is a real turn. Counted wired like the cap
+                                // math.
                                 enabled = (state.pending.isNotBlank() ||
                                     state.pendingAttachments.wiredPhotoCount() > 0) &&
                                     state.ready,
@@ -3081,9 +2726,8 @@ internal fun ChatScreen(
                             val isLast = index == state.messages.lastIndex
                             // Replace resend drops turns when anything
                             // non-blank follows the edited message.
-                            // Content includes photos (#318): dropping an
-                            // image-only turn without confirming is silent
-                            // data loss of the same class as text.
+                            // Content includes photos: dropping an image-only
+                            // turn without confirming is silent data loss.
                             val dropsTurns = state.messages.drop(index + 1).any { messageHasContent(it) }
                             // #52: proper conversational bubbles — user right, assistant left.
                             Box(
@@ -3209,13 +2853,11 @@ internal fun ChatScreen(
                                                     modifier = Modifier.fillMaxWidth(),
                                                     maxLines = 6,
                                                 )
-                                                // Carried photos are invisible here
-                                                // (#339): the field is text-only,
-                                                // but Replace/Fork resends the
-                                                // turn's photos with it — say so,
-                                                // or an edit to "thanks" silently
-                                                // resends images. Counted wired
-                                                // so blanks claim nothing.
+                                                // Carried photos are invisible here:
+                                                // the field is text-only, but
+                                                // Replace/Fork resends the turn's
+                                                // photos with it — say so, or an
+                                                // edit to "thanks" resends images.
                                                 val wiredCount = msg.attachments.wiredPhotoCount()
                                                 if (wiredCount > 0) {
                                                     HintLine(
@@ -3228,13 +2870,9 @@ internal fun ChatScreen(
                                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                     verticalAlignment = Alignment.CenterVertically,
                                                 ) {
-                                                    // Empty text allowed with photos
-                                                    // (#339): the editor reaches
-                                                    // image-only resends, which
-                                                    // send() supports — the VM
-                                                    // still refuses empty
-                                                    // text-only resends.
-                                                    // Wired count, like the hint.
+                                                    // Empty text allowed with photos:
+                                                    // the editor reaches image-only
+                                                    // resends, which send() supports.
                                                     val canResend = editDraft.isNotBlank() ||
                                                         msg.attachments.wiredPhotoCount() > 0
                                                     Button(
@@ -3260,29 +2898,21 @@ internal fun ChatScreen(
                                                     }
                                                 }
                                             } else {
-                                                // Sent photos (#318) render above the
-                                                // text; an image-only turn shows no
-                                                // "…" placeholder — the thumbnails
-                                                // ARE the message. Iterated wired
-                                                // (#339): the gate, the row, and
-                                                // the label all count the same
-                                                // wired list, so blanks render
-                                                // nothing and claim nothing.
+                                                // Sent photos render above the text;
+                                                // an image-only turn shows no "…"
+                                                // placeholder — the thumbnails ARE
+                                                // the message.
                                                 val wiredBubble = msg.attachments.wiredPhotos()
                                                 if (wiredBubble.isNotEmpty()) {
                                                     Row(
                                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                     ) {
-                                                        // Wired position as slot here, staged
-                                                        // index in the strip (#339): history
-                                                        // has no staged slots, so the bubble
-                                                        // keys legacy payloads on wired
-                                                        // position while the strip keys them
-                                                        // on staged index. Divergent only for
-                                                        // pre-id payloads (stable ids ignore
-                                                        // slot either way) — documented, not
-                                                        // unified, because there is no shared
-                                                        // index domain to unify on.
+                                                        // Wired position as slot here,
+                                                        // staged index in the strip:
+                                                        // history has no staged slots, so
+                                                        // the bubble keys legacy payloads
+                                                        // on wired position. Divergent only
+                                                        // for pre-id payloads.
                                                         wiredBubble.forEachIndexed { ai, a ->
                                                             AttachmentThumb(
                                                                 base64 = a.base64,
@@ -3301,12 +2931,11 @@ internal fun ChatScreen(
                                                     }
                                                 }
                                                 if (msg.content.isNotBlank() || msg.attachments.wiredPhotoCount() == 0) {
-                                                    // Rendered trimEnd, stored raw
-                                                    // (#339): storage is wire-verbatim
-                                                    // since round-37, so trailing
-                                                    // newlines would render as blank
-                                                    // lines — trimmed for display,
-                                                    // never for the wire.
+                                                    // Rendered trimEnd, stored raw:
+                                                    // storage is wire-verbatim, so
+                                                    // trailing newlines would render
+                                                    // as blank lines — trimmed for
+                                                    // display, never for the wire.
                                                     SelectionContainer {
                                                         Text(
                                                             msg.content.trimEnd().ifEmpty { "…" },
@@ -3450,14 +3079,13 @@ internal fun ChatScreen(
         val confirm = confirmReplace
         if (confirm != null) {
             val (idx, text) = confirm
-            // Content, not text (#339): image-only turns count as dropped
-            // turns, like the dropsTurns gate above — otherwise the dialog
-            // reports "drops 0 later messages" while discarding photos.
+            // Content, not text: image-only turns count as dropped turns,
+            // like the dropsTurns gate above — otherwise the dialog reports
+            // "drops 0 later messages" while discarding photos.
             val dropped = state.messages.drop(idx + 1).count { messageHasContent(it) }
-            // Same invisibility as the inline editor above: the edited
-            // turn's photos resend with the new text — named here so the
-            // confirmation covers the full resend. Counted wired like the
-            // HintLine (#339).
+            // Same invisibility as the inline editor above: the edited turn's
+            // photos resend with the new text — named here so the confirmation
+            // covers the full resend. Counted wired like the HintLine.
             val resendPhotos = state.messages.getOrNull(idx)?.attachments?.wiredPhotoCount() ?: 0
             AlertDialog(
                 onDismissRequest = { confirmReplace = null },

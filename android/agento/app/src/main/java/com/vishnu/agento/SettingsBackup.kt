@@ -4,19 +4,15 @@ import android.content.Context
 import androidx.core.content.edit
 import org.json.JSONObject
 
-/** Hard cap on the backup peak, bytes (#339): past ~25 MB of heap peak the
- * materialized string (~2x bytes as UTF-16 plus the JSONObject) reliably
- * OOMs low-end 1–2 GB-RAM devices mid-export — a crash, not a slow restore.
- * The meter is DISK bytes but the cap is HEAP, hence the ×2 + slack compare:
- * a backup at 12 MB on disk peaks ~25 MB and is refused. Shared by the
- * export boundary (the wall every caller hits) and the Settings pre-meter
- * (the friendly, tap-consent warning), so the two can never name different
- * limits. */
+/** Hard cap on the backup peak, bytes: past ~25 MB of heap peak the
+ * materialized string (~2x bytes as UTF-16 plus the JSONObject) reliably OOMs
+ * low-end 1–2 GB-RAM devices mid-export — a crash, not a slow restore. The
+ * meter is DISK bytes but the cap is HEAP, hence the ×2 + slack compare;
+ * shared by the export boundary and the Settings pre-meter. */
 internal const val BACKUP_HARD_CAP_BYTES: Long = 25_000_000
 
-/** Headroom added to the floor meter before the hard-cap compare (#339):
- * prefs + JSON framing + JSONObject wrapper. KBs in practice, but the gate
- * must judge the sum, not just the files. */
+/** Headroom added to the floor meter before the hard-cap compare: prefs +
+ * JSON framing + JSONObject wrapper. */
 internal const val BACKUP_FLOOR_SLACK_BYTES: Long = 1_000_000
 
 /**
@@ -32,9 +28,8 @@ internal const val BACKUP_FLOOR_SLACK_BYTES: Long = 1_000_000
  */
 object SettingsBackup {
 
-    /** Named over-cap remedy (#339): one spelling for the pre-meter, the
-     * in-boundary wall, and the import gate — the next reword fixes every
-     * path instead of one. */
+    /** Named over-cap remedy: one spelling for the pre-meter, the in-boundary
+     * wall, and the import gate — the next reword fixes every path. */
     internal fun backupTooLargeMessage(onDisk: Long): String =
         "Backup too large to export safely (${formatBytes(onDisk)} on disk). " +
             "Delete old photo threads in the thread switcher, then try again."
@@ -109,13 +104,9 @@ object SettingsBackup {
         return false
     }
 
-    /**
-     * Dynamic per-model effort keys, enumerated from ONE prefs snapshot
-     * (#339): the caller passes the same `all` map it type-checks against,
-     * so a prefs write landing mid-export cannot list a key the snapshot
-     * lacks (skipped despite existing) or split check-vs-read across two
-     * reads. Only string values are exported.
-     */
+    /** Dynamic per-model effort keys, enumerated from ONE prefs snapshot: the
+     * caller passes the same `all` map it type-checks against, so a write
+     * landing mid-export cannot split check-vs-read across two reads. */
     private fun effortKeys(all: Map<String, *>): List<String> =
         all.keys.filter { k ->
             isEffortMemoryKey(k) && all[k] is String
@@ -169,60 +160,34 @@ object SettingsBackup {
         return k.substring(prefix.length).all { it.isDigit() }
     }
 
-    /** Serializes all known prefs plus app files; absent keys are omitted (not nulled). */
-    /**
-     * Metered footprint of everything [export] would read (#339): file
-     * lengths only, no reads — so the caller can warn BEFORE the
-     * materialization peak instead of after it. Raw disk bytes (a FLOOR):
-     * the export string runs ~2x bytes as UTF-16 plus the JSONObject copy,
-     * so callers judging the heap peak must scale ×2 (+ slack) — comparing
-     * raw lengths to a heap cap understates ASCII base64 ~2x (12 MB on disk
-     * peaks ~25 MB in memory). Deliberately
-     * UNGATED (no requireIoThread): File.length() is a metadata stat, not
-     * a blocking read, so any thread may call it — the gate lives on the
-     * readers (export/import/load/save), not the meter.
-     */
+    /** Metered footprint of everything [export] would read: file lengths only,
+     * no reads — so the caller can warn BEFORE the materialization peak. Raw
+     * disk bytes (a FLOOR): the export string runs ~2x bytes as UTF-16, so
+     * callers judging the heap peak must scale ×2 (+ slack). Deliberately
+     * UNGATED: File.length() is a metadata stat, so any thread may call it. */
     internal fun backupFilesBytes(dir: java.io.File): Long =
         backupFiles().sumOf { name ->
             java.io.File(dir, name).takeIf { it.exists() }?.length() ?: 0L
         }
-    /**
-     * Full-settings export (prefs + thread files) as one JSONObject.
-     * IO-REQUIRED (see requireIoThread, enforced below — not just this
-     * comment): a photo-heavy export holds ~2x peak on the caller's thread
-     * (file text + JSONObject copy; the old canonical re-encode is gone —
-     * import/load canonicalize on the way in), bounded by the 200-msg cap
-     * — the same Main-never rule as ChatThreads.load(). Both
-     * callers (Settings export + import pickers) run inside
-     * withContext(Dispatchers.IO); a future Main-thread caller fails fast
-     * instead of freezing the UI. Remaining hump, named not hidden (#339):
-     * toString() still materializes the whole compact string (~2x bytes as
-     * UTF-16) before the first chunk writes — the read/compress peaks are
-     * scoped, this is the last OOM hump. Streaming via JsonWriter (or
-     * excluding payloads with a re-attach note) removes it; the 5 MB
-     * warning stays as the interim signal.
-     */
+    /** Full-settings export (prefs + thread files) as one JSONObject; absent
+     * keys are omitted (not nulled). IO-REQUIRED (enforced via
+     * requireIoThread): a photo-heavy export holds ~2x peak on the caller's
+     * thread — the same Main-never rule as ChatThreads.load(). */
     @androidx.annotation.WorkerThread
     fun export(context: Context): JSONObject {
         requireIoThread("SettingsBackup.export")
-        // The cap lives HERE, not only in the caller (#339): every caller
-        // materializes the same string peak, so the wall belongs on the
-        // boundary that builds it — a share-sheet or future caller that
-        // skips the Settings meter still fails closed with the named
-        // remedy. Settings keeps its own pre-meter for the warning (the
-        // floor is cheaper to judge before this runs); this is the
-        // backstop, and both use the same constant + wording.
+        // The cap lives HERE, not only in the caller: the wall belongs on the
+        // boundary that builds the peak, so a caller that skips the Settings
+        // pre-meter still fails closed. Both use the same constant + wording.
         val onDisk = backupFilesBytes(context.filesDir)
         if (onDisk * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
             throw IllegalStateException(backupTooLargeMessage(onDisk))
         }
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
         val values = JSONObject()
-        // Single snapshot, type-guarded reads (#339): contains()+get throws
-        // ClassCastException on a mistyped value (old build, hand-edit) and
-        // fails the WHOLE export. Import already guards with opt-is checks;
-        // export mirrors it — skip, never coerce. Snapshot once, not per
-        // key, so the check and the read can't disagree mid-export either.
+        // Single snapshot, type-guarded reads: contains()+get throws
+        // ClassCastException on a mistyped value and fails the WHOLE export.
+        // Skip, never coerce — import guards the same way.
         val all = prefs.all
         for (k in STRING_KEYS) {
             (all[k] as? String)?.let { values.put(k, it) }
@@ -230,12 +195,10 @@ object SettingsBackup {
         for (k in effortKeys(all)) {
             (all[k] as? String)?.let { values.put(k, it) }
         }
-        // Per-widget display settings (#169): enumerated live because the key
-        // ends in an appWidgetId, and written by type because the four fields
-        // are not all one type. Sorted, so two exports of the same prefs are
-        // byte-identical and can be diffed. Read from the same `all`
-        // snapshot as every other block (#339): re-reading prefs.all per
-        // key would split check-vs-read on a concurrent write.
+        // Per-widget display settings: enumerated live because the key ends in
+        // an appWidgetId, and written by type because the four fields are not
+        // all one type. Sorted, so two exports of the same prefs are
+        // byte-identical. Read from the same `all` snapshot as every other block.
         for (k in all.keys.filter { isWidgetDisplayKey(it) }.sorted()) {
             when (val v = all[k]) {
                 is String -> values.put(k, v)
@@ -246,11 +209,9 @@ object SettingsBackup {
             (all[k] as? Boolean)?.let { values.put(k, it) }
         }
         for (k in LONG_KEYS) {
-            // Long-or-Int only (#339): a hand-set Int still carries the
-            // count (widened), but a fractional Double/Float is corruption —
-            // truncating 1.9 to 1 would persist a wrong-but-plausible
-            // count. Skipped like every other mistyped value in this
-            // function; import clamps its own side.
+            // Long-or-Int only: a hand-set Int still carries the count
+            // (widened), but a fractional Double/Float is corruption —
+            // truncating 1.9 to 1 would persist a wrong-but-plausible count.
             val n: Long? = when (val v = all[k]) {
                 is Long -> v
                 is Int -> v.toLong()
@@ -262,18 +223,10 @@ object SettingsBackup {
         for (name in backupFiles()) {
             val f = java.io.File(context.filesDir, name)
             if (f.exists()) {
-                // Shipped raw BY DESIGN (#339): the import boundary and load()
-                // both canonicalize on the way in, so an export-side
-                // decode+re-encode (2x multi-MB parses) only paid off for
-                // raw-file shares that bypass load() — which self-heal on
-                // first read anyway. Halves the export peak (file text +
-                // JSONObject copy, no re-encode) with no contract loss; the
-                // toStored precedent (raw on Main, canonicalize at the
-                // boundary) already works this way.
-                // Pinned UTF-8 (#339): the platform default happens to be
-                // UTF-8 on Android, but the backup crosses devices (and the
-                // wire path pins it explicitly) — the contract belongs in
-                // the call, not in the platform's happenstance.
+                // Shipped raw BY DESIGN: the import boundary and load() both
+                // canonicalize on the way in, so an export-side decode+re-encode
+                // buys nothing and doubles the export peak. Pinned UTF-8: the
+                // backup crosses devices, so the contract belongs in the call.
                 runCatching {
                     files.put(name, f.readText(Charsets.UTF_8))
                 }
@@ -282,15 +235,10 @@ object SettingsBackup {
         return JSONObject().put("version", VERSION).put("values", values).put("files", files)
     }
 
-    /**
-     * Applies a backup produced by [export]; unknown keys and mistyped values
+    /** Applies a backup produced by [export]; unknown keys and mistyped values
      * are skipped. Version 1 backups (prefs only) still import. Returns the
-     * number of prefs + files applied. IO-REQUIRED like [export] (#339,
-     * enforced): file reads + canonicalize + prefs writes all ride the
-     * caller's thread — the picker caller runs inside
-     * withContext(Dispatchers.IO). A future Main-thread caller fails fast
-     * instead of freezing the UI.
-     */
+     * number of prefs + files applied. IO-REQUIRED like [export] (enforced):
+     * file reads + canonicalize + prefs writes all ride the caller's thread. */
     @androidx.annotation.WorkerThread
     fun importFrom(context: Context, json: JSONObject): Result<Int> {
         requireIoThread("SettingsBackup.importFrom")
@@ -312,12 +260,9 @@ object SettingsBackup {
                         applied++
                     }
                 }
-                // Real token totals: Long/Int only, mirroring export (#339).
-                // opt() type check then optLong() would coerce a fractional
-                // Double (1.9) into a wrong-but-plausible 1 — the two sides
-                // now reject the same shapes, so a corrupted count is
-                // skipped, not silently truncated. Negatives (hand-edited)
-                // clamp to 0 — totals never go below.
+                // Real token totals: Long/Int only, mirroring export — opt()
+                // then optLong() would coerce a fractional Double (1.9) into
+                // a wrong-but-plausible 1. Negatives (hand-edited) clamp to 0.
                 for (k in LONG_KEYS) {
                     val n: Long? = when (val v = values.opt(k)) {
                         is Long -> v
@@ -329,9 +274,7 @@ object SettingsBackup {
                         applied++
                     }
                 }
-                // Per-model effort memory: same allowlist shape as export
-                // (isEffortMemoryKey, string values only). Unknown keys and
-                // mistyped values are still skipped.
+                // Per-model effort memory: same allowlist shape as export.
                 val names = values.keys().asSequence().toList()
                 for (k in names) {
                     if (isEffortMemoryKey(k) && values.opt(k) is String) {
@@ -339,12 +282,10 @@ object SettingsBackup {
                         applied++
                     }
                 }
-                // Per-widget display settings (#169): the export allowlist
-                // mirrored per prefix — view/density take strings only,
-                // due/scroll take booleans only. A cross-typed value in a
-                // hand-edited backup (e.g. {"task_widget_due_12": "yes"})
-                // is skipped, because the widget reads those keys with
-                // getBoolean and a stored String would throw there.
+                // Per-widget display settings: the export allowlist mirrored
+                // per prefix — view/density take strings only, due/scroll take
+                // booleans only. A cross-typed value in a hand-edited backup is
+                // skipped: the widget reads those keys with getBoolean.
                 for (k in names) {
                     if (isStringWidgetKey(k) && values.opt(k) is String) {
                         putString(k, values.optString(k, ""))
@@ -361,45 +302,22 @@ object SettingsBackup {
                     val text = files.optString(name, "")
                     if (text.isEmpty()) continue
                     if (name.startsWith("chat_threads_")) {
-                        // Single parse, not probe-then-parse (#339): the old
-                        // org.json JSONArray/JSONObject probe decoded the
-                        // whole multi-MB string just to check shape, then
-                        // canonicalizeFile decoded it AGAIN via kotlinx —
-                        // 3x transient (probe + canonical + write) on the
-                        // exact path the hard cap exists to bound.
-                        // canonicalizeFile returns null on any invalid shape
-                        // (decode failure → getOrNull), so the null IS the
-                        // validity check with the same skip contract and one
-                        // fewer full parse.
-                        // Thread files canonicalize payloads first (#339):
-                        // a hand-edited backup must not persist wrapped or
-                        // ragged base64 that the load boundary would then
-                        // have to heal. Valid-JSON-but-wrong-shape SKIPS for
-                        // chat_threads_* (#339): the old raw fallback wrote
-                        // bytes load() cannot decode, so the next load
-                        // returned emptyList() — wiping the LIVE threads the
-                        // import just overwrote. A skip keeps them; the count
-                        // still hints at it (applied excludes the file).
-                        // Fresh-reinstall loss is identical either way (the
-                        // shape was never loadable).
-                        // Oversize persists until send, BY DESIGN (#339):
-                        // canonicalize strips whitespace and blanks ragged
-                        // payloads but does NOT enforce the 1.5M staging cap
-                        // — an old thread must stay readable even if a newer
-                        // build would refuse to stage it. So a 3 MB imported
-                        // payload loads, titles, and searches as a photo,
-                        // then trips the named per-photo wire cap at send
-                        // time. Fail-closed and correct; the failure just
-                        // surfaces far from the cause, which this note —
-                        // and the named error itself — closes.
+                        // Single parse, not probe-then-parse: the old org.json
+                        // probe decoded the multi-MB string just to check shape,
+                        // then canonicalizeFile decoded it AGAIN. Its null
+                        // return IS the validity check (same skip contract).
+                        // Valid-JSON-but-wrong-shape SKIPS: the old raw
+                        // fallback wrote bytes load() cannot decode, so the
+                        // next load returned emptyList() — wiping the LIVE
+                        // threads the import just overwrote.
+                        // Oversize persists until send: canonicalize does not
+                        // enforce the 1.5M staging cap.
                         val toWrite = ChatThreads.canonicalizeFile(text) ?: continue
                         runCatching {
                             java.io.File(context.filesDir, name).writeText(toWrite, Charsets.UTF_8)
-                            // Invalidate the save cache for this tab (#339):
-                            // the import bypasses save(), so a stale snapshot
-                            // would make the next save with unchanged VM
-                            // instances write the pre-import bytes back over
-                            // the file we just restored.
+                            // Invalidate the save cache: the import bypasses
+                            // save(), so a stale snapshot would write the
+                            // pre-import bytes back over the restored file.
                             ChatThreads.invalidate(
                                 name.removePrefix("chat_threads_").removeSuffix(".json"),
                             )
@@ -407,10 +325,9 @@ object SettingsBackup {
                         }
                         continue
                     }
-                    // Validate JSON shape before overwriting live state.
-                    // Non-thread files only: thread files validate via the
-                    // canonicalizeFile null above (no decoder to disagree
-                    // with here, so the org.json probe stays the check).
+                    // Validate JSON shape before overwriting live state
+                    // (non-thread files only; thread files validate via the
+                    // canonicalizeFile null above).
                     val valid = runCatching { org.json.JSONArray(text); true }
                         .recoverCatching { org.json.JSONObject(text); true }
                         .getOrDefault(false)
