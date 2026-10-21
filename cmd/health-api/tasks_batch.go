@@ -47,6 +47,17 @@ func parseBatchOps(fields map[string]any) ([]tasks.BatchOp, error) {
 		if !ok {
 			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d] must be an object", i)}
 		}
+		// No silent extras: a misspelled key (`reasons`, `dueDate` at the
+		// wrong level) would otherwise commit without what the caller
+		// meant — the same silent-drop shape the misplaced reason/fields
+		// rejection guards one level down.
+		for key := range obj {
+			switch key {
+			case "op", "id", "reason", "fields":
+			default:
+				return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].%s is not a batch field; want op, id, reason, or fields", i, key)}
+			}
+		}
 		// Missing and mistyped stay distinct: absent means "send it",
 		// wrong-typed means "fix its type", and blank-after-trim reads as
 		// missing — there is no value to type-check.

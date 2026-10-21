@@ -5,7 +5,7 @@ Task Manager and supporting services for personal task tracking.
 ## Language
 
 **Task**:
-A unit of work with a name, due date/time, and optional repeat — open, done, or skipped (a done occurrence not completed).
+A unit of work with a name, due date/time, and optional repeat — open, done, or skipped (a resolved occurrence not completed).
 _Avoid_: todo, item, reminder
 
 **Complete**:
