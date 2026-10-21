@@ -39,6 +39,10 @@ func TestTaskHistoryReadsTheAgentsOwnWrites(t *testing.T) {
 	if id == "" {
 		t.Fatalf("no id returned: %v", doc)
 	}
+	// The cleanup deletes the task WITHOUT writing a log row: only the
+	// transports record mutations, not the store's Delete. That is what
+	// keeps the counts above exact — if Delete ever started recording, a
+	// row would appear here and break them.
 	defer func() { _, _ = store.Delete(ctx, id) }()
 
 	out, err := taskHistory(ctx, store, taskHistoryInput{TaskID: id})
@@ -93,6 +97,10 @@ func TestTaskHistoryFilters(t *testing.T) {
 		t.Fatalf("createTask: %v", err)
 	}
 	id, _ := doc["id"].(string)
+	// The cleanup deletes the task WITHOUT writing a log row: only the
+	// transports record mutations, not the store's Delete. That is what
+	// keeps the counts above exact — if Delete ever started recording, a
+	// row would appear here and break them.
 	defer func() { _, _ = store.Delete(ctx, id) }()
 
 	// An op the task never had: the filter must exclude it rather than

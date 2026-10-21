@@ -95,8 +95,9 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		// A programmer error, not a caller error: the transports always
 		// pass both, and a dropped entry is a hole in the log. Logged, the
 		// way the failed write below is — best-effort means the mutation
-		// still succeeds, not that the gap is invisible.
-		log.Printf("tasks: mutation log entry dropped (op=%q task_id=%q)", op, taskID)
+		// still succeeds, not that the gap is invisible. The values are
+		// bounded: a caller passing 10KB of id must not write 10KB of log.
+		log.Printf("tasks: mutation log entry dropped (op=%q task_id=%q)", TruncateBytes(op, 40), TruncateBytes(taskID, 40))
 		return
 	}
 	// Every row in this collection must be one the READ side can find:
@@ -111,19 +112,21 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	// writer that invents an op the log does not know would lose the
 	// entry entirely.
 	if _, err := NormalizeTaskID(taskID); err != nil {
-		log.Printf("tasks: mutation log entry dropped (task_id=%q is not a hex id)", taskID)
+		log.Printf("tasks: mutation log entry dropped (task_id=%q is not a hex id)", TruncateBytes(taskID, 40))
 		return
 	}
 	if err := ValidateOps([]string{op}); err != nil {
-		log.Printf("tasks: mutation log entry dropped (op=%q is not a known op)", op)
+		log.Printf("tasks: mutation log entry dropped (op=%q is not a known op)", TruncateBytes(op, 40))
 		return
 	}
 	entry := bson.M{
 		"op":      op,
 		"task_id": taskID,
-		"source":  TruncateBytes(source, 40),
-		"detail":  TruncateBytes(detail, 300),
-		"at":      primitive.NewDateTimeFromTime(time.Now().UTC()),
+		// Trimmed before it is capped, so the stored label is the label the
+		// caller meant: "  app  " and "app" are one caller, not two.
+		"source": TruncateBytes(strings.TrimSpace(source), 40),
+		"detail": TruncateBytes(detail, 300),
+		"at":     primitive.NewDateTimeFromTime(time.Now().UTC()),
 	}
 	// The audit write must NOT inherit the caller's cancellation.
 	//
