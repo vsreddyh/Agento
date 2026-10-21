@@ -94,7 +94,7 @@ class TaskBulkTest {
         val body = bulkOpsBody(
             listOf(
                 BulkOp("  update  ", "  abc  ", null, JSONObject().put("due_date", JSONObject.NULL)),
-                BulkOp("complete", "def", null, JSONObject().put("due_date", "2026-12-01")),
+                BulkOp("update", "def", null, JSONObject().put("due_date", "2026-12-01")),
             ),
         )
         val ops = body.getJSONArray("ops")
