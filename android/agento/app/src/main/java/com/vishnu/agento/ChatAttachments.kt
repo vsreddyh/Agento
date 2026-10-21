@@ -167,7 +167,12 @@ internal fun requireIoThread(site: String) {
  */
 fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachment> =
     attachments.map { a ->
-        // Single-walk fast path (#339): isDecodableBase64 already rejects
+        // Clean-first ordering, stated (#339): the two pre-scans
+        // short-circuit (first bad char / first non-space), so clean
+        // payloads — everything this app writes — pay one full walk and
+        // zero copies. Strip-first would tax every clean payload with a
+        // ~1.5 M-char copy to spare the rare wrapped shape its short
+        // pre-scans: the wrong tradeoff. Single-walk fast path (#339): isDecodableBase64 already rejects
         // whitespace, so no separate none{isWhitespace} proof walk — clean
         // payloads (everything this app writes) validate allocation-free
         // and return untouched. Giants never reach the strip copy: the

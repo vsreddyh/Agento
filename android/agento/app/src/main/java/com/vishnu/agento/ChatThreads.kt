@@ -196,7 +196,13 @@ object ChatThreads {
      * anyway, so the flag only pays off after a full rewrite cycle while
      * the trust-no-caller boundary goes soft in the meantime.
      * Send-frequency, IO-confined (enforced below): accepted, not
-     * overlooked.
+     * overlooked. Full-file every save, BY DESIGN (#339): dirty-thread-only
+     * tracking would need mutable cross-call state (last-saved refs) at a
+     * boundary that is deliberately stateless — and immutable copies mean
+     * the active thread's ref changes on every streaming update anyway, so
+     * the flag would only ever skip inactive threads while adding an
+     * invalidation risk no test can see. The re-scan is the price of the
+     * trust-no-caller boundary round-77 asked for.
      */
     @androidx.annotation.WorkerThread
     fun save(context: Context, tab: String, threads: List<ChatThread>) {
@@ -291,6 +297,17 @@ object ChatThreads {
             )
         }
 
+    /**
+     * UI memory → storage shape, intentionally RAW (#339): attachments ride
+     * through uncanonicalized — no walks here because this runs on Main
+     * (streaming upserts, fork resends, receiver builds) and alphabet scans
+     * must never run there. The canonicalizing boundary is
+     * save()/load()/export()/import (IO-gated via requireIoThread): a
+     * ragged payload reaching disk heals on the next load, and the wire
+     * filter fails closed meanwhile. Trusts the same canonical-memory
+     * invariant as the field docs; save() re-validates, so the trust is
+     * verified at the boundary, not assumed at every conversion.
+     */
     fun toStored(messages: List<ChatMessage>): List<StoredMessage> =        messages.map {
             StoredMessage(
                 role = it.role,
@@ -310,6 +327,7 @@ object ChatThreads {
                 interruptedBy = it.interruptedBy.storageKey,
             )
         }
+}
 }
 
 /**
