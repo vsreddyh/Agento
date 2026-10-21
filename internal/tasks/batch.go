@@ -2,8 +2,8 @@ package tasks
 
 // Atomic task batches: one bulk run, one transaction (#344).
 //
-// A bulk run (complete, skip, or move a set of selected tasks) maps to one
-// Batch call, which commits fully or not at all. Every op runs through the
+// A bulk run (complete, skip, move, or duplicate a set of selected tasks)
+// maps to one Batch call, which commits fully or not at all. Every op runs through the
 // same CompleteDetail / SkipDetail / Update the single-task paths use, so the
 // batch cannot drift from what one task does alone — the only differences
 // are deliberate and named below:
@@ -155,10 +155,10 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 	}
 	for i, op := range ops {
 		switch op.Op {
-		case "complete", "skip", "update":
+		case "complete", "skip", "update", "duplicate":
 		default:
 			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
-				Err: fail("unknown batch op %q: want complete, skip, or update", op.Op)}
+				Err: fail("unknown batch op %q: want complete, skip, update, or duplicate", op.Op)}
 		}
 		if strings.TrimSpace(op.ID) == "" {
 			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
@@ -192,6 +192,10 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				res.Next, res.Rollover, res.Detail = next, reason, detail
 			case "update":
 				res.Task, err = s.Update(nb, op.ID, op.Fields)
+				res.Rollover = RolloverNone
+			case "duplicate":
+				res.Task, err = s.Duplicate(nb, op.ID)
+				res.Rollover = RolloverNone
 			}
 			if err != nil {
 				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID, Err: err}

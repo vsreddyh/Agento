@@ -117,6 +117,8 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 		case "update":
 			store.RecordMutation(ctx, tasks.OpUpdate, res.ID, source,
 				tasks.ChangedFieldNames(rawBatchFields(ops, res.Index)))
+		case "duplicate":
+			store.RecordMutation(ctx, tasks.OpDuplicate, res.ID, source, "")
 		}
 	}
 	out := make([]bson.M, 0, len(results))

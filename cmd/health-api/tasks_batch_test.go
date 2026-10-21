@@ -52,14 +52,14 @@ func TestParseBatchOpsValid(t *testing.T) {
 
 func TestParseBatchOpsRejectsBadShapes(t *testing.T) {
 	cases := map[string]map[string]any{
-		"missing ops":  {},
-		"null ops":     {"ops": nil},
-		"ops not array": {"ops": "complete"},
-		"item not object": {"ops": []any{"complete"}},
-		"missing op":      {"ops": []any{map[string]any{"id": "abc"}}},
-		"missing id":      {"ops": []any{map[string]any{"op": "complete"}}},
-		"op not string":   {"ops": []any{map[string]any{"op": 3, "id": "abc"}}},
-		"id not string":   {"ops": []any{map[string]any{"op": "complete", "id": 3}}},
+		"missing ops":       {},
+		"null ops":          {"ops": nil},
+		"ops not array":     {"ops": "complete"},
+		"item not object":   {"ops": []any{"complete"}},
+		"missing op":        {"ops": []any{map[string]any{"id": "abc"}}},
+		"missing id":        {"ops": []any{map[string]any{"op": "complete"}}},
+		"op not string":     {"ops": []any{map[string]any{"op": 3, "id": "abc"}}},
+		"id not string":     {"ops": []any{map[string]any{"op": "complete", "id": 3}}},
 		"reason not string": {"ops": []any{map[string]any{"op": "skip", "id": "abc", "reason": 3}}},
 		"fields not object": {"ops": []any{map[string]any{"op": "update", "id": "abc", "fields": "soon"}}},
 	}
