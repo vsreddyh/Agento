@@ -234,17 +234,10 @@ private fun AttachmentThumb(
     // stable across removes — the stable VALUE ignores slot, so photo 1
     // keeps its thumbnail when photo 0 leaves (value equality holds, no
     // re-decode, no flicker) — and distinct across identical picks (no
-    // aliasing). The head/tail sample IS a remember key (#339): a
-    // hand-edited same-id/same-length/head-or-tail-changed payload
-    // recomputes the Triple, so produceState restarts and the cache misses
-    // instead of serving the stale bitmap. Costs one 128-char sample
-    // string per visible thumb per recomposition — no full-string walk,
-    // GC-cheap, and the price of closing the head/tail case rather than
-    // documenting around it. Middle-only mutations still alias (the sample
-    // never sees the middle): accepted, display-only, adversarial-only —
-    // the wire always sends the current bytes, so no send can go wrong.
-    // Pick-time immutability (one UUID per pick, payloads never mutated)
-    // is still what the common path rests on.
+    // aliasing). The value carries the same head/tail sample as the
+    // legacy branch — best-effort: head+tail narrows the alias window
+    // without closing it. Pick-time immutability (one UUID per pick,
+    // payloads never mutated) is what the common path rests on.
     // Legacy payloads (id "") have no UUID, so the legacy value keeps its
     // 128-char-total sample (64+64): same slot + same length + same
     // head/tail CAN still alias (no crash, no placeholder — just the wrong
@@ -256,24 +249,23 @@ private fun AttachmentThumb(
     // pixels from under a late outgoing draw ("trying to use a recycled
     // bitmap") — ~256px thumbnails are GC-cheap, and prompt freeing is
     // not worth a crash.
-    // Remembered, not rebuilt per recomposition — mostly (#339): the
-    // sampleKey(64) call in the key list DOES allocate a 128-char string
-    // on every recomposition per visible thumb (accepted: no full-string
-    // walk, GC-cheap, and the price of closing the head/tail mutation
-    // case). ONE remember slot with the branch inside (#339): a shared key
-    // rebuilds the sample on each remove (indices shift i: 1→0) — accepted,
-    // because the alternative (conditional remember, one slot per branch)
-    // splits the slot by call position, and a future edit migrating an id
-    // in place would unmount/remount instead of re-keying. Value equality
-    // holds either way, so produceState never restarts for a remove.
+    // Remembered, no per-recomposition alloc (#339): the remember keys are
+    // the cheap identity (UUID + slot + length — tens of chars compared),
+    // and the value (with its sample) builds ONLY when the keys change.
+    // A hand-edited same-id/same-length/middle-changed payload never
+    // re-keys — accepted: the sample cannot see the middle, and walking
+    // the full payload on every recomposition to catch it would cost
+    // every scroll for an adversarial-only case. Display-only in any
+    // event: the wire always sends the current bytes, never the cached
+    // picture, so no send can go wrong from a stale thumb. ONE remember
+    // slot with the branch inside (#339): a shared key means remove
+    // (indices shift i: 1→0) recomputes Triples that compare equal —
+    // value equality holds, so produceState never restarts for a remove.
     // Single construction shared with the staged-remove eviction
     // (#339): the produce value and the cache key are built once, here,
     // by thumbCacheKey — the key can never disagree with the value
-    // because there is only one of each. Middle-only mutations still
-    // alias (the sample never sees the middle): accepted, display-only,
-    // adversarial-only — the wire always sends the current payload
-    // bytes, never the cached picture, so no send can go wrong.
-    val thumbKey = remember(stableId, legacySlot, base64.length, base64.sampleKey(64)) {
+    // because there is only one of each.
+    val thumbKey = remember(stableId, legacySlot, base64.length) {
         thumbCacheKey(stableId, legacySlot, base64)
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {

@@ -859,15 +859,18 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // about is exactly base64 blobs nobody reads — the peak
                     // that matters most is the one pretty-printing inflates.
                     val text = SettingsBackup.export(context).toString()
-                    // Re-checked AFTER materializing (#339): the meter above
+                    // Re-metered AFTER materializing (#339): the meter above
                     // judged the floor at meter time, but a concurrent
                     // turn-boundary save can grow thread files between the
                     // meter and this read — a backup that crossed the cap
-                    // mid-build must not be written as if it passed. The
-                    // string already exists (this guards the FILE, not the
-                    // peak), measured exactly in chars × UTF-16 plus the
-                    // same slack — same named error, same remedy.
-                    if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                    // mid-build must not be written as if it passed. Re-read
+                    // the FILES (metadata only, no new copy), not the string:
+                    // text.length × 2 overstates ASCII ~2x (early-but-safe
+                    // refuse) and understates CJK (3B/char UTF-8 > 2B/char
+                    // UTF-16 — the exact OOM the gate exists to prevent).
+                    // Bytes vs bytes, same units as the cap, same named
+                    // error and remedy as above.
+                    if (SettingsBackup.backupFilesBytes(context.filesDir) + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup grew past the safe limit during export. " +
                                 "Delete old photo threads in the thread switcher, then try again.",

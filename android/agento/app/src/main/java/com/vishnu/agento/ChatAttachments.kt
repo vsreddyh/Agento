@@ -159,27 +159,34 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
 
 /**
  * IO-thread gate for the persistence boundary (#339): the load/save/
- * export/import/canonicalizeFile contracts all CLAIM Main-never, and a
- * comment alone never stopped a future Main-thread caller. Two independent
- * tripwires, either of which fires (#339): the Looper identity (exact on
- * device) OR the thread name (the UI thread is always named "main").
- * The name check is load-bearing, not just a JVM-stub fallback: before
- * Looper.prepareMainLooper() runs, myLooper() is null on EVERY thread —
- * including Main — so the Looper comparison alone would pass an early
- * Main-thread call the gate exists to catch. On JVM unit tests the Looper
- * branch throws (stubbed android.jar) and the name branch decides, which
- * keeps the throw pinned without Robolectric (which build.gradle.kts
- * rules out — the suite must gate merges cheaply). Deliberately NOT on
- * canonicalizeAttachments/isDecodableBase64: those are pure per-payload
- * helpers (unit-tested on JVM), and their IO confinement comes from
- * their boundary callers (load/save/export), which are gated.
+ * export/import contracts all CLAIM Main-never, and a comment alone never
+ * stopped a future Main-thread caller. Looper-exact on device
+ * (myLooper() === mainLooper); on JVM unit tests the android.jar stubs
+ * throw, which reads as "no Looper, no Main thread here" and passes —
+ * the suite therefore CANNOT pin the throw path (documented, not hidden:
+ * a device-only Main-thread call is caught on-device, and every caller
+ * today runs inside withContext(Dispatchers.IO) anyway). No thread-name
+ * heuristic: any executor may name a worker "main", which would
+ * false-positive, while the Looper identity already proves Main-ness
+ * where it matters. The pre-prepare window (myLooper() null
+ * everywhere) needs no handling: no app code — and therefore no
+ * boundary call — runs before ActivityThread prepares the main Looper.
+ * Deliberately NOT on metadata-only helpers
+ * (backupFilesBytes stat()s sizes without reading): the gate is for
+ * callers that could block, not for every function that touches the
+ * filesystem. Deliberately NOT on canonicalizeAttachments/isDecodableBase64:
+ * those are pure per-payload helpers (unit-tested on JVM), and their IO
+ * confinement comes from their boundary callers (load/save/export),
+ * which are gated.
  */
 internal fun requireIoThread(site: String) {
-    val mainByLooper = runCatching {
+    // runCatching (not try/catch): the fallback value documents the JVM
+    // case inline, with no unused-exception binding to trip lint.
+    val onMain = runCatching {
         val mainLooper = android.os.Looper.getMainLooper()
         android.os.Looper.myLooper() !== null && android.os.Looper.myLooper() === mainLooper
     }.getOrDefault(false)
-    check(!mainByLooper && Thread.currentThread().name != "main") {
+    check(!onMain) {
         "$site must run on an IO thread, never Main"
     }
 }
@@ -312,13 +319,10 @@ fun wireSizeExceeded(bytes: Long): Boolean = bytes < 0 || bytes > MAX_CHAT_WIRE_
 
 /**
  * Per-photo oversize message for one attachment, or null when within the
- * cap (#339): shared by the [dataUri] wall (which throws it) and the
- * streamChat pre-check (which emits it as a ChatEvent.Error WITHOUT
- * throwing — a throw inside the payload-build block would escape the
- * callbackFlow producer with no Error path and wedge the turn). One
- * spelling, one cap, two delivery paths — they can never disagree.
- * Two-tier like the thumbnail gate: at/below-cap raws skip the precise
- * measure; only over-length raws pay the full walk.
+ * cap (#339): the wording [dataUri] throws and the stage path reports.
+ * One spelling, one cap — callers never reword it. Two-tier like the
+ * thumbnail gate: at/below-cap raws skip the precise measure; only
+ * over-length raws pay the full walk.
  */
 internal fun ChatAttachment.oversizeMessage(): String? {
     if (base64.length <= MAX_IMAGE_BASE64_CHARS) return null
@@ -328,9 +332,9 @@ internal fun ChatAttachment.oversizeMessage(): String? {
 }
 
 /**
- * Shared per-photo oversize wording (#339): the stage failure, the
- * dataUri wall, and the streamChat pre-check all say exactly this — the
- * next reword fixes all three paths instead of two. Takes the raw
+ * Shared per-photo oversize wording (#339): the stage failure and the
+ * dataUri wall say exactly this — the next reword fixes both paths instead
+ * of one. Takes the raw
  * payload, not the attachment: the stage path measures candidates that
  * never become attachments.
  */
@@ -364,17 +368,6 @@ internal fun messageMatchesQuery(
     return photoCount > 0 &&
         contentWithMarker(content, photoCount).contains(query, ignoreCase = true)
 }
-
-/** Unchecked twin of [dataUri], for the wire loop ONLY (#339):
- * [messageContentJson] just proved this exact payload blank-free,
- * decodable, AND under the per-photo cap (the filter asserts the first
- * two; streamChat's pre-check throws the named error on oversize BEFORE
- * building) — re-walking the alphabet + measuring again would prove the
- * identical facts a second time per photo per send. Direct callers MUST
- * use [dataUri]: its walls live there, and this twin deliberately has
- * none. If the multipart loop ever stops going through the pre-checked
- * path, switch it back to dataUri() instead of widening this. */
-internal fun ChatAttachment.dataUriUnchecked(): String = "data:image/jpeg;base64,$base64"
 
 /** Wire form of one attachment: the `image_url` data URI the gateway's
  * multipart parser accepts (`internal/gateway/openai.go`). Remote URLs are
@@ -411,12 +404,9 @@ fun ChatAttachment.dataUri(): String {
     // conversation preflight fails it; with it the send fails with the SAME
     // named per-photo message as the stage path. Unreachable via the app
     // (staged payloads are capped at pick time) — storage-injected
-    // oversize only. Shared spelling via oversizeMessage() (#339): the
-    // streamChat pre-check emits the same words as a ChatEvent.Error
-    // WITHOUT throwing (a throw inside the payload-build block escapes the
-    // callbackFlow with no Error path and wedges the turn); this wall
-    // throws it for direct callers. Same cap, same message, two delivery
-    // paths — they can never disagree.
+    // oversize only. Thrown (not returned) by design: streamChat maps it
+    // to a ChatEvent.Error at the build site, so the throw always has a
+    // delivery path and can never wedge a turn again.
     oversizeMessage()?.let { throw NamedAttachError(it) }
     return "data:image/jpeg;base64,$base64"
 }
@@ -583,14 +573,17 @@ fun messageContentJson(
     // the alphabet scan lives at the wire, never in the hot-path
     // isWired() predicate. Single pass: blank-check then validity per
     // attachment, not a wiredPhotos() list followed by a second walk.
-    // Parts use dataUriUnchecked, not dataUri (#339): the filter above
-    // proved blank+decodable and streamChat's pre-check already threw the
-    // named oversize error upstream — re-walking the alphabet + measure
-    // per part would prove the identical facts a third time per photo per
-    // send. The walls stay in dataUri() for every direct caller; the
-    // unchecked twin is wired to this exact call site by KDoc. Send
-    // frequency on the send path (never scroll/search), so the remaining
-    // two walks are a send tax, not a scroll tax.
+    // dataUri() re-validates per part (#339): the filter walk plus the
+    // dataUri decodability + cap walls is 2–3 full walks per photo per
+    // send — accepted, not deduplicated. The alternative (an unchecked
+    // twin, or passing the validated size through) would save a walk but
+    // move enforcement out of the builder: any direct messageContentJson
+    // caller (or a future one that skips streamChat's pre-check) would
+    // wire oversize with no wall. Enforcement lives in the lowest common
+    // function every path funnels through — never in the caller, no
+    // matter how hot the path feels. Send-frequency on the send path
+    // (never scroll/search), so the walks are a send tax, not a scroll
+    // tax.
     val images = attachments.filter { it.isWired() && isDecodableBase64(it.base64) }
     if (images.isEmpty()) {
         // Marker when text survives, bare when nothing does (#339): a
@@ -611,14 +604,13 @@ fun messageContentJson(
         arr.put(JSONObject().put("type", "text").put("text", content))
     }
     for (a in images) {
-        // Unchecked by construction (#339): images passed the wired +
-        // decodable filter above AND streamChat's oversize pre-check, so
-        // re-validating per part would walk each payload a third time.
-        // dataUri() keeps its walls for every other (direct) caller.
+        // Validated by construction above (#339): the filter proved wired +
+        // decodable, and the per-photo cap wall lives inside dataUri() —
+        // the single choke point every wire path funnels through.
         arr.put(
             JSONObject()
                 .put("type", "image_url")
-                .put("image_url", JSONObject().put("url", a.dataUriUnchecked())),
+                .put("url", JSONObject().put("url", a.dataUri()))
         )
     }
     return WireContent.Multipart(arr)

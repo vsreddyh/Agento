@@ -374,30 +374,28 @@ class ChatAttachmentsTest {
 
     @Test
     fun requireIoThreadPassesOffMain() {
-        // Suite runs on a worker thread (never named "main"), so the
-        // boundary gate must pass here — this is the JVM half of the
-        // Looper-first/name-disjunct contract (#339): the name tripwire
-        // is load-bearing, not just a stub fallback — it also closes the
-        // pre-prepare hole where myLooper() is null everywhere. If a
-        // future runner DID name test threads "main", this test would
-        // throw — loudly failing, never silently voiding the gate. The
-        // on-device Looper tripwire is runner-independent.
+        // Suite runs on a worker thread, so the boundary gate must pass
+        // here — this is the JVM half of the contract (#339): the stubs
+        // throw, which reads as "no Looper, no Main thread". The throw
+        // path itself is untestable without Robolectric (deliberately
+        // declined in build.gradle.kts) — documented on the function, not
+        // papered over with a thread-name heuristic that would
+        // false-positive on any executor with a "main"-named worker.
         requireIoThread("test")
     }
 
     @Test
-    fun requireIoThreadRejectsMainNamedThread() {
-        // The throw path, pinned without Robolectric (#339): a thread
-        // named "main" trips the name tripwire exactly like the UI thread
-        // trips the Looper branch on device — and like a pre-prepare Main
-        // thread with no Looper anywhere yet.
+    fun requireIoThreadIgnoresCallerThreadName() {
+        // No thread-name heuristic (#339): even on a thread NAMED "main",
+        // the JVM stub path passes — names prove nothing, only the Looper
+        // identity gates, and on JVM there is no Looper at all.
         var thrown: Throwable? = null
         val t = Thread({
             thrown = runCatching { requireIoThread("test") }.exceptionOrNull()
         }, "main")
         t.start()
         t.join()
-        assertTrue(thrown is IllegalStateException)
+        assertTrue(thrown == null)
     }
 
     @Test

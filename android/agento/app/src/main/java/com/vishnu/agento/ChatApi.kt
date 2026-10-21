@@ -591,29 +591,18 @@ class ChatApi(context: Context) {
         // stay in producer context below (trySend/close live there).
         // lastUserIdx hoisted here: cheap role scan, read on both sides.
         val lastUserIdx = messages.indexOfLast { it.role == "user" }
-        // Per-photo oversize pre-check, BEFORE building (#339): the dataUri
-        // wall throws NamedAttachError on storage-injected oversize, and a
-        // throw inside the withContext build below escapes this
-        // callbackFlow producer with no ChatEvent.Error path — collect
-        // throws, the job fails, and the turn wedges (streaming, no banner,
-        // no retry). Emitting the SAME named message up front (shared
-        // spelling via oversizeMessage, never thrown here) gives it a
-        // delivery path; dataUri's wall stays as defense-in-depth. Cheap:
-        // only the trailing turn's wired+decodable attachments are
-        // measured, and at/below-cap raws skip the precise measure.
-        if (lastUserIdx >= 0) {
-            val overMsg = messages[lastUserIdx].attachments
-                .wiredPhotos()
-                .firstNotNullOfOrNull { a ->
-                    a.takeIf { isDecodableBase64(it.base64) }?.oversizeMessage()
-                }
-            if (overMsg != null) {
-                trySend(ChatEvent.Error(overMsg))
-                close()
-                return@callbackFlow
-            }
-        }
-        val (body, rawBytes) = withContext(Dispatchers.IO) {
+        // Named walls throw inside the build below (#339): dataUri()
+        // fails closed on blank/ragged/oversize, and an uncaught throw
+        // would escape this callbackFlow producer with no ChatEvent.Error
+        // path — collect throws, the job fails, and the turn wedges
+        // (streaming, no banner, no retry). Catch ONLY the named family:
+        // anything else (including CancellationException) must propagate,
+        // or cancels and real bugs get misreported as attach problems.
+        // Unreachable via staged UI (stage-time caps hold); hand-edited
+        // threads only — but every wire path funnels through dataUri(),
+        // so no caller can bypass the wall, pre-checked or not.
+        val (body, rawBytes) = try {
+            withContext(Dispatchers.IO) {
             val payload = JSONObject()
             // An explicit provider/model is always sent; blanks are omitted
             // (legacy configs predate required selection).
@@ -667,6 +656,11 @@ class ChatApi(context: Context) {
             val raw = payload.toString()
             val built = raw.toRequestBody(JSON)
             built to built.contentLength()
+            }
+        } catch (e: NamedAttachError) {
+            trySend(ChatEvent.Error(e.message ?: "Couldn't build that message."))
+            close()
+            return@callbackFlow
         }
         if (wireSizeExceeded(rawBytes)) {
             // Phrased for what's actually measured (#339): rawBytes is the
