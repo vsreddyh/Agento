@@ -2,6 +2,7 @@ package com.vishnu.agento
 
 import android.content.Context
 import androidx.core.content.edit
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
 /** Hard cap on the backup peak, bytes: past ~25 MB of heap peak the
