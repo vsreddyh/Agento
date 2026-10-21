@@ -141,6 +141,13 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		// AND the order in one pass, so a per-task history does not sort a
 		// collection that only grows.
 		{Keys: bson.D{{Key: "task_id", Value: 1}, {Key: "at", Value: -1}}, Options: options.Index().SetName("task_id_at")},
+		// The whole log, newest first, in the log's own order: {at, _id}.
+		// The `at_1` index above serves the retention prune and can be
+		// scanned backwards for `at` alone, but it does not carry the `_id`
+		// tiebreak the read sorts on — so without this one the whole-log
+		// read sorts every matching row in memory, on a collection that
+		// only grows. `_id` is a legal field in a compound index.
+		{Keys: bson.D{{Key: "at", Value: -1}, {Key: "_id", Value: -1}}, Options: options.Index().SetName("at_id")},
 	})
 	return err
 }

@@ -128,8 +128,14 @@ func TestTaskMutationsResponseShape(t *testing.T) {
 	tasksStoreMu.Unlock()
 	t.Cleanup(func() {
 		tasksStoreMu.Lock()
-		tasksCache = nil
-		tasksStoreMu.Unlock()
+		defer tasksStoreMu.Unlock()
+		// The cached store is process-lifetime in the server — one client
+		// for the life of the process. In a test process that would be a
+		// leaked client per run, so it is closed as the cache is emptied.
+		if tasksCache != nil {
+			_ = tasksCache.Close(context.Background())
+			tasksCache = nil
+		}
 	})
 
 	// A fresh id per run: this database is not dropped between runs, so a
@@ -185,10 +191,12 @@ func TestTaskMutationsResponseShape(t *testing.T) {
 	if first.Detail != "http POST /api/tasks" {
 		t.Errorf("detail = %q, want the create detail", first.Detail)
 	}
-	// The timestamp must be RFC3339: the app parses it, and a bare date or
-	// an epoch number would be a different contract.
-	if _, err := time.Parse(time.RFC3339, first.At); err != nil {
-		t.Errorf("at = %q, want RFC3339: %v", first.At, err)
+	// The timestamp must be RFC3339Nano: the app parses it, and the
+	// filter it feeds accepts that shape. RFC3339Nano is the layout the
+	// `since` filter uses, so the two agree on the format by construction
+	// rather than by luck.
+	if _, err := time.Parse(time.RFC3339Nano, first.At); err != nil {
+		t.Errorf("at = %q, want RFC3339Nano: %v", first.At, err)
 	}
 	// The older entry is still there, with its own source — the two writers
 	// are distinguishable, which is the point of the field.

@@ -124,14 +124,20 @@ func ParseSince(s string) (time.Time, error) {
 	return t, nil
 }
 
-// NormalizeTaskID validates a task id and returns it trimmed.
+// NormalizeTaskID validates a task id and returns it normalized.
 //
-// The log stores the task's hex id, so a malformed one can only ever match
-// nothing — and an empty history reads like "this task was never touched",
-// which is the wrong answer to a typo. Both transports validate through
-// here, so the agent and the app are told the same thing.
+// The log stores the task's hex id, and Mongo writes those LOWERCASE, so a
+// caller sending the same id in upper case must be answered with the same
+// history — not with an empty one. The id is therefore lowercased here, not
+// merely checked: `ObjectIDFromHex` accepts upper case, so a check alone
+// would pass an id that can never match a stored row.
+//
+// A malformed id is refused outright: it could only ever match nothing, and
+// an empty history reads like "this task was never touched" — the wrong
+// answer to a typo. Both transports validate through here, so the agent and
+// the app are told the same thing.
 func NormalizeTaskID(id string) (string, error) {
-	id = strings.TrimSpace(id)
+	id = strings.ToLower(strings.TrimSpace(id))
 	if id == "" {
 		return "", nil
 	}
@@ -152,9 +158,17 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	if err := ValidateOps(f.Ops); err != nil {
 		return nil, false, err
 	}
+	// The id is normalized here too, not only in the transports: the store
+	// is the seam, and a caller that reached it directly must not be able to
+	// ask about "not-an-id" or about an id in the wrong case and get an
+	// empty history that reads like "never touched".
+	taskID, err := NormalizeTaskID(f.TaskID)
+	if err != nil {
+		return nil, false, err
+	}
 	filt := bson.M{}
-	if f.TaskID != "" {
-		filt["task_id"] = f.TaskID
+	if taskID != "" {
+		filt["task_id"] = taskID
 	}
 	if len(f.Ops) > 0 {
 		filt["op"] = bson.M{"$in": f.Ops}

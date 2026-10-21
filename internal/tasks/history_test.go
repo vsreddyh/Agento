@@ -130,6 +130,45 @@ func TestNormalizeTaskID(t *testing.T) {
 	}
 }
 
+// The stored ids are lowercase, so an id in upper case is the SAME task and
+// must answer with the same history. A check that only validated the shape
+// would pass the id and then match nothing — the empty history that reads
+// like "never touched", which is the whole reason the id is checked.
+func TestNormalizeTaskIDLowercases(t *testing.T) {
+	id, err := NormalizeTaskID("0123456789ABCDEF01234567")
+	if err != nil {
+		t.Fatalf("NormalizeTaskID: %v", err)
+	}
+	if id != "0123456789abcdef01234567" {
+		t.Errorf("id = %q, want it lowercased", id)
+	}
+}
+
+// The store is the seam: a caller that reaches it directly must not be able
+// to ask about a malformed id and get an empty history back.
+func TestListMutationsRejectsMalformedTaskIDWithoutTouchingMongo(t *testing.T) {
+	var s Store
+	_, _, err := s.ListMutations(context.Background(), MutationFilter{TaskID: "not-an-id"})
+	if err == nil {
+		t.Fatal("a malformed task id must be rejected")
+	}
+}
+
+// And the case: the same task, asked for in upper case, is the same history.
+func TestListMutationsMatchesTheIDInAnyCase(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	s.RecordMutation(ctx, OpCreate, "0123456789abcdef01234567", "mcp", "")
+
+	rows, _, err := s.ListMutations(ctx, MutationFilter{TaskID: "0123456789ABCDEF01234567"})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1 — the same id in upper case is the same task", len(rows))
+	}
+}
+
 // Validation is a pure rule, so it is testable without a database — and the
 // store applies it BEFORE touching MongoDB, which is why a zero-value Store
 // is enough to prove it.
@@ -144,9 +183,9 @@ func TestListMutationsRejectsUnknownOpWithoutTouchingMongo(t *testing.T) {
 func TestListMutationsReturnsNewestFirst(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "mcp create_task")
-	s.RecordMutation(ctx, OpUpdate, "task-a", "http", "name")
-	s.RecordMutation(ctx, OpComplete, "task-a", "mcp", "none")
+	s.RecordMutation(ctx, OpCreate, "aaaaaaaaaaaaaaaaaaaaaaaa", "mcp", "mcp create_task")
+	s.RecordMutation(ctx, OpUpdate, "aaaaaaaaaaaaaaaaaaaaaaaa", "http", "name")
+	s.RecordMutation(ctx, OpComplete, "aaaaaaaaaaaaaaaaaaaaaaaa", "mcp", "none")
 
 	rows, truncated, err := s.ListMutations(ctx, MutationFilter{})
 	if err != nil {
@@ -167,8 +206,8 @@ func TestListMutationsReturnsNewestFirst(t *testing.T) {
 	}
 	// Every entry carries the four facts the log exists for: what, which
 	// task, who, when.
-	if rows[0].TaskID != "task-a" {
-		t.Errorf("task_id = %q, want task-a", rows[0].TaskID)
+	if rows[0].TaskID != "aaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Errorf("task_id = %q, want the task it describes", rows[0].TaskID)
 	}
 	if rows[0].Source != "mcp" {
 		t.Errorf("source = %q, want mcp", rows[0].Source)
@@ -181,20 +220,20 @@ func TestListMutationsReturnsNewestFirst(t *testing.T) {
 func TestListMutationsFiltersByTaskAndOp(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
-	s.RecordMutation(ctx, OpUpdate, "task-a", "http", "name")
-	s.RecordMutation(ctx, OpCreate, "task-b", "mcp", "")
+	s.RecordMutation(ctx, OpCreate, "aaaaaaaaaaaaaaaaaaaaaaaa", "mcp", "")
+	s.RecordMutation(ctx, OpUpdate, "aaaaaaaaaaaaaaaaaaaaaaaa", "http", "name")
+	s.RecordMutation(ctx, OpCreate, "bbbbbbbbbbbbbbbbbbbbbbbb", "mcp", "")
 
-	rows, _, err := s.ListMutations(ctx, MutationFilter{TaskID: "task-a"})
+	rows, _, err := s.ListMutations(ctx, MutationFilter{TaskID: "aaaaaaaaaaaaaaaaaaaaaaaa"})
 	if err != nil {
 		t.Fatalf("ListMutations: %v", err)
 	}
 	if len(rows) != 2 {
-		t.Fatalf("task-a rows = %d, want 2", len(rows))
+		t.Fatalf("one task's rows = %d, want 2", len(rows))
 	}
 	for _, r := range rows {
-		if r.TaskID != "task-a" {
-			t.Errorf("row for %q leaked into the task-a filter", r.TaskID)
+		if r.TaskID != "aaaaaaaaaaaaaaaaaaaaaaaa" {
+			t.Errorf("row for %q leaked into the filter", r.TaskID)
 		}
 	}
 
@@ -206,12 +245,12 @@ func TestListMutationsFiltersByTaskAndOp(t *testing.T) {
 		t.Fatalf("create rows = %d, want 2", len(rows))
 	}
 
-	rows, _, err = s.ListMutations(ctx, MutationFilter{TaskID: "task-a", Ops: []string{OpCreate}})
+	rows, _, err = s.ListMutations(ctx, MutationFilter{TaskID: "aaaaaaaaaaaaaaaaaaaaaaaa", Ops: []string{OpCreate}})
 	if err != nil {
 		t.Fatalf("ListMutations: %v", err)
 	}
 	if len(rows) != 1 {
-		t.Fatalf("task-a create rows = %d, want 1", len(rows))
+		t.Fatalf("one task's create rows = %d, want 1", len(rows))
 	}
 }
 
@@ -221,13 +260,13 @@ func TestListMutationsFiltersByTaskAndOp(t *testing.T) {
 func TestListMutationsSinceIsInclusive(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
+	s.RecordMutation(ctx, OpCreate, "aaaaaaaaaaaaaaaaaaaaaaaa", "mcp", "")
 	// The two writes must land in DIFFERENT milliseconds: `at` is stored at
 	// millisecond precision, and two entries sharing one timestamp would
 	// make the lower bound below match both — the test would then measure
 	// the clock, not the contract.
 	time.Sleep(2 * time.Millisecond)
-	s.RecordMutation(ctx, OpUpdate, "task-a", "mcp", "name")
+	s.RecordMutation(ctx, OpUpdate, "aaaaaaaaaaaaaaaaaaaaaaaa", "mcp", "name")
 
 	all, _, err := s.ListMutations(ctx, MutationFilter{})
 	if err != nil {
@@ -261,7 +300,7 @@ func TestListMutationsReportsTruncation(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
+		s.RecordMutation(ctx, OpCreate, "aaaaaaaaaaaaaaaaaaaaaaaa", "mcp", "")
 	}
 
 	rows, truncated, err := s.ListMutations(ctx, MutationFilter{Limit: 2})
@@ -294,7 +333,7 @@ func TestListMutationsClampsTheLimit(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
+		s.RecordMutation(ctx, OpCreate, "aaaaaaaaaaaaaaaaaaaaaaaa", "mcp", "")
 	}
 	rows, _, err := s.ListMutations(ctx, MutationFilter{Limit: MaxLimit + 1000})
 	if err != nil {
@@ -346,7 +385,7 @@ func TestListMutationsSurvivesTheTaskItDescribes(t *testing.T) {
 func TestListMutationsTimestampsAreUTC(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
+	s.RecordMutation(ctx, OpCreate, "aaaaaaaaaaaaaaaaaaaaaaaa", "mcp", "")
 	rows, _, err := s.ListMutations(ctx, MutationFilter{})
 	if err != nil {
 		t.Fatalf("ListMutations: %v", err)
