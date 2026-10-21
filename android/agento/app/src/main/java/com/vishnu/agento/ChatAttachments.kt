@@ -365,6 +365,17 @@ internal fun messageMatchesQuery(
         contentWithMarker(content, photoCount).contains(query, ignoreCase = true)
 }
 
+/** Unchecked twin of [dataUri], for the wire loop ONLY (#339):
+ * [messageContentJson] just proved this exact payload blank-free,
+ * decodable, AND under the per-photo cap (the filter asserts the first
+ * two; streamChat's pre-check throws the named error on oversize BEFORE
+ * building) — re-walking the alphabet + measuring again would prove the
+ * identical facts a second time per photo per send. Direct callers MUST
+ * use [dataUri]: its walls live there, and this twin deliberately has
+ * none. If the multipart loop ever stops going through the pre-checked
+ * path, switch it back to dataUri() instead of widening this. */
+internal fun ChatAttachment.dataUriUnchecked(): String = "data:image/jpeg;base64,$base64"
+
 /** Wire form of one attachment: the `image_url` data URI the gateway's
  * multipart parser accepts (`internal/gateway/openai.go`). Remote URLs are
  * never produced — the gateway refuses to fetch them. The type is PINNED,
@@ -572,15 +583,14 @@ fun messageContentJson(
     // the alphabet scan lives at the wire, never in the hot-path
     // isWired() predicate. Single pass: blank-check then validity per
     // attachment, not a wiredPhotos() list followed by a second walk.
-    // Then dataUri() re-validates per part (#339): the filter walk plus
-    // the dataUri decodability walk plus its cap-measure gate is 2–3 full
-    // walks per photo per send — accepted, not deduplicated. A
-    // dataUriUnchecked twin (or passing the validated size through) would
-    // save a walk, but the dataUri walls ARE the storage-injected-oversize
-    // enforcement (round-80: same named per-photo error as stage time) —
-    // bypassing them for the normal path re-opens exactly the hole they
-    // closed. Send-frequency on the send path (never scroll/search), so
-    // the walks are a send tax, not a scroll tax.
+    // Parts use dataUriUnchecked, not dataUri (#339): the filter above
+    // proved blank+decodable and streamChat's pre-check already threw the
+    // named oversize error upstream — re-walking the alphabet + measure
+    // per part would prove the identical facts a third time per photo per
+    // send. The walls stay in dataUri() for every direct caller; the
+    // unchecked twin is wired to this exact call site by KDoc. Send
+    // frequency on the send path (never scroll/search), so the remaining
+    // two walks are a send tax, not a scroll tax.
     val images = attachments.filter { it.isWired() && isDecodableBase64(it.base64) }
     if (images.isEmpty()) {
         // Marker when text survives, bare when nothing does (#339): a
@@ -601,10 +611,14 @@ fun messageContentJson(
         arr.put(JSONObject().put("type", "text").put("text", content))
     }
     for (a in images) {
+        // Unchecked by construction (#339): images passed the wired +
+        // decodable filter above AND streamChat's oversize pre-check, so
+        // re-validating per part would walk each payload a third time.
+        // dataUri() keeps its walls for every other (direct) caller.
         arr.put(
             JSONObject()
                 .put("type", "image_url")
-                .put("image_url", JSONObject().put("url", a.dataUri())),
+                .put("image_url", JSONObject().put("url", a.dataUriUnchecked())),
         )
     }
     return WireContent.Multipart(arr)

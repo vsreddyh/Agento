@@ -53,7 +53,12 @@ private val titleWhitespace = Regex("\\s+")
  * stateful and not thread-safe, and constructing one per title render
  * (plus per switcher-search filter pass over 200-msg threads) is churn.
  * ROOT locale pins deterministic cluster rules across locales (Thai/Lao
- * boundaries are locale-sensitive). */
+ * boundaries are locale-sensitive). Intentionally sticky for the pool's
+ * lifetime (#339): the walker itself is a few hundred bytes with no text
+ * attached (the input string is released via setText("") after each use),
+ * so there is nothing to trim — remove() would only force a re-
+ * allocation on the next title. Pooling is the point; stickiness is the
+ * mechanism, not a leak. */
 private val titleBreaks: ThreadLocal<java.text.BreakIterator> =
     ThreadLocal.withInitial {
         java.text.BreakIterator.getCharacterInstance(java.util.Locale.ROOT)

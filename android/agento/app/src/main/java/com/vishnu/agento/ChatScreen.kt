@@ -234,13 +234,15 @@ private fun AttachmentThumb(
     // stable across removes — the stable VALUE ignores slot, so photo 1
     // keeps its thumbnail when photo 0 leaves (value equality holds, no
     // re-decode, no flicker) — and distinct across identical picks (no
-    // aliasing). The stable value carries the SAME head/tail sample as
-    // the legacy branch (#339): a hand-edited same-length/middle-changed
-    // payload keeps its id (load() blanks only the undecodable), and
-    // without the sample the cache would serve the stale thumbnail while
-    // the wire sends the new bytes. Best-effort — head+tail narrows, never
-    // closes, the window — but built inside the remember below (no
-    // per-recomposition alloc) while the decode it guards stays on IO.
+    // aliasing). The head/tail sample IS a remember key (#339): a
+    // hand-edited same-id/same-length/head-or-tail-changed payload
+    // recomputes the Triple, so produceState restarts and the cache misses
+    // instead of serving the stale bitmap. Costs one 128-char sample
+    // string per visible thumb per recomposition — no full-string walk,
+    // GC-cheap, and the price of closing the head/tail case rather than
+    // documenting around it. Middle-only mutations still alias (the sample
+    // never sees the middle): accepted, display-only, adversarial-only —
+    // the wire always sends the current bytes, so no send can go wrong.
     // Pick-time immutability (one UUID per pick, payloads never mutated)
     // is still what the common path rests on.
     // Legacy payloads (id "") have no UUID, so the legacy value keeps its
@@ -254,30 +256,24 @@ private fun AttachmentThumb(
     // pixels from under a late outgoing draw ("trying to use a recycled
     // bitmap") — ~256px thumbnails are GC-cheap, and prompt freeing is
     // not worth a crash.
-    // Remembered, not rebuilt per recomposition (#339): the legacy sample
-    // string otherwise allocates fresh on every scroll frame per visible
-    // thumb. ONE remember slot with the branch inside (#339): a shared key
-    // rebuilds the legacy branch's sample on each remove (indices shift
-    // i: 1→0) — accepted, because the alternative (conditional remember,
-    // one slot per branch) splits the slot by call position, and a future
-    // edit migrating an id in place would unmount/remount instead of
-    // re-keying. The stable rebuild costs one 128-char sample string per
-    // surviving thumb on a remove (a rare user action); the legacy rebuild
-    // rides the same event on self-aging payloads. Value equality holds
-    // either way, so produceState never restarts for a remove.
+    // Remembered, not rebuilt per recomposition — mostly (#339): the
+    // sampleKey(64) call in the key list DOES allocate a 128-char string
+    // on every recomposition per visible thumb (accepted: no full-string
+    // walk, GC-cheap, and the price of closing the head/tail mutation
+    // case). ONE remember slot with the branch inside (#339): a shared key
+    // rebuilds the sample on each remove (indices shift i: 1→0) — accepted,
+    // because the alternative (conditional remember, one slot per branch)
+    // splits the slot by call position, and a future edit migrating an id
+    // in place would unmount/remount instead of re-keying. Value equality
+    // holds either way, so produceState never restarts for a remove.
     // Single construction shared with the staged-remove eviction
     // (#339): the produce value and the cache key are built once, here,
     // by thumbCacheKey — the key can never disagree with the value
-    // because there is only one of each. Accepted staleness, stated: a
-    // hand-edited same-id/same-length/middle-changed payload never
-    // recomputes this Triple, so produceState keeps the old key and the
-    // cache may serve a stale thumbnail. Display-only and adversarial-only
-    // (impossible via the app — picks are immutable): the wire always
-    // sends the current payload bytes, never the cached picture, so no
-    // send can go wrong from a stale thumb. Best-effort like the legacy
-    // branch otherwise: head+tail narrows the alias window without
-    // closing it.
-    val thumbKey = remember(stableId, legacySlot, base64.length) {
+    // because there is only one of each. Middle-only mutations still
+    // alias (the sample never sees the middle): accepted, display-only,
+    // adversarial-only — the wire always sends the current payload
+    // bytes, never the cached picture, so no send can go wrong.
+    val thumbKey = remember(stableId, legacySlot, base64.length, base64.sampleKey(64)) {
         thumbCacheKey(stableId, legacySlot, base64)
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
@@ -1248,7 +1244,7 @@ internal fun ChatTab(
             // means LRU handles it. Staged index i IS the legacy slot at tap
             // time (state snapshot, same as the thumb rendered).
             state.pendingAttachments.getOrNull(i)?.let { a ->
-                thumbCache.remove(thumbCacheKey(a.stableId, i, a.base64))
+                thumbCache.remove(thumbCacheKey(a.id, i, a.base64))
             }
             // Staging may empty here (#339): reset the slate when it does
             // so the next episode voices anew (see onLiveStagedPhotos).

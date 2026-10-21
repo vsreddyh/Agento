@@ -152,12 +152,19 @@ object SettingsBackup {
      * Metered footprint of everything [export] would read (#339): file
      * lengths only, no reads — so the caller can warn BEFORE the
      * materialization peak instead of after it. The export string runs
-     * ~2x the bytes as UTF-16, so this is a floor, not a ceiling.
+     * ~2x bytes as UTF-16, so this is a floor, not a ceiling. IO-gated
+     * like every other boundary helper: File.length() is a metadata
+     * stat, but the gate is about the CALLER (a future direct call from
+     * composition must fail fast, not silently stat on Main) — the
+     * rule is uniform so no call site has to reason about which file op
+     * is "cheap enough".
      */
-    internal fun backupFilesBytes(dir: java.io.File): Long =
-        backupFiles().sumOf { name ->
+    internal fun backupFilesBytes(dir: java.io.File): Long {
+        requireIoThread("SettingsBackup.backupFilesBytes")
+        return backupFiles().sumOf { name ->
             java.io.File(dir, name).takeIf { it.exists() }?.length() ?: 0L
         }
+    }
     /**
      * Full-settings export (prefs + thread files) as one JSONObject.
      * IO-REQUIRED (see requireIoThread, enforced below — not just this
