@@ -19,6 +19,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -119,6 +120,10 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
  * settle it, so the double-launch gate must not stick forever. Ten minutes
  * bounds a stuck gate far above any real camera session. MONOTONIC domain. */
 private const val CAMERA_PENDING_STALE_MS = 10 * 60 * 1000L
+/** The gallery picker's own stale window (#339): a picker session is long
+ * (browsing photos, taking a call), so the camera's 10 minutes would
+ * expire while it is still open. */
+private const val GALLERY_PENDING_STALE_MS = 60 * 60 * 1000L
 
 /** Sweep age-out for non-keep camera orphans: same duration, WALL domain —
  * file mtimes are wall-clock, so compare against currentTimeMillis(). A
@@ -258,12 +263,15 @@ private fun AttachmentThumb(
     // composition janks low-end scroll, so produceState moves it to IO. No
     // manual recycle: it can pull pixels from under a late outgoing draw.
     // Remembered, no per-recomposition alloc: the remember keys are the cheap
-    // identity (UUID + slot + length) and the value builds ONLY when they
-    // change. A hand-edited same-id/same-length payload never re-keys —
-    // accepted: display-only anyway (the wire always sends the current
-    // bytes). ONE remember slot with the branch inside, so a remove
-    // (indices shift 1→0) never restarts produceState.
-    val thumbKey = remember(stableId, legacySlot, base64.length, threadKey) {
+    // identity (UUID + slot + length + the content sample) and the value
+    // builds ONLY when they change. The sample is a KEY too, not just part
+    // of the cache key (#339): without it, a same-id/same-length payload
+    // swap keeps the old key and serves the stale bitmap. A hand-edited
+    // same-id/same-length payload never re-keys — accepted: display-only
+    // anyway (the wire always sends the current bytes). ONE remember slot
+    // with the branch inside, so a remove (indices shift 1→0) never
+    // restarts produceState.
+    val thumbKey = remember(stableId, legacySlot, base64.length, base64.sampleKey(64), threadKey) {
         thumbCacheKey(stableId, legacySlot, base64, threadKey)
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
@@ -452,11 +460,14 @@ internal fun ChatTab(
     }
 
     /** True while a gallery picker is outstanding (#339): a second tap
-     * would open a second picker and the two results would interleave. */
+     * would open a second picker and the two results would interleave. Its
+     * own bound: a picker session is long (browsing, a call), so the
+     * camera's 10-minute window would expire while the picker is still
+     * open. */
     fun isGalleryPending(): Boolean {
         if (galleryPendingSince == 0L) return false
         val age = SystemClock.elapsedRealtime() - galleryPendingSince
-        return age >= 0 && age < CAMERA_PENDING_STALE_MS
+        return age >= 0 && age < GALLERY_PENDING_STALE_MS
     }
     // Startup sweep: a process kill between the TakePicture write and the
     // decode leaves a capture with no owner — per-batch finally covers
@@ -530,7 +541,11 @@ internal fun ChatTab(
     fun deleteQuietly(f: File?) {
         if (f == null) return
         processCleanupScope.launch {
+            // Logged, not swallowed (#339): a failed delete (a lock, a full
+            // disk) leaves the file behind until the startup sweep, and
+            // without a line in logcat the orphan has no explanation.
             runCatching { f.takeIf { it.exists() }?.delete() }
+                .onFailure { Log.w("ChatAttachments", "cleanup delete failed: ${f.name}", it) }
         }
     }
     fun processUris(

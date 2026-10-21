@@ -366,7 +366,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         val take = wired.take(room)
         val dropped = wired.size - take.size
-        // Stored canonical-filtered: only wired photos occupy slots.
+        // Stored canonical-filtered: only wired photos occupy slots — the
+        // same rule the history store uses (photos.wiredPhotos()). A blank
+        // in the staged set is therefore dropped silently; the stage path
+        // never produces one (prepareAttachment throws instead), so this
+        // is a boundary rule, not a user-visible drop.
         _state.value = _state.value.copy(pendingAttachments = cur.wiredPhotos() + take)
         if (dropped > 0) {
             notify(capRefused(room), ToastKind.Info)
@@ -546,6 +550,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // sending them into the restored one is the mis-send class the
         // switch/new/delete sites already close.
         val hadStaged = _state.value.pendingAttachments.wiredPhotoCount() > 0
+        // Staged thumbs are keyed by the thread they were staged in (#339).
+        val stagedRewrite = _state.value.pendingAttachments
+        val stagedRewriteThread = threadId
         val active = restored.firstOrNull { it.id == threadId }
         if (active != null) {
             threads = restored
@@ -569,6 +576,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         if (hadStaged) {
             stagedDiscardedNotice()
+        }
+        evictStagedThumbs(stagedRewrite, stagedRewriteThread)
+    }
+
+    /** Evicts the thumbnails of a discarded staged set (#339): they live in
+     * the cache under the thread they were staged in, and a discard left
+     * them there until pressure, a trim, or the thread's deletion. */
+    private fun evictStagedThumbs(staged: List<ChatAttachment>, thread: String) {
+        staged.forEachIndexed { i, a ->
+            thumbCache.remove(thumbCacheKey(a.id, i, a.base64, thread))
         }
     }
 
@@ -603,6 +620,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val target = threads.firstOrNull { it.id == id } ?: return
         // Past every no-op return: this tap republishes thread state, so it outranks init's load.
         touchThreads()
+        // Staged photos are keyed by the thread they were staged in (#339):
+        // capture the set and that thread before the switch, so the
+        // discard can evict the exact cache entries.
+        val stagedSwitch = _state.value.pendingAttachments
+        val stagedThread = threadId
         threadId = id
         cancelRecovery()
         runsJob?.cancel()
@@ -639,6 +661,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (hadStaged) {
             stagedDiscardedNotice()
         }
+        evictStagedThumbs(stagedSwitch, stagedThread)
         if (hadTypedSwitch) {
             notify("Typed draft discarded — it belonged to the previous thread.", ToastKind.Info)
         }
@@ -700,6 +723,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (_state.value.streaming) return false
             // Real publish past every no-op return, same rule as switchThread.
             touchThreads()
+            // Staged thumbs are keyed by the thread they were staged in
+            // (#339): capture both before the switch.
+            val stagedOpen = _state.value.pendingAttachments
+            val stagedOpenThread = threadId
             threadId = id
             cancelRecovery()
             runsJob?.cancel()
@@ -731,6 +758,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (hadStagedOpen) {
                 stagedDiscardedNotice()
             }
+            evictStagedThumbs(stagedOpen, stagedOpenThread)
             if (hadTypedOpen) {
                 notify("Typed draft discarded — it belonged to the previous thread.", ToastKind.Info)
             }
@@ -791,6 +819,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
         threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
+        // Staged thumbs are keyed by the thread they were staged in (#339).
+        val stagedNew = _state.value.pendingAttachments
+        val stagedNewThread = threadId
         threadId = fresh.id
         cancelRecovery()
         runsJob?.cancel()
@@ -823,6 +854,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (hadStagedNew) {
             stagedDiscardedNotice()
         }
+        evictStagedThumbs(stagedNew, stagedNewThread)
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
         if (threads.any { it.messages.isNotEmpty() }) persist()
@@ -866,8 +898,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             }
         }
         threads = threads.filterNot { it.id == id }
-        // The deleted thread's LEGACY thumbs die with it (#339): they would
-        // otherwise sit in the cache until LRU pressure evicted them.
+        // The deleted thread's thumbs die with it (#339): every key carries
+        // its thread, so this frees them now instead of at LRU pressure.
         thumbCache.removeThread(id)
         if (threadId == id) {
             // `id` is already filtered out above: the fallback is the newest remaining thread.
@@ -2097,6 +2129,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Real publish past every no-op return above: the fork outranks init's load.
         touchThreads()
         threads = listOf(fresh) + threads
+        // Staged thumbs are keyed by the thread they were staged in (#339).
+        val stagedFork = _state.value.pendingAttachments
+        val stagedForkThread = threadId
         threadId = fresh.id
         cancelRecovery()
         runsJob?.cancel()
@@ -2121,6 +2156,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (hadStagedFork) {
             stagedDiscardedNotice()
         }
+        evictStagedThumbs(stagedFork, stagedForkThread)
         persist()
         doSend(forked, path, provider, model, effort)
     }
