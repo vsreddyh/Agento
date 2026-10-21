@@ -163,10 +163,19 @@ object ChatThreads {
         requireIoThread("ChatThreads.load")
         val f = file(context, tab)
         if (!f.exists()) return emptyList()
+        // Unchanged-file fast path (#339): every load re-walks every photo
+        // payload (a full alphabet scan each), which is hundreds of
+        // millions of characters for a photo-heavy thread — on every cold
+        // start and every thread switch. The stamp (mtime + size) skips
+        // the walk while the file is untouched. The list is SHARED, not
+        // copied: ChatThread is immutable, so every caller can hold it.
+        val stamp = LoadStamp(f.lastModified(), f.length())
+        val cached = lastLoad[tab]
+        if (cached != null && cached.first == stamp) return cached.second
         // The scans (whitespace strip + alphabet validation over photo
         // payloads) must never run on Main: every caller — VM, Settings
         // export/import — is inside Dispatchers.IO.
-        return runCatching {
+        val loaded = runCatching {
             threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText(Charsets.UTF_8))
                 .filter { it.id.isNotEmpty() }
                 .take(MAX_THREADS)
@@ -189,7 +198,21 @@ object ChatThreads {
                     })
                 }
         }.getOrDefault(emptyList())
+        // Only a successful parse is cached (#339): an unreadable file
+        // must not pin an empty result under its stamp.
+        if (loaded.isNotEmpty()) lastLoad[tab] = stamp to loaded
+        loaded
     }
+
+    /** The file stamp behind the load cache (#339): mtime + size, so an
+     * unchanged file skips the payload re-walk. */
+    private data class LoadStamp(val mtime: Long, val size: Long)
+
+    /** Last successful load per tab (#339): the stamp and the canonical
+     * threads it produced. The payloads are the caller's own strings
+     * (shared, never copied), so the cache pins no extra bytes. */
+    private val lastLoad: MutableMap<String, Pair<LoadStamp, List<ChatThread>>> =
+        java.util.concurrent.ConcurrentHashMap()
 
     /**
      * Persists threads, canonicalizing attachments at the boundary: load()
@@ -220,6 +243,10 @@ object ChatThreads {
             val out = canonicalizeUnchanged(cached?.first, cached?.second, capped)
             file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), out), Charsets.UTF_8)
             lastCanonical[tab] = capped to out
+            // The load cache is dropped here (#339): the app's own write
+            // invalidates the stamp fast path, so a same-size write inside
+            // one mtime tick can never serve a stale list.
+            lastLoad.remove(tab)
         }.onFailure { e ->
             // Logged, not swallowed (#339): a failed write (disk full, an
             // OOM) leaves memory and disk diverging, and the next cold
@@ -235,6 +262,7 @@ object ChatThreads {
      * invalidate it, or the next save restores the pre-import bytes. */
     internal fun invalidate(tab: String) {
         lastCanonical.remove(tab)
+        lastLoad.remove(tab)
     }
 
     /** Tabs whose thread file was rewritten out-of-band, with a per-tab

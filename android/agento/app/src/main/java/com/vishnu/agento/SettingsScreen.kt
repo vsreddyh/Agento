@@ -472,6 +472,7 @@ internal fun SettingsScreen(
                             scope = viewModel.viewModelScope,
                             busy = viewModel.state.value.backupBusy,
                             onBusy = viewModel::setBackupBusy,
+                            claimBackup = viewModel::claimBackup,
                             onImported = {
                                 viewModel.refresh()
                                 settingsRefresh++
@@ -801,6 +802,7 @@ internal fun SettingsBackupSection(
     scope: CoroutineScope,
     busy: Boolean,
     onBusy: (Boolean) -> Unit,
+    claimBackup: () -> Boolean,
     onImported: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -824,7 +826,10 @@ internal fun SettingsBackupSection(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        onBusy(true)
+        // The VM owns the gate (#339): the button's enabled state is
+        // UI-only, and two taps before the first recomposition would both
+        // pass it — two exports, each holding the peak.
+        if (!claimBackup()) return@rememberLauncherForActivityResult
         status = ""
         failed = false
         val job = scope.launch {
@@ -968,7 +973,10 @@ internal fun SettingsBackupSection(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        onBusy(true)
+        // The VM owns the gate (#339): the button's enabled state is
+        // UI-only, and two taps before the first recomposition would both
+        // pass it — two exports, each holding the peak.
+        if (!claimBackup()) return@rememberLauncherForActivityResult
         status = ""
         failed = false
         val job = scope.launch {

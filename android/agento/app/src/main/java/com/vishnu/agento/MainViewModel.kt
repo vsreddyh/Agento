@@ -44,6 +44,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(backupBusy = busy)
     }
 
+    /** Claims the backup slot, or refuses when one is already running
+     * (#339): the button's `enabled` state is UI-only, and two taps
+     * before the first recomposition would both pass it — two exports
+     * would each hold the ~25 MB peak. Returns false when the slot is
+     * taken. */
+    fun claimBackup(): Boolean {
+        if (_state.value.backupBusy) return false
+        _state.value = _state.value.copy(backupBusy = true)
+        return true
+    }
+
     /** Reloads prefs plus Health Connect availability; permission check runs async. */
     fun refresh() {        val prefs = getApplication<Application>().getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         // Unified server URL first; legacy per-feature keys as fallback so

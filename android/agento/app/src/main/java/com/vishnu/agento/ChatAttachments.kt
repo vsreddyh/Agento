@@ -367,7 +367,10 @@ fun ChatAttachment.dataUri(): String {
  * and documented at both ends — the marker describes the THREAD, the parts
  * must be provable. */
 fun attachmentMarker(n: Int): String =
-    if (n == 1) "[1 photo attached]" else "[$n photos attached]"
+    // Zero renders as nothing (#339): "[0 photos attached]" is a claim
+    // about a photo that is not there, and every caller already guards
+    // on > 0 — the empty string keeps a future caller from printing it.
+    if (n <= 0) "" else if (n == 1) "[1 photo attached]" else "[$n photos attached]"
 
 /** User-typed marker lookalike: `[N photo(s) attached]` ANYWHERE in the text
  * (not just trailing) — a mid-string lookalike would otherwise ride with two
