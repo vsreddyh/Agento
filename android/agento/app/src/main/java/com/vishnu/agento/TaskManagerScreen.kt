@@ -588,9 +588,6 @@ internal fun TaskManagerScreen(
         }
     }
 
-    fun doComplete(t: ServerTask) = doResolve(t, "complete")
-    fun doSkip(t: ServerTask) = doResolve(t, "skip")
-
     /**
      * Marks [t] resolved via [verb] ("complete" or "skip", #345): same leave
      * animation, same silent-refetch-on-rollover, same custom-repeat recreate
@@ -726,6 +723,9 @@ internal fun TaskManagerScreen(
             unmarkBusy(t.id)
         }
     }
+
+    fun doComplete(t: ServerTask) = doResolve(t, "complete")
+    fun doSkip(t: ServerTask) = doResolve(t, "skip")
 
     fun doReopen(t: ServerTask) {
         selected = null
