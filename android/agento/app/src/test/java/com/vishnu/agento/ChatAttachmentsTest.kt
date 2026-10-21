@@ -344,6 +344,28 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun requireIoThreadPassesOffMain() {
+        // Suite runs on a worker thread (never named "main"), so the
+        // boundary gate must pass here — this is the JVM half of the
+        // Looper-first/name-fallback contract.
+        requireIoThread("test")
+    }
+
+    @Test
+    fun requireIoThreadRejectsMainNamedThread() {
+        // The throw path, pinned without Robolectric (#339): a thread
+        // named "main" trips the JVM fallback exactly like the UI thread
+        // trips the Looper branch on device.
+        var thrown: Throwable? = null
+        val t = Thread({
+            thrown = runCatching { requireIoThread("test") }.exceptionOrNull()
+        }, "main")
+        t.start()
+        t.join()
+        assertTrue(thrown is IllegalStateException)
+    }
+
+    @Test
     fun photoOnlyThreadTitlesNamePhotos() {
         assertEquals(
             "Photo",

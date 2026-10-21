@@ -148,9 +148,10 @@ object SettingsBackup {
     /**
      * Full-settings export (prefs + thread files) as one JSONObject.
      * IO-REQUIRED (see requireIoThread, enforced below — not just this
-     * comment): a photo-heavy export holds ~3x peak on the caller's thread
-     * (file text + canonical re-encode + JSONObject copy), bounded by the
-     * 200-msg cap — the same Main-never rule as ChatThreads.load(). Both
+     * comment): a photo-heavy export holds ~2x peak on the caller's thread
+     * (file text + JSONObject copy; the old canonical re-encode is gone —
+     * import/load canonicalize on the way in), bounded by the 200-msg cap
+     * — the same Main-never rule as ChatThreads.load(). Both
      * callers (Settings export + import pickers) run inside
      * withContext(Dispatchers.IO); a future Main-thread caller fails fast
      * instead of freezing the UI. Remaining hump, named not hidden (#339):
@@ -191,19 +192,16 @@ object SettingsBackup {
         for (name in backupFiles()) {
             val f = java.io.File(context.filesDir, name)
             if (f.exists()) {
-                // Thread files canonicalize at export too (#339): import
-                // already does, and an export that ships raw ragged payloads
-                // only self-heals a cycle later on reimport/load+persist.
-                // Unparseable-as-threads falls back to raw (export must not
-                // drop data it can't understand — same skip-policy as import).
+                // Shipped raw BY DESIGN (#339): the import boundary and load()
+                // both canonicalize on the way in, so an export-side
+                // decode+re-encode (2x multi-MB parses) only paid off for
+                // raw-file shares that bypass load() — which self-heal on
+                // first read anyway. Halves the export peak (file text +
+                // JSONObject copy, no re-encode) with no contract loss; the
+                // toStored precedent (raw on Main, canonicalize at the
+                // boundary) already works this way.
                 runCatching {
-                    val raw = f.readText()
-                    val text = if (name.startsWith("chat_threads_")) {
-                        ChatThreads.canonicalizeFile(raw) ?: raw
-                    } else {
-                        raw
-                    }
-                    files.put(name, text)
+                    files.put(name, f.readText())
                 }
             }
         }

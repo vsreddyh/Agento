@@ -144,8 +144,18 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
  * their boundary callers (load/save/export), which are gated.
  */
 internal fun requireIoThread(site: String) {
-    val main = runCatching { android.os.Looper.getMainLooper() }.getOrNull()
-    check(main == null || android.os.Looper.myLooper() !== main) {
+    // Looper-first on device, thread-name fallback on JVM (#339): the
+    // android.jar stubs throw, which would make the contract untestable —
+    // the fallback keeps the exact same "never Main" meaning (the UI
+    // thread is always named "main") and lets the suite pin the throw
+    // without Robolectric (which build.gradle.kts rules out — the suite
+    // must gate merges cheaply). On device the Looper branch decides;
+    // the name branch only runs where Looper is a stub.
+    val onMain = runCatching {
+        val mainLooper = android.os.Looper.getMainLooper()
+        android.os.Looper.myLooper() !== null && android.os.Looper.myLooper() === mainLooper
+    }.getOrDefault(Thread.currentThread().name == "main")
+    check(!onMain) {
         "$site must run on an IO thread, never Main"
     }
 }
@@ -424,6 +434,15 @@ fun messageContentJson(
     // so the alphabet scan lives at the wire, never in the hot-path
     // isWired() predicate. Single pass: blank-check then validity per
     // attachment, not a wiredPhotos() list followed by a second walk.
+    // Then dataUri() re-validates per part (#339): the filter walk plus
+    // the dataUri decodability walk plus its cap-measure gate is 2–3 full
+    // walks per photo per send — accepted, not deduplicated. A
+    // dataUriUnchecked twin (or passing the validated size through) would
+    // save a walk, but the dataUri walls ARE the storage-injected-oversize
+    // enforcement (round-80: same named per-photo error as stage time) —
+    // bypassing them for the normal path re-opens exactly the hole they
+    // closed. Send-frequency on the send path (never scroll/search), so
+    // the walks are a send tax, not a scroll tax.
     val images = attachments.filter { it.isWired() && isDecodableBase64(it.base64) }
     if (role != "user" || images.isEmpty() || !includeImages) {
         // Stripped earlier photo turns stay honest (#339): the server

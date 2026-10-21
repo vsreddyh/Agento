@@ -144,6 +144,27 @@ private fun String.sampleKey(half: Int): String =
     if (length <= half * 2) this else take(half) + takeLast(half)
 
 /**
+ * Bounded decoded-thumbnail memory (#339): produceState remembers per
+ * composition, so scrolling away disposes the bitmap and scrolling back
+ * re-runs Base64.decode + decodeByteArray per photo. Keyed by stable pick
+ * UUID — immutable and unique per pick, so a key always names the same
+ * payload. Bounded (32 entries ≈ 8 MB of ~256px thumbs) for low-end
+ * devices; eviction does NOT recycle — GC reclaims, because recycling
+ * risks pulling pixels from under a late outgoing draw (the same class
+ * the no-recycle rule in AttachmentThumb exists for). Stable picks only;
+ * legacy (id-less) payloads bypass the cache (slot-keyed entries would
+ * alias across removes). LruCache is internally synchronized, so Main
+ * gets and IO puts are safe.
+ */
+internal class ThumbCache(maxEntries: Int = 32) {
+    private val cache = android.util.LruCache<String, android.graphics.Bitmap>(maxEntries)
+    fun get(key: String): android.graphics.Bitmap? = cache.get(key)
+    fun put(key: String, bmp: android.graphics.Bitmap) {
+        cache.put(key, bmp)
+    }
+}
+
+/**
  * One staged or sent photo (#318): the remembered ~256px thumbnail, or an
  * icon placeholder when the payload won't decode (a corrupt payload
  * degrades to a missing thumbnail, never a crash).
@@ -161,6 +182,9 @@ private fun AttachmentThumb(
     // UUID + length alone, so value equality holds across removes.
     legacySlot: Int = 0,
     stableId: String = "",
+    // Scroll-back memory, hoisted by the caller (#339): null disables the
+    // cache (previews, single-use). Stable picks only — see ThumbCache.
+    cache: ThumbCache? = null,
 ) {
     // Identity without walking the payload (#339): the per-pick UUID is
     // stable across removes — the stable VALUE ignores slot, so photo 1
@@ -211,9 +235,16 @@ private fun AttachmentThumb(
         // swallow the producer's own CancellationException into a null
         // placeholder — the same cancel-masking fixed inside
         // decodeThumbnail must not be reintroduced at its call site.
+        // Stable picks consult the hoisted cache first (#339): a scroll-back
+        // hit skips decode entirely. Legacy payloads (null key) always
+        // decode — slot-keyed cache entries would alias across removes.
+        val cacheKey = stableId.ifEmpty { null }
         value = try {
-            withContext(Dispatchers.IO) {
-                decodeThumbnail(base64)
+            val hit = cacheKey?.let { key -> cache?.get(key) }
+            hit ?: withContext(Dispatchers.IO) {
+                decodeThumbnail(base64)?.also { bmp ->
+                    if (cacheKey != null) cache?.put(cacheKey, bmp)
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -278,6 +309,11 @@ internal fun ChatTab(
     val state by vm.state
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Scroll-back thumbnail memory (#339): AttachmentThumb's produceState
+    // remembers per composition, so scrolling away disposes the bitmap and
+    // scrolling back re-decodes. Hoisted here so the cache outlives any
+    // one composition; the cache itself is bounded (see ThumbCache).
+    val thumbCache = remember { ThumbCache() }
     LaunchedEffect(Unit) { vm.refreshConfig() }
     // Task-instruction deep-link (#287): open the instructed thread once
     // the ViewModel has loaded. Consumed on confirmed open (not
@@ -1057,6 +1093,7 @@ internal fun ChatTab(
         },
         onAppendPending = vm::appendPending,
         hasStagedPhotos = { vm.pendingAttachmentCount() > 0 },
+        thumbCache = thumbCache,
     )
     // Camera permanently denied (#339): the request UI never shows again,
     // so the dialog — not an auto-open — offers the Settings escape hatch.
@@ -1640,6 +1677,9 @@ internal fun ChatScreen(
      * not use the composition snapshot (recomposition lag), so ChatTab
      * supplies the ViewModel read directly. */
     hasStagedPhotos: () -> Boolean = { false },
+    /** Scroll-back thumbnail memory (#339): hoisted in ChatTab, shared
+     * with the composer strip so one bounded cache serves both. */
+    thumbCache: ThumbCache? = null,
     autoLiveGen: Int = 0,
 ) {
     val listState = rememberLazyListState()
@@ -2524,6 +2564,7 @@ internal fun ChatScreen(
                                             modifier = Modifier.size(64.dp),
                                             legacySlot = i,
                                             stableId = a.id,
+                                            cache = thumbCache,
                                         )
                                         // Standard 48dp target (#339): a scanner
                                         // fails anything smaller, and the
@@ -2986,6 +3027,7 @@ internal fun ChatScreen(
                                                                 modifier = Modifier.size(120.dp),
                                                                 legacySlot = ai,
                                                                 stableId = a.id,
+                                                                cache = thumbCache,
                                                             )
                                                         }
                                                     }
