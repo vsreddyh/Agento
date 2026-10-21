@@ -610,7 +610,7 @@ fun messageContentJson(
         arr.put(
             JSONObject()
                 .put("type", "image_url")
-                .put("url", JSONObject().put("url", a.dataUri()))
+                .put("image_url", JSONObject().put("url", a.dataUri()))
         )
     }
     return WireContent.Multipart(arr)
