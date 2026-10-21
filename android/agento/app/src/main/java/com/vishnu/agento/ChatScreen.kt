@@ -673,6 +673,14 @@ internal fun ChatTab(
                 // completion callback runs on Main for the same reason —
                 // NonCancellable so a cancelled batch still drops the flag
                 // (otherwise every later launch skips its cleanup forever).
+                // Dead-composition write is INTENTIONAL (#339): after a tab
+                // leave the finally still fires onBatchDone into the disposed
+                // composition — but the flag MUST drop even when the home
+                // thread is gone (the photos already settled via the
+                // isThreadCurrent drop above, while a stuck cameraBusy
+                // would break every later launch). Snapshot writes
+                // post-dispose are accepted, never crashing; the VM side
+                // already made its keep/drop decision.
                 runCatching { cleanup?.takeIf { it.exists() }?.delete() }
                 withContext(Dispatchers.Main + NonCancellable) { onBatchDone() }
             }

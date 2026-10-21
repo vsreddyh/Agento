@@ -274,6 +274,24 @@ fun ChatAttachment.dataUri(): String {
             "ChatAttachment.dataUri requires a decodable payload (ragged base64 never wires)",
         )
     }
+    // Per-photo cap, enforced — not just staged (#339): the 4M-char
+    // ceiling admits a hand-edited multi-MB valid payload that stage-time
+    // caps never saw. Without this wall it wires until the generic ~3.5 MB
+    // conversation preflight fails it; with it the send fails with the SAME
+    // named per-photo message as the stage path. Unreachable via the app
+    // (staged payloads are capped at pick time) — storage-injected
+    // oversize only. Two-tier like the thumbnail gate: at/below-cap raws
+    // skip the precise measure; only over-length raws pay it.
+    if (base64.length > MAX_IMAGE_BASE64_CHARS &&
+        base64Bytes(base64) > MAX_IMAGE_BASE64_CHARS * 3L / 4L
+    ) {
+        throw NamedAttachError(
+            "Photo too large even after shrinking (${formatBytes(base64Bytes(base64))}) — " +
+                "the per-photo limit is about " +
+                "${formatBytes(MAX_IMAGE_BASE64_CHARS * 3L / 4L)}. " +
+                "Pick a different photo.",
+        )
+    }
     return "data:image/jpeg;base64,$base64"
 }
 

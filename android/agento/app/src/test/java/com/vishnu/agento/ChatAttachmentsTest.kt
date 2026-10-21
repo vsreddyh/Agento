@@ -223,6 +223,20 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun dataUriRejectsStorageInjectedOversize() {
+        // The per-photo cap wall (#339): a hand-edited multi-MB valid
+        // payload passes the 4M-char ceiling, so without this the send
+        // would ride to the generic conversation-size preflight. Fails with
+        // the same named per-photo message as the stage path.
+        try {
+            ChatAttachment(base64 = "A".repeat(MAX_IMAGE_BASE64_CHARS + 4)).dataUri()
+            fail("over-cap payload must throw the named per-photo error, not wire")
+        } catch (e: NamedAttachError) {
+            assertTrue(e.message!!.contains("per-photo limit"))
+        }
+    }
+
+    @Test
     fun dataUriRejectsRaggedPayload() {
         // The wall the wire filter relies on (#339): a ragged payload
         // reaching a direct caller throws the typed error, never renders.

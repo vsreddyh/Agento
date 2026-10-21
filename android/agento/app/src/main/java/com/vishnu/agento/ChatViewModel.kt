@@ -380,12 +380,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Bounded at 3 (#339): ten rapid failures must not queue ten
         // toasts — the oldest drop, the newest (most relevant) survive.
         _state.value = _state.value.copy(
-            notices = (_state.value.notices + ToastNotice(msg, kind, ++noticeSeq)).takeLast(3),
+            notices = (_state.value.notices + ToastNotice(msg, kind, noticeSeq.incrementAndGet())).takeLast(3),
         )
     }
 
-    /** Monotonic notice sequence for re-fire identity (see [notify]). */
-    private var noticeSeq = 0L
+    /** Monotonic notice sequence for re-fire identity (see [notify]).
+     * Atomic, not proof-by-convention (#339): the ++ lived safely only
+     * while every caller hopped to Main first, and the pre-existing
+     * launch(IO) writers prove a future notify-from-IO is one edit away —
+     * a raced counter duplicates a seq and reintroduces the dedup the
+     * queue exists to prevent. The state copy itself stays Main-confined;
+     * only the identity counter is thread-safe. */
+    private val noticeSeq = java.util.concurrent.atomic.AtomicLong(0L)
 
     /** Single spelling for the thread-load dead-tap answer (#339): nine
      * call sites share this so the next reword can't fix eight and miss
