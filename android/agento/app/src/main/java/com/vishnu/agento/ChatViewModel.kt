@@ -805,10 +805,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // user-only like the wire rule (#339): a hypothetical
                         // assistant attachment must not make the thread
                         // findable while title and wire stay silent on it.
-                        val photoCount =
-                            if (it.role == "user") it.attachments.wiredPhotoCount() else 0
-                        contentWithMarker(it.content, photoCount)
-                            .lowercase(java.util.Locale.ROOT).contains(q)
+                        // Raw-text first, marker only on miss (#339): the
+                        // marker build (regex + trim + concat) plus the count
+                        // runs per message per keystroke — keystrokes that
+                        // match visible text skip it entirely. The marker is
+                        // only needed to make "photo" itself findable.
+                        val lower = it.content.lowercase(java.util.Locale.ROOT)
+                        if (lower.contains(q)) {
+                            true
+                        } else {
+                            val photoCount =
+                                if (it.role == "user") it.attachments.wiredPhotoCount() else 0
+                            photoCount > 0 && contentWithMarker(it.content, photoCount)
+                                .lowercase(java.util.Locale.ROOT).contains(q)
+                        }
                     }
                 )
         }.map {

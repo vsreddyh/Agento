@@ -536,13 +536,15 @@ internal fun ChatTab(
     // resort, strictly better than an orphan.
     // Declared before first use: batch returns, camera callback, and
     // launch-failure path all call it. Optimistic ownership (#339): the
-    // flag is set BEFORE launch, so the live path dispatches to IO and the
-    // picker/camera callback never pays the unlink — the old set-inside
-    // read false on the caller ~always (the child hadn't run yet), paying
-    // Main-thread disk IO plus a second unlink on every call. Die-in-window
-    // (scope dies between the check and the child start) leaks to the
-    // startup sweep instead — bounded by design, and the sweep exists for
-    // exactly these orphans. Dead scope deletes inline, same as before.
+    // live path dispatches to IO and the picker/camera callback never pays
+    // the unlink. Die-in-window settle: if the scope dies between the
+    // isActive check and the child start, the child may never run
+    // (cancelled before its first statement) — the invokeOnCompletion
+    // below settles that case inline, mirroring the batch's never-ran
+    // settle. (NonCancellable detaches the child from the scope, so in
+    // practice the delete still lands; the fallback covers the platform
+    // nuance either way.) exists()-gated, so a completed delete makes the
+    // fallback a no-op second unlink.
     fun deleteQuietly(f: File?) {
         if (f == null) return
         if (!scope.isActive) {
@@ -551,6 +553,10 @@ internal fun ChatTab(
         }
         scope.launch(Dispatchers.IO + NonCancellable) {
             runCatching { f.takeIf { it.exists() }?.delete() }
+        }.invokeOnCompletion { cause ->
+            if (cause is CancellationException) {
+                runCatching { f.takeIf { it.exists() }?.delete() }
+            }
         }
     }
     fun processUris(
@@ -591,16 +597,15 @@ internal fun ChatTab(
         // dedupe would need a post-read content hash, i.e. decoding first,
         // which is the cost dedupe exists to avoid.
         val unique = uris.distinct()
-        // Duplicates collapse into one copy — said out loud (#339):
-        // picking the same photo 3x stages 1 with no other toast, which
-        // reads as 2 lost picks. The cap toast is NOT fired here: it waits
-        // for the loop's actual drop below — a tap-time prediction misnames
-        // the corrupt-first case (failures free the slots, nothing drops,
-        // yet the toast already claimed a cap event). Deferred toasts only
-        // ever name drops that happened.
-        if (unique.size < uris.size) {
-            vm.notify("Duplicate photos attached once.", ToastKind.Info)
-        }
+        // Duplicates collapse into one copy — said out loud, but DEFERRED
+        // (#339): the tap can't know whether the deduped set still
+        // overflows (corrupt-first yields may free slots, making the
+        // duplicate the only toast — correct — or a clean overflow, making
+        // it two back-to-back for one tap — noisy). The loop voices the
+        // dedupe at the end, only when no cap toast fired: one gesture,
+        // one toast about what actually happened.
+        val hadDupes = unique.size < uris.size
+        val capToasted = java.util.concurrent.atomic.AtomicBoolean(false)
         // Hoisted ABOVE the launch (#339): the resolver is all the batch
         // needs, and declaring it inside would still capture the Activity
         // in the closure until that line runs — narrowing the leak, not
@@ -682,6 +687,9 @@ internal fun ChatTab(
                         // tap time: corrupt-first picks can free the slots a
                         // tap-time prediction assumed lost. First !room ends
                         // the loop, so this fires at most once per batch.
+                        // Marks capToasted so the deferred duplicate notice
+                        // below stays silent — one gesture, one toast.
+                        capToasted.set(true)
                         withContext(Dispatchers.Main) {
                             // Free slots re-read live (#339): room is a
                             // boolean, but the cap wording needs the
@@ -743,6 +751,16 @@ internal fun ChatTab(
                             }
                     }
                     if (batchAborted.get()) break
+                }
+                // Deferred duplicate voice (#339): the tap can't know whether
+                // the deduped set still overflows, so the notice waits for the
+                // loop outcome — voiced only when something staged AND no cap
+                // toast fired. Cap-hit batches already said their piece; a
+                // clean dedupe-only batch still names the collapsed picks.
+                if (hadDupes && landed.get() > 0 && !capToasted.get()) {
+                    withContext(Dispatchers.Main) {
+                        vm.notify("Duplicate photos attached once.", ToastKind.Info)
+                    }
                 }
             } catch (e: CancellationException) {
                 // Cancelled mid-batch (tab left, #339): staged picks stay,
@@ -906,6 +924,12 @@ internal fun ChatTab(
         // saveable gate (armed only once an intent actually exists);
         // strays by the staleness bound.
         ioGuard.set(true)
+        // Homed LIVE at tap time like the gallery path (#339): same
+        // stale-snapshot class — reading state.threadId in the Main hop
+        // after the IO hop widens the lag window (mkdirs + FileProvider),
+        // homing the capture to a thread the user already left. Saved
+        // (restore keeps the owner across rotation/death with the path).
+        cameraThread = vm.threadIdNow()
         scope.launch(Dispatchers.IO) {
             try {
                 val dir = File(appTapContext.cacheDir, "camera")
@@ -953,9 +977,8 @@ internal fun ChatTab(
                     }
                     cameraUri = uri
                     cameraPath = file.absolutePath
-                    // Owner recorded with the launch (#339): the callback homes the
-                    // batch to this thread even across a switch.
-                    cameraThread = state.threadId
+                    // Owner homed at tap time (see launchCamera above): the
+                    // callback reads the tap-time owner, never current state.
                     // Armed at launch, cleared in the callback (#339): from
                     // here on the saveable gate owns the outstanding intent
                     // (survives rotation AND death — the keep!=null sweep
@@ -1158,9 +1181,14 @@ internal fun ChatTab(
         onRegenerate = vm::regenerate, onContinue = vm::continueTurn,
         onReplace = vm::replaceAndResend, onFork = vm::forkAndResend,
         onPickPhotos = {
-            // Home snapshot at tap time (#339): the callback runs
-            // post-switch, so this — not current-at-result — owns the batch.
-            galleryThread = state.threadId
+            // Home snapshot LIVE at tap time (#339): the callback runs
+            // post-switch, so the tap — not current-at-result — owns the
+            // batch. vm.threadIdNow(), not the composition snapshot:
+            // state.threadId can lag the VM by a recomposition (switch
+            // thread, tap attach before recomposition lands), homing the
+            // batch to the old thread and dropping good picks with a
+            // "Thread switched" notice for a switch that already happened.
+            galleryThread = vm.threadIdNow()
             // Guarded like the camera/permission intents (#339): a launch()
             // throw (no picker on an odd OEM) fires no callback — so drop
             // the homed thread + voice here instead of crashing.
