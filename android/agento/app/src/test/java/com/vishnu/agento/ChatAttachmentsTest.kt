@@ -248,7 +248,11 @@ class ChatAttachmentsTest {
         try {
             ChatAttachment(base64 = "A".repeat(MAX_IMAGE_BASE64_CHARS + 4)).dataUri()
             fail("over-cap payload must throw the named per-photo error, not wire")
-        } catch (e: NamedAttachError) {
+        } catch (e: OversizeAttachError) {
+            // The oversize wall throws the OVERSIZE type (#339), the same
+            // one the stage path throws; the ragged-payload wall keeps the
+            // named-attach type. Both are in the named family the send path
+            // passes through, and the message is the same one either way.
             assertTrue(e.message!!.contains("per-photo limit"))
         }
     }
