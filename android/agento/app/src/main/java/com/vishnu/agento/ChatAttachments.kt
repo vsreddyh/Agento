@@ -115,6 +115,15 @@ const val MAX_RAW_BASE64_CHARS = 4_000_000
  * Alphabet scan, no decode: runs per send, never per keystroke. Internal:
  * the persistence loader canonicalizes with this too, so memory holds no
  * wrapped-or-ragged payloads and the hot paths never need this check.
+ * STRICT on whitespace BY DESIGN (not an oversight vs the lenient pair
+ * below): `base64Bytes` skips whitespace and `Base64.decode(DEFAULT)`
+ * accepts it, but the wire must never emit a wrapped/multiline data: URI —
+ * a wrapped-but-valid payload measures a real size and decodes fine, yet
+ * FAILS this gate and wires as bare text. The three helpers deliberately
+ * disagree: measure/decode tolerate (they read bytes), validate refuses
+ * (it guards the wire shape). Do not "fix" one side to match the others:
+ * the split is load-healed in practice (loader strips framing first), and
+ * the strict gate is what keeps a hand edit from widening the wire.
  * Padding is positional, not counted: `=` is legal only as the last ≤2
  * chars — `=AAA`, `A=A=`, `AB=C` all fail — since a bare count would pass
  * interior padding straight into the corrupt part this exists to prevent.

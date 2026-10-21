@@ -787,16 +787,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Threads matching [query] in title or message text (switcher search). */
     fun searchThreads(query: String): List<ThreadSummary> {
-        // ROOT locale throughout (#339): the default locale folds `I`
-        // differently (Turkish `ı`), so searches for marker words like
-        // "photo" — and any content with an `I` — would miss by locale.
-        val q = query.trim().lowercase(java.util.Locale.ROOT)
+        // Trimmed, NOT lowercased (#339): every haystack here matches with
+        // contains(ignoreCase = true), so pre-folding the query would buy
+        // nothing and split the rule — one folding, region matching, on
+        // all three paths (title, raw text, marker). The old lowercase-
+        // everything shape paid a full-string copy per message per
+        // keystroke; region matching skips it.
+        val q = query.trim()
         if (q.isEmpty()) return _state.value.threads
         return threads.filter { t ->
             t.messages.isNotEmpty() && (
                 // Same untitled fallback as summaries() so "new
                 // conversation" finds threads without a custom title.
-                t.title.ifBlank { UNTITLED }.lowercase(java.util.Locale.ROOT).contains(q) ||
+                t.title.ifBlank { UNTITLED }.contains(q, ignoreCase = true) ||
                     t.messages.any {
                         // Photo threads are findable by "photo" (#318): their
                         // images are payloads with no searchable text. One
@@ -810,11 +813,6 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // runs per message per keystroke — keystrokes that
                         // match visible text skip it entirely. The marker is
                         // only needed to make "photo" itself findable.
-                        // contains(ignoreCase=TRUE), not lowercase-then-
-                        // contains (#339): region-matching skips the full-
-                        // string lowercase copy per message per keystroke on
-                        // the filter path (titles per render already pay
-                        // their own walk; search must not double it).
                         val text = it.content
                         if (text.contains(q, ignoreCase = true)) {
                             true
@@ -822,7 +820,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             val photoCount =
                                 if (it.role == "user") it.attachments.wiredPhotoCount() else 0
                             photoCount > 0 && contentWithMarker(it.content, photoCount)
-                                .lowercase(java.util.Locale.ROOT).contains(q)
+                                .contains(q, ignoreCase = true)
                         }
                     }
                 )

@@ -144,22 +144,32 @@ private fun String.sampleKey(half: Int): String =
     if (length <= half * 2) this else take(half) + takeLast(half)
 
 /**
+ * Process-lifetime IO scope for fire-and-forget file cleanup (#339):
+ * deleteQuietly must survive tab-leave, rotation, AND composition death
+ * without extending any of their lifetimes — so it launches here, not on
+ * a composition scope. One SupervisorJob for the process; children are
+ * runCatching-guarded, so nothing ever fails the scope.
+ */
+private val cleanupScope =
+    kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
+    )
+
+/**
  * Bounded decoded-thumbnail memory (#339): produceState remembers per
  * composition, so scrolling away disposes the bitmap and scrolling back
  * re-runs Base64.decode + decodeByteArray per photo. Keyed by the full
- * stable identity (id + length pair, never the id alone): a same-id
- * length change restarts produceState and must miss the cache.
- * Deliberately NOT keyed by thread (#339): pick UUIDs are globally
- * unique, so no two threads can alias the same key — per-thread keys
- * would only guarantee a re-decode on every fork/duplicate-thread view
- * for zero safety gain, and the produce key (which the cache must never
- * disagree with) has no thread in it either. Legacy (id-less) payloads
- * bypass the cache (slot-keyed entries would alias across removes).
- * Bounded (32 entries ≈ 8 MB of ~256px thumbs) for low-end devices;
- * eviction does NOT recycle — GC reclaims, because recycling risks
- * pulling pixels from under a late outgoing draw (the same class the
- * no-recycle rule in AttachmentThumb exists for). LruCache is
- * internally synchronized, so Main gets and IO puts are safe.
+ * stable identity (id + length + head/tail sample, never the id alone):
+ * same id + different length restarts produceState, and the key IS the
+ * produce key — a weaker shadow could serve a stale bitmap. Deliberately
+ * no thread in the key (#339): UUIDs are globally unique, so no two
+ * threads can alias it, and forks share the decoded bitmap for free.
+ * Legacy (id-less) payloads bypass the cache (slot-keyed entries would
+ * alias across removes). Bounded (32 entries ≈ 8 MB of ~256px thumbs)
+ * for low-end devices; eviction does NOT recycle — GC reclaims, because
+ * recycling risks pulling pixels from under a late outgoing draw (the
+ * same class the no-recycle rule in AttachmentThumb exists for). LruCache
+ * is internally synchronized, so Main gets and IO puts are safe.
  */
 internal class ThumbCache(maxEntries: Int = 32) {
     private val cache = android.util.LruCache<Any, android.graphics.Bitmap>(maxEntries)
@@ -197,13 +207,15 @@ private fun AttachmentThumb(
     // stable across removes — the stable VALUE ignores slot, so photo 1
     // keeps its thumbnail when photo 0 leaves (value equality holds, no
     // re-decode, no flicker) — and distinct across identical picks (no
-    // aliasing). The stable value carries NO sample (#339): distinct picks
-    // already differ by id, and the one case a sample would matter (same
-    // id + same length, mutated middle) never recomputes — the keys are
-    // unchanged, so the cached value (with its stale sample) is reused and
-    // the 256-char alloc per thumb per remove buys nothing on either path.
+    // aliasing). The stable value carries the SAME head/tail sample as
+    // the legacy branch (#339): a hand-edited same-length/middle-changed
+    // payload keeps its id (load() blanks only the undecodable), and
+    // without the sample the cache would serve the stale thumbnail while
+    // the wire sends the new bytes. Best-effort — head+tail narrows, never
+    // closes, the window — but built inside the remember below (no
+    // per-recomposition alloc) while the decode it guards stays on IO.
     // Pick-time immutability (one UUID per pick, payloads never mutated)
-    // is what the stable branch rests on, stated here — not the sample.
+    // is still what the common path rests on.
     // Legacy payloads (id "") have no UUID, so the legacy value keeps its
     // 128-char-total sample (64+64): same slot + same length + same
     // head/tail CAN still alias (no crash, no placeholder — just the wrong
@@ -222,13 +234,21 @@ private fun AttachmentThumb(
     // i: 1→0) — accepted, because the alternative (conditional remember,
     // one slot per branch) splits the slot by call position, and a future
     // edit migrating an id in place would unmount/remount instead of
-    // re-keying. The stable branch allocates nothing per remove (a Pair,
-    // no sample walk); the legacy rebuild rides a rare user action on
-    // self-aging payloads, and value equality holds so produceState never
-    // restarts either way.
+    // re-keying. The stable rebuild costs one 128-char sample string per
+    // surviving thumb on a remove (a rare user action); the legacy rebuild
+    // rides the same event on self-aging payloads. Value equality holds
+    // either way, so produceState never restarts for a remove.
     val thumbKey = remember(stableId, legacySlot, base64.length) {
         if (stableId.isNotEmpty()) {
-            stableId to base64.length
+            // Same head/tail sample as the legacy branch (#339): a
+            // hand-edited same-length/middle-changed payload keeps its id
+            // (load() blanks only the undecodable), so without the sample
+            // the cache would serve the stale thumbnail while the wire
+            // sends the new bytes. Best-effort like the legacy branch —
+            // head+tail narrows, never closes, the window — but built
+            // inside this remember (no per-recomposition alloc) while the
+            // decode it guards stays on IO.
+            Triple(stableId, base64.length, base64.sampleKey(64))
         } else {
             // Legacy fallback, best-effort by construction (#339): two
             // different pre-id photos with same length + same head/tail CAN
@@ -243,16 +263,17 @@ private fun AttachmentThumb(
         // placeholder — the same cancel-masking fixed inside
         // decodeThumbnail must not be reintroduced at its call site.
         // Stable picks consult the hoisted cache first (#339): a scroll-back
-        // hit skips decode entirely. Keyed by the full stable identity
-        // (id + length, NOT the id alone): same id + different length
-        // restarts produceState, and the key must never disagree with
-        // the produce key it shadows. Unreachable via the app (picks are
-        // immutable, one UUID per pick), storage-edit only. Legacy
-        // payloads (null key) always decode — slot-keyed entries would
-        // alias across removes. Deliberately no thread in the key (#339):
-        // UUIDs are globally unique, so cross-thread aliasing is
-        // impossible and forks share the decoded bitmap for free.
-        val cacheKey = stableId.takeIf { it.isNotEmpty() }?.let { it to base64.length }
+        // hit skips decode entirely. Keyed by the produce key ITSELF —
+        // never a weaker shadow: same id + different length restarts
+        // produceState, and the cache lookup uses the identical Triple so
+        // a divergent key can never serve a stale bitmap. Unreachable via
+        // the app (picks are immutable, one UUID per pick), storage-edit
+        // only. Legacy payloads (null key) always decode — slot-keyed
+        // entries would alias across removes. Deliberately no thread in
+        // the key (#339): UUIDs are globally unique, so cross-thread
+        // aliasing is impossible and forks share the decoded bitmap
+        // for free.
+        val cacheKey = stableId.takeIf { it.isNotEmpty() }?.let { thumbKey }
         value = try {
             val hit = cacheKey?.let { key -> cache?.get(key) }
             hit ?: withContext(Dispatchers.IO) {
@@ -535,19 +556,17 @@ internal fun ChatTab(
     // is skipped and the unlink runs inline instead: a metadata op, safe
     // on Main as a last resort, strictly better than an orphan.
     // Declared before first use: batch returns, camera callback, and
-    // launch-failure path all call it. Detached fire-and-forget (#339):
-    // the NonCancellable in the launch context replaces the scope's Job
-    // as the child's parent, so scope death cannot cancel it — the child
-    // runs to completion regardless. There is no die-in-window case to
-    // settle (and no completion callback to race): the isActive check
-    // below only skips scheduling on an already-dead scope.
+    // launch-failure path all call it. True fire-and-forget (#339): the
+    // cleanup must survive tab-leave, rotation, AND composition death
+    // without extending any of their lifetimes or joining their completion
+    // — so it launches on the process-lifetime cleanupScope, not on the
+    // composition scope at all. No isActive check (nothing to check
+    // against), no completion callback to race, no Main-thread disk IO on
+    // the caller — exists()-gated, so a second unlink from any path is a
+    // harmless no-op.
     fun deleteQuietly(f: File?) {
         if (f == null) return
-        if (!scope.isActive) {
-            runCatching { f.takeIf { it.exists() }?.delete() }
-            return
-        }
-        scope.launch(Dispatchers.IO + NonCancellable) {
+        cleanupScope.launch {
             runCatching { f.takeIf { it.exists() }?.delete() }
         }
     }
