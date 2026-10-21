@@ -185,6 +185,18 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
 				Err: fail("batch op %d (%s) has no id", i, op.Op)}
 		}
+		// Extras ride only where they are read: a `reason` on anything but
+		// skip, or `fields` on anything but update, would commit while
+		// silently dropping the value — the exact silent-drop shape the
+		// single-task layer rejects at its boundary.
+		if op.Op != "skip" && strings.TrimSpace(op.Reason) != "" {
+			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
+				Err: fail("batch op %d (%s) takes no reason; reason rides only on skip", i, op.Op)}
+		}
+		if op.Op != "update" && op.Fields != nil {
+			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
+				Err: fail("batch op %d (%s) takes no fields; fields ride only on update", i, op.Op)}
+		}
 	}
 	if !s.useTransactions(ctx) {
 		return nil, ErrNoTransactions
@@ -195,6 +207,7 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// errors, and results from a failed attempt must not leak into the
 		// next one. Assigned outward only on success, below.
 		attempt := make([]BatchItemResult, 0, len(ops))
+		wrote := false
 		// Per-op bumps suppressed: every shared write path (the verbs, the
 		// insert funnel, rollover successors) checks this flag, and the one
 		// bump for the whole batch lands below, inside the transaction.
@@ -247,9 +260,18 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
 					Err: fail("rollover failed: %s", res.Detail)}
 			}
+			// Complete/skip/duplicate always write; an update whose detail
+			// is "no fields" took the store's no-op path and wrote nothing.
+			if op.Op != "update" || res.Detail != "no fields" {
+				wrote = true
+			}
 			attempt = append(attempt, res)
 		}
-		s.bumpChanges(sc)
+		// The marker tracks writes, not requests: an all-no-op batch bumps
+		// nothing, so the next poll does not refetch over zero change.
+		if wrote {
+			s.bumpChanges(sc)
+		}
 		results = attempt
 		return nil
 	})

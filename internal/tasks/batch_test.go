@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"agento/internal/mongostore"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -152,6 +154,12 @@ func TestBatchValidationRejectsBadEnvelopes(t *testing.T) {
 		"empty":   {},
 		"unknown": {{Op: "vaporize", ID: id}},
 		"bad id":  {{Op: "complete", ID: "not-an-id"}},
+		"fields on complete": {
+			{Op: "complete", ID: id, Fields: map[string]any{"due_date": "2026-12-01"}},
+		},
+		"reason on update": {
+			{Op: "update", ID: id, Reason: "busy", Fields: map[string]any{"due_date": "2026-12-01"}},
+		},
 	}
 	for name, ops := range cases {
 		if _, err := s.Batch(ctx, ops); err == nil {
@@ -257,6 +265,33 @@ func TestBatchMoveUpdatesDueDates(t *testing.T) {
 	}
 	if got := revisionOf(t, s) - before; got != 1 {
 		t.Fatalf("one committed batch bumps exactly once, got %d", got)
+	}
+}
+
+func TestBatchNoOpUpdateSkipsBump(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	id := mkBatchTask(t, s, "bulk-a", Repeat{})
+	doc, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	rev, _ := mongostore.ToInt(doc["revision"])
+	before := revisionOf(t, s)
+	res, err := s.Batch(ctx, []BatchOp{
+		{Op: "update", ID: id, Fields: map[string]any{"expected_revision": rev}},
+	})
+	if err != nil {
+		t.Fatalf("Batch: %v", err)
+	}
+	if len(res) != 1 || res[0].Detail != "no fields" {
+		t.Fatalf("guard-only update is a no-op, got %+v", res)
+	}
+	if got := revisionOf(t, s) - before; got != 0 {
+		t.Fatalf("all-no-op batch bumps nothing, got %d", got)
+	}
+	if n := openCount(t, s); n != 1 {
+		t.Fatalf("task still open, got %d open", n)
 	}
 }
 

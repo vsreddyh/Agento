@@ -234,6 +234,10 @@ internal fun TaskManagerScreen(
     // disabled while its request runs — the rest of the list, the top bar
     // and the editor stay live. Synthetic "__create__" covers the dialog
     // save path, which has no task id of its own.
+    //
+    // unmarkBusy runs after the request, not in `finally`: this scope is the
+    // screen's own, so a cancelled request dies with the composition and the
+    // busy set with it — there is no cross-screen leak for `finally` to guard.
     var busyIds by remember { mutableStateOf(setOf<String>()) }
     fun markBusy(id: String) { busyIds = busyIds + id }
     fun unmarkBusy(id: String) { busyIds = busyIds - id }
@@ -831,13 +835,18 @@ internal fun TaskManagerScreen(
                 onFailure = { e ->
                     // The selection is kept: the batch changed nothing, so
                     // the same set is still the right one to retry once the
-                    // reload underneath lands.
+                    // reload underneath lands. The failing item is named by
+                    // task, falling back to its position when the row is not
+                    // on screen (the sent order is the set order, which the
+                    // user never sees).
                     silentRefresh = true
                     refreshTick++
                     val named = e.message?.let(::parseBatchError)
-                    val detail = named?.let {
-                        if (it.index >= 0) "${it.detail} (item ${it.index + 1})" else it.detail
-                    } ?: serverDetail(e.message ?: e.javaClass.simpleName)
+                    val target = named?.id?.takeIf { it.isNotEmpty() }?.let { id ->
+                        tasks.firstOrNull { it.id == id }?.name?.ifEmpty { null }
+                    } ?: named?.let { if (it.index >= 0) "item ${it.index + 1}" else null }
+                    val detail = (named?.detail ?: serverDetail(e.message ?: e.javaClass.simpleName)) +
+                        (target?.let { " — $it" } ?: "")
                     toasts.toast(detail, ToastKind.Error)
                 },
             )
@@ -870,6 +879,7 @@ internal fun TaskManagerScreen(
 
     /** One atomic bulk move (#345): one date for the whole selection. */
     fun doBulkMove(dueDate: String) {
+        if (dueDate.isBlank()) return
         val ids = bulkSelected.toList()
         if (ids.isEmpty()) return
         val whenText = friendlyDue(dueDate, "", java.time.LocalDate.now(IST)).ifEmpty { dueDate }
@@ -877,7 +887,9 @@ internal fun TaskManagerScreen(
         // the list showed, so a task changed elsewhere fails the whole batch
         // instead of overwriting. Complete/skip stay unguarded by design —
         // the single verbs are last-write-wins too, with no revision to
-        // guard on.
+        // guard on. An id missing from the fetched page goes out unguarded
+        // (same semantics); if the row is truly gone the server 404s the
+        // batch with the item named.
         val byId = tasks.associateBy { it.id }
         runBulkOps(
             ids.map { id ->
