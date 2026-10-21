@@ -158,6 +158,16 @@ object ChatThreads {
         return base + suffix
     }
 
+    /** The file stamp behind the load cache (#339): mtime + size, so an
+     * unchanged file skips the payload re-walk. */
+    private data class LoadStamp(val mtime: Long, val size: Long)
+
+    /** Last successful load per tab (#339): the stamp and the canonical
+     * threads it produced. The payloads are the caller's own strings
+     * (shared, never copied), so the cache pins no extra bytes. */
+    private val lastLoad: MutableMap<String, Pair<LoadStamp, List<ChatThread>>> =
+        java.util.concurrent.ConcurrentHashMap()
+
     @androidx.annotation.WorkerThread
     fun load(context: Context, tab: String): List<ChatThread> {
         requireIoThread("ChatThreads.load")
@@ -175,7 +185,7 @@ object ChatThreads {
         // The scans (whitespace strip + alphabet validation over photo
         // payloads) must never run on Main: every caller — VM, Settings
         // export/import — is inside Dispatchers.IO.
-        val loaded = runCatching {
+        val loaded: List<ChatThread> = runCatching {
             threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText(Charsets.UTF_8))
                 .filter { it.id.isNotEmpty() }
                 .take(MAX_THREADS)
@@ -200,19 +210,11 @@ object ChatThreads {
         }.getOrDefault(emptyList())
         // Only a successful parse is cached (#339): an unreadable file
         // must not pin an empty result under its stamp.
-        if (loaded.isNotEmpty()) lastLoad[tab] = stamp to loaded
-        loaded
+        if (loaded.isNotEmpty()) {
+            lastLoad[tab] = stamp to loaded
+        }
+        return loaded
     }
-
-    /** The file stamp behind the load cache (#339): mtime + size, so an
-     * unchanged file skips the payload re-walk. */
-    private data class LoadStamp(val mtime: Long, val size: Long)
-
-    /** Last successful load per tab (#339): the stamp and the canonical
-     * threads it produced. The payloads are the caller's own strings
-     * (shared, never copied), so the cache pins no extra bytes. */
-    private val lastLoad: MutableMap<String, Pair<LoadStamp, List<ChatThread>>> =
-        java.util.concurrent.ConcurrentHashMap()
 
     /**
      * Persists threads, canonicalizing attachments at the boundary: load()
