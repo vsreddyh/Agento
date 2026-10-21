@@ -46,6 +46,10 @@ const (
 // somewhere else is a list that goes stale, and a stale list rejects a valid
 // op — the caller asking "what changed?" gets an error instead of an answer.
 //
+// The WRITE side consults it too (RecordMutation drops an op it does not
+// know), so a new op must be added here in the same change as its constant —
+// otherwise the entries for it are dropped on the way in.
+//
 // Unexported, and handed out as a copy: an exported slice is a slice any
 // caller can append to, and one that changes the validation set process-wide
 // by accident is a bug with no trace.
@@ -93,6 +97,25 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		// way the failed write below is — best-effort means the mutation
 		// still succeeds, not that the gap is invisible.
 		log.Printf("tasks: mutation log entry dropped (op=%q task_id=%q)", op, taskID)
+		return
+	}
+	// Every row in this collection must be one the READ side can find:
+	// a known op, and a hex id the filter accepts. A row that fails either
+	// test is visible only in a whole-log read and can never be narrowed
+	// to — a record that exists but cannot be asked for. Both checks are
+	// programmer errors (the transports validate the id before they get
+	// here, and pass op constants), so they are dropped loudly.
+	//
+	// A NEW op must be added to knownOps in the same change as the
+	// constant: the read side refuses what the write side drops, and a
+	// writer that invents an op the log does not know would lose the
+	// entry entirely.
+	if _, err := NormalizeTaskID(taskID); err != nil {
+		log.Printf("tasks: mutation log entry dropped (task_id=%q is not a hex id)", taskID)
+		return
+	}
+	if err := ValidateOps([]string{op}); err != nil {
+		log.Printf("tasks: mutation log entry dropped (op=%q is not a known op)", op)
 		return
 	}
 	entry := bson.M{

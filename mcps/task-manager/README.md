@@ -325,7 +325,10 @@ than assuming one format.
 
 `source` is a self-attested LABEL (`mcp` for the agent, the app's own
 `X-Agento-Source` otherwise), not an authenticated identity — see the tamper
-note above.
+note above. It is stored **as the caller sent it** (trimmed, capped at 40
+bytes): unlike the op and the task id, it is not canonicalised, so `App` and
+`app` are two labels for what may be one caller. Grouping them is a choice
+the app makes, not the server's.
 
 ## Run
 

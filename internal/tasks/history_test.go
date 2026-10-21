@@ -514,6 +514,23 @@ func TestListMutationsRejectsAnOpFilterThatNamesNothing(t *testing.T) {
 	}
 }
 
+// The write side refuses what the read side refuses: a row the filter
+// cannot narrow to — a malformed id, an op the log does not know — is a
+// record that exists but cannot be asked for.
+func TestRecordMutationDropsRowsTheReadSideWouldRefuse(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	s.RecordMutation(ctx, OpCreate, "not-an-id", "mcp", "")
+	s.RecordMutation(ctx, "frobnicate", "aaaaaaaaaaaaaaaaaaaaaaaa", "mcp", "")
+	n, err := s.tasks.Database().Collection(auditCollection).CountDocuments(ctx, map[string]any{})
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("%d rows written, want 0 — a row the reader cannot filter to is a hole in the log", n)
+	}
+}
+
 // The timestamps are stored and returned in UTC, so a log read from two
 // machines does not disagree about when an entry happened.
 func TestListMutationsTimestampsAreUTC(t *testing.T) {
