@@ -67,6 +67,12 @@ explicitly; keep the fail-closed part-type contract.**
   what `SavedStateHandle` should carry, and `persist()` writes sent
   threads only. Re-pick after a kill. A future "persist staging" change
   must store refs/Uris (plus the shrink step), never payloads.
+- The multi-pick decode batch runs in the ViewModel's scope, not the
+  composition's: a rotation recreates the composition and would cancel
+  the rest of a valid pick ("pick again"), so the batch finishes in the
+  background and the staged photos appear when the tab returns (with a
+  notice). Leaving the tab for good, or the app closing, still cancels
+  it — the camera capture file is cleaned in `finally` either way.
 - App-killed-turn resume covers image tails: resending the identical
   history reproduces the identical reattach key (same text + same image
   signature), so it reattaches rather than duplicating, exactly like

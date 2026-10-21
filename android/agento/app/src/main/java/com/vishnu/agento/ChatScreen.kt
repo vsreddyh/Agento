@@ -685,10 +685,13 @@ internal fun ChatTab(
                     }
                 }
             } catch (e: CancellationException) {
-                // Cancelled mid-batch (tab left, rotation): staged picks stay,
-                // undecoded ones vanish — said once, including the zero-landed
-                // abort, because silence reads as a dead tap. Immediately
-                // rethrown: swallowing cancel breaks structured concurrency.
+                // Cancelled mid-batch (the tab's ViewModel went away — the
+                // app closed or the tab was discarded; a ROTATION no longer
+                // cancels it, the batch runs in the ViewModel's scope):
+                // staged picks stay, undecoded ones vanish — said once,
+                // including the zero-landed abort, because silence reads as a
+                // dead tap. Immediately rethrown: swallowing cancel breaks
+                // structured concurrency.
                 withContext(Dispatchers.Main + NonCancellable) {
                     vm.notify(
                         if (landed.get() == 0) {
