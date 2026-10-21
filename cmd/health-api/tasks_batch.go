@@ -162,15 +162,10 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 			}
 		case "duplicate":
 			// The row is about the COPY (its id is the copy's), and the
-			// detail names the SOURCE it was duplicated from. Without
-			// that, the history could say a task appeared and not what it
-			// came from — and the source's own row says nothing about
-			// the copy that came out of it.
-			detail := ""
-			if res.Index >= 0 && res.Index < len(ops) {
-				detail = ops[res.Index].ID
-			}
-			store.RecordMutation(ctx, tasks.OpDuplicate, res.ID, source, detail)
+			// detail names the SOURCE it was duplicated from — carried in
+			// the result by the store, so the transport does not have to
+			// match the result back to its op to know what it was about.
+			store.RecordMutation(ctx, tasks.OpDuplicate, res.ID, source, res.Detail)
 		}
 	}
 	out := make([]bson.M, 0, len(results))

@@ -279,6 +279,18 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			case "duplicate":
 				res.Task, err = s.Duplicate(nb, op.ID)
 				res.Rollover = RolloverNone
+				// The audit detail names the SOURCE the copy came from.
+				// The row the log gets is about the copy (its id is the
+				// copy's), and without the source the history could say a
+				// task appeared without saying what it came from — while
+				// the source's own row says nothing about the copy.
+				//
+				// Carried here rather than re-derived by the transport from
+				// the op list, for the same reason the update's detail is
+				// carried here: the result should not have to be matched
+				// back to its op to know what it was about. Lowercased,
+				// because the log's task_id is.
+				res.Detail = strings.ToLower(strings.TrimSpace(op.ID))
 				// Name the row produced, not the row asked about: the
 				// copy is a different id, and the response envelope and
 				// the audit log both read ID.
