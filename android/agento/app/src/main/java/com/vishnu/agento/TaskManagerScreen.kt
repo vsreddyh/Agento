@@ -542,18 +542,24 @@ internal fun TaskManagerScreen(
     }
 
     /**
-     * Copy a task 1:1 (issue #161) via the canonical server duplicate: every
-     * field carried over verbatim — name, speak_name, description, due
+     * Duplicate a task 1:1 (issue #161) via the canonical server duplicate:
+     * every field carried over verbatim — name, speak_name, description, due
      * date/time, estimate, the whole repeat block and the parallel flag — as
      * a new **open** task. Nothing is "smarter" than the original: a past due
      * date stays a past due date, and a cadence comes across as the same
-     * cadence. A copy is a starting point to edit, not a rescheduled twin.
+     * cadence. A duplicate is a starting point to edit, not a rescheduled twin.
      *
      * The server validates the source (a task with no usable contents is
      * rejected with the reason), so there is no client-side precheck: the
      * sheet is already dismissed, and the error toast says what to fix.
      */
     fun doDuplicate(t: ServerTask) {
+        // One duplicate per tap: a second tap while the first is in flight
+        // would send a second one-op batch and mint a second copy. Same
+        // guard shape as doResolve — and marking the source id (not just
+        // the placeholder) also holds the bulk bar, whose liveness check
+        // reads these same ids.
+        if (exiting.containsKey(t.id) || t.id in busyIds) return
         // Closed here rather than by the caller, so the toast lands on the
         // list the copy will appear in.
         selected = null
@@ -568,6 +574,7 @@ internal fun TaskManagerScreen(
         // if the filter would carry it).
         tasks = if (filter == ServerTaskFilter.Done) prev else listOf(placeholder) + prev
         markBusy(tempId)
+        markBusy(t.id)
         scope.launch {
             api.batch(listOf(BulkOp("duplicate", t.id))).fold(
                 onSuccess = { items ->
@@ -592,6 +599,7 @@ internal fun TaskManagerScreen(
                 },
             )
             unmarkBusy(tempId)
+            unmarkBusy(t.id)
         }
     }
 
