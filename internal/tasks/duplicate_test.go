@@ -91,6 +91,16 @@ func TestBatchDuplicateAtomically(t *testing.T) {
 		if r.Task["completedAt"] != nil {
 			t.Fatalf("result %d must be open", i)
 		}
+		newID, _ := r.Task["id"].(string)
+		if newID == "" {
+			t.Fatalf("result %d: copy has no id", i)
+		}
+		// The result names the row produced, not the row asked about:
+		// the copy is a different id, and the response envelope and the
+		// audit log both read ID.
+		if r.ID != newID {
+			t.Fatalf("result %d: ID = %q, want new copy %q", i, r.ID, newID)
+		}
 	}
 	if n := openCount(t, s); n != 4 {
 		t.Fatalf("2 sources + 2 copies = 4 open, got %d", n)

@@ -21,7 +21,7 @@ Returning a done or skipped task to open.
 _Avoid_: uncomplete, restore
 
 **Duplicate**:
-Creating a new task as a canonical copy of an existing one, including notes, repeat, and reminders.
+A new task made from an existing one, carrying its contents (details, due date/time, estimate, repeat, voice phrase). Reminders follow the carried due date/time.
 _Avoid_: copy, clone
 
 **Move**:

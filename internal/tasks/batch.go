@@ -4,7 +4,7 @@ package tasks
 //
 // A bulk run (complete, skip, move, or duplicate a set of selected tasks)
 // maps to one Batch call, which commits fully or not at all. Every op runs through the
-// same CompleteDetail / SkipDetail / Update the single-task paths use, so the
+// same CompleteDetail / SkipDetail / Update / Duplicate the single-task paths use, so the
 // batch cannot drift from what one task does alone — the only differences
 // are deliberate and named below:
 //
@@ -18,7 +18,12 @@ package tasks
 //     so aborting is both honest and atomic.
 //   - no transaction support means no batch. The sequential fallback other
 //     stores use would silently break the all-or-nothing contract, so Batch
-//     refuses instead of degrading.
+//     refuses with ErrNoTransactions (mapped to 503) instead of degrading.
+//   - not idempotent across transport failure. A timeout leaves the outcome
+//     unknown (the commit may have landed: see transact), and a blind retry
+//     would re-apply — harmless for complete/skip/update, but duplicate
+//     would copy twice. On an unknown outcome, refresh via the changes
+//     marker and resend the selection instead of retrying blind.
 
 import (
 	"context"
@@ -34,10 +39,10 @@ import (
 // chunking protocol is needed on either side.
 const BatchMaxOps = 50
 
-// BatchOp is one operation inside a batch: complete or skip a task by id, or
-// update it with the same field map the single-task update takes (due_date
-// for a move, expected_revision for the concurrency guard, skip reason only
-// on skip).
+// BatchOp is one operation inside a batch: complete, skip, update, or
+// duplicate a task by id. Update takes the same field map the single-task
+// update takes (due_date for a move, expected_revision for the concurrency
+// guard); reason rides only on skip.
 type BatchOp struct {
 	Op     string
 	ID     string
@@ -48,6 +53,10 @@ type BatchOp struct {
 // BatchItemResult is what one committed op produced: the fresh task, the
 // minted successor when a structured cadence rolled over, and the rollover
 // outcome with its field-specific detail (empty unless the rollover stopped).
+//
+// ID is the requested id for complete/skip/update — and the NEW copy's id
+// for duplicate, whose task is a different row. The response and the audit
+// log both name the row the op produced, not the row it was asked about.
 type BatchItemResult struct {
 	Index    int
 	ID       string
@@ -57,6 +66,11 @@ type BatchItemResult struct {
 	Rollover Rollover
 	Detail   string
 }
+
+// ErrNoTransactions refuses a batch where atomicity is unavailable. A
+// distinct sentinel (not a StoreError) so the transport answers 503: this
+// is a deployment capability, never a bad envelope.
+var ErrNoTransactions = errors.New("batch unavailable: this deployment does not support transactions")
 
 // BatchOpError names which op of a batch failed, keeping the original error
 // (and its 404/409 mapping) intact underneath for errors.As.
@@ -80,6 +94,13 @@ func (e *BatchOpError) Unwrap() error { return e.Err }
 // signatures would churn every caller to serve the one caller that batches;
 // the context carries it to exactly the writes one batch performs and
 // nowhere else.
+//
+// Wrapping the session context is safe with this driver: mongo-go-driver
+// v1.17.6 recovers the session by context VALUE (sessionFromContext reads
+// ctx.Value(sessionKey{}) in mongo/session.go), so WithValue/WithoutCancel
+// — which both preserve parent values — keep every write enlisted. The
+// abort tests prove it: with the session stripped, the first op would
+// autocommit outside the transaction and no abort test could pass.
 type noBumpKey struct{}
 
 func noBump(ctx context.Context) context.Context {
@@ -166,10 +187,14 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		}
 	}
 	if !s.useTransactions(ctx) {
-		return nil, fail("batch unavailable: this deployment does not support transactions")
+		return nil, ErrNoTransactions
 	}
-	results := make([]BatchItemResult, 0, len(ops))
+	var results []BatchItemResult
 	err := s.transact(ctx, func(sc context.Context) error {
+		// Local to the attempt: transact retries this closure on transient
+		// errors, and results from a failed attempt must not leak into the
+		// next one. Assigned outward only on success, below.
+		attempt := make([]BatchItemResult, 0, len(ops))
 		// Per-op bumps suppressed: every shared write path (the verbs, the
 		// insert funnel, rollover successors) checks this flag, and the one
 		// bump for the whole batch lands below, inside the transaction.
@@ -193,9 +218,24 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			case "update":
 				res.Task, err = s.Update(nb, op.ID, op.Fields)
 				res.Rollover = RolloverNone
+				// The audit detail travels with the result rather than
+				// being re-derived from op order by the caller.
+				fields := op.Fields
+				if fields == nil {
+					fields = map[string]any{}
+				}
+				res.Detail = ChangedFieldNames(fields)
 			case "duplicate":
 				res.Task, err = s.Duplicate(nb, op.ID)
 				res.Rollover = RolloverNone
+				// Name the row produced, not the row asked about: the
+				// copy is a different id, and the response envelope and
+				// the audit log both read ID.
+				if err == nil {
+					if newID, _ := res.Task["id"].(string); newID != "" {
+						res.ID = newID
+					}
+				}
 			}
 			if err != nil {
 				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID, Err: err}
@@ -207,9 +247,10 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
 					Err: fail("rollover failed: %s", res.Detail)}
 			}
-			results = append(results, res)
+			attempt = append(attempt, res)
 		}
 		s.bumpChanges(sc)
+		results = attempt
 		return nil
 	})
 	if err != nil {

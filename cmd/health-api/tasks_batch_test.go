@@ -72,7 +72,7 @@ func TestParseBatchOpsRejectsBadShapes(t *testing.T) {
 
 func TestBatchHandlerRejectsBadShapes(t *testing.T) {
 	t.Setenv("PASSWORD", "test-secret-12345678")
-	for _, body := range []string{`{}`, `{"ops": "complete"}`, `{"ops": [{"id": "abc"}]}`, `not json`} {
+	for _, body := range []string{`{}`, `{"ops": "complete"}`, `{"ops": [{"id": "abc"}]}`, `{"ops": [{"op": "complete", "id": "   "}]}`, `{"ops": [{"op": "", "id": "abc"}]}`, `not json`} {
 		req := httptest.NewRequest(http.MethodPost, "/api/tasks/batch", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer test-secret-12345678")
 		w := httptest.NewRecorder()
@@ -112,5 +112,11 @@ func TestWriteBatchErrNamesTheFailingOp(t *testing.T) {
 	writeBatchErr(w3, errors.New("boom"))
 	if w3.Code != http.StatusInternalServerError {
 		t.Fatalf("plain error: got %d", w3.Code)
+	}
+	// No-transaction deployments are a capability problem: 503, not 422.
+	w4 := httptest.NewRecorder()
+	writeBatchErr(w4, tasks.ErrNoTransactions)
+	if w4.Code != http.StatusServiceUnavailable {
+		t.Fatalf("no transactions: got %d", w4.Code)
 	}
 }

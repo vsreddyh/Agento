@@ -2,12 +2,15 @@ package main
 
 // Batch endpoint: one atomic bulk run for the Task Manager selection (#345).
 //
-// POST /api/tasks/batch {"ops": [{"op": "complete"|"skip"|"update",
+// POST /api/tasks/batch {"ops": [{"op": "complete"|"skip"|"update"|"duplicate",
 // "id": "...", "reason": "...", "fields": {...}}]} answers 200 with
-// {"results": [{"index", "id", "op", "task", "next"?, "rollover",
-// "needs_attention"?}]}. Any hard failure answers with the single-verb
-// status for the failing op (404 unknown id, 409 revision conflict, 422
-// validation) plus the op's index, id, and op so the client can name it.
+// {"results": [{"index": 0, "id": "...", "op": "complete", "task": {...},
+// "next": {...}, "rollover": "created", "needs_attention": "..."}]}.
+// "id" names the row the op produced: the task itself, except duplicate,
+// whose copy is a new row. Any hard failure aborts the whole batch and
+// answers with the single-verb status for the failing op (404 unknown id,
+// 409 revision conflict, 422 validation, 503 no transactions) plus the
+// op's index, id, and op so the client can name it.
 //
 // Shape validation (JSON types) lives here, beside checkTaskFields; VALUE
 // validation (empty batch, over-cap, unknown op) lives in the store, the one
@@ -19,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -42,18 +46,14 @@ func parseBatchOps(fields map[string]any) ([]tasks.BatchOp, error) {
 			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d] must be an object", i)}
 		}
 		op, _ := obj["op"].(string)
+		op = strings.TrimSpace(op)
 		if op == "" {
-			if _, present := obj["op"]; !present || obj["op"] == nil {
-				return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].op is required", i)}
-			}
-			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].op must be a string", i)}
+			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].op is required", i)}
 		}
 		id, _ := obj["id"].(string)
+		id = strings.TrimSpace(id)
 		if id == "" {
-			if _, present := obj["id"]; !present || obj["id"] == nil {
-				return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].id is required", i)}
-			}
-			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].id must be a string", i)}
+			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].id is required", i)}
 		}
 		bop := tasks.BatchOp{Op: op, ID: id}
 		if v, present := obj["reason"]; present && v != nil {
@@ -115,8 +115,11 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 		case "skip":
 			store.RecordMutation(ctx, tasks.OpSkip, res.ID, source, string(res.Rollover))
 		case "update":
-			store.RecordMutation(ctx, tasks.OpUpdate, res.ID, source,
-				tasks.ChangedFieldNames(rawBatchFields(ops, res.Index)))
+			// A no-op update wrote nothing: like the single verb, it
+			// earns no audit row, so the log stays a record of change.
+			if res.Detail != "no fields" {
+				store.RecordMutation(ctx, tasks.OpUpdate, res.ID, source, res.Detail)
+			}
 		case "duplicate":
 			store.RecordMutation(ctx, tasks.OpDuplicate, res.ID, source, "")
 		}
@@ -138,21 +141,23 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, bson.M{"results": out})
 }
 
-// rawBatchFields recovers the update field map for the audit log. The result
-// carries the fresh task, not what was sent, so the detail comes from the op.
-func rawBatchFields(ops []tasks.BatchOp, index int) map[string]any {
-	if index < 0 || index >= len(ops) || ops[index].Fields == nil {
-		return map[string]any{}
-	}
-	return ops[index].Fields
-}
-
 // writeBatchErr maps a batch failure like its single-verb equivalent (404
-// unknown id, 409 conflict, 422 validation), naming the failing op so the
-// client can report WHICH item failed and keep the selection for retry.
+// unknown id, 409 conflict, 422 validation, 503 no transactions), naming the
+// failing op so the client can report WHICH item failed and keep the
+// selection for retry.
 func writeBatchErr(w http.ResponseWriter, err error) {
+	// No-transaction deployments are a server capability, not a bad
+	// envelope: 503, so the client treats it as retry-later rather than
+	// fix-your-fields. Served before the op wrapper because this error
+	// aborts before any op runs and names no index.
+	if errors.Is(err, tasks.ErrNoTransactions) {
+		writeJSON(w, http.StatusServiceUnavailable, bson.M{"detail": err.Error()})
+		return
+	}
 	var bop *tasks.BatchOpError
 	if errors.As(err, &bop) {
+		// Owned here: taskErrBody builds a fresh map per call, so these
+		// additions cannot alias anything shared.
 		code, body := taskErrBody(bop.Err)
 		body["index"] = bop.Index
 		body["id"] = bop.ID

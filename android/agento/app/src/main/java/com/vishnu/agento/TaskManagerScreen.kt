@@ -819,7 +819,8 @@ internal fun TaskManagerScreen(
         val ids = ops.map { it.id }
         ids.forEach(::markBusy)
         scope.launch {
-            api.batch(ops).fold(
+            try {
+                api.batch(ops).fold(
                 onSuccess = {
                     silentRefresh = true
                     refreshTick++
@@ -840,7 +841,9 @@ internal fun TaskManagerScreen(
                     toasts.toast(detail, ToastKind.Error)
                 },
             )
-            ids.forEach(::unmarkBusy)
+            } finally {
+                ids.forEach(::unmarkBusy)
+            }
         }
     }
 

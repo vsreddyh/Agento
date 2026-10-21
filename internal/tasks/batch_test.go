@@ -238,6 +238,14 @@ func TestBatchMoveUpdatesDueDates(t *testing.T) {
 	if len(res) != 2 {
 		t.Fatalf("want 2 results, got %d", len(res))
 	}
+	if res[0].Detail != "due_date" || res[1].Detail != "due_date" {
+		t.Fatalf("update results carry the audit detail, got %q and %q", res[0].Detail, res[1].Detail)
+	}
+	for i, r := range res {
+		if r.ID == "" || r.Task == nil {
+			t.Fatalf("result %d must name its task, got %+v", i, r)
+		}
+	}
 	for _, id := range []string{a, b} {
 		doc, err := s.Get(ctx, id)
 		if err != nil {
