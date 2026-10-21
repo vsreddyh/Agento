@@ -642,14 +642,15 @@ fun base64Bytes(base64: String): Long {
     return maxOf(0L, ((content + tailPad) * 3L) / 4L - minOf(tailPad, 2))
 }
 
-/** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal at KB
- * and above, plain count below 1000 B (never blank) (#339): the old doc
- * line ("one decimal") overpromised the sub-KB branch, which renders no
- * decimal by design.
+/** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal at MB
+ * and above, integer KB below that, plain count below 1000 B (never blank)
+ * (#339): the old doc line ("one decimal") overpromised the sub-KB branch,
+ * which renders no decimal by design.
  * Pinned to US formatting (#339): user-visible strings must not render
- * `1,1 MB` under a comma-decimal locale. Never renders `1000 <unit>`
- * (#339): the KB branch stops below 999_500 so rounding carries into MB
- * instead of printing a cross-unit "1000 KB" in a named limit error.
+ * `1,1 MB` under a comma-decimal locale. Never renders a cross-unit value
+ * (#339): the KB branch floors (no "1000 KB" from rounding up) up to
+ * 999_950, where 1-decimal MB honestly reads "1.0" — "999 KB" below,
+ * "1.0 MB" at and above, no value names the wrong unit.
  * Negative input renders "unknown size" (#339): the preflight phrases
  * unknown length separately today, but the next caller passing a raw
  * contentLength() must not print "-1 B" in a user-visible string.
@@ -661,7 +662,8 @@ fun base64Bytes(base64: String): Long {
 fun formatBytes(bytes: Long): String {
     if (bytes < 0) return "unknown size"
     if (bytes < 1_000L) return "$bytes B"
-    if (bytes < 999_500L) return "${"%.0f".format(java.util.Locale.US, bytes / 1_000.0)} KB"
+    // Floor + 999_950 threshold per the KDoc above: no cross-unit values.
+    if (bytes < 999_950L) return "${bytes / 1_000} KB"
     return "${"%.1f".format(java.util.Locale.US, bytes / 1_000_000.0)} MB"
 }
 

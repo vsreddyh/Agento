@@ -261,11 +261,15 @@ object ChatThreads {
      * the dirty-tracking cache behind [save]. Element-wise identity of the
      * CURRENT list is checked against the last INPUT — never the last
      * output (the VM keeps its original instances; comparing against
-     * canonicalized copies would never match). Same instance means same
-     * immutable content, so the corresponding cached output is reused
-     * without re-walking payloads; only new or copied threads pay the
-     * alphabet walk. Bounded by tab count (a handful); entries hold the
-     * same objects the VM already holds, so no payload is duplicated. A
+     * canonicalized copies would never match, which is exactly the
+     * fragility a list-level comparison would have — the check is
+     * per-element refs, robust to the fresh-list-per-save shape). Same
+     * instance means same immutable content, so the corresponding cached
+     * output is reused without re-walking payloads; only new or copied
+     * threads pay the alphabet walk. Bounded by tab count (a handful);
+     * entries reference the same payload STRINGS the VM already holds —
+     * data-class copies share their string refs, so the cache pins list
+     * and message shells only, never a second copy of the base64. A
      * foreign caller bypassing the VM always misses (fresh instances, no
      * cache entry) and gets the full boundary treatment — the cache can
      * only skip work the boundary itself already proved, never vouch for

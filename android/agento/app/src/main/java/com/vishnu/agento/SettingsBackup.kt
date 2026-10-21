@@ -194,8 +194,10 @@ object SettingsBackup {
         // Per-widget display settings (#169): enumerated live because the key
         // ends in an appWidgetId, and written by type because the four fields
         // are not all one type. Sorted, so two exports of the same prefs are
-        // byte-identical and can be diffed.
-        for (k in prefs.all.keys.filter { isWidgetDisplayKey(it) }.sorted()) {
+        // byte-identical and can be diffed. Read from the same `all`
+        // snapshot as every other block (#339): re-reading prefs.all per
+        // key would split check-vs-read on a concurrent write.
+        for (k in all.keys.filter { isWidgetDisplayKey(it) }.sorted()) {
             when (val v = all[k]) {
                 is String -> values.put(k, v)
                 is Boolean -> values.put(k, v)

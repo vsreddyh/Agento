@@ -432,22 +432,26 @@ class ChatAttachmentsTest {
         // so unchanged threads reuse the cached output without re-walking
         // payloads. New or copied threads canonicalize fully (ragged
         // blanked) — the cache never vouches for strangers.
-        val photo = attachment()
+        val raw = "QUJD".repeat(512)
+        val photo = attachment(raw)
         val t1 = ChatThread(
             id = "t",
             messages = listOf(StoredMessage(role = "user", content = "hi", attachments = listOf(photo))),
         )
-        val first = canonicalizeUnchanged(null, null, listOf(t1))
+        val first = ChatThreads.canonicalizeUnchanged(null, null, listOf(t1))
         assertEquals(1, first.size)
         // Same input refs in, cached output out: zero re-validation on a
         // no-op save. Shifted lists degrade to full canonicalize (safe).
-        val second = canonicalizeUnchanged(listOf(t1), first, listOf(t1))
+        val second = ChatThreads.canonicalizeUnchanged(listOf(t1), first, listOf(t1))
         assertTrue(second[0] === first[0])
+        // Payload strings are shared, not copied (#339): the cache pins
+        // shells only — same base64 instance the VM holds.
+        assertTrue(second[0].messages[0].attachments[0].base64 === raw)
         val t0 = ChatThread(
             id = "t0",
             messages = listOf(StoredMessage(role = "user", content = "yo")),
         )
-        val shifted = canonicalizeUnchanged(listOf(t1), first, listOf(t0, t1))
+        val shifted = ChatThreads.canonicalizeUnchanged(listOf(t1), first, listOf(t0, t1))
         assertEquals(2, shifted.size)
         assertEquals("yo", shifted[0].messages[0].content)
         // Changed thread: ragged blanked, and the survivor keeps its ref.
@@ -456,7 +460,7 @@ class ChatAttachmentsTest {
             id = "t",
             messages = listOf(StoredMessage(role = "user", content = "hi", attachments = listOf(ragged))),
         )
-        val third = canonicalizeUnchanged(listOf(t1), first, listOf(t1, t2))
+        val third = ChatThreads.canonicalizeUnchanged(listOf(t1), first, listOf(t1, t2))
         assertTrue(third[0] === first[0])
         assertEquals("", third[1].messages[0].attachments[0].base64)
     }
