@@ -614,7 +614,7 @@ class ChatApi(context: Context) {
         // Named walls throw inside the build: an uncaught throw would escape
         // this producer with no ChatEvent.Error path, and the turn would
         // wedge. Catch ONLY the two named classes; anything else must propagate.
-        val (body, rawBytes) = try {
+        val (body, rawBytes, hasPhotos) = try {
             withContext(Dispatchers.IO) {
             val payload = JSONObject()
             // An explicit provider/model is always sent; blanks are omitted.
@@ -665,7 +665,12 @@ class ChatApi(context: Context) {
             // the BUILT length, which is the part that reaches the wire.
             val raw = payload.toString()
             val built = raw.toRequestBody(JSON)
-            built to built.contentLength()
+            // The photo scan rides the IO block (#339): it walks every
+            // payload's alphabet, which is up to hundreds of millions of
+            // characters — on the producer's thread outside this block it
+            // would sit on the collector's path.
+            val hasPhotos = messages.any { it.attachments.hasDecodablePhoto() }
+            Triple(built, built.contentLength(), hasPhotos)
             }
         } catch (e: NamedAttachError) {
             trySend(ChatEvent.Error(e.message ?: "Couldn't build that message."))
@@ -701,7 +706,6 @@ class ChatApi(context: Context) {
             // (#339): a hand-edited odd-cased tail parks its photos, and
             // advising "shorten the thread" when the remedy is the parked
             // photo would name the wrong fix.
-            val hasPhotos = messages.any { it.attachments.hasDecodablePhoto() }
             trySend(
                 ChatEvent.Error(
                     (if (rawBytes < 0) {

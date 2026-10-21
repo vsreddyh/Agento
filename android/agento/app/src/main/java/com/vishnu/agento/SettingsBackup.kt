@@ -353,7 +353,10 @@ object SettingsBackup {
                     .sumOf { files.optString(it, "").length.toLong() }
                 if (incomingChars * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                     return Result.failure(
-                        IllegalStateException(backupTooLargeMessage(incomingChars * 2)),
+                        // incomingChars is the char count, the same unit the
+                        // export twin passes (the message renders disk-like
+                        // sizes; doubling it here would overstate it).
+                        IllegalStateException(backupTooLargeMessage(incomingChars)),
                     )
                 }
                 // Unknown keys (a retired tab, a renamed file) are named

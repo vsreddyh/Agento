@@ -1125,7 +1125,7 @@ internal fun ChatTab(
             // gallery did not — a second tap opened a second picker and
             // the two results interleaved.
             if (isGalleryPending()) {
-                vm.notify("Photo picker is already open.")
+                vm.notify("Photo picker is already open.", ToastKind.Info)
                 return@ChatScreen
             }
             // Home snapshot LIVE at tap time: the callback runs post-switch,
