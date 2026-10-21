@@ -266,6 +266,9 @@ func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (
 		return nil, err
 	}
 	if rows == nil {
+		// Belt and braces: the store returns an empty list, never a nil
+		// slice, so this never fires today. It is here so the tool's
+		// `mutations` is `[]` and not `null` whatever the seam does next.
 		rows = []tasks.Mutation{}
 	}
 	return map[string]any{

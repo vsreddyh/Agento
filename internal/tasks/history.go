@@ -130,7 +130,10 @@ func ParseSince(s string) (time.Time, error) {
 	}
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
-		return time.Time{}, fail("since must be an RFC3339 timestamp, e.g. 2026-10-21T00:00:00Z")
+		// The offending value is echoed, bounded: an app author who sent
+		// "2026-10-21 00:00:00" should not have to guess what the server
+		// was looking at.
+		return time.Time{}, fail("since must be an RFC3339 timestamp, e.g. 2026-10-21T00:00:00Z (got %q)", TruncateBytes(s, 40))
 	}
 	return t, nil
 }
@@ -153,7 +156,10 @@ func NormalizeTaskID(id string) (string, error) {
 		return "", nil
 	}
 	if _, err := primitive.ObjectIDFromHex(id); err != nil {
-		return "", fail("task_id must be a 24-character hex id")
+		// The offending value is echoed, bounded: the caller sent a string
+		// where a hex id belonged, and saying which string saves a round
+		// trip to find out.
+		return "", fail("task_id must be a 24-character hex id (got %q)", TruncateBytes(id, 40))
 	}
 	return id, nil
 }

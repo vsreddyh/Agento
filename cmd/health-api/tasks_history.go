@@ -101,6 +101,9 @@ func taskMutations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rows == nil {
+		// Belt and braces: the store returns an empty list, never a nil
+		// slice, so this never fires today. It is here so the wire shape
+		// (`[]`, not `null`) survives a future change to the seam.
 		rows = []tasks.Mutation{}
 	}
 	writeJSON(w, http.StatusOK, bson.M{"mutations": rows, "truncated": truncated})

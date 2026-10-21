@@ -279,6 +279,12 @@ single duplicate is a store operation with no verb of its own, so the filter
 vocabulary is wider than the current set of writers. Rows come back only for
 duplicates made through a batch.
 
+There is **no cursor**. `truncated` says "more rows exist than this page
+holds" and nothing more: the filters are the way to narrow, so read one
+task's history (`task_id`) or one kind of change (`op`) rather than paging
+through the whole log. A 90-day personal log fits a page; if it ever does
+not, the fix is a cursor — `(at, _id)` — not a bigger `limit`.
+
 `source` is a self-attested LABEL (`mcp` for the agent, the app's own
 `X-Agento-Source` otherwise), not an authenticated identity — see the tamper
 note above.
