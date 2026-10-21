@@ -687,9 +687,12 @@ class ChatApi(context: Context) {
             // Phrased for what's actually measured: rawBytes is the whole
             // request JSON, so "this turn" would misname the number on a long
             // text-only thread — and a photo-less trip must not say "remove a
-            // photo". The second half keys off decodable photos.
-            val hasPhotos = lastUserIdx >= 0 &&
-                messages[lastUserIdx].attachments.hasDecodablePhoto()
+            // photo". The second half keys off decodable photos — ANY
+            // decodable photo in the request, not just the trailing turn's
+            // (#339): a hand-edited odd-cased tail parks its photos, and
+            // advising "shorten the thread" when the remedy is the parked
+            // photo would name the wrong fix.
+            val hasPhotos = messages.any { it.attachments.hasDecodablePhoto() }
             trySend(
                 ChatEvent.Error(
                     (if (rawBytes < 0) {

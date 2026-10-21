@@ -172,7 +172,9 @@ object SettingsBackup {
      * UNGATED: File.length() is a metadata stat, so any thread may call it. */
     internal fun backupFilesBytes(dir: java.io.File): Long =
         backupFiles().sumOf { name ->
-            java.io.File(dir, name).takeIf { it.exists() }?.length() ?: 0L
+            // isFile, not exists (#339): a directory at a thread-file path
+            // would report metadata bytes and under-read the floor.
+            java.io.File(dir, name).takeIf { it.isFile }?.length() ?: 0L
         }
     /** One export's result (#339): the payload plus the files that could not
      * be read. A thread file that fails to read is simply MISSING from the
@@ -354,7 +356,14 @@ object SettingsBackup {
                         IllegalStateException(backupTooLargeMessage(incomingChars * 2)),
                     )
                 }
-                for (name in backupFiles()) {
+                // Unknown keys (a retired tab, a renamed file) are named
+                // too (#339): they are not restored, and "Restored N" must
+                // not hide what was left behind.
+                val known = backupFiles()
+                for (name in files.keys()) {
+                    if (name !in known) skipped += name
+                }
+                for (name in known) {
                     // Absent entry, not a broken one (#339): a backup
                     // exported before the file existed simply has no entry
                     // for it — that is not a skip to report.

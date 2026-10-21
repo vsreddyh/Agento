@@ -919,7 +919,14 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                             .onFailure { Log.w("Agento", "export cleanup failed", it) }
                         throw e
                     }
-                    written to export.unreadable                }
+                    written to export.unreadable
+                }.onFailure { e ->
+                    // Cancellation is NOT a failure (#339): a cancelled
+                    // export (navigated away) must not report an error
+                    // toast — it rethrows, and the write block above already
+                    // deleted the partial file.
+                    if (e is CancellationException) throw e
+                }
             }
             status = result.fold(
                 onSuccess = { (size, unreadable) ->
@@ -1021,6 +1028,10 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                         )
                     }
                     SettingsBackup.importFrom(appContext, org.json.JSONObject(text)).getOrThrow()
+                }.onFailure { e ->
+                    // A cancelled import is not a failure (#339): it must
+                    // not report an error toast.
+                    if (e is CancellationException) throw e
                 }
             }
             result.fold(
