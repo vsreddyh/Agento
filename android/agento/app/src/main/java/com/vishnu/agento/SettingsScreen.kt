@@ -794,6 +794,21 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
+                    // Metered BEFORE materializing (#339): export() builds
+                    // the whole compact string (~2x bytes as UTF-16) before
+                    // the first chunk writes — a hundreds-of-MB backup OOMs
+                    // before the post-hoc large-backup warning below could
+                    // display. Sum lengths first (metadata only, no reads):
+                    // the floor, not the ceiling. Warns up front; the
+                    // explicit tap is consent to proceed.
+                    val upfront = SettingsBackup.backupFilesBytes(context.filesDir)
+                    if (upfront > BACKUP_LARGE_BYTES) {
+                        withContext(Dispatchers.Main) {
+                            status = "Large backup (${formatBytes(upfront)} on disk) — " +
+                                "exporting now, this may take a moment."
+                            failed = false
+                        }
+                    }
                     // Sized for the photo-thread warning below (#339): the
                     // export holds thread files wholesale, payloads
                     // included, so photo-heavy threads make for slow
