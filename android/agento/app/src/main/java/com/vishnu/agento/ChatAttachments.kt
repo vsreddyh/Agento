@@ -369,7 +369,7 @@ internal fun messageMatchesQuery(
     query: String,
 ): Boolean {
     if (content.contains(query, ignoreCase = true)) return true
-    val photoCount = if (role == "user") attachments.wiredPhotoCount() else 0
+    val photoCount = if (role.equals("user", ignoreCase = true)) attachments.wiredPhotoCount() else 0
     return photoCount > 0 &&
         contentWithMarker(content, photoCount).contains(query, ignoreCase = true)
 }
@@ -425,8 +425,13 @@ fun attachmentMarker(n: Int): String =
  * ANYWHERE in the text (not just trailing) — a mid-string lookalike
  * ("[1 photo attached] hello" + a real photo) would otherwise ride with
  * two identical markers for one photo. No `$` anchor by design: the real
- * marker is appended AFTER escaping, so it can never self-quote. */
-private val literalMarker = Regex("""\[(\d+ photos?) attached\]""")
+ * marker is appended AFTER escaping, so it can never self-quote.
+ * Case-insensitive by design (#339): a user-typed "[1 Photo Attached]"
+ * must quote like the lowercase form — otherwise the mixed-case lookalike
+ * bypasses the quote rule while the canonical marker stays lowercase.
+ * Role checks use equals(ignoreCase) for the same reason: a future
+ * "User"-cased writer must not silently bypass the wire/search rules. */
+private val literalMarker = Regex("""\[(\d+ photos?) attached\]""", RegexOption.IGNORE_CASE)
 
 /**
  * Quotes a user-typed marker lookalike ANYWHERE in the text (#339): a user who
@@ -482,7 +487,7 @@ fun contentWithMarkerVerbatim(content: String, n: Int): String =
  * assistant photo turn filters as content-less (it would wire as bare
  * text with no marker), so resends never carry a turn the wire drops. */
 fun messageHasContent(m: ChatMessage): Boolean =
-    m.content.isNotBlank() || (m.role == "user" && m.attachments.wiredPhotoCount() > 0)
+    m.content.isNotBlank() || (m.role.equals("user", ignoreCase = true) && m.attachments.wiredPhotoCount() > 0)
 
 /**
  * Dimensions fitting `w`×`h` inside [MAX_IMAGE_SIDE_PX] on the long side,
@@ -558,13 +563,13 @@ fun messageContentJson(
     // but never wires — both positions reasoned, disagreeing only on that
     // hand-edited shape, which load() heals on read anyway.
     val markerCount = attachments.wiredPhotoCount()
-    if (role != "user" || !includeImages) {
+    if (!role.equals("user", ignoreCase = true) || !includeImages) {
         // Stripped earlier photo turns stay honest (#339): the server
         // prompts with the trailing turn alone, but any other reader of
         // this history should see that photos were here — not a blank.
         // Verbatim twin (NOT the trimming helper): history rides exactly
         // as typed, marker only appended.
-        if (role == "user" && markerCount > 0 && !includeImages) {
+        if (role.equals("user", ignoreCase = true) && markerCount > 0 && !includeImages) {
             return WireContent.Text(contentWithMarkerVerbatim(content, markerCount))
         }
         // Assistant turns never stage photos: the marker rule above is
@@ -968,13 +973,26 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 }
                 ensureActive()
                 val (tw, th) = downscaledSize(bitmap.width, bitmap.height)
+                // Downscale FIRST, fill second (#339): the old order filled
+                // at full size then scaled, holding sampled + opaque-sampled
+                // + scaled live for alpha screenshots. Scaling first means
+                // the fill allocates at target size (tw×th) — same pixels
+                // out, ~half the transient for the PNG path. Alpha survives
+                // the scale, so the hasAlpha gate still fires correctly.
+                if (bitmap.width != tw || bitmap.height != th) {
+                    val scaled = Bitmap.createScaledBitmap(bitmap, tw, th, true)
+                    if (scaled !== bitmap) {
+                        bitmap.recycle()
+                        bitmap = scaled
+                    }
+                }
                 // Opaque white fill, only when needed (#339): JPEG has no
                 // alpha channel, so a transparent screenshot/icon would
                 // otherwise flatten onto black. hasAlpha()-gated — opaque
-                // camera photos (the common case) skip the second full-size
-                // bitmap + blit entirely.
+                // camera photos (the common case) skip the extra bitmap +
+                // blit entirely.
                 if (bitmap.hasAlpha()) {
-                    val opaque = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+                    val opaque = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
                     android.graphics.Canvas(opaque).apply {
                         drawColor(android.graphics.Color.WHITE)
                         drawBitmap(bitmap, 0f, 0f, null)
@@ -982,13 +1000,6 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     if (opaque !== bitmap) {
                         bitmap.recycle()
                         bitmap = opaque
-                    }
-                }
-                if (bitmap.width != tw || bitmap.height != th) {
-                    val scaled = Bitmap.createScaledBitmap(bitmap, tw, th, true)
-                    if (scaled !== bitmap) {
-                        bitmap.recycle()
-                        bitmap = scaled
                     }
                 }
                 ensureActive()

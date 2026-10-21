@@ -195,6 +195,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private val serverApi = ServerApi(app)
     private val appCtx: Application = app
 
+    /** Decoded-thumbnail memory, ViewModel-held (#339): the strip used to
+     * `remember(tab) { ThumbCache() }`, which dropped on every rotation /
+     * activity recreate and re-ran Base64.decode + decodeByteArray for
+     * every visible thumb on return. The VM (keyed per-tab like the cache
+     * was) survives rotation, so the cache does too — same per-tab
+     * scoping, no re-decode. Bitmaps in a VM are safe here: bounded
+     * (~8 MB LRU), UI-only, never persisted. */
+    internal val thumbCache = ThumbCache()
+
     private val _state = mutableStateOf(
         ChatUiState(
             provider = api.providerFor(tab),
@@ -531,17 +540,26 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         stopApprovalWatch()
         retargetApprovals()
         retargetMemory()
-        // Staged photos die with the text draft, said out loud (#339):
-        // the composer belongs to the thread being left, and a parked
-        // photo firing into the wrong thread would be a silent mis-send —
-        // so the discard itself voices instead of vanishing.
+        // Queued text parks in the composer like newConversation/delete
+        // (#339): the composer belongs to the thread being left, but typed
+        // words are not a mis-send risk the way staged photos are — photos
+        // fire into the wrong thread silently, while text just sits visibly
+        // in the box for review. New/delete already keep every word via
+        // joinPending; switch/open now do the same so a fast switch never
+        // eats a draft silently. Staged photos still discard with notice.
+        val sw = _state.value
+        val parkedSwitch = when {
+            sw.queued.isBlank() -> sw.pending
+            sw.pending.isBlank() -> sw.queued
+            else -> joinPending(sw.pending, sw.queued)
+        }
         val hadStaged = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
             threadId = id,
             error = "",
-            pending = "",
+            pending = parkedSwitch,
             // The notice queue drops Infos with them: a cap toast triggered on
             // the old thread must not render over the new composer's first
             // paint (Errors survive via retainedNotices(); the discard notice
@@ -610,6 +628,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             stopApprovalWatch()
             retargetApprovals()
             retargetMemory()
+            // Same text-park as switchThread/newConversation (#339): typed
+            // words survive the open visibly in the composer; staged photos
+            // still discard with notice below (silent mis-send risk).
+            val op = _state.value
+            val parkedOpen = when {
+                op.queued.isBlank() -> op.pending
+                op.pending.isBlank() -> op.queued
+                else -> joinPending(op.pending, op.queued)
+            }
             // Same staged-discard voice as switchThread above (#339).
             val hadStagedOpen = _state.value.pendingAttachments.wiredPhotoCount() > 0
             _state.value = _state.value.copy(
@@ -617,7 +644,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 threads = summaries(),
                 threadId = id,
                 error = "",
-                pending = "",
+                pending = parkedOpen,
                 // Staged photos die with the text draft (#339): the composer
                 // belongs to the thread being left, and a parked photo firing
                 // into the wrong thread is a silent mis-send. Infos die with
@@ -698,7 +725,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         retargetMemory()
         // Same queued→pending restore as stop() (#339): killing the stream
         // must not eat queued text. Concatenated when the composer is
-        // occupied (stop() drops there — a live-thread tradeoff); a fresh
+        // occupied (stop() concatenates too — same joinPending rule, so a
+        // stop mid-type keeps every word in the box); a fresh
         // thread has no turn to confuse, so keeping every word wins.
         val s = _state.value
         val parked = when {

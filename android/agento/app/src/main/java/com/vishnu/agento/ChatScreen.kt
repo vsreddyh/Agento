@@ -363,9 +363,10 @@ internal fun ChatTab(
     var liveStagedVoicedCount by rememberSaveable { mutableStateOf(0) }
     // Scroll-back thumbnail memory (#339): AttachmentThumb's produceState
     // remembers per composition, so scrolling away disposes the bitmap and
-    // scrolling back re-decodes. Hoisted here so the cache outlives any
-    // one composition; the cache itself is bounded (see ThumbCache).
-    val thumbCache = remember(tab) { ThumbCache() }
+    // scrolling back re-decodes. Hoisted to the ViewModel (per-tab keyed,
+    // rotation-surviving) instead of remember(tab) here — see
+    // ChatViewModel.thumbCache. The cache itself is bounded (see ThumbCache).
+    val thumbCache = remember(tab) { vm.thumbCache }
     // New thread, new staging episode (#339): the voice slate belongs to
     // the old thread's staged set. The thumb cache is NOT evicted here by
     // design: keys carry no thread (UUIDs are globally unique, so no two

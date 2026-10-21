@@ -966,6 +966,17 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                             failed = false
                         }
                     }
+                    // Symmetric hard refuse with the export path (#339):
+                    // readText() + JSONObject() hold ~2x the file bytes in
+                    // memory, so an unbounded import OOMs the same way an
+                    // unbounded export would. Estimated peak is file×2 +
+                    // slack, judged against the same heap cap and remedy.
+                    if (pickedBytes >= 0 && pickedBytes * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                        throw IllegalStateException(
+                            "Backup too large to import safely (${formatBytes(pickedBytes)} on disk). " +
+                                "Delete old photo threads in the switcher, export a smaller backup, then try again.",
+                        )
+                    }
                     val text = context.contentResolver.openInputStream(uri)?.use { input ->
                         // Pinned UTF-8 like the writer side (#339): the SAF
                         // stream carries no charset, and the platform
