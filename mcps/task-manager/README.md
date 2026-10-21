@@ -273,6 +273,12 @@ the `at` this filter is fed back from carries milliseconds). A malformed
 `since`, `op` or `task_id` is a 422, not a silently widened answer: "the
 whole log" is the wrong data, not merely more of it.
 
+That is the opposite of the revision poll next door
+(`GET /api/tasks/changes?since=`), which never 422s on a mangled cursor —
+it falls back to `0`, because a poll that 422s on a mangled cursor 422s
+forever. The two are right for their own jobs, and they are not the same
+rule.
+
 "Inclusive" holds at every precision, because both sides go through the
 same BSON datetime: `at` is written in whole milliseconds, and the filter
 value is truncated to milliseconds the same way, so a hand-built

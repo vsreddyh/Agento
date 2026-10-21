@@ -473,9 +473,18 @@ func main() {
 				store.RecordMutation(ctx, tasks.OpDelete, in.ID, mcpSource, "mcp delete_task")
 			}
 			if !done {
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown task '%s'", in.ID)})
+				// Bounded, like every other echo: the id came from the
+				// caller and is not worth answering at length.
+				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown task '%s'", tasks.TruncateBytes(in.ID, 40))})
 			}
-			return result(map[string]any{"ok": true, "deleted": in.ID})
+			// The CANONICAL id, not the caller's spelling: the change log
+			// stores the normalized id, so a caller comparing this answer
+			// with a history row must not miss on case.
+			deleted := in.ID
+			if id, nerr := tasks.NormalizeTaskID(in.ID); nerr == nil {
+				deleted = id
+			}
+			return result(map[string]any{"ok": true, "deleted": deleted})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "task_history",

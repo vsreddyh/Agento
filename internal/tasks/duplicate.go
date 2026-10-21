@@ -33,7 +33,7 @@ func (s *Store) Duplicate(ctx context.Context, id string) (map[string]any, error
 	var cur bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&cur); err != nil {
 		if err == mongoDrv.ErrNoDocuments {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		return nil, err
 	}

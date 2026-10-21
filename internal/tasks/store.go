@@ -132,6 +132,15 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	// collection scans against a collection that only grows. A second function is a
 	// second place to forget the call, so there is now one place to add an index and
 	// one place that runs.
+	// The four index definitions below are CREATEd on every connect, with
+	// FIXED names. Changing what one of them covers (adding a field, say)
+	// does not redefine it: MongoDB keeps the old definition and the
+	// CreateMany fails, which fails New(), which stops the server from
+	// starting against a database its own previous version created. So an
+	// index change here is a MIGRATION — drop the old index out of band
+	// (db.collection.dropIndex) before the new definition ships, or use a
+	// new name. It is written down because the failure it causes looks
+	// like a startup regression, and nothing about it points at an index.
 	_, err = s.db.Collection(auditCollection).Indexes().CreateMany(ctx, []mongoDrv.IndexModel{
 		// The two singles predate the change log's read path (#176) and are
 		// kept: they are prefixes of the compounds below, so a reader may
@@ -173,6 +182,16 @@ func (s *Store) Close(ctx context.Context) error {
 	return s.client.Disconnect(ctx)
 }
 
+// unknownTask names the task that was not found.
+//
+// The id is bounded: a 404 that answers a 10KB path segment with itself is
+// a response nobody wants, and every other echo in this package is bounded
+// the same way.
+func unknownTask(id string) *StoreError {
+	return fail("unknown task '%s'", TruncateBytes(id, 40))
+}
+
+// checkDue validates the due date/time pair.
 func checkDue(dueDate, dueTime string) error {
 	if dueDate != "" {
 		if _, err := validate.CheckDay(dueDate); err != nil {
@@ -673,7 +692,7 @@ func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 	var doc bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); err != nil {
 		if err == mongoDrv.ErrNoDocuments {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		return nil, err
 	}
@@ -700,7 +719,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	var cur bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&cur); err != nil {
 		if err == mongoDrv.ErrNoDocuments {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		return nil, err
 	}
@@ -833,7 +852,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		}
 		var latest bson.M
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&latest); ferr != nil {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		if now, _ := mongostore.ToInt(latest["revision"]); now != want {
 			return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, now)
@@ -862,7 +881,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		// (Unguarded cannot miss: the id was just read above.)
 		var latest bson.M
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&latest); ferr != nil {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		now, _ := mongostore.ToInt(latest["revision"])
 		return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, now)
@@ -1087,7 +1106,7 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 func (s *Store) stateOnMiss(ctx context.Context, oid primitive.ObjectID, id string) (bson.M, *StoreError) {
 	var doc bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); err != nil {
-		return nil, fail("unknown task '%s'", id)
+		return nil, unknownTask(id)
 	}
 	return doc, nil
 }
@@ -1155,7 +1174,7 @@ func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 	if res.MatchedCount == 0 {
 		var doc bson.M
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); ferr != nil {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		return nil, fail("task '%s' is already open", id)
 	}
