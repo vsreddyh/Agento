@@ -147,17 +147,19 @@ private fun String.sampleKey(half: Int): String =
  * Bounded decoded-thumbnail memory (#339): produceState remembers per
  * composition, so scrolling away disposes the bitmap and scrolling back
  * re-runs Base64.decode + decodeByteArray per photo. Keyed by the full
- * stable identity (thread + id + length, never the id alone): same-id
- * length changes restart produceState, and entries must never serve a
- * stale bitmap — nor a live bitmap from the WRONG thread after a switch.
- * Per-thread keys age out via LRU instead of a switch-time wipe (no
- * re-decode round-trip on switch-back). Legacy (id-less) payloads bypass
- * the cache (slot-keyed entries would alias across removes). Bounded
- * (32 entries ≈ 8 MB of ~256px thumbs) for low-end devices; eviction
- * does NOT recycle — GC reclaims, because recycling risks pulling pixels
- * from under a late outgoing draw (the same class the no-recycle rule in
- * AttachmentThumb exists for). LruCache is internally synchronized, so
- * Main gets and IO puts are safe.
+ * stable identity (id + length pair, never the id alone): a same-id
+ * length change restarts produceState and must miss the cache.
+ * Deliberately NOT keyed by thread (#339): pick UUIDs are globally
+ * unique, so no two threads can alias the same key — per-thread keys
+ * would only guarantee a re-decode on every fork/duplicate-thread view
+ * for zero safety gain, and the produce key (which the cache must never
+ * disagree with) has no thread in it either. Legacy (id-less) payloads
+ * bypass the cache (slot-keyed entries would alias across removes).
+ * Bounded (32 entries ≈ 8 MB of ~256px thumbs) for low-end devices;
+ * eviction does NOT recycle — GC reclaims, because recycling risks
+ * pulling pixels from under a late outgoing draw (the same class the
+ * no-recycle rule in AttachmentThumb exists for). LruCache is
+ * internally synchronized, so Main gets and IO puts are safe.
  */
 internal class ThumbCache(maxEntries: Int = 32) {
     private val cache = android.util.LruCache<Any, android.graphics.Bitmap>(maxEntries)
@@ -187,11 +189,9 @@ private fun AttachmentThumb(
     stableId: String = "",
     // Scroll-back memory, hoisted by the caller (#339): null disables the
     // cache (previews, single-use). Stable picks only — see ThumbCache.
+    // (No threadKey: pick UUIDs are globally unique, so the (id, length)
+    // cache key can never alias across threads — see ThumbCache.)
     cache: ThumbCache? = null,
-    // Thread owning this thumbnail (#339): part of the cache key so a
-    // switch/delete can never serve the old thread's bitmaps. Same
-    // threadId the produce path homes batches to.
-    threadKey: String = "",
 ) {
     // Identity without walking the payload (#339): the per-pick UUID is
     // stable across removes — the stable VALUE ignores slot, so photo 1
@@ -244,14 +244,15 @@ private fun AttachmentThumb(
         // decodeThumbnail must not be reintroduced at its call site.
         // Stable picks consult the hoisted cache first (#339): a scroll-back
         // hit skips decode entirely. Keyed by the full stable identity
-        // (thread + id + length, NOT the id alone): same id + different
-        // length restarts produceState, a thread switch must never serve
-        // the old thread's bitmaps — and the key must never disagree with
+        // (id + length, NOT the id alone): same id + different length
+        // restarts produceState, and the key must never disagree with
         // the produce key it shadows. Unreachable via the app (picks are
         // immutable, one UUID per pick), storage-edit only. Legacy
         // payloads (null key) always decode — slot-keyed entries would
-        // alias across removes.
-        val cacheKey = stableId.takeIf { it.isNotEmpty() }?.let { Triple(threadKey, it, base64.length) }
+        // alias across removes. Deliberately no thread in the key (#339):
+        // UUIDs are globally unique, so cross-thread aliasing is
+        // impossible and forks share the decoded bitmap for free.
+        val cacheKey = stableId.takeIf { it.isNotEmpty() }?.let { it to base64.length }
         value = try {
             val hit = cacheKey?.let { key -> cache?.get(key) }
             hit ?: withContext(Dispatchers.IO) {
@@ -330,9 +331,6 @@ internal fun ChatTab(
     // remembers per composition, so scrolling away disposes the bitmap and
     // scrolling back re-decodes. Hoisted here so the cache outlives any
     // one composition; the cache itself is bounded (see ThumbCache).
-    // Keyed by tab like every other tab-scoped state (#339): the entry
-    // keys already carry threadId (no cross-thread bitmaps), but a tab
-    // reuse must not inherit the other tab's LRU pressure either.
     val thumbCache = remember(tab) { ThumbCache() }
     // New thread, new staging episode (#339): the voice slate belongs to
     // the old thread's staged set. (The cache is NOT evicted here — keys
@@ -593,19 +591,14 @@ internal fun ChatTab(
         // dedupe would need a post-read content hash, i.e. decoding first,
         // which is the cost dedupe exists to avoid.
         val unique = uris.distinct()
-        // Cap toast here covers pre-truncation overflow; the loop below
-        // re-checks room per pick (concurrent batches can only shrink it).
-        // Duplicates collapse silently into one copy — said out loud when
-        // nothing else was: picking the same photo 3x with room to spare
-        // stages 1 with no other toast, which reads as 2 lost picks.
-        val overCap = unique.size > slots
-        if (overCap) {
-            vm.notify(capRefused(slots), ToastKind.Info)
-        } else if (unique.size < uris.size) {
-            // Collapse-under-cap stays cap-only (#339): firing both toasts
-            // for one tap nags (two Info notices back to back for one
-            // gesture). The cap is the limiting fact; the dedupe still
-            // voices whenever it fires alone.
+        // Duplicates collapse into one copy — said out loud (#339):
+        // picking the same photo 3x stages 1 with no other toast, which
+        // reads as 2 lost picks. The cap toast is NOT fired here: it waits
+        // for the loop's actual drop below — a tap-time prediction misnames
+        // the corrupt-first case (failures free the slots, nothing drops,
+        // yet the toast already claimed a cap event). Deferred toasts only
+        // ever name drops that happened.
+        if (unique.size < uris.size) {
             vm.notify("Duplicate photos attached once.", ToastKind.Info)
         }
         // Hoisted ABOVE the launch (#339): the resolver is all the batch
@@ -685,16 +678,18 @@ internal fun ChatTab(
                         break
                     }
                     if (!room) {
-                        if (!overCap) {
-                            withContext(Dispatchers.Main) {
-                                // Free slots re-read live (#339): room is a
-                                // boolean, but the cap wording needs the
-                                // count (full composer vs excess drop).
-                                vm.notify(
-                                    capRefused(MAX_IMAGES_PER_TURN - vm.pendingAttachmentCount()),
-                                    ToastKind.Info,
-                                )
-                            }
+                        // Toasted on the ACTUAL drop (#339), not predicted at
+                        // tap time: corrupt-first picks can free the slots a
+                        // tap-time prediction assumed lost. First !room ends
+                        // the loop, so this fires at most once per batch.
+                        withContext(Dispatchers.Main) {
+                            // Free slots re-read live (#339): room is a
+                            // boolean, but the cap wording needs the
+                            // count (full composer vs excess drop).
+                            vm.notify(
+                                capRefused(MAX_IMAGES_PER_TURN - vm.pendingAttachmentCount()),
+                                ToastKind.Info,
+                            )
                         }
                         break
                     }
@@ -893,14 +888,12 @@ internal fun ChatTab(
         // isDirectory, not exists: a stray FILE at this path would
         // otherwise pass the check and fail downstream as a generic
         // couldn't-start-the-camera instead of storage-unavailable.
-        // Snapshot Main state BEFORE the IO hop (#339): cameraBusy/cameraPath
-        // are remember-backed snapshot state — reading them inside the IO
-        // block risks illegal/stale snapshot access on low-end devices, and
-        // a stale cameraBusy=false could delete the in-flight capture
-        // mid-decode. Snapshots are plain values; the IO block never
-        // touches snapshot state again.
-        val wasBusy = cameraBusy
-        val prevPath = cameraPath
+        // No snapshot locals (#339): the old code snapshotted
+        // cameraBusy/cameraPath here for the IO-block delete below — but a
+        // batch finishing mid-hop left the snapshot stale-true and leaked
+        // a capture until the sweep. The delete moved to the Main hop,
+        // where both reads are live and Main-safe; the IO block never
+        // touches snapshot state at all.
         // Arm the IO-window guard synchronously at tap (#339): the check
         // above runs on Main, and this closes the double-tap window across
         // the IO hop below. The SAVEABLE gate stays disarmed until the Main
@@ -925,13 +918,6 @@ internal fun ChatTab(
                     }
                     return@launch
                 }
-                // Skip the delete while a capture is decoding (#339): a rapid
-                // re-tap would delete the in-flight file mid-read and turn a good
-                // capture into a "moved or deleted" error. The in-flight batch's
-                // own cleanup deletes its file when it lands.
-                if (!wasBusy) {
-                    runCatching { prevPath?.let(::File)?.takeIf { it.exists() }?.delete() }
-                }
                 // UUID, not millis (#339): a rapid double-tap can mint the same
                 // millisecond twice and point two captures at one file.
                 val file = File(dir, "capture-${java.util.UUID.randomUUID()}.jpg")
@@ -954,6 +940,16 @@ internal fun ChatTab(
                         // exists()/delete() on Main (#339).
                         deleteQuietly(file)
                         return@withContext
+                    }
+                    // Delete-before-replace, liveness re-checked HERE (#339):
+                    // the pre-IO snapshot this replaces could go stale if the
+                    // in-flight batch finished mid-hop (stale-true leak until
+                    // the sweep). On Main both reads are fresh: skip only
+                    // while a capture is actively decoding (its own cleanup
+                    // owns the file), and the delete rides deleteQuietly
+                    // (async IO, Main-safe to call).
+                    if (!cameraBusy) {
+                        cameraPath?.let(::File)?.takeIf { it.exists() }?.let { deleteQuietly(it) }
                     }
                     cameraUri = uri
                     cameraPath = file.absolutePath
@@ -2675,7 +2671,6 @@ internal fun ChatScreen(
                                             legacySlot = i,
                                             stableId = a.id,
                                             cache = thumbCache,
-                                            threadKey = state.threadId,
                                         )
                                         // Standard 48dp target (#339): a scanner
                                         // fails anything smaller, and the
@@ -3139,7 +3134,6 @@ internal fun ChatScreen(
                                                                 legacySlot = ai,
                                                                 stableId = a.id,
                                                                 cache = thumbCache,
-                                                                threadKey = state.threadId,
                                                             )
                                                         }
                                                     }

@@ -151,28 +151,26 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
 /**
  * IO-thread gate for the persistence boundary (#339): the load/save/
  * export/import/canonicalizeFile contracts all CLAIM Main-never, and a
- * comment alone never stopped a future Main-thread caller. JVM-safe by
- * construction: android.os.Looper is stubbed in unit tests, so the lookup
- * throws there — which reads as "no main thread" and lets logic tests run
- * without a device. On-device, a Main-thread call fails fast with the
- * site named instead of freezing the UI. Deliberately NOT on
+ * comment alone never stopped a future Main-thread caller. Two independent
+ * tripwires, either of which fires (#339): the Looper identity (exact on
+ * device) OR the thread name (the UI thread is always named "main").
+ * The name check is load-bearing, not just a JVM-stub fallback: before
+ * Looper.prepareMainLooper() runs, myLooper() is null on EVERY thread —
+ * including Main — so the Looper comparison alone would pass an early
+ * Main-thread call the gate exists to catch. On JVM unit tests the Looper
+ * branch throws (stubbed android.jar) and the name branch decides, which
+ * keeps the throw pinned without Robolectric (which build.gradle.kts
+ * rules out — the suite must gate merges cheaply). Deliberately NOT on
  * canonicalizeAttachments/isDecodableBase64: those are pure per-payload
  * helpers (unit-tested on JVM), and their IO confinement comes from
  * their boundary callers (load/save/export), which are gated.
  */
 internal fun requireIoThread(site: String) {
-    // Looper-first on device, thread-name fallback on JVM (#339): the
-    // android.jar stubs throw, which would make the contract untestable —
-    // the fallback keeps the exact same "never Main" meaning (the UI
-    // thread is always named "main") and lets the suite pin the throw
-    // without Robolectric (which build.gradle.kts rules out — the suite
-    // must gate merges cheaply). On device the Looper branch decides;
-    // the name branch only runs where Looper is a stub.
-    val onMain = runCatching {
+    val mainByLooper = runCatching {
         val mainLooper = android.os.Looper.getMainLooper()
         android.os.Looper.myLooper() !== null && android.os.Looper.myLooper() === mainLooper
-    }.getOrDefault(Thread.currentThread().name == "main")
-    check(!onMain) {
+    }.getOrDefault(false)
+    check(!mainByLooper && Thread.currentThread().name != "main") {
         "$site must run on an IO thread, never Main"
     }
 }
@@ -199,7 +197,16 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
         // payloads — everything this app writes — pay one full walk and
         // zero copies. Strip-first would tax every clean payload with a
         // ~1.5 M-char copy to spare the rare wrapped shape its short
-        // pre-scans: the wrong tradeoff. Single-walk fast path (#339): isDecodableBase64 already rejects
+        // pre-scans: the wrong tradeoff. No length pre-check before the
+        // whitespace walks, also deliberate (#339): a length-only blank
+        // would nuke a valid multi-MB payload that deserves the named
+        // oversize error (dataUri/streamChat), not silent blanking — and
+        // no cap below the 4M ceiling separates "big whitespace" from "big
+        // photo" without walking. The 4M raw ceiling bounds the worst
+        // case; per-save repetition is load-canonical memory re-proving
+        // itself (see save()'s dirty-tracking note), and every walk here
+        // is IO-confined, never Main, never the send path.
+        // Single-walk fast path (#339): isDecodableBase64 already rejects
         // whitespace, so no separate none{isWhitespace} proof walk — clean
         // payloads (everything this app writes) validate allocation-free
         // and return untouched. Giants never reach the strip copy: the

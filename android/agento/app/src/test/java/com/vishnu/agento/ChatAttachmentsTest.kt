@@ -376,19 +376,21 @@ class ChatAttachmentsTest {
     fun requireIoThreadPassesOffMain() {
         // Suite runs on a worker thread (never named "main"), so the
         // boundary gate must pass here — this is the JVM half of the
-        // Looper-first/name-fallback contract. Runner assumption, stated
-        // (#339): Gradle workers are named "Test worker", not "main". If
-        // a future runner DID name test threads "main", this test would
+        // Looper-first/name-disjunct contract (#339): the name tripwire
+        // is load-bearing, not just a stub fallback — it also closes the
+        // pre-prepare hole where myLooper() is null everywhere. If a
+        // future runner DID name test threads "main", this test would
         // throw — loudly failing, never silently voiding the gate. The
-        // on-device gate itself is Looper-exact and runner-independent.
+        // on-device Looper tripwire is runner-independent.
         requireIoThread("test")
     }
 
     @Test
     fun requireIoThreadRejectsMainNamedThread() {
         // The throw path, pinned without Robolectric (#339): a thread
-        // named "main" trips the JVM fallback exactly like the UI thread
-        // trips the Looper branch on device.
+        // named "main" trips the name tripwire exactly like the UI thread
+        // trips the Looper branch on device — and like a pre-prepare Main
+        // thread with no Looper anywhere yet.
         var thrown: Throwable? = null
         val t = Thread({
             thrown = runCatching { requireIoThread("test") }.exceptionOrNull()
