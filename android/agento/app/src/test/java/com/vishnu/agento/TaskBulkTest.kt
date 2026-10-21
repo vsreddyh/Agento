@@ -63,6 +63,7 @@ class TaskBulkTest {
     fun `bulk op allows blank extras like the server does`() {
         BulkOp("complete", "a", "   ")
         BulkOp("complete", "a", null, JSONObject())
+        BulkOp("complete", "a", null, JSONObject().put("due_date", JSONObject.NULL))
     }
 
     @Test
@@ -78,6 +79,14 @@ class TaskBulkTest {
         assertEquals("complete", ops.getJSONObject(0).getString("op"))
         assertEquals("a", ops.getJSONObject(0).getString("id"))
         assertEquals("busy", ops.getJSONObject(1).getString("reason"))
+    }
+
+    @Test
+    fun `bulk body trims reason and omits blanks`() {
+        val body = bulkOpsBody(listOf(BulkOp("skip", "a", "  busy  ")))
+        assertEquals("busy", body.getJSONArray("ops").getJSONObject(0).getString("reason"))
+        val blank = bulkOpsBody(listOf(BulkOp("skip", "a", "   ")))
+        assertFalse(blank.getJSONArray("ops").getJSONObject(0).has("reason"))
     }
 
     @Test

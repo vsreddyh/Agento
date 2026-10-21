@@ -105,7 +105,7 @@ data class BulkOp(
     // so only a real value on the wrong verb throws.
     init {
         require(reason == null || reason.isBlank() || op == "skip") { "reason rides only on skip" }
-        require(fields == null || fields.length() == 0 || op == "update") { "fields ride only on update" }
+        require(fields == null || fields.isEmptyOrNullOnly() || op == "update") { "fields ride only on update" }
     }
 }
 
@@ -125,7 +125,10 @@ internal fun bulkOpsBody(ops: List<BulkOp>): JSONObject {
     val arr = JSONArray()
     for (op in ops) {
         val o = JSONObject().put("op", op.op).put("id", op.id)
-        if (op.reason != null) o.put("reason", op.reason)
+        // Trimmed once, here: like toggleBulkId trims ids, the wire carries
+        // what the set holds, and a blank reason is omitted as absent.
+        val reason = op.reason?.trim()
+        if (!reason.isNullOrEmpty()) o.put("reason", reason)
         if (op.fields != null) o.put("fields", op.fields)
         arr.put(o)
     }
@@ -144,6 +147,17 @@ internal data class BatchFailure(
     val id: String,
     val op: String,
 )
+
+/** True when the object carries no real values: empty, or every value an
+ * explicit JSON null. Mirrors the server's empty-as-absent rule
+ * (`ChangedFieldNames` treats null as absent). */
+internal fun JSONObject.isEmptyOrNullOnly(): Boolean {
+    val keys = keys()
+    while (keys.hasNext()) {
+        if (!isNull(keys.next())) return false
+    }
+    return true
+}
 
 /**
  * Field names the per-item contract assert understands. Anything else in a
