@@ -236,6 +236,26 @@ object ChatThreads {
                     t
                 }
             }
+            // Never wipe a file that still has content (#339): load()
+            // returns an empty list when a file fails to parse, and the
+            // next save would then persist that empty list over the
+            // user's threads. An INTENTIONAL clear (the user deleted
+            // every conversation) still writes: the file on disk parses
+            // fine, so it is the live data, not a corrupt one.
+            val target = file(context, tab)
+            if (capped.isEmpty() && target.exists() && target.length() > 0L) {
+                val existingParses = runCatching {
+                    threadJson.decodeFromString(
+                        ListSerializer(ChatThread.serializer()),
+                        target.readText(Charsets.UTF_8),
+                    )
+                }.isSuccess
+                if (!existingParses) {
+                    // Corrupt file, empty list: keep the bytes on disk
+                    // (they may be recoverable by hand) and skip the write.
+                    return@runCatching
+                }
+            }
             // Canonicalize only what changed since the last save: same
             // instance means same immutable content, already proven canonical
             // by the save that cached it. No refuse/trim gate here, by design

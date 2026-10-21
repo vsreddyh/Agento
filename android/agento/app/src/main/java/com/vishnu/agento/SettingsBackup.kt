@@ -433,6 +433,10 @@ object SettingsBackup {
                 }
             }
             Result.success(Outcome(applied, skipped))
+        } catch (e: CancellationException) {
+            // A cancelled import is not a failure (#339): rethrow, so the
+            // caller's scope sees the cancel instead of an error status.
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
