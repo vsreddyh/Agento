@@ -665,7 +665,9 @@ func deleteTask(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if !found {
-		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown task '" + id + "'"})
+		// Bounded, like every other echo in this package: the id came off
+		// the path and is not worth answering at length.
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown task '" + tasks.TruncateBytes(id, 40) + "'"})
 		return
 	}
 	// Logged AFTER the delete, so there is no window where the log claims a delete

@@ -268,6 +268,11 @@ filter parameter reads its FIRST value only (`?op=create&op=delete` filters
 by `create`), which is Go's standard query handling — the same the task list
 already has.
 
+The delete envelopes differ too, and predates this reader: the MCP tool
+answers `{"deleted": "<canonical id>"}` while the HTTP route answers
+`{"deleted": true}` with no id. The canonical id is the one the log stores,
+so it is the one a caller can compare against a history row.
+
 `since` is **inclusive** and must be RFC3339 (fractional seconds accepted —
 the `at` this filter is fed back from carries milliseconds). A malformed
 `since`, `op` or `task_id` is a 422, not a silently widened answer: "the
@@ -302,7 +307,9 @@ The `task_id` check is shared by both transports (`tasks.NormalizeTaskID`),
 so the agent and the app are told the same thing: a typo'd id is refused
 rather than answered with an empty history that reads like "this task was
 never touched". Ids are lowercased — the same id in either case is the same
-task.
+task. A blank `task_id` means no filter (the whole log); a non-blank one that
+is not a hex id — including one made only of spaces and commas — is a 422,
+exactly like an `op` filter that names nothing.
 
 `op=duplicate` is accepted but only the **batch** path records it (#341): a
 single duplicate is a store operation with no verb of its own, so the filter

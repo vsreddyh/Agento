@@ -123,6 +123,18 @@ func TestTaskHistoryFilters(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("mutations = %d, want 1", len(rows))
 	}
+
+	// The same id in upper case is the same task: the filter is
+	// normalized, so the agent gets the same history it would get with
+	// the lower-case spelling.
+	out, err = taskHistory(ctx, store, taskHistoryInput{TaskID: strings.ToUpper(id)})
+	if err != nil {
+		t.Fatalf("taskHistory: %v", err)
+	}
+	rows, _ = out["mutations"].([]tasks.Mutation)
+	if len(rows) != 1 {
+		t.Fatalf("upper-case id returned %d rows, want 1 — it is the same task", len(rows))
+	}
 }
 
 // An op the log does not hold is a caller mistake, and the tool says so

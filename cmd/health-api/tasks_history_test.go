@@ -236,6 +236,29 @@ func TestTaskMutationsResponseShape(t *testing.T) {
 		t.Fatalf("round-tripped since = %d rows (%s), want the echoed entry", len(round.Mutations), w.Body.String())
 	}
 
+	// The same id in upper case is the same task: the filter is
+	// normalized, so the caller gets the same history it would get with
+	// the lower-case spelling.
+	upper := strings.ToUpper(id)
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks/mutations?task_id="+upper, nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	taskMutations(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("task_id=%s: got %d (%s)", upper, w.Code, w.Body.String())
+	}
+	var upperBody struct {
+		Mutations []struct {
+			TaskID string `json:"task_id"`
+		} `json:"mutations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &upperBody); err != nil {
+		t.Fatalf("decoding %s: %v", w.Body.String(), err)
+	}
+	if len(upperBody.Mutations) != 2 {
+		t.Fatalf("upper-case id returned %d rows (%s), want the same 2", len(upperBody.Mutations), w.Body.String())
+	}
+
 	// A malformed limit is LENIENT, unlike the filters above: it can only
 	// make the page bigger, which is the answer the caller already had.
 	// A stray query param must never nuke the answer.
