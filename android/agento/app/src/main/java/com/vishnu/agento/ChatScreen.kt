@@ -438,14 +438,21 @@ internal fun ChatTab(
     // thread-A photos into thread B (see isThreadCurrent).
     // Best-effort file cleanup, shared by every delete below (#339):
     // exists()/delete() are disk IO, and callers run on Main
-    // picker/camera callbacks — so fire-and-forget off-main. NonCancellable
-    // like the batch finally: a tab-leave racing the call must not cancel
-    // the cleanup it just scheduled. And when the scope is already dead
-    // (tab left / rotation race), no child will run at all — NonCancellable
-    // can't resurrect a dead parent — so delete inline instead: unlink is
-    // a metadata op, safe on Main as a last resort, strictly better than
-    // an orphan. Declared before first use: batch returns, camera
-    // callback, and launch-failure path all call it.
+    // picker/camera callbacks — so fire-and-forget, never blocking the
+    // callback. NonCancellable like the batch finally: a tab-leave racing
+    // the call must not cancel the cleanup it just scheduled. And when the
+    // scope is already dead (tab left / rotation race), no child will run
+    // at all — NonCancellable can't resurrect a dead parent — so delete
+    // inline instead: unlink is a metadata op, safe on Main as a last
+    // resort, strictly better than an orphan. Declared before first use:
+    // batch returns, camera callback, and launch-failure path all call it.
+    // Main-primary, IO best-effort (#339): UNDISPATCHED + a non-suspending
+    // body executes inline on the caller (Main), NOT on IO — the
+    // Dispatchers.IO context only takes effect if the body ever suspends.
+    // Stated plainly because the older framing above ("fire-and-forget
+    // off-main") overclaims: what is actually guaranteed is never-blocking
+    // (inline unlink or a launched child), and an unlink is cheap enough
+    // that Main-primary is correct, not a compromise.
     fun deleteQuietly(f: File?) {
         if (f == null) return
         // UNDISPATCHED + started-proof (#339): the isActive check and the
@@ -901,11 +908,15 @@ internal fun ChatTab(
             // Double-request gate (#339): a second tap while the permission
             // dialog is outstanding would otherwise fire two permission
             // requests (OEM-dependent second-request behavior) — the same
-            // class the launch gate closed for the intent. Silent: the
-            // first tap's dialog is already up answering. (The launch gate
-            // stays authoritative for the intent itself; this only guards
-            // the request window. A stale timestamp here can only come from
-            // a dead process, where silence is correct — nothing is open.)
+            // class the launch gate closed for the intent. Voiced like the
+            // launch gate (#339), not silent: the first tap's dialog IS up
+            // answering, but a tap with zero feedback reads dead — the
+            // class this PR keeps eliminating. (The launch gate stays
+            // authoritative for the intent itself; this only guards the
+            // request window. A stale timestamp here can only come from a
+            // dead process, where nothing is open — but voicing there is
+            // still the safer lie: it names the recovery, "try again".)
+            vm.notify("Camera permission request is already open — answer it first.", ToastKind.Info)
         } else {
             // Permission request armed like the launch gate (#339): rapid
             // double-tap on a fresh install would otherwise fire two

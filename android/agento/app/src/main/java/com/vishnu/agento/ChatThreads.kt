@@ -123,11 +123,9 @@ object ChatThreads {
             // Grapheme-safe cut via the shared walker (#339): the last
             // boundary within budget, so ZWJ sequences, flag pairs, and
             // surrogate pairs never split mid-cluster in the switcher row.
-            // withInitial never returns null, so no fallback branch: the
-            // retained last-setText per pooled thread is one title (≤~250
-            // chars), released with the thread — documented, not fixed,
-            // because the alternative (per-call instance) reintroduces the
-            // churn the hoist removed.
+            // Retained input released below (#339): the ThreadLocal lives
+            // for the process, so setText holds the ~250-char title until
+            // the next title render — never "released with the thread".
             val breaks = titleBreaks.get()
             breaks.setText(oneLine)
             var end = 0
@@ -136,6 +134,8 @@ object ChatThreads {
                 end = n
                 n = breaks.next()
             }
+            // Drop the retained title string now, not on the next render.
+            breaks.setText("")
             oneLine.substring(0, end) + "…"
         } else {
             ""

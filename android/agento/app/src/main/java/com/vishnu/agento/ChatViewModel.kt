@@ -404,6 +404,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private fun joinPending(first: String, second: String): String =
         "${first.trimEnd()} ${second.trimStart()}"
 
+    /** Removes a staged composer photo by STAGED slot (#339): the strip
+     * passes `i` from wiredPhotosWithIndex() while labeling by wired
+     * position (`w+1 of N`) — passing the label number removes the wrong
+     * photo once blanks exist. Pinned here so a future caller reading the
+     * labels can't naturally pass `w`. */
     fun removePendingAttachment(index: Int) {
         val cur = _state.value.pendingAttachments
         if (index !in cur.indices) return
