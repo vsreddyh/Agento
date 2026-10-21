@@ -576,7 +576,7 @@ internal fun TaskManagerScreen(
                         if (tasks.any { it.id == tempId }) noteRowShown(copy.id)
                         tasks = tasks.map { if (it.id == tempId) copy else it }
                         pokeWidget()
-                        toasts.toast("Copied \u201c${copy.name}\u201d.", ToastKind.Success)
+                        toasts.toast("Duplicated \u201c${copy.name}\u201d.", ToastKind.Success)
                     }
                 },
                 onFailure = { e ->
@@ -588,16 +588,16 @@ internal fun TaskManagerScreen(
         }
     }
 
-    fun doComplete(t: ServerTask) = doFinish(t, "complete")
-    fun doSkip(t: ServerTask) = doFinish(t, "skip")
+    fun doComplete(t: ServerTask) = doResolve(t, "complete")
+    fun doSkip(t: ServerTask) = doResolve(t, "skip")
 
     /**
-     * Marks [t] finished via [verb] ("complete" or "skip", #345): same leave
+     * Marks [t] resolved via [verb] ("complete" or "skip", #345): same leave
      * animation, same silent-refetch-on-rollover, same custom-repeat recreate
      * draft — only the verb and the toast wording differ, so the two stay in
      * step by sharing this body instead of being two near-copies.
      */
-    fun doFinish(t: ServerTask, verb: String) {
+    fun doResolve(t: ServerTask, verb: String) {
         // Already on its way out, or still in flight (#308): the exit
         // animation owns the removal, and a second request here would finish
         // first on failure and cancel the first one's animation with
@@ -815,7 +815,8 @@ internal fun TaskManagerScreen(
      * leaves bulk mode; failure keeps the selection for retry after the
      * reload and names the failing item.
      */
-    fun runBulkOps(ids: List<String>, ops: List<BulkOp>, success: String) {
+    fun runBulkOps(ops: List<BulkOp>, success: String) {
+        val ids = ops.map { it.id }
         ids.forEach(::markBusy)
         scope.launch {
             api.batch(ops).fold(
@@ -844,11 +845,11 @@ internal fun TaskManagerScreen(
     }
 
     /**
-     * One atomic bulk finish (#345): every selected task completed or
+     * One atomic bulk resolve (#345): every selected task completed or
      * skipped in a single batch. No per-row exit animation — the set can
      * span what is on screen, so the shared runner swaps the whole list in.
      */
-    fun doBulkFinish(verb: String) {
+    fun doBulkResolve(verb: String) {
         val ids = bulkSelected.toList()
         if (ids.isEmpty()) return
         val doneWord = if (verb == "skip") "Skipped" else "Completed"
@@ -858,7 +859,6 @@ internal fun TaskManagerScreen(
         // instead.
         val customs = tasks.count { it.id in ids && it.repeatCustom }
         runBulkOps(
-            ids,
             ids.map { BulkOp(verb, it) },
             "$doneWord ${ids.size} task${if (ids.size == 1) "" else "s"}." +
                 (if (verb == "complete" && customs > 0) " Recreate custom repeats from Done." else ""),
@@ -870,9 +870,18 @@ internal fun TaskManagerScreen(
         val ids = bulkSelected.toList()
         if (ids.isEmpty()) return
         val whenText = friendlyDue(dueDate, "", java.time.LocalDate.now(IST)).ifEmpty { dueDate }
+        // Guarded like the single-task edit: each op carries the revision
+        // the list showed, so a task changed elsewhere fails the whole batch
+        // instead of overwriting. Complete/skip stay unguarded by design —
+        // the single verbs are last-write-wins too, with no revision to
+        // guard on.
+        val byId = tasks.associateBy { it.id }
         runBulkOps(
-            ids,
-            ids.map { BulkOp("update", it, fields = JSONObject().put("due_date", dueDate)) },
+            ids.map { id ->
+                val fields = JSONObject().put("due_date", dueDate)
+                byId[id]?.let { fields.put("expected_revision", it.revision) }
+                BulkOp("update", id, fields = fields)
+            },
             "Moved ${ids.size} task${if (ids.size == 1) "" else "s"} to $whenText.",
         )
     }
@@ -882,7 +891,6 @@ internal fun TaskManagerScreen(
         val ids = bulkSelected.toList()
         if (ids.isEmpty()) return
         runBulkOps(
-            ids,
             ids.map { BulkOp("duplicate", it) },
             "Duplicated ${ids.size} task${if (ids.size == 1) "" else "s"}.",
         )
@@ -905,7 +913,7 @@ internal fun TaskManagerScreen(
                         title = { Text("${bulkSelected.size}/$MAX_BULK_SELECT selected") },
                         actions = {
                             TextButton(
-                                onClick = { doBulkFinish("skip") },
+                                onClick = { doBulkResolve("skip") },
                                 enabled = bulkSelected.isNotEmpty(),
                             ) { Text("Skip") }
                             IconButton(
@@ -927,7 +935,7 @@ internal fun TaskManagerScreen(
                                 )
                             }
                             TextButton(
-                                onClick = { doBulkFinish("complete") },
+                                onClick = { doBulkResolve("complete") },
                                 enabled = bulkSelected.isNotEmpty(),
                             ) { Text("Complete") }
                         },
@@ -1250,6 +1258,10 @@ internal fun TaskManagerScreen(
                                                         toggleBulk(t.id)
                                                     }
                                                 },
+                                                // Per-task Skip (#345): the
+                                                // same flow as the sheet's
+                                                // Skip button.
+                                                onSkip = { doSkip(t) },
                                             )
                                             if (i < rows.lastIndex) {
                                                 HorizontalDivider(
@@ -1676,6 +1688,11 @@ internal fun ServerTaskRow(
     onOpen: () -> Unit,
     onToggle: () -> Unit,
     onLongPress: () -> Unit = {},
+    /**
+     * Per-task Skip (#345). Null hides it: bulk mode taps toggle, and
+     * closed tasks have nothing to skip.
+     */
+    onSkip: (() -> Unit)? = null,
 ) {
     val done = !task.isOpen() || completed
     // On the Done/All filters a completion leaves the row where it is and
@@ -1777,6 +1794,16 @@ internal fun ServerTaskRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(end = 4.dp),
             )
+        }
+        // Per-task Skip (#345): one tap from the row into the same flow as
+        // the sheet's Skip. Open tasks in normal mode only: in bulk mode
+        // taps toggle membership, and a closed task has nothing to skip.
+        if (onSkip != null && task.isOpen() && !bulkMode) {
+            TextButton(
+                onClick = onSkip,
+                enabled = actionsEnabled,
+                contentPadding = PaddingValues(horizontal = 4.dp),
+            ) { Text("Skip") }
         }
     }
 }

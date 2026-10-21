@@ -1,15 +1,16 @@
 package tasks
 
-// Canonical task duplication: a user copy, not a rollover successor.
+// Canonical task duplication: a user duplicate, not a rollover successor.
 //
 // Duplicate reads the source row and re-enters it through CreateWithKey, so
 // every validation the create path enforces (required fields, due shapes,
-// recurrence rules) applies to the copy too — a corrupt source fails loudly
-// instead of cloning garbage. The copy is a new open task: fresh id and
-// revision, no completion, no skip marker, and no `rolled_from` back-link
-// (that marker answers "did this repeat roll over", which a hand-made copy
-// is not). What IS carried: name, description, voice phrase, due date/time,
-// estimated minutes, the whole recurrence, and parallelable.
+// recurrence rules) applies to the duplicate too — a corrupt source fails
+// loudly instead of duplicating garbage. The duplicate is a new open task:
+// fresh id and revision, no completion, no skip marker, and no `rolled_from`
+// back-link (that marker answers "did this repeat roll over", which a
+// hand-made duplicate is not). What IS carried: name, description, voice
+// phrase, due date/time, estimated minutes, the whole recurrence, and
+// parallelable.
 
 import (
 	"context"
@@ -22,7 +23,8 @@ import (
 	mongoDrv "go.mongodb.org/mongo-driver/mongo"
 )
 
-// Duplicate copies a task — open, done, or skipped — as a new open task.
+// Duplicate makes a new open task from any existing one — open, done, or
+// skipped.
 func (s *Store) Duplicate(ctx context.Context, id string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {

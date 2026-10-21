@@ -87,7 +87,7 @@ data class ChangeMarker(
 )
 
 /**
- * One op inside a bulk batch (#345): complete, skip, update, or duplicate a
+ * One op inside a batch (#345): complete, skip, update, or duplicate a
  * task by id. `reason` rides only on skip; `fields` only on update (the same
  * partial-update map the single-task update takes, e.g. due_date for a move
  * plus expected_revision for the concurrency guard).
