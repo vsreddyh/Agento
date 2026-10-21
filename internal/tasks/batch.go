@@ -180,39 +180,52 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 	}
 	seen := make(map[string]bool, len(ops))
 	for i, op := range ops {
+		// Normalized once: the trimmed id is what the guard, the dedupe,
+		// the verbs, and the results all see, so a padded id can neither
+		// slip the duplicate check nor come back padded in a result.
+		id := strings.TrimSpace(op.ID)
 		switch op.Op {
 		case "complete", "skip", "update", "duplicate":
 		default:
-			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
+			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
 				Err: fail("unknown batch op %q: want complete, skip, update, or duplicate", op.Op)}
 		}
-		if strings.TrimSpace(op.ID) == "" {
-			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
+		if id == "" {
+			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
 				Err: fail("batch op %d (%s) has no id", i, op.Op)}
 		}
-		norm := strings.TrimSpace(op.ID)
-		if seen[norm] {
+		if seen[id] {
 			// The same id twice would self-conflict inside one transaction:
 			// the second verb reads the first's uncommitted write. Reject
 			// up front rather than aborting on our own write. Unreachable
 			// from the UI (the selection is a set), so this guards the raw
 			// API.
-			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
-				Err: fail("batch op %d (%s %s) duplicates an earlier op; one op per task", i, op.Op, op.ID)}
+			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
+				Err: fail("batch op %d (%s %s) duplicates an earlier op; one op per task", i, op.Op, id)}
 		}
-		seen[norm] = true
+		seen[id] = true
 		// Extras ride only where they are read: a `reason` on anything but
 		// skip, or `fields` on anything but update, would commit while
 		// silently dropping the value — the exact silent-drop shape the
-		// single-task layer rejects at its boundary.
+		// single-task layer rejects at its boundary. Empty extras count as
+		// absent (a blank reason, an empty fields object), like the
+		// single-task layer treats JSON null.
 		if op.Op != "skip" && strings.TrimSpace(op.Reason) != "" {
-			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
+			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
 				Err: fail("batch op %d (%s) takes no reason; reason rides only on skip", i, op.Op)}
 		}
-		if op.Op != "update" && op.Fields != nil {
-			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
+		if op.Op != "update" && len(op.Fields) > 0 {
+			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
 				Err: fail("batch op %d (%s) takes no fields; fields ride only on update", i, op.Op)}
 		}
+	}
+	// Normalized once into a copy: the caller's slice is untouched, and
+	// every downstream use (verbs, results, errors) sees the trimmed id, so
+	// a padded id can neither slip the duplicate check above nor come back
+	// padded in a result.
+	ops = append([]BatchOp(nil), ops...)
+	for i := range ops {
+		ops[i].ID = strings.TrimSpace(ops[i].ID)
 	}
 	if !s.useTransactions(ctx) {
 		return nil, ErrNoTransactions

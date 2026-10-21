@@ -303,6 +303,28 @@ func TestBatchNoOpUpdateSkipsBump(t *testing.T) {
 	}
 }
 
+func TestBatchIgnoresEmptyExtras(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	a := mkBatchTask(t, s, "bulk-a", Repeat{})
+	b := mkBatchTask(t, s, "bulk-b", Repeat{})
+	// Empty extras count as absent: an empty fields object on complete and
+	// a blank reason on skip must not trip the misplaced-extra rejection.
+	res, err := s.Batch(ctx, []BatchOp{
+		{Op: "complete", ID: a, Fields: map[string]any{}},
+		{Op: "skip", ID: b, Reason: "   "},
+	})
+	if err != nil {
+		t.Fatalf("Batch: %v", err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("want 2 results, got %d", len(res))
+	}
+	if n := openCount(t, s); n != 0 {
+		t.Fatalf("both must resolve, %d still open", n)
+	}
+}
+
 func mustOid(t *testing.T, hex string) primitive.ObjectID {
 	t.Helper()
 	oid, err := primitive.ObjectIDFromHex(hex)

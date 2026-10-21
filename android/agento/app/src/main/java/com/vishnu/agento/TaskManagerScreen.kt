@@ -907,8 +907,10 @@ internal fun TaskManagerScreen(
         }
         runBulkOps(
             ids.map { id ->
+                // Safe: the fail-closed guard above proved every id is in
+                // the map, so this is a lookup, not a fallback.
                 val fields = JSONObject().put("due_date", dueDate)
-                byId[id]?.let { fields.put("expected_revision", it.revision) }
+                fields.put("expected_revision", byId.getValue(id).revision)
                 BulkOp("update", id, fields = fields)
             },
             "Moved ${ids.size} task${if (ids.size == 1) "" else "s"} to $whenText.",
