@@ -883,8 +883,12 @@ internal fun TaskManagerScreen(
         // date: the single-task flow opens a recreate draft, which cannot
         // scale to N tasks, so the bulk toast says where to recreate them
         // instead — for skips exactly like completes, since skipping a
-        // custom occurrence also ends it without a successor.
-        val customs = tasks.count { it.id in ids && it.repeatCustom }
+        // custom occurrence also ends it without a successor. Ids that left
+        // the fetched page count as maybe-custom: their repeat block is
+        // unreadable, and a missing notice loses the cadence while an extra
+        // sentence only restates where to look.
+        val customs = tasks.count { it.id in ids && it.repeatCustom } +
+            ids.count { id -> tasks.none { it.id == id } }
         runBulkOps(
             ids.map { BulkOp(verb, it) },
             "$doneWord ${ids.size} task${if (ids.size == 1) "" else "s"}." +

@@ -135,6 +135,47 @@ internal data class BatchFailure(
     val op: String,
 )
 
+/**
+ * Builds the "what the app asked the server to store" record for one bulk
+ * update op (#345), so a bulk move gets the same field-level assertion as a
+ * single-task edit. Complete/skip/duplicate send no fields — there is
+ * nothing to assert — so they stay version-only, exactly like the single
+ * verbs. Top-level (not a member) so unit tests call it without a Context.
+ */
+internal fun bulkUpdateSent(fields: JSONObject): TaskContractSent {
+    fun str(key: String): String? =
+        if (fields.has(key) && !fields.isNull(key)) fields.optString(key, "") else null
+    fun num(key: String): Int? =
+        if (fields.has(key) && !fields.isNull(key)) (fields.opt(key) as? Number)?.toInt() else null
+    fun flag(key: String): Boolean? =
+        if (fields.has(key) && !fields.isNull(key)) fields.optBoolean(key) else null
+    return TaskContractSent(
+        name = str("name"),
+        speakName = str("speak_name"),
+        description = str("description"),
+        dueDate = str("due_date"),
+        dueTime = str("due_time"),
+        estimatedMinutes = num("estimated_minutes"),
+        repeatEvery = num("repeat_every"),
+        repeatUnit = str("repeat_unit"),
+        repeatDays = if (fields.has("repeat_days") && !fields.isNull("repeat_days")) {
+            val raw = mutableListOf<String>()
+            val arr = fields.optJSONArray("repeat_days")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    arr.optString(i, "").trim().takeIf { it.isNotEmpty() }?.let { raw.add(it) }
+                }
+            }
+            canonicalRepeatDays(raw)
+        } else {
+            null
+        },
+        repeatCustom = flag("repeat_custom"),
+        repeatRule = str("repeat_rule"),
+        parallelable = flag("parallelable"),
+    )
+}
+
 /** Recovers a [BatchFailure] from an HTTP error message, or null when the
  * message carries no batch envelope (a network failure, a proxy hint). */
 internal fun parseBatchError(message: String): BatchFailure? {
@@ -848,6 +889,16 @@ class TasksApi(context: Context) {
                     noteContractVersion(maxOf(task.contractVersion, nextVersion ?: 0))
                     if (next != null) {
                         task = task.copy(nextDueDate = optStr(next, "due_date"))
+                    }
+                    // Field-level assertion for update ops, mirroring the
+                    // single-task edit: the request op carries the fields,
+                    // matched by position (the server preserves order).
+                    // Complete/skip/duplicate send no fields, so they stay
+                    // version-only — exactly like the single verbs.
+                    ops.getOrNull(item.optInt("index", i))?.let { req ->
+                        if (req.op == "update" && req.fields != null) {
+                            checkContract(task, bulkUpdateSent(req.fields), expectedId = id)
+                        }
                     }
                     out.add(
                         BulkItemResult(

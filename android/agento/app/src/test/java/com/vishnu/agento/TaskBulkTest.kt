@@ -68,6 +68,28 @@ class TaskBulkTest {
     }
 
     @Test
+    fun `bulk update sent reads present fields only`() {
+        val sent = bulkUpdateSent(
+            JSONObject().put("due_date", "2026-12-01").put("expected_revision", 3),
+        )
+        assertEquals("2026-12-01", sent.dueDate)
+        assertNull(sent.name)
+        assertNull(sent.repeatCustom)
+    }
+
+    @Test
+    fun `bulk update sent canonicalises days and reads numbers`() {
+        val sent = bulkUpdateSent(
+            JSONObject().put("repeat_days", org.json.JSONArray(listOf("Wed", "mon")))
+                .put("estimated_minutes", 15)
+                .put("repeat_custom", true),
+        )
+        assertEquals(listOf("mon", "wed"), sent.repeatDays)
+        assertEquals(15, sent.estimatedMinutes)
+        assertEquals(true, sent.repeatCustom)
+    }
+
+    @Test
     fun `batch failure parses the envelope`() {
         val f = parseBatchError(
             """HTTP 409: {"detail": "conflict: task changed", "index": 2, "id": "abc", "op": "update"}""",
