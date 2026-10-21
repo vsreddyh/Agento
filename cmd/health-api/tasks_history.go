@@ -39,6 +39,10 @@ import (
 // The `task_id` and `since` rules are shared with the agent's `task_history`
 // tool (tasks.NormalizeTaskID / tasks.ParseSince), so the app and the agent
 // are told the same thing about the same mistake.
+//
+// `since` is a query parameter, so an offset with a `+` in it
+// ("2026-10-21T00:00:00+02:00") must arrive percent-encoded as `%2B` — `+`
+// in a query string means a space. `Z` needs no encoding.
 func taskMutations(w http.ResponseWriter, r *http.Request) {
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})

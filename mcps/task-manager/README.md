@@ -276,7 +276,15 @@ milliseconds.
 `limit` is the one lenient filter: unparseable, zero or negative falls back
 to the default (200), and a parseable-but-huge one is clamped to the ceiling
 (500). A limit can only enlarge the page, which is the answer the caller
-already had, so it is never worth a 422.
+already had, so it is never worth a 422. Over MCP a limit of the wrong
+*type* (`"200"` instead of `200`) is an argument error, not a value the tool
+quietly rounds — types and values are different layers, and only the value
+layer is lenient.
+
+`since` is a URL parameter on the HTTP route, so an offset with a `+` in it
+(`2026-10-21T00:00:00+02:00`) must be percent-encoded as `%2B` — `+` in a
+query string means a space. `Z` needs no encoding, and is what the examples
+use.
 
 The `task_id` check is shared by both transports (`tasks.NormalizeTaskID`),
 so the agent and the app are told the same thing: a typo'd id is refused

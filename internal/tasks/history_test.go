@@ -92,6 +92,18 @@ func TestKnownOpsHandsOutACopy(t *testing.T) {
 	}
 }
 
+// The validator normalizes too, so it agrees with the parser and the store
+// seam: an exported check that disagreed with the thing it checks would be a
+// second rule.
+func TestValidateOpsNormalizes(t *testing.T) {
+	if err := ValidateOps([]string{"CREATE", " complete ", ""}); err != nil {
+		t.Errorf("an op in the wrong case must be accepted: %v", err)
+	}
+	if err := ValidateOps([]string{"frobnicate"}); err == nil {
+		t.Error("an unknown op must be rejected")
+	}
+}
+
 // The `since` filter is fed back from the `at` the read path hands out, so
 // it must accept that shape — milliseconds included — and reject a value
 // that is not a timestamp at all.

@@ -73,6 +73,11 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		return
 	}
 	if op == "" || taskID == "" {
+		// A programmer error, not a caller error: the transports always
+		// pass both, and a dropped entry is a hole in the log. Logged, the
+		// way the failed write below is — best-effort means the mutation
+		// still succeeds, not that the gap is invisible.
+		log.Printf("tasks: mutation log entry dropped (op=%q task_id=%q)", op, taskID)
 		return
 	}
 	entry := bson.M{

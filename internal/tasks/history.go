@@ -115,8 +115,13 @@ func ParseOps(s string) ([]string, error) {
 // An unknown op is a caller mistake, and the error names the valid set: an
 // empty history that reads like "nothing happened" is the wrong answer to a
 // typo, and "you asked for a thing that does not exist" is the right one.
+//
+// The names are normalized first, by the same rule the parser and the store
+// seam use — so this validator, used on its own, agrees with both. An
+// exported check that disagreed with the thing it checks would be a second
+// rule, and a second rule is where this stack keeps growing surprises.
 func ValidateOps(ops []string) error {
-	for _, op := range ops {
+	for _, op := range normalizeOps(ops) {
 		if !slices.Contains(knownOps, op) {
 			// The offending token is echoed, bounded: a 10KB query
 			// parameter answered with itself is a log line nobody wants.
