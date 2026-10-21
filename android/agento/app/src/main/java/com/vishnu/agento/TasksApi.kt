@@ -831,6 +831,12 @@ class TasksApi(context: Context) {
                         ?: throw RuntimeException("Unexpected response shape")
                     var task = parseTask(root)
                         ?: throw RuntimeException("Unexpected response shape")
+                    // No lenient fallback to task.id: the server guarantees
+                    // ID (source id, or the new copy's id for duplicate), so
+                    // a missing one is a contract violation, not a gap to
+                    // paper over.
+                    val id = optStr(item, "id")
+                    if (id.isEmpty()) throw RuntimeException("Unexpected response shape")
                     // Version handling mirrors resolve(): each half versioned
                     // on its own, warn-not-throw on disagreement.
                     val next = item.optJSONObject("next")
@@ -846,7 +852,7 @@ class TasksApi(context: Context) {
                     out.add(
                         BulkItemResult(
                             index = item.optInt("index", i),
-                            id = optStr(item, "id").ifEmpty { task.id },
+                            id = id,
                             op = optStr(item, "op"),
                             task = task,
                             nextDueDate = task.nextDueDate,

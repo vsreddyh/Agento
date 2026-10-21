@@ -4,7 +4,11 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"agento/internal/mongostore"
+
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -38,7 +42,7 @@ func TestDuplicateCopiesContents(t *testing.T) {
 	if doc["completedAt"] != nil {
 		t.Fatalf("duplicate must be open, got completedAt=%v", doc["completedAt"])
 	}
-	if rev, _ := doc["revision"].(int); rev != 0 {
+	if rev, _ := mongostore.ToInt(doc["revision"]); rev != 0 {
 		t.Fatalf("duplicate starts at revision 0, got %v", doc["revision"])
 	}
 	if _, ok := doc["rolled_from"]; ok {
@@ -127,5 +131,37 @@ func TestBatchDuplicateAborts(t *testing.T) {
 	}
 	if got := revisionOf(t, s) - before; got != 0 {
 		t.Fatalf("aborted batch bumps nothing, got %d", got)
+	}
+}
+
+func TestDuplicateLegacyRowWithoutNumbers(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	// A pre-backfill row: no estimated_minutes, no parallelable. The user
+	// can still complete it, so duplicating must work too — reading absent
+	// as zero, like a missing revision. Present-but-wrong-typed still fails.
+	res, err := s.tasks.InsertOne(ctx, bson.M{
+		"name": "legacy", "description": "old row",
+		"due_date": "2026-11-04", "due_time": "08:00",
+		"revision": int32(0), "completedAt": nil,
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+	})
+	if err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+	id := res.InsertedID.(primitive.ObjectID).Hex()
+	doc, err := s.Duplicate(ctx, id)
+	if err != nil {
+		t.Fatalf("Duplicate: %v", err)
+	}
+	if mins, ok := mongostore.ToInt(doc["estimated_minutes"]); !ok || mins != 0 {
+		t.Fatalf("absent estimate duplicates as 0, got %v", doc["estimated_minutes"])
+	}
+	if _, err := s.tasks.UpdateOne(ctx, bson.M{"_id": mustOid(t, id)},
+		bson.M{"$set": bson.M{"estimated_minutes": "lots"}}); err != nil {
+		t.Fatalf("corrupt fixture: %v", err)
+	}
+	if _, err := s.Duplicate(ctx, id); err == nil {
+		t.Fatal("wrong-typed estimate must fail, not duplicate as zero")
 	}
 }

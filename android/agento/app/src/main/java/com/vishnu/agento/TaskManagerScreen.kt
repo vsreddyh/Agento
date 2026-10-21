@@ -67,6 +67,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -136,10 +137,10 @@ internal fun TaskManagerScreen(
     // clears the selection, and there is deliberately no select-all (the
     // list is truncated past the server cap, so "all" would act on rows
     // never fetched).
-    var bulkMode by remember { mutableStateOf(false) }
-    var bulkSelected by remember { mutableStateOf(setOf<String>()) }
+    var bulkMode by rememberSaveable { mutableStateOf(false) }
+    var bulkSelected by rememberSaveable(stateSaver = BulkSelectionSaver) { mutableStateOf(setOf<String>()) }
     // Bulk move date dialog (#345): one date for the whole selection.
-    var bulkMoveOpen by remember { mutableStateOf(false) }
+    var bulkMoveOpen by rememberSaveable { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     // Bumped after every load/mutation so the loader below reruns.
@@ -823,8 +824,7 @@ internal fun TaskManagerScreen(
         val ids = ops.map { it.id }
         ids.forEach(::markBusy)
         scope.launch {
-            try {
-                api.batch(ops).fold(
+            api.batch(ops).fold(
                 onSuccess = {
                     silentRefresh = true
                     refreshTick++
@@ -835,24 +835,22 @@ internal fun TaskManagerScreen(
                 onFailure = { e ->
                     // The selection is kept: the batch changed nothing, so
                     // the same set is still the right one to retry once the
-                    // reload underneath lands. The failing item is named by
-                    // task, falling back to its position when the row is not
-                    // on screen (the sent order is the set order, which the
-                    // user never sees).
+                    // reload underneath lands. The failure names the task,
+                    // falling back to the stable id and only then to the
+                    // position: the sent order is the set order, which the
+                    // user never sees.
                     silentRefresh = true
                     refreshTick++
                     val named = e.message?.let(::parseBatchError)
                     val target = named?.id?.takeIf { it.isNotEmpty() }?.let { id ->
-                        tasks.firstOrNull { it.id == id }?.name?.ifEmpty { null }
+                        tasks.firstOrNull { it.id == id }?.name?.ifEmpty { null } ?: id
                     } ?: named?.let { if (it.index >= 0) "item ${it.index + 1}" else null }
                     val detail = (named?.detail ?: serverDetail(e.message ?: e.javaClass.simpleName)) +
                         (target?.let { " — $it" } ?: "")
                     toasts.toast(detail, ToastKind.Error)
                 },
             )
-            } finally {
-                ids.forEach(::unmarkBusy)
-            }
+            ids.forEach(::unmarkBusy)
         }
     }
 
@@ -887,10 +885,20 @@ internal fun TaskManagerScreen(
         // the list showed, so a task changed elsewhere fails the whole batch
         // instead of overwriting. Complete/skip stay unguarded by design —
         // the single verbs are last-write-wins too, with no revision to
-        // guard on. An id missing from the fetched page goes out unguarded
-        // (same semantics); if the row is truly gone the server 404s the
-        // batch with the item named.
+        // guard on. An id missing from the fetched page fails closed here
+        // rather than going out unguarded: sending it would be a silent
+        // last-write-wins on a row the user can't see.
         val byId = tasks.associateBy { it.id }
+        if (ids.any { it !in byId }) {
+            silentRefresh = true
+            refreshTick++
+            exitBulk()
+            toasts.toast(
+                "Some selected tasks aren't in view — reloaded. Reselect and retry.",
+                ToastKind.Error,
+            )
+            return
+        }
         runBulkOps(
             ids.map { id ->
                 val fields = JSONObject().put("due_date", dueDate)
@@ -2626,6 +2634,17 @@ internal fun isConflict(e: Throwable): Boolean =
  * batch and no chunking protocol is needed on either side.
  */
 internal const val MAX_BULK_SELECT = 50
+
+/**
+ * Selection survives rotation (#345): a Set is not Bundle-saveable, so it
+ * rides as a List. The cap still holds on restore — a set cannot grow past
+ * it by rotating.
+ */
+internal val BulkSelectionSaver: Saver<Set<String>, List<String>> =
+    Saver(
+        save = { it.toList() },
+        restore = { it.toSet() },
+    )
 
 /**
  * Toggles [id] in a bulk selection: removes it when present, adds it when

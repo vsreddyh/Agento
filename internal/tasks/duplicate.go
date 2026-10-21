@@ -38,14 +38,25 @@ func (s *Store) Duplicate(ctx context.Context, id string) (map[string]any, error
 		return nil, err
 	}
 	// Typed reads, asserted like the rollover plan's: a hand-edited row with
-	// the wrong types must fail here, not copy as zeros.
-	mins, ok := mongostore.ToInt(cur["estimated_minutes"])
-	if !ok {
-		return nil, fail("cannot duplicate: estimated_minutes is not a number")
+	// the wrong types must fail here, not duplicate as zeros. ABSENT is the
+	// exception, not the rule: it reads as the zero value, the same leniency
+	// the store gives a missing `revision` (the backfill) — a legacy row the
+	// user can still complete must also duplicate.
+	mins := 0
+	if v, present := cur["estimated_minutes"]; present && v != nil {
+		var ok bool
+		mins, ok = mongostore.ToInt(v)
+		if !ok {
+			return nil, fail("cannot duplicate: estimated_minutes is not a number")
+		}
 	}
-	parallel, ok := mongostore.ToBool(cur["parallelable"])
-	if !ok {
-		return nil, fail("cannot duplicate: parallelable is not a boolean")
+	parallel := false
+	if v, present := cur["parallelable"]; present && v != nil {
+		var ok bool
+		parallel, ok = mongostore.ToBool(v)
+		if !ok {
+			return nil, fail("cannot duplicate: parallelable is not a boolean")
+		}
 	}
 	name, _ := cur["name"].(string)
 	description, _ := cur["description"].(string)

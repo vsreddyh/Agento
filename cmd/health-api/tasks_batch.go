@@ -63,7 +63,9 @@ func parseBatchOps(fields map[string]any) ([]tasks.BatchOp, error) {
 			if !ok {
 				return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].reason must be a string", i)}
 			}
-			bop.Reason = s
+			// Trimmed like op/id: a whitespace reason is no reason, and
+			// the store would carry the padding onto the skip record.
+			bop.Reason = strings.TrimSpace(s)
 		}
 		if v, present := obj["fields"]; present && v != nil {
 			m, ok := v.(map[string]any)

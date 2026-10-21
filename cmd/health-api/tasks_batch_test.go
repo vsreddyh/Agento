@@ -83,6 +83,37 @@ func TestBatchHandlerRejectsBadShapes(t *testing.T) {
 	}
 }
 
+func TestParseBatchOpsTrimsAndRequires(t *testing.T) {
+	ops, err := parseBatchOps(map[string]any{"ops": []any{
+		map[string]any{"op": "skip", "id": "  abc  ", "reason": "  busy  "},
+	}})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if ops[0].ID != "abc" || ops[0].Reason != "busy" {
+		t.Fatalf("op/id/reason must trim, got %+v", ops[0])
+	}
+	for name, fields := range map[string]map[string]any{
+		"empty op":  {"ops": []any{map[string]any{"op": "", "id": "abc"}}},
+		"blank id":  {"ops": []any{map[string]any{"op": "complete", "id": "   "}}},
+		"padded op": {"ops": []any{map[string]any{"op": "  complete  ", "id": "abc"}}},
+	} {
+		ops, err := parseBatchOps(fields)
+		if name == "padded op" {
+			if err != nil {
+				t.Fatalf("%s: surrounding spaces trim, got %v", name, err)
+			}
+			if ops[0].Op != "complete" {
+				t.Fatalf("%s: want trimmed op, got %+v", name, ops[0])
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatalf("%s: must fail", name)
+		}
+	}
+}
+
 func TestWriteBatchErrNamesTheFailingOp(t *testing.T) {
 	// Conflict keeps its 409 through the batch wrapper, with index/id/op added.
 	w := httptest.NewRecorder()
