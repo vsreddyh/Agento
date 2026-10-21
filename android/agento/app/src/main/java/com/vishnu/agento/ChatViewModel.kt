@@ -449,6 +449,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     internal fun pendingAttachmentById(id: String): ChatAttachment? =
         if (id.isEmpty()) null else _state.value.pendingAttachments.firstOrNull { it.id == id }
 
+    /** The staged photo at [index] (#339): the LEGACY remove path (an
+     * empty id — every legacy pick shares it) can only be resolved by
+     * position, and the LIVE list is the only one that is not a stale
+     * composition snapshot. */
+    internal fun pendingAttachmentAt(index: Int): ChatAttachment? =
+        _state.value.pendingAttachments.getOrNull(index)
+
     /** Removes the staged photo at [index] (#339): a legacy payload (empty
      * id) cannot be removed by id — every legacy pick shares that empty id,
      * so the id path would drop the wrong photo (or nothing). */
@@ -721,6 +728,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // draft must not enter history.
                 threads = (threads + loaded.filter { l -> threads.none { it.id == l.id } })
                     .sortedByDescending { it.updatedAt }
+                    // The storage cap, like load()'s (#339): the merged list
+                    // must not exceed what the next persist would write.
+                    .take(ChatThreads.MAX_THREADS)
             }
             // Consumed only when the open was not blocked on a live turn:
             // a streaming-blocked tap keeps its target and retries on re-tap.

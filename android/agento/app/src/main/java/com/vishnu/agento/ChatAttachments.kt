@@ -351,7 +351,10 @@ fun ChatAttachment.dataUri(): String {
     // preflight fails it; with it the send fails with the SAME named per-photo
     // message as the stage path. Thrown (not returned) by design: streamChat
     // maps it to a ChatEvent.Error, so the throw has a delivery path.
-    oversizeMessage()?.let { throw NamedAttachError(it) }
+    // OversizeAttachError, like the stage path (#339): the same per-photo
+    // cap, the same type — so any future type-keyed handling sees one
+    // shape, not two.
+    oversizeMessage()?.let { throw OversizeAttachError(it) }
     return "data:image/jpeg;base64,$base64"
 }
 

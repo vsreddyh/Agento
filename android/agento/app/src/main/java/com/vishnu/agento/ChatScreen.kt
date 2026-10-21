@@ -174,7 +174,9 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
     }
     /** Threads whose thumbs are dead (#339): a deleted thread's id never
      * comes back, so a decode that finishes AFTER the eviction must not
-     * re-pin its bitmap. */
+     * re-pin its bitmap. Grows by one short id per deleted thread and is
+     * NOT cleared by evictAll() — clearing it would reopen the very race
+     * it closes (a late put re-pinning a dead thread's bitmap). */
     private val deadThreads: MutableSet<String> =
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
 
@@ -1038,6 +1040,10 @@ internal fun ChatTab(
                 cameraPermission.launch(Manifest.permission.CAMERA)
             }.onFailure {
                 cameraPermSince = 0L
+                // The asked-before flag resets too (#339): the request never
+                // happened, so the NEXT denial is still a first denial and
+                // must route to the toast, not to Settings.
+                cameraAskedBefore = false
                 vm.notify("Couldn't ask for camera permission.")
             }
         }
@@ -1130,7 +1136,14 @@ internal fun ChatTab(
             // between recomposition and tap shifts it. A MISS skips the
             // evict: guessing from the snapshot could free the survivor's
             // bitmap and leave the removed one cached.
-            val a = vm.pendingAttachmentById(id)
+            val a = if (id.isBlank()) {
+                // Legacy (no id): position only, from the LIVE list.
+                vm.pendingAttachmentAt(stagedIndex)
+            } else {
+                // Stable id: by id, or nothing — a miss must not fall back
+                // to a position, which could free the survivor's bitmap.
+                vm.pendingAttachmentById(id)
+            }
             if (a != null) {
                 thumbCache.remove(thumbCacheKey(a.id, stagedIndex, a.base64, state.threadId))
             }

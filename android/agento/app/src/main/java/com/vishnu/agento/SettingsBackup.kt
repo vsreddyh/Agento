@@ -357,8 +357,14 @@ object SettingsBackup {
                         // fallback wrote bytes load() cannot decode, so the
                         // next load returned emptyList() — wiping the LIVE
                         // threads the import just overwrote.
-                        // Oversize persists until send: canonicalize does not
-                        // enforce the 1.5M staging cap.
+                        // Oversize persists until send, BY DESIGN (#339):
+                        // canonicalize does not enforce the 1.5M staging
+                        // cap, so an imported thread may hold a payload the
+                        // current build would refuse to stage. The cost is
+                        // a cold start that materializes it (the ADR
+                        // discloses the backup growth); the alternative —
+                        // trimming on import — would DELETE the user's
+                        // photos at restore time, which is worse.
                         val toWrite = ChatThreads.canonicalizeFile(text)
                         if (toWrite == null) {
                             skipped += name
