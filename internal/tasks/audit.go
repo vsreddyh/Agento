@@ -68,8 +68,11 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	// A store that was never connected cannot record anything, and the
 	// function is best-effort by contract: it swallows its own failures
 	// rather than failing the mutation they describe. The read side says
-	// "not connected" out loud; here, the log simply has no entry.
+	// "not connected" out loud; here, the log simply has no entry — and
+	// says so, because a silent hole in the log is the one thing a log
+	// must not have.
 	if s == nil || s.db == nil {
+		log.Printf("tasks: mutation log entry dropped (store is not connected, op=%q task_id=%q)", op, taskID)
 		return
 	}
 	if op == "" || taskID == "" {

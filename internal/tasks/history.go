@@ -65,6 +65,11 @@ type MutationFilter struct {
 	Limit int
 }
 
+// normalizeOp is the per-op half of the normalisation: lowercase and trim.
+func normalizeOp(op string) string {
+	return strings.ToLower(strings.TrimSpace(op))
+}
+
 // normalizeOps lowercases, trims, drops empties and removes repeats.
 //
 // One rule, two callers: the transport parses a comma-separated string
@@ -75,7 +80,7 @@ func normalizeOps(ops []string) []string {
 	out := make([]string, 0, len(ops))
 	seen := map[string]bool{}
 	for _, op := range ops {
-		op = strings.ToLower(strings.TrimSpace(op))
+		op = normalizeOp(op)
 		if op == "" || seen[op] {
 			continue
 		}
@@ -120,9 +125,17 @@ func ParseOps(s string) ([]string, error) {
 // seam use — so this validator, used on its own, agrees with both. An
 // exported check that disagreed with the thing it checks would be a second
 // rule, and a second rule is where this stack keeps growing surprises.
+//
+// The error echoes the token the caller SENT, not the normalized copy of it:
+// " FROBNICATE " is what the caller can go and fix, and the normalized
+// spelling would have them hunting for the wrong string.
 func ValidateOps(ops []string) error {
-	for _, op := range normalizeOps(ops) {
-		if !slices.Contains(knownOps, op) {
+	for _, op := range ops {
+		norm := normalizeOp(op)
+		if norm == "" {
+			continue
+		}
+		if !slices.Contains(knownOps, norm) {
 			// The offending token is echoed, bounded: a 10KB query
 			// parameter answered with itself is a log line nobody wants.
 			return fail("unknown op %q; known ops are %s", TruncateBytes(op, 40), strings.Join(knownOps, ", "))

@@ -94,13 +94,17 @@ func TestKnownOpsHandsOutACopy(t *testing.T) {
 
 // The validator normalizes too, so it agrees with the parser and the store
 // seam: an exported check that disagreed with the thing it checks would be a
-// second rule.
+// second rule. And it echoes what the caller SENT, not the normalized copy.
 func TestValidateOpsNormalizes(t *testing.T) {
 	if err := ValidateOps([]string{"CREATE", " complete ", ""}); err != nil {
 		t.Errorf("an op in the wrong case must be accepted: %v", err)
 	}
-	if err := ValidateOps([]string{"frobnicate"}); err == nil {
-		t.Error("an unknown op must be rejected")
+	err := ValidateOps([]string{" FROBNICATE "})
+	if err == nil {
+		t.Fatal("an unknown op must be rejected")
+	}
+	if !strings.Contains(err.Error(), "FROBNICATE") {
+		t.Errorf("the error must echo what the caller sent: %v", err)
 	}
 }
 
