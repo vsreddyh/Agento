@@ -667,6 +667,13 @@ internal fun ChatTab(
                         result
                             .onSuccess {
                                 val before = vm.pendingAttachmentCount()
+                                // Stages into the HOME thread (the one the
+                                // pick was made for), not "whatever is current"
+                                // (#339): the check above re-reads the live
+                                // thread and drops with a notice when the
+                                // user switched mid-batch, so a photo can
+                                // never land in a conversation the pick was
+                                // not made for.
                                 vm.addPendingAttachments(listOf(it))
                                 if (vm.pendingAttachmentCount() > before) landed.incrementAndGet()
                                 consecutiveFailures.set(0)

@@ -121,7 +121,18 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
  * @WorkerThread — so this gate is the tripwire for a future caller that
  * forgets, not the thing that makes the cap safe. A Main caller still
  * gets the right bytes, just on the wrong thread. */
-internal fun requireIoThread(site: String, context: Context? = null) {
+/**
+ * Whether this build is debuggable, cached once at app start (#339): the
+ * IO-thread gate must not do a PackageManager-adjacent read on the very
+ * thread it is trying to keep clean. Set by [AgentoApp.onCreate]; before
+ * that (and in JVM tests) it stays false and the gate only logs.
+ */
+internal object DebugBuild {
+    @Volatile
+    var debuggable: Boolean = false
+}
+
+internal fun requireIoThread(site: String) {
     // runCatching (not try/catch): the fallback documents the JVM case inline.
     val onMain = runCatching {
         val mainLooper = android.os.Looper.getMainLooper()
@@ -132,9 +143,7 @@ internal fun requireIoThread(site: String, context: Context? = null) {
         // device surfaces the slip immediately instead of janking silently.
         // Production only logs — a crash there would take the chat tab
         // down over a performance mistake.
-        if (context != null &&
-            (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-        ) {
+        if (DebugBuild.debuggable) {
             throw IllegalStateException("$site must run on an IO thread, never Main")
         }
         // Stacked, not thrown: a Main-thread caller still does the right work.
@@ -178,11 +187,20 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
             // All-whitespace just under the ceiling: blank without building the copy.
             a.copy(base64 = "")
         } else {
-            val stripped = a.base64.filterNot { c -> c.isWhitespace() }
-            when {
-                stripped.isBlank() -> a.copy(base64 = "")
-                isDecodableBase64(stripped) -> a.copy(base64 = stripped)
-                else -> a.copy(base64 = "")
+            // Count first, copy second (#339): a wrapped payload just under
+            // the ceiling would otherwise build a second ~4 M-char copy on
+            // the load path (per message, on cold start). If the STRIPPED
+            // length is over the ceiling, blank without building it.
+            val strippedLen = a.base64.count { !it.isWhitespace() }
+            if (strippedLen > MAX_RAW_BASE64_CHARS) {
+                a.copy(base64 = "")
+            } else {
+                val stripped = a.base64.filterNot { c -> c.isWhitespace() }
+                when {
+                    stripped.isBlank() -> a.copy(base64 = "")
+                    isDecodableBase64(stripped) -> a.copy(base64 = stripped)
+                    else -> a.copy(base64 = "")
+                }
             }
         }
     }

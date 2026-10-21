@@ -152,7 +152,7 @@ object ChatThreads {
 
     @androidx.annotation.WorkerThread
     fun load(context: Context, tab: String): List<ChatThread> {
-        requireIoThread("ChatThreads.load", context)
+        requireIoThread("ChatThreads.load")
         val f = file(context, tab)
         if (!f.exists()) return emptyList()
         // The scans (whitespace strip + alphabet validation over photo
@@ -194,7 +194,7 @@ object ChatThreads {
      */
     @androidx.annotation.WorkerThread
     fun save(context: Context, tab: String, threads: List<ChatThread>) {
-        requireIoThread("ChatThreads.save", context)
+        requireIoThread("ChatThreads.save")
         runCatching {
             val capped = threads.take(MAX_THREADS).map { t ->
                 if (t.messages.size > MAX_MESSAGES) {

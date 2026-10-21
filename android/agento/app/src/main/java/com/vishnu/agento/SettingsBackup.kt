@@ -186,7 +186,7 @@ object SettingsBackup {
      * thread — the same Main-never rule as ChatThreads.load(). */
     @androidx.annotation.WorkerThread
     fun export(context: Context): Export {
-        requireIoThread("SettingsBackup.export", context)
+        requireIoThread("SettingsBackup.export")
         // The cap lives HERE, not only in the caller: the wall belongs on the
         // boundary that builds the peak, so a caller that skips the Settings
         // pre-meter still fails closed. Both use the same constant + wording.
@@ -264,7 +264,7 @@ object SettingsBackup {
      * file reads + canonicalize + prefs writes all ride the caller's thread. */
     @androidx.annotation.WorkerThread
     fun importFrom(context: Context, json: JSONObject): Result<Outcome> {
-        requireIoThread("SettingsBackup.importFrom", context)
+        requireIoThread("SettingsBackup.importFrom")
         return try {
             val values = json.optJSONObject("values")
                 ?: return Result.failure(IllegalArgumentException("Not an Agento settings file (missing values)"))
