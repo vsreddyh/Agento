@@ -907,11 +907,12 @@ internal fun TaskManagerScreen(
         }
         runBulkOps(
             ids.map { id ->
-                // Fail-closed like the guard above: a row that left the
-                // fetched page between guard and map degrades to the same
-                // reload-and-retry, never to an unguarded write or a crash.
-                // `return` here leaves doBulkMove (map is inline), not just
-                // the lambda.
+                // Fail-closed as defense in depth: the guard above already
+                // proved membership on this thread with no suspension
+                // between, so this cannot fire today — but if that ever
+                // changes, the degradation is reload-and-retry, never an
+                // unguarded write or a crash. `return` here leaves
+                // doBulkMove (map is inline), not just the lambda.
                 val rev = byId[id]?.revision ?: run {
                     silentRefresh = true
                     refreshTick++
