@@ -307,9 +307,10 @@ The `task_id` check is shared by both transports (`tasks.NormalizeTaskID`),
 so the agent and the app are told the same thing: a typo'd id is refused
 rather than answered with an empty history that reads like "this task was
 never touched". Ids are lowercased — the same id in either case is the same
-task. A blank `task_id` means no filter (the whole log); a non-blank one that
-is not a hex id — including one made only of spaces and commas — is a 422,
-exactly like an `op` filter that names nothing.
+task. A blank `task_id` — empty, or only whitespace — means no filter (the
+whole log), exactly as a blank `op` means every op; a non-blank one that is
+not a hex id (including one made of spaces and commas) is a 422, exactly like
+an `op` filter that names nothing.
 
 `op=duplicate` is accepted but only the **batch** path records it (#341): a
 single duplicate is a store operation with no verb of its own, so the filter
@@ -321,6 +322,10 @@ holds" and nothing more: the filters are the way to narrow, so read one
 task's history (`task_id`) or one kind of change (`op`) rather than paging
 through the whole log. A 90-day personal log fits a page; if it ever does
 not, the fix is a cursor — `(at, _id)` — not a bigger `limit`.
+
+The entries carry no cursor key today: `at` alone does not disambiguate
+two rows written in the same millisecond, so a future cursor would be a NEW
+field in the envelope, not a correction of one.
 
 ### What `detail` holds, per op
 
@@ -336,6 +341,11 @@ that is worth knowing before diffing two rows:
 | `reopen` | empty over HTTP, `mcp reopen_task` over MCP |
 | `delete` | the door that deleted it (`http DELETE`, `mcp delete_task`) |
 | `duplicate` | empty |
+
+`detail` is capped at 300 bytes, so a longer one is stored truncated with
+no marker — the op-specific extras are short by nature (a field list, a
+rollover outcome), and a cap that rewrote the value would change what the
+log says.
 
 `at` is RFC3339 **with milliseconds** — unlike the task documents, whose
 `completedAt`/`createdAt` are RFC3339 to the second. Both are valid
