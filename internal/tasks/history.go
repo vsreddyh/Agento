@@ -129,7 +129,14 @@ func ParseOps(s string) ([]string, error) {
 // The error echoes the token the caller SENT, not the normalized copy of it:
 // " FROBNICATE " is what the caller can go and fix, and the normalized
 // spelling would have them hunting for the wrong string.
+//
+// A filter that was sent and names NOTHING is refused too — the same rule
+// the transport's parser applies, so this validator and the seam cannot
+// answer differently about the same input.
 func ValidateOps(ops []string) error {
+	if len(normalizeOps(ops)) == 0 && len(ops) > 0 {
+		return fail("op filter names no operation; known ops are %s", strings.Join(knownOps, ", "))
+	}
 	for _, op := range ops {
 		norm := normalizeOp(op)
 		if norm == "" {
@@ -208,16 +215,18 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	// transport's parser uses: the stored ops are lowercase, and a caller
 	// that reached the store directly must not be told "create" is an
 	// unknown op, nor asked about an empty one.
-	ops := normalizeOps(f.Ops)
-	if err := ValidateOps(ops); err != nil {
+	// The ops are normalized here, on a copy, by the SAME rule the
+	// transport's parser uses: the stored ops are lowercase, and a caller
+	// that reached the store directly must not be told "create" is an
+	// unknown op, nor asked about an empty one.
+	//
+	// The validator sees the caller's OWN list, not the normalized copy:
+	// it is the one that can tell "no filter" (an empty list) from "a
+	// filter that names nothing" (a list of blanks).
+	if err := ValidateOps(f.Ops); err != nil {
 		return nil, false, err
 	}
-	// A filter that was sent and names nothing is a filter the caller
-	// sent — the same rule the transport's parser applies, so a direct
-	// caller is not handed the whole log for "Ops: []string{\"\", \" \"}".
-	if len(ops) == 0 && len(f.Ops) > 0 {
-		return nil, false, fail("op filter names no operation; known ops are %s", strings.Join(knownOps, ", "))
-	}
+	ops := normalizeOps(f.Ops)
 	// The id is normalized here too, not only in the transports: the store
 	// is the seam, and a caller that reached it directly must not be able to
 	// ask about "not-an-id" or about an id in the wrong case and get an

@@ -76,7 +76,8 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	// says so, because a silent hole in the log is the one thing a log
 	// must not have.
 	if s == nil || s.db == nil {
-		log.Printf("tasks: mutation log entry dropped (store is not connected, op=%q task_id=%q)", op, taskID)
+		log.Printf("tasks: mutation log entry dropped (store is not connected, op=%q task_id=%q)",
+			TruncateBytes(op, 40), TruncateBytes(taskID, 40))
 		return
 	}
 	// The id and the op are normalized HERE, on the write side, for the
@@ -125,7 +126,7 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		// Trimmed before it is capped, so the stored label is the label the
 		// caller meant: "  app  " and "app" are one caller, not two.
 		"source": TruncateBytes(strings.TrimSpace(source), 40),
-		"detail": TruncateBytes(detail, 300),
+		"detail": TruncateBytes(strings.TrimSpace(detail), 300),
 		"at":     primitive.NewDateTimeFromTime(time.Now().UTC()),
 	}
 	// The audit write must NOT inherit the caller's cancellation.

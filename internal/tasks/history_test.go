@@ -401,6 +401,11 @@ func TestListMutationsClampsTheLimit(t *testing.T) {
 
 // The ops are lowercased at the store seam, so a caller that bypasses
 // ParseOps is answered the same way: "CREATE" is the op the log holds.
+//
+// This one runs WITHOUT a database, so it is the check CI makes: it proves
+// the rule is not rejected before any store use. The matching itself — that
+// "CREATE" finds the stored lowercase row — is pinned by the DB-backed
+// filter test.
 func TestListMutationsAcceptsOpsInAnyCase(t *testing.T) {
 	var s Store
 	_, _, err := s.ListMutations(context.Background(), MutationFilter{Ops: []string{"CREATE"}})
