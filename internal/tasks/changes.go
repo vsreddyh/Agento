@@ -61,7 +61,15 @@ const changeWriteBudget = 5 * time.Second
 // bumpChanges advances the collection-wide change marker. Best-effort — see
 // the package comment. A single upserted $inc, so a lost bump is the failure
 // mode that degrades to a redundant refresh rather than to a stale one.
+//
+// Inside a batch the flag from batch.go suppresses this: the batch bumps
+// once for all of its writes instead of once per op, so per-op bumps
+// (including rollover successors through the insert funnel) stay silent
+// until the batch's own bump lands.
 func (s *Store) bumpChanges(ctx context.Context) {
+	if ctx.Value(noBumpKey{}) != nil {
+		return
+	}
 	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), changeWriteBudget)
 	defer cancel()
 	// $inc with an upsert is the whole implementation: the first bump creates

@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 
 package com.vishnu.agento
 
@@ -29,7 +29,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
@@ -66,6 +67,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,6 +82,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import java.util.Locale
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 // REQUIRED, do not remove as an unused import: `collect { }` on a Flow with a lambda is
 // the kotlinx.coroutines.flow EXTENSION, not the FlowCollector member. Removing it fails to
 // compile. Flagged as redundant in review twice; it is load-bearing.
@@ -128,6 +131,16 @@ internal fun TaskManagerScreen(
     var query by rememberSaveable { mutableStateOf("") }
     var sortMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<ServerTask?>(null) }
+    // Bulk selection (#345): entered via long-press or the Select action,
+    // with checkboxes on rows and tap-to-toggle while active. Capped at
+    // MAX_BULK_SELECT so every bulk run fits in one atomic batch; exiting
+    // clears the selection, and there is deliberately no select-all (the
+    // list is truncated past the server cap, so "all" would act on rows
+    // never fetched).
+    var bulkMode by rememberSaveable { mutableStateOf(false) }
+    var bulkSelected by rememberSaveable(stateSaver = BulkSelectionSaver) { mutableStateOf(setOf<String>()) }
+    // Bulk move date dialog (#345): one date for the whole selection.
+    var bulkMoveOpen by rememberSaveable { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     // Bumped after every load/mutation so the loader below reruns.
@@ -222,6 +235,9 @@ internal fun TaskManagerScreen(
     // disabled while its request runs — the rest of the list, the top bar
     // and the editor stay live. Synthetic "__create__" covers the dialog
     // save path, which has no task id of its own.
+    //
+    // Every launch site clears its mark in `finally`: a cancelled request
+    // must not leave a row disabled until the next composition.
     var busyIds by remember { mutableStateOf(setOf<String>()) }
     fun markBusy(id: String) { busyIds = busyIds + id }
     fun unmarkBusy(id: String) { busyIds = busyIds - id }
@@ -523,34 +539,26 @@ internal fun TaskManagerScreen(
     }
 
     /**
-     * Copy a task 1:1 (issue #161): every field carried over verbatim —
-     * name, speak_name, description, due date/time, estimate, the whole repeat block
-     * and the parallel flag — as a new **open** task. Nothing is "smarter"
-     * than the original: a past due date stays a past due date, and a
-     * cadence comes across as the same cadence. A copy is a starting point
-     * to edit, not a rescheduled twin.
+     * Duplicate a task 1:1 (issue #161) via the canonical server duplicate:
+     * every field carried over verbatim — name, speak_name, description, due
+     * date/time, estimate, the whole repeat block and the parallel flag — as
+     * a new **open** task. Nothing is "smarter" than the original: a past due
+     * date stays a past due date, and a cadence comes across as the same
+     * cadence. A duplicate is a starting point to edit, not a rescheduled twin.
+     *
+     * The server validates the source (a task with no usable contents is
+     * rejected with the reason), so there is no client-side precheck: the
+     * sheet is already dismissed, and the error toast says what to fix.
      */
     fun doDuplicate(t: ServerTask) {
-        // Everything the client itself enforces is checked here, before the
-        // sheet is dismissed: a refusal that closes the task leaves the user
-        // with a toast and nothing to fix, because the thing they needed
-        // to change is behind a tap they just made.
-        val missing = listOf(
-            "a name" to t.name.isBlank(),
-            "some details" to t.description.isBlank(),
-            "a due date" to !t.dueDate.isIsoDate(),
-            "a due time" to t.dueTime.isBlank(),
-        ).filter { it.second }.map { it.first }
-        if (missing.isNotEmpty()) {
-            toasts.toast(
-                "This task has no ${missing.joinToString(" or ")} yet — add " +
-                    "${if (missing.size == 1) "it" else "them"} before copying it.",
-                ToastKind.Error,
-            )
-            return
-        }
-        // Closed here rather than by the caller, so a task that cannot be
-        // copied stays open to be fixed.
+        // One duplicate per tap: a second tap while the first is in flight
+        // would send a second one-op batch and mint a second copy. Same
+        // guard shape as doResolve — and marking the source id (not just
+        // the placeholder) also holds the bulk bar, whose liveness check
+        // reads these same ids.
+        if (exiting.containsKey(t.id) || t.id in busyIds) return
+        // Closed here rather than by the caller, so the toast lands on the
+        // list the copy will appear in.
         selected = null
         // Optimistic placeholder: the copy appears instantly with a temp id
         // and is swapped for the server answer — no full-reload flicker.
@@ -562,42 +570,48 @@ internal fun TaskManagerScreen(
         // still pokes and toasts; the row appears on the next reload only
         // if the filter would carry it).
         tasks = if (filter == ServerTaskFilter.Done) prev else listOf(placeholder) + prev
-        markBusy(tempId)
+        // Busy only what is shown: on Done the placeholder never renders, so
+        // an orphan tempId would sit in the set for the whole request.
+        if (filter != ServerTaskFilter.Done) markBusy(tempId)
+        markBusy(t.id)
         scope.launch {
-            api.create(
-                name = t.name,
-                speakName = t.speakName,
-                description = t.description,
-                dueDate = t.dueDate,
-                dueTime = t.dueTime,
-                estimatedMinutes = t.estimatedMinutes,
-                repeatEvery = t.repeatEvery,
-                repeatUnit = t.repeatUnit,
-                repeatDays = t.repeatDays,
-                repeatCustom = t.repeatCustom,
-                repeatRule = t.repeatRule,
-                parallelable = t.parallelable,
-            ).fold(
-                onSuccess = { copy ->
-                    editing = null
-                    // Only when the placeholder is still there to be replaced:
-                    // if a filter change already dropped it, the server row is
-                    // a genuine arrival and must animate in (#308).
-                    if (tasks.any { it.id == tempId }) noteRowShown(copy.id)
-                    tasks = tasks.map { if (it.id == tempId) copy else it }
-                    pokeWidget()
-                    toasts.toast("Copied \u201c${copy.name}\u201d.", ToastKind.Success)
-                },
-                onFailure = { e ->
-                    tasks = prev
-                    fail(e)
-                },
-            )
-            unmarkBusy(tempId)
+            try {
+                api.batch(listOf(BulkOp("duplicate", t.id))).fold(
+                    onSuccess = { items ->
+                        val copy = items.firstOrNull()?.task
+                        if (copy == null) {
+                            tasks = prev
+                            toasts.toast("Duplicate failed.", ToastKind.Error)
+                        } else {
+                            editing = null
+                            // Only when the placeholder is still there to be replaced:
+                            // if a filter change already dropped it, the server row is
+                            // a genuine arrival and must animate in (#308).
+                            if (tasks.any { it.id == tempId }) noteRowShown(copy.id)
+                            tasks = tasks.map { if (it.id == tempId) copy else it }
+                            pokeWidget()
+                            toasts.toast("Duplicated \u201c${copy.name}\u201d.", ToastKind.Success)
+                        }
+                    },
+                    onFailure = { e ->
+                        tasks = prev
+                        fail(e)
+                    },
+                )
+            } finally {
+                unmarkBusy(tempId)
+                unmarkBusy(t.id)
+            }
         }
     }
 
-    fun doComplete(t: ServerTask) {
+    /**
+     * Marks [t] resolved via [verb] ("complete" or "skip", #345): same leave
+     * animation, same silent-refetch-on-rollover, same custom-repeat recreate
+     * draft — only the verb and the toast wording differ, so the two stay in
+     * step by sharing this body instead of being two near-copies.
+     */
+    fun doResolve(t: ServerTask, verb: String) {
         // Already on its way out, or still in flight (#308): the exit
         // animation owns the removal, and a second request here would finish
         // first on failure and cancel the first one's animation with
@@ -641,89 +655,97 @@ internal fun TaskManagerScreen(
             tasks = prev.map { if (it.id == t.id) it.copy(completedAt = "__pending__") else it }
         }
         markBusy(t.id)
+        val doneWord = if (verb == "skip") "Task skipped" else "Task completed"
         scope.launch {
-            api.complete(t.id).fold(
-                onSuccess = { done ->
-                    // A structured cadence rolled itself over server-side:
-                    // the next occurrence is a NEW row this response does
-                    // not carry, so only then fall back to a refetch — a
-                    // silent one, so the list under the leaving row stays put
-                    // (#308). The row mid-exit is carried over that swap by
-                    // the loader, so its animation finishes rather than being
-                    // cut short. Every other completion patches in place.
-                    val next = done?.nextDueDate.orEmpty()
-                    if (next.isNotEmpty()) {
-                        silentRefresh = true
-                        refreshTick++
-                        // The widget and the alarm set still need the push:
-                        // the loader never pokes, and the new occurrence's
-                        // reminders are not armed until it does.
-                        pokeWidget()
-                        // "Tomorrow" / "2 Oct" rather than a raw ISO date.
-                        val when2 = friendlyDue(
-                            next, "", java.time.LocalDate.now(IST)).ifEmpty { next }
-                        toasts.toast("Task completed — next one set for $when2.")
-                    } else if (filter == ServerTaskFilter.Open) {
-                        pokeWidget()
-                        // A custom condition is nobody's to compute but
-                        // ours, so the prefilled draft asks for the date —
-                        // unless an editor is already open, which must not
-                        // be discarded. One-shot tasks are skipped.
-                        if (editing == null && t.hasRepeat) {
-                            editing = ServerTaskDraft(
-                                name = t.name,
-                                description = t.description,
-                                // Only the date is cleared: recreating means
-                                // picking a new one (save stays gated on it),
-                                // but every other field is the user's own and
-                                // is carried over verbatim. Clearing the time
-                                // too made the user re-pick a value they had
-                                // already set (#148). The time field is
-                                // disabled until a date exists, so the kept
-                                // time is revealed, not stranded.
-                                dueDate = "",
-                                dueTime = t.dueTime,
-                                estimatedMinutes = t.estimatedMinutes.toString(),
-                                repeatEvery = if (t.repeatEvery > 0) t.repeatEvery.toString() else "",
-                                repeatUnit = t.repeatUnit.ifEmpty { "days" },
-                                repeatDays = t.repeatDays,
-                                repeatCustom = t.repeatCustom,
-                                repeatRule = t.repeatRule,
-                                parallelable = t.parallelable,
-                            )
-                            // Legacy tasks (created before due_time was
-                            // required) have no time to keep — don't claim
-                            // there is one.
-                            toasts.toast(
-                                if (t.dueTime.isBlank()) {
-                                    "Task completed — pick a new date and time to recreate it."
-                                } else {
-                                    "Task completed — pick a new date to recreate it (time kept)."
-                                },
-                            )
+            try {
+                val finish = if (verb == "skip") api.skip(t.id) else api.complete(t.id)
+                finish.fold(
+                    onSuccess = { done ->
+                        // A structured cadence rolled itself over server-side:
+                        // the next occurrence is a NEW row this response does
+                        // not carry, so only then fall back to a refetch — a
+                        // silent one, so the list under the leaving row stays put
+                        // (#308). The row mid-exit is carried over that swap by
+                        // the loader, so its animation finishes rather than being
+                        // cut short. Every other completion patches in place.
+                        val next = done?.nextDueDate.orEmpty()
+                        if (next.isNotEmpty()) {
+                            silentRefresh = true
+                            refreshTick++
+                            // The widget and the alarm set still need the push:
+                            // the loader never pokes, and the new occurrence's
+                            // reminders are not armed until it does.
+                            pokeWidget()
+                            // "Tomorrow" / "2 Oct" rather than a raw ISO date.
+                            val when2 = friendlyDue(
+                                next, "", java.time.LocalDate.now(IST)).ifEmpty { next }
+                            toasts.toast("$doneWord — next one set for $when2.")
+                        } else if (filter == ServerTaskFilter.Open) {
+                            pokeWidget()
+                            // A custom condition is nobody's to compute but
+                            // ours, so the prefilled draft asks for the date —
+                            // unless an editor is already open, which must not
+                            // be discarded. One-shot tasks are skipped.
+                            if (editing == null && t.hasRepeat) {
+                                editing = ServerTaskDraft(
+                                    name = t.name,
+                                    description = t.description,
+                                    // Only the date is cleared: recreating means
+                                    // picking a new one (save stays gated on it),
+                                    // but every other field is the user's own and
+                                    // is carried over verbatim. Clearing the time
+                                    // too made the user re-pick a value they had
+                                    // already set (#148). The time field is
+                                    // disabled until a date exists, so the kept
+                                    // time is revealed, not stranded.
+                                    dueDate = "",
+                                    dueTime = t.dueTime,
+                                    estimatedMinutes = t.estimatedMinutes.toString(),
+                                    repeatEvery = if (t.repeatEvery > 0) t.repeatEvery.toString() else "",
+                                    repeatUnit = t.repeatUnit.ifEmpty { "days" },
+                                    repeatDays = t.repeatDays,
+                                    repeatCustom = t.repeatCustom,
+                                    repeatRule = t.repeatRule,
+                                    parallelable = t.parallelable,
+                                )
+                                // Legacy tasks (created before due_time was
+                                // required) have no time to keep — don't claim
+                                // there is one.
+                                toasts.toast(
+                                    if (t.dueTime.isBlank()) {
+                                        "$doneWord — pick a new date and time to recreate it."
+                                    } else {
+                                        "$doneWord — pick a new date to recreate it (time kept)."
+                                    },
+                                )
+                            } else {
+                                toasts.toast("$doneWord.", ToastKind.Success)
+                            }
                         } else {
-                            toasts.toast("Task completed.", ToastKind.Success)
+                            tasks = tasks.map { if (it.id == t.id) done else it }
+                            pokeWidget()
+                            toasts.toast("$doneWord.", ToastKind.Success)
                         }
-                    } else {
-                        tasks = tasks.map { if (it.id == t.id) done else it }
-                        pokeWidget()
-                        toasts.toast("Task completed.", ToastKind.Success)
-                    }
-                },
-                onFailure = { e ->
-                    // Cancel the leave animation: clearing the id puts the row
-                    // back on screen, where it fades in where it was (#308).
-                    // Restoring `prev` also covers the case where the
-                    // animation had already finished and onRowExited had
-                    // dropped the row.
-                    exiting = exiting - t.id
-                    tasks = prev
-                    fail(e)
-                },
-            )
-            unmarkBusy(t.id)
+                    },
+                    onFailure = { e ->
+                        // Cancel the leave animation: clearing the id puts the row
+                        // back on screen, where it fades in where it was (#308).
+                        // Restoring `prev` also covers the case where the
+                        // animation had already finished and onRowExited had
+                        // dropped the row.
+                        exiting = exiting - t.id
+                        tasks = prev
+                        fail(e)
+                    },
+                )
+            } finally {
+                unmarkBusy(t.id)
+            }
         }
     }
+
+    fun doComplete(t: ServerTask) = doResolve(t, "complete")
+    fun doSkip(t: ServerTask) = doResolve(t, "skip")
 
     fun doReopen(t: ServerTask) {
         selected = null
@@ -744,19 +766,22 @@ internal fun TaskManagerScreen(
         }
         markBusy(t.id)
         scope.launch {
-            api.reopen(t.id).fold(
-                onSuccess = { reopened ->
-                    if (filter != ServerTaskFilter.Done) {
-                        tasks = tasks.map { if (it.id == t.id) reopened else it }
-                    }
-                    pokeWidget()
-                },
-                onFailure = { e ->
-                    tasks = prev
-                    fail(e)
-                },
-            )
-            unmarkBusy(t.id)
+            try {
+                api.reopen(t.id).fold(
+                    onSuccess = { reopened ->
+                        if (filter != ServerTaskFilter.Done) {
+                            tasks = tasks.map { if (it.id == t.id) reopened else it }
+                        }
+                        pokeWidget()
+                    },
+                    onFailure = { e ->
+                        tasks = prev
+                        fail(e)
+                    },
+                )
+            } finally {
+                unmarkBusy(t.id)
+            }
         }
     }
 
@@ -775,18 +800,184 @@ internal fun TaskManagerScreen(
         tasks = prev.filterNot { it.id == t.id }
         markBusy(t.id)
         scope.launch {
-            api.delete(t.id).fold(
-                onSuccess = {
-                    pokeWidget()
-                    toasts.toast("Task deleted.", ToastKind.Success)
-                },
-                onFailure = { e ->
-                    tasks = prev
-                    fail(e)
-                },
-            )
-            unmarkBusy(t.id)
+            try {
+                api.delete(t.id).fold(
+                    onSuccess = {
+                        pokeWidget()
+                        toasts.toast("Task deleted.", ToastKind.Success)
+                    },
+                    onFailure = { e ->
+                        tasks = prev
+                        fail(e)
+                    },
+                )
+            } finally {
+                unmarkBusy(t.id)
+            }
         }
+    }
+
+    /**
+     * Toggles [id] in the bulk selection (#345): the cap refuses a new id
+     * with a toast instead of silently ignoring the tap.
+     */
+    fun toggleBulk(id: String) {
+        val next = toggleBulkId(bulkSelected, id)
+        if (next == null) {
+            toasts.toast("You can select up to $MAX_BULK_SELECT tasks.", ToastKind.Error)
+        } else {
+            bulkSelected = next
+        }
+    }
+
+    fun exitBulk() {
+        bulkMode = false
+        bulkSelected = emptySet()
+    }
+
+    /**
+     * Runs one atomic bulk batch (#345): one background refresh in, one
+     * toast out, one widget/alarm poke. Success clears the selection and
+     * leaves bulk mode; failure keeps the selection for retry after the
+     * reload and names the failing item.
+     */
+    fun runBulkOps(ops: List<BulkOp>, success: String) {
+        // Ops carry normalized ids (BulkOp trims at construction), so the
+        // busy set keys exactly what the wire sends and the error names.
+        val ids = ops.map { it.id }
+        // Cap guard, like the 50-cap on selection: unreachable via the UI
+        // (toggleBulkId refuses over-cap adds), but a future direct caller
+        // building BulkOp lists by hand must fail here, not with a server
+        // 422 mid-flow.
+        if (ops.size > MAX_BULK_SELECT) {
+            toasts.toast("You can send up to $MAX_BULK_SELECT tasks in one batch.", ToastKind.Error)
+            return
+        }
+        // Re-checked here, not just on the button: recomposition lags a
+        // frame, so two taps in the same frame would both pass a stale
+        // enabled=true and send two batches (a duplicate batch copies
+        // twice). The button state is only the visual hint.
+        if (!bulkActionsLive(ids.toSet(), busyIds)) return
+        ids.forEach(::markBusy)
+        scope.launch {
+            try {
+                api.batch(ops).fold(
+                    onSuccess = {
+                        silentRefresh = true
+                        refreshTick++
+                        pokeWidget()
+                        exitBulk()
+                        toasts.toast(success, ToastKind.Success)
+                    },
+                    onFailure = { e ->
+                        // The selection is kept: the batch changed nothing, so
+                        // the same set is still the right one to retry once the
+                        // reload underneath lands. The failure names the task,
+                        // falling back to the stable id and only then to the
+                        // position: the sent order is the set order, which the
+                        // user never sees.
+                        silentRefresh = true
+                        refreshTick++
+                        val named = e.message?.let(::parseBatchError)
+                        val target = named?.id?.takeIf { it.isNotEmpty() }?.let { id ->
+                            tasks.firstOrNull { it.id == id }?.name?.ifEmpty { null } ?: id
+                        } ?: named?.let { if (it.index >= 0) "item ${it.index + 1}" else null }
+                        val detail = (named?.detail ?: serverDetail(e.message ?: e.javaClass.simpleName)) +
+                            (target?.let { " — $it" } ?: "")
+                        toasts.toast(detail, ToastKind.Error)
+                    },
+                )
+            } finally {
+                ids.forEach(::unmarkBusy)
+            }
+        }
+    }
+
+    /**
+     * One atomic bulk resolve (#345): every selected task completed or
+     * skipped in a single batch. No per-row exit animation — the set can
+     * span what is on screen, so the shared runner swaps the whole list in.
+     */
+    fun doBulkResolve(verb: String) {
+        val ids = bulkSelected.toList()
+        if (ids.isEmpty()) return
+        val doneWord = if (verb == "skip") "Skipped" else "Completed"
+        val byId = tasks.associateBy { it.id }
+        // Act on what's actionable: only open rows in the fetched page can
+        // resolve. Rows that left the page (filter switch) or are already
+        // resolved are set aside with a count instead of failing the whole
+        // atomic batch on one stale row — or going out unguarded. Nothing
+        // here needs a refresh: the list is already current for this filter.
+        val actionable = ids.filter { byId[it]?.isOpen() == true }
+        val skipped = ids.size - actionable.size
+        if (actionable.isEmpty()) {
+            toasts.toast(
+                "Nothing to $verb — selected tasks are already resolved or not in view.",
+                ToastKind.Error,
+            )
+            return
+        }
+        // A custom repeat has no next occurrence until somebody picks a
+        // date: the single-task flow opens a recreate draft, which cannot
+        // scale to N tasks, so the bulk toast says where to recreate them
+        // instead — for skips exactly like completes, since skipping a
+        // custom occurrence also ends it without a successor. Counted over
+        // the actionable set only: set-aside rows were not touched, so they
+        // need no recreation guidance.
+        val customs = actionable.count { byId[it]?.repeatCustom == true }
+        runBulkOps(
+            actionable.map { BulkOp(verb, it) },
+            "$doneWord ${actionable.size} task${if (actionable.size == 1) "" else "s"}." +
+                (if (skipped > 0) " ($skipped skipped.)" else "") +
+                (if (customs > 0) " Recreate custom repeats from Done." else ""),
+        )
+    }
+
+    /** One atomic bulk move (#345): one date for the whole selection.
+     * Unlike resolve, move applies to any state: re-dating a done row is a
+     * legitimate edit, the same as the single-task dialog, which edits done
+     * rows freely. */
+    fun doBulkMove(dueDate: String) {
+        if (dueDate.isBlank()) return
+        val ids = bulkSelected.toList()
+        if (ids.isEmpty()) return
+        val whenText = friendlyDue(dueDate, "", java.time.LocalDate.now(IST)).ifEmpty { dueDate }
+        // Guarded like the single-task edit: each op carries the revision
+        // the list showed, so a task changed elsewhere fails the whole batch
+        // instead of overwriting. Complete/skip stay unguarded by design —
+        // the single verbs are last-write-wins too, with no revision to
+        // guard on. Only fetched rows move: rows that left the page are set
+        // aside with a count, since there is no revision to guard them with.
+        val byId = tasks.associateBy { it.id }
+        val ops = ids.mapNotNull { id ->
+            byId[id]?.let { t ->
+                val fields = JSONObject().put("due_date", dueDate)
+                fields.put("expected_revision", t.revision)
+                BulkOp("update", id, fields = fields)
+            }
+        }
+        if (ops.isEmpty()) {
+            toasts.toast("Selected tasks aren't in this view.", ToastKind.Error)
+            return
+        }
+        val skipped = ids.size - ops.size
+        runBulkOps(
+            ops,
+            "Moved ${ops.size} task${if (ops.size == 1) "" else "s"} to $whenText, times kept." +
+                (if (skipped > 0) " ($skipped not in view skipped.)" else ""),
+        )
+    }
+
+    /** One atomic bulk duplicate (#345): one canonical server copy each.
+     * Duplicate takes any state by design: the copy is always a new open
+     * task, so resolving the source first would be pointless. */
+    fun doBulkDuplicate() {
+        val ids = bulkSelected.toList()
+        if (ids.isEmpty()) return
+        runBulkOps(
+            ids.map { BulkOp("duplicate", it) },
+            "Duplicated ${ids.size} task${if (ids.size == 1) "" else "s"}.",
+        )
     }
 
     // The toast card floats top-end over the content (Box overlay, not
@@ -794,16 +985,61 @@ internal fun TaskManagerScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             topBar = {
-                TopAppBar(
+                if (bulkMode) {
+                    // Bulk mode (#345): the bar counts the selection and
+                    // finishes it — Skip and Complete need at least one row.
+                    TopAppBar(
+                        navigationIcon = {
+                            IconButton(onClick = ::exitBulk) {
+                                Icon(Icons.Filled.Close, contentDescription = "Exit selection")
+                            }
+                        },
+                        title = { Text("${bulkSelected.size}/$MAX_BULK_SELECT selected") },
+                        actions = {
+                            // Disabled while any selected row is in flight:
+                            // a second tap would send a second batch, and a
+                            // duplicate batch copies twice.
+                            val bulkLive = bulkActionsLive(bulkSelected, busyIds)
+                            TextButton(
+                                onClick = { doBulkResolve("skip") },
+                                enabled = bulkLive,
+                            ) { Text("Skip") }
+                            IconButton(
+                                onClick = { bulkMoveOpen = true },
+                                enabled = bulkLive,
+                            ) {
+                                Icon(
+                                    Icons.Filled.DateRange,
+                                    contentDescription = "Move selected to a date",
+                                )
+                            }
+                            IconButton(
+                                onClick = { doBulkDuplicate() },
+                                enabled = bulkLive,
+                            ) {
+                                Icon(
+                                    Icons.Filled.ContentCopy,
+                                    contentDescription = "Duplicate selected",
+                                )
+                            }
+                            TextButton(
+                                onClick = { doBulkResolve("complete") },
+                                enabled = bulkLive,
+                            ) { Text("Complete") }
+                        },
+                    )
+                } else {
+                    TopAppBar(
                     navigationIcon = {
                         IconButton(onClick = onMenu) {
                             Icon(Icons.Filled.Menu, contentDescription = "Menu")
                         }
                     },
                     title = { Text("Task Manager") },
-                    // Never gated: mutations are per-row now, so the bell,
-                    // New and Refresh stay live while a request runs.
+                    // Never gated: mutations are per-row now, so the Select,
+                    // bell, New and Refresh stay live while a request runs.
                     actions = {
+                        TextButton(onClick = { bulkMode = true }) { Text("Select") }
                         IconButton(onClick = ::onBell) {
                             Icon(
                                 Icons.Filled.Notifications,
@@ -827,8 +1063,9 @@ internal fun TaskManagerScreen(
                         }) {
                             Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                         }
-                    },
-                )
+                        },
+                    )
+                }
             },
         ) { padding ->
             Column(
@@ -1074,17 +1311,45 @@ internal fun TaskManagerScreen(
                                                 // bucket it was in does not
                                                 // change underneath it.
                                                 completed = t.id in exitingHere,
+                                                // Bulk mode (#345): checkboxes
+                                                // instead of the toggle, and a
+                                                // tap toggles membership
+                                                // instead of opening the sheet.
+                                                bulkMode = bulkMode,
+                                                bulkChecked = t.id in bulkSelected,
                                                 // A leaving row is not a
                                                 // target: opening it would
                                                 // race the request that is
                                                 // taking it away.
                                                 onOpen = {
-                                                    if (t.id !in exitingHere) selected = t
+                                                    if (bulkMode) {
+                                                        toggleBulk(t.id)
+                                                    } else if (t.id !in exitingHere) {
+                                                        selected = t
+                                                    }
                                                 },
                                                 onToggle = {
-                                                    if (t.isOpen()) doComplete(t) else doReopen(t)
-                                                    selected = null
+                                                    if (bulkMode) {
+                                                        toggleBulk(t.id)
+                                                    } else {
+                                                        if (t.isOpen()) doComplete(t) else doReopen(t)
+                                                        selected = null
+                                                    }
                                                 },
+                                                // Long-press enters bulk mode
+                                                // with this row selected (#345);
+                                                // in bulk mode taps toggle, so
+                                                // there is nothing to enter.
+                                                onLongPress = {
+                                                    if (!bulkMode) {
+                                                        bulkMode = true
+                                                        toggleBulk(t.id)
+                                                    }
+                                                },
+                                                // Per-task Skip (#345): the
+                                                // same flow as the sheet's
+                                                // Skip button.
+                                                onSkip = { doSkip(t) },
                                             )
                                             if (i < rows.lastIndex) {
                                                 HorizontalDivider(
@@ -1163,35 +1428,38 @@ internal fun TaskManagerScreen(
                     editing = null
                     markBusy(tempId)
                     scope.launch {
-                        api.create(
-                            name = next.name,
-                            speakName = next.speakName,
-                            description = next.description,
-                            dueDate = next.dueDate,
-                            dueTime = next.dueTime,
-                            estimatedMinutes = mins,
-                            repeatEvery = rep?.every ?: 0,
-                            repeatUnit = rep?.unit.orEmpty(),
-                            repeatDays = rep?.days.orEmpty(),
-                            repeatCustom = rep?.custom == true,
-                            repeatRule = rep?.text.orEmpty(),
-                            parallelable = next.parallelable,
-                        ).fold(
-                            onSuccess = { created ->
-                                // Only when the placeholder is still there to
-                                // be replaced: if a filter change already
-                                // dropped it, the server row is a genuine
-                                // arrival and must animate in (#308).
-                                if (tasks.any { it.id == tempId }) noteRowShown(created.id)
-                                tasks = tasks.map { if (it.id == tempId) created else it }
-                                pokeWidget()
-                            },
-                            onFailure = { e ->
-                                tasks = prev
-                                fail(e)
-                            },
-                        )
-                        unmarkBusy(tempId)
+                        try {
+                            api.create(
+                                name = next.name,
+                                speakName = next.speakName,
+                                description = next.description,
+                                dueDate = next.dueDate,
+                                dueTime = next.dueTime,
+                                estimatedMinutes = mins,
+                                repeatEvery = rep?.every ?: 0,
+                                repeatUnit = rep?.unit.orEmpty(),
+                                repeatDays = rep?.days.orEmpty(),
+                                repeatCustom = rep?.custom == true,
+                                repeatRule = rep?.text.orEmpty(),
+                                parallelable = next.parallelable,
+                            ).fold(
+                                onSuccess = { created ->
+                                    // Only when the placeholder is still there to
+                                    // be replaced: if a filter change already
+                                    // dropped it, the server row is a genuine
+                                    // arrival and must animate in (#308).
+                                    if (tasks.any { it.id == tempId }) noteRowShown(created.id)
+                                    tasks = tasks.map { if (it.id == tempId) created else it }
+                                    pokeWidget()
+                                },
+                                onFailure = { e ->
+                                    tasks = prev
+                                    fail(e)
+                                },
+                            )
+                        } finally {
+                            unmarkBusy(tempId)
+                        }
                     }
                 } else {
                     // Only resend the recurrence when it actually
@@ -1225,58 +1493,61 @@ internal fun TaskManagerScreen(
                     editing = null
                     markBusy(next.id)
                     scope.launch {
-                        api.update(
-                            id = next.id,
-                            name = next.name,
-                            speakName = next.speakName,
-                            description = next.description,
-                            dueDate = next.dueDate,
-                            dueTime = next.dueTime,
-                            estimatedMinutes = mins,
-                            repeatEvery = if (repChanged) nowRep?.every else null,
-                            repeatUnit = if (repChanged) nowRep?.unit else null,
-                            repeatDays = if (repChanged) nowRep?.days.orEmpty() else null,
-                            repeatCustom = if (repChanged) nowRep?.custom else null,
-                            repeatRule = if (repChanged) nowRep?.text else null,
-                            parallelable = next.parallelable,
-                            // The revision the dialog read, not a fresh
-                            // lookup: the task may have scrolled out of the
-                            // fetched page, and a null lookup would send
-                            // the edit unguarded (#184).
-                            expectedRevision = next.revision,
-                        ).fold(
-                            onSuccess = { saved ->
-                                if (prevRow == null) {
-                                    // The row was not in the fetched page at
-                                    // all: backgrounded (#308) so pulling the
-                                    // list in does not blank what is on screen.
-                                    silentRefresh = true
-                                    refreshTick++
-                                } else {
-                                    tasks = tasks.map { if (it.id == next.id) saved else it }
-                                }
-                                pokeWidget()
-                            },
-                            onFailure = { e ->
-                                tasks = prev
-                                if (isConflict(e)) {
-                                    // Someone else wrote first: reload and
-                                    // say so, rather than silently holding
-                                    // the reverted row. Backgrounded (#308):
-                                    // the toast is the message, and a spinner
-                                    // over the list would fight it.
-                                    silentRefresh = true
-                                    refreshTick++
-                                    toasts.toast(
-                                        "That task changed elsewhere — reloaded. Reapply your edit.",
-                                        ToastKind.Error,
-                                    )
-                                } else {
-                                    fail(e)
-                                }
-                            },
-                        )
-                        unmarkBusy(next.id)
+                        try {
+                            api.update(
+                                id = next.id,
+                                name = next.name,
+                                speakName = next.speakName,
+                                description = next.description,
+                                dueDate = next.dueDate,
+                                dueTime = next.dueTime,
+                                estimatedMinutes = mins,
+                                repeatEvery = if (repChanged) nowRep?.every else null,
+                                repeatUnit = if (repChanged) nowRep?.unit else null,
+                                repeatDays = if (repChanged) nowRep?.days.orEmpty() else null,
+                                repeatCustom = if (repChanged) nowRep?.custom else null,
+                                repeatRule = if (repChanged) nowRep?.text else null,
+                                parallelable = next.parallelable,
+                                // The revision the dialog read, not a fresh
+                                // lookup: the task may have scrolled out of the
+                                // fetched page, and a null lookup would send
+                                // the edit unguarded (#184).
+                                expectedRevision = next.revision,
+                            ).fold(
+                                onSuccess = { saved ->
+                                    if (prevRow == null) {
+                                        // The row was not in the fetched page at
+                                        // all: backgrounded (#308) so pulling the
+                                        // list in does not blank what is on screen.
+                                        silentRefresh = true
+                                        refreshTick++
+                                    } else {
+                                        tasks = tasks.map { if (it.id == next.id) saved else it }
+                                    }
+                                    pokeWidget()
+                                },
+                                onFailure = { e ->
+                                    tasks = prev
+                                    if (isConflict(e)) {
+                                        // Someone else wrote first: reload and
+                                        // say so, rather than silently holding
+                                        // the reverted row. Backgrounded (#308):
+                                        // the toast is the message, and a spinner
+                                        // over the list would fight it.
+                                        silentRefresh = true
+                                        refreshTick++
+                                        toasts.toast(
+                                            "That task changed elsewhere — reloaded. Reapply your edit.",
+                                            ToastKind.Error,
+                                        )
+                                    } else {
+                                        fail(e)
+                                    }
+                                },
+                            )
+                        } finally {
+                            unmarkBusy(next.id)
+                        }
                     }
                 }
             },
@@ -1298,6 +1569,18 @@ internal fun TaskManagerScreen(
             dismissButton = {
                 TextButton(onClick = { deleting = null }) { Text("Cancel") }
             },
+        )
+    }
+
+    // Bulk move (#345): one date picker for the whole selection.
+    if (bulkMoveOpen) {
+        DueDatePickerDialog(
+            initial = "",
+            onConfirm = { date ->
+                bulkMoveOpen = false
+                doBulkMove(date)
+            },
+            onDismiss = { bulkMoveOpen = false },
         )
     }
 
@@ -1324,6 +1607,10 @@ internal fun TaskManagerScreen(
             onToggle = {
                 selected = null
                 if (open.isOpen()) doComplete(open) else doReopen(open)
+            },
+            onSkip = {
+                selected = null
+                doSkip(open)
             },
             onDuplicate = { doDuplicate(open) },
             onDelete = {
@@ -1486,8 +1773,20 @@ internal fun ServerTaskRow(
      * is left alone so the bucket it sits in does not change under it.
      */
     completed: Boolean = false,
+    /**
+     * Bulk selection (#345): checkboxes instead of the complete/reopen
+     * toggle, and both tap and checkbox toggle membership.
+     */
+    bulkMode: Boolean = false,
+    bulkChecked: Boolean = false,
     onOpen: () -> Unit,
     onToggle: () -> Unit,
+    onLongPress: () -> Unit = {},
+    /**
+     * Per-task Skip (#345). Null hides it: bulk mode taps toggle, and
+     * closed tasks have nothing to skip.
+     */
+    onSkip: (() -> Unit)? = null,
 ) {
     val done = !task.isOpen() || completed
     // On the Done/All filters a completion leaves the row where it is and
@@ -1505,10 +1804,19 @@ internal fun ServerTaskRow(
     )
     Row(
         modifier = Modifier.fillMaxWidth()
-            .clickable(onClick = onOpen)
+            .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
             .padding(horizontal = 4.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (bulkMode) {
+            // The selection control: checked state only, the row tap and
+            // this box do the same toggle.
+            Checkbox(
+                checked = bulkChecked,
+                onCheckedChange = { onToggle() },
+                enabled = actionsEnabled,
+            )
+        } else {
         IconButton(onClick = onToggle, enabled = actionsEnabled) {
             // Two different questions, two different answers. The ICON follows
             // what is DRAWN (`done`), so a row that is leaving (#308) shows the
@@ -1532,6 +1840,7 @@ internal fun ServerTaskRow(
                     modifier = Modifier.size(26.dp),
                 )
             }
+        }
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -1580,6 +1889,16 @@ internal fun ServerTaskRow(
                 modifier = Modifier.padding(end = 4.dp),
             )
         }
+        // Per-task Skip (#345): one tap from the row into the same flow as
+        // the sheet's Skip. Open tasks in normal mode only: in bulk mode
+        // taps toggle membership, and a closed task has nothing to skip.
+        if (onSkip != null && task.isOpen() && !bulkMode) {
+            TextButton(
+                onClick = onSkip,
+                enabled = actionsEnabled,
+                contentPadding = PaddingValues(horizontal = 4.dp),
+            ) { Text("Skip") }
+        }
     }
 }
 
@@ -1594,6 +1913,7 @@ internal fun ServerTaskDetailSheet(
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onToggle: () -> Unit,
+    onSkip: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -1708,16 +2028,69 @@ internal fun ServerTaskDetailSheet(
                 ) {
                     Text(if (task.isOpen()) "Complete" else "Reopen")
                 }
-                OutlinedButton(
-                    onClick = onEdit,
-                    enabled = actionsEnabled,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Filled.Edit, contentDescription = null)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Edit")
+                // Skip sits beside Complete (#345): the same skip the bulk
+                // bar and the notification action run, with the same
+                // toast/refresh behaviour as completing. Closed tasks keep
+                // Edit here instead.
+                if (task.isOpen()) {
+                    OutlinedButton(
+                        onClick = onSkip,
+                        enabled = actionsEnabled,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Skip")
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onEdit,
+                        enabled = actionsEnabled,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Filled.Edit, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Edit")
+                    }
                 }
             }
+            // Edit joins Duplicate on the second row for open tasks; for
+            // closed ones the second row is unchanged (Duplicate + Delete).
+            if (task.isOpen()) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    OutlinedButton(
+                        onClick = onEdit,
+                        enabled = actionsEnabled,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Filled.Edit, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Edit")
+                    }
+                    OutlinedButton(
+                        onClick = onDuplicate,
+                        enabled = actionsEnabled,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Duplicate")
+                    }
+                }
+                OutlinedButton(
+                    onClick = onDelete,
+                    enabled = actionsEnabled,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Filled.Delete, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Delete")
+                }
+            } else {
             // Duplicate sits beside Delete rather than joining the primary
             // row: three buttons on one line is the cramped case, and both
             // of these are secondary.
@@ -1746,6 +2119,7 @@ internal fun ServerTaskDetailSheet(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Delete")
                 }
+            }
             }
         }
     }
@@ -2324,3 +2698,53 @@ internal fun formatLastSynced(syncedAt: Long, nowMillis: Long): String? {
 /** True when the failure is a revision race: someone else wrote first. */
 internal fun isConflict(e: Throwable): Boolean =
     "HTTP 409" in (e.message ?: "")
+
+/**
+ * How many tasks one bulk selection may hold (#345). Matches the server's
+ * batch cap (BatchMaxOps in internal/tasks/batch.go — keep the two in sync),
+ * so a whole selection always fits in one atomic batch and no chunking
+ * protocol is needed on either side.
+ */
+internal const val MAX_BULK_SELECT = 50
+
+/**
+ * Selection survives rotation (#345): a Set is not Bundle-saveable, so it
+ * rides as a List. The cap still holds on restore — a set cannot grow past
+ * it by rotating.
+ */
+internal val BulkSelectionSaver: Saver<Set<String>, List<String>> =
+    Saver(
+        save = { it.toList() },
+        // Enforce the cap on restore too: rotation cannot grow the set
+        // today, but a lowered cap or a corrupt Bundle must not sneak an
+        // over-cap selection past the guard into a 422 batch.
+        restore = { it.take(MAX_BULK_SELECT).toSet() },
+    )
+
+/**
+ * Whether the bulk bar is live (#345): a non-empty selection with nothing
+ * in flight. A second tap while a batch runs would send a second batch —
+ * and a duplicate batch copies twice — so the bar goes dead until the
+ * first lands.
+ */
+internal fun bulkActionsLive(selected: Set<String>, busyIds: Set<String>): Boolean =
+    selected.isNotEmpty() && selected.none { it in busyIds }
+
+/**
+ * Toggles [id] in a bulk selection: trims it first, so the set, the wire,
+ * and any error all name the same id; removes it when present, adds it when
+ * there is room, and returns null when the cap refuses a new id (the caller
+ * toasts instead of silently ignoring the tap). Blank ids never enter the
+ * set: one would ride out as an unguarded op and 422 the whole atomic batch.
+ */
+internal fun toggleBulkId(selected: Set<String>, id: String): Set<String>? {
+    val clean = id.trim()
+    if (clean.isEmpty()) return selected
+    return if (clean in selected) {
+        selected - clean
+    } else if (selected.size >= MAX_BULK_SELECT) {
+        null
+    } else {
+        selected + clean
+    }
+}

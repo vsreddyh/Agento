@@ -86,6 +86,189 @@ data class ChangeMarker(
     val changed: Boolean,
 )
 
+/**
+ * One op inside a batch (#345): complete, skip, update, or duplicate a
+ * task by id. `reason` rides only on skip; `fields` only on update (the same
+ * partial-update map the single-task update takes, e.g. due_date for a move
+ * plus expected_revision for the concurrency guard). Construction details
+ * live on the factory below; a private constructor forces every call site
+ * through it.
+ */
+data class BulkOp private constructor(
+    val op: String,
+    val id: String,
+    val reason: String? = null,
+    val fields: JSONObject? = null,
+) {
+    companion object {
+        // Normalized once, here: op/id trimmed, blank reason dropped to
+        // null, fields deep-copied — so the set, the wire, the busy set, and
+        // the error all name the same values, and no call site trims. After
+        // construction, the op's fields are borrowed read-only (like
+        // batch.go's shallow Fields copy): a future caller that needs to
+        // change them must build a new op, never mutate the object —
+        // mutating would move the wire and the per-item contract assert
+        // together, making the drift self-consistent and invisible.
+        operator fun invoke(
+            op: String,
+            id: String,
+            reason: String? = null,
+            fields: JSONObject? = null,
+        ): BulkOp = BulkOp(
+            op = op.trim(),
+            id = id.trim(),
+            reason = reason?.trim()?.ifEmpty { null },
+            // Defensive copy: the factory borrows nothing. A caller
+            // mutating the object after construction would otherwise change
+            // the wire and the per-item contract assert together, making
+            // the drift self-consistent and invisible.
+            fields = fields?.let { JSONObject(it.toString()) },
+        )
+    }
+
+    // Fail fast on misplaced extras: the server 422s a reason on non-skip
+    // and fields on non-update, aborting the whole atomic batch — so a
+    // caller bug here must read as a programming error, not a runtime 422.
+    // Blank counts as absent (a blank reason arrives here as null), so only
+    // a real value on the wrong verb throws.
+    init {
+        require(reason == null || op == "skip") { "reason rides only on skip" }
+        require(fields == null || fields.isEmptyOrNullOnly() || op == "update") { "fields ride only on update" }
+    }
+}
+
+/** What one committed batch item produced: the fresh task, plus the next
+ * occurrence's due date when a structured cadence rolled over. */
+data class BulkItemResult(
+    val index: Int,
+    val id: String,
+    val op: String,
+    val task: ServerTask,
+    val nextDueDate: String = "",
+)
+
+/** Builds the `{"ops": [...]}` body for a bulk batch. Top-level (not a
+ * member) so the shape is unit-testable without a Context. */
+internal fun bulkOpsBody(ops: List<BulkOp>): JSONObject {
+    val arr = JSONArray()
+    for (op in ops) {
+        // Values arrive normalized from BulkOp's factory; the body only
+        // omits what counts as absent — a blank reason, a null-only or empty
+        // fields object — mirroring the server's empty-as-absent rule.
+        val o = JSONObject().put("op", op.op).put("id", op.id)
+        if (!op.reason.isNullOrEmpty()) o.put("reason", op.reason)
+        if (op.fields != null && !op.fields.isEmptyOrNullOnly()) o.put("fields", op.fields)
+        arr.put(o)
+    }
+    return JSONObject().put("ops", arr)
+}
+
+/**
+ * Which item of a bulk batch failed, recovered from the HTTP error text
+ * (#345). The batch endpoint answers a failed op with the single-verb
+ * status plus the op's index, id, and op, e.g.
+ * `HTTP 409: {"detail": "conflict: ...", "index": 2, "id": "...", "op": "update"}`.
+ */
+internal data class BatchFailure(
+    val detail: String,
+    val index: Int,
+    val id: String,
+    val op: String,
+)
+
+/** True when the object carries no real values: empty, or every value an
+ * explicit JSON null. Mirrors the server's empty-as-absent rule
+ * (`ChangedFieldNames` treats null as absent). */
+internal fun JSONObject.isEmptyOrNullOnly(): Boolean {
+    val keys = keys()
+    while (keys.hasNext()) {
+        if (!isNull(keys.next())) return false
+    }
+    return true
+}
+
+/**
+ * Field names the per-item contract assert understands. Anything else in a
+ * bulk update's `fields` is a caller bug or a contract the app predates —
+ * either way it must surface, not pass a weakened assert. `expected_revision`
+ * is guard metadata, not a stored field, so it never counts.
+ */
+internal val BULK_UPDATE_KNOWN_FIELDS = setOf(
+    "name", "speak_name", "description", "due_date", "due_time",
+    "estimated_minutes", "repeat_every", "repeat_unit", "repeat_days",
+    "repeat_custom", "repeat_rule", "parallelable", "expected_revision",
+)
+
+/** Names the `fields` entries [bulkUpdateSent] cannot assert. Empty means
+ * the op asserts everything it sent. */
+internal fun bulkUnknownFields(fields: JSONObject): List<String> {
+    val out = mutableListOf<String>()
+    val keys = fields.keys()
+    while (keys.hasNext()) {
+        val key = keys.next()
+        if (key !in BULK_UPDATE_KNOWN_FIELDS && !fields.isNull(key)) out.add(key)
+    }
+    return out.sorted()
+}
+
+/**
+ * Builds the "what the app asked the server to store" record for one bulk
+ * update op (#345), so a bulk move gets the same field-level assertion as a
+ * single-task edit. Complete/skip/duplicate send no fields — there is
+ * nothing to assert — so they stay version-only, exactly like the single
+ * verbs. Top-level (not a member) so unit tests call it without a Context.
+ */
+internal fun bulkUpdateSent(fields: JSONObject): TaskContractSent {
+    fun str(key: String): String? =
+        if (fields.has(key) && !fields.isNull(key)) fields.optString(key, "") else null
+    fun num(key: String): Int? =
+        if (fields.has(key) && !fields.isNull(key)) (fields.opt(key) as? Number)?.toInt() else null
+    fun flag(key: String): Boolean? =
+        if (fields.has(key) && !fields.isNull(key)) fields.optBoolean(key) else null
+    return TaskContractSent(
+        name = str("name"),
+        speakName = str("speak_name"),
+        description = str("description"),
+        dueDate = str("due_date"),
+        dueTime = str("due_time"),
+        estimatedMinutes = num("estimated_minutes"),
+        repeatEvery = num("repeat_every"),
+        repeatUnit = str("repeat_unit"),
+        repeatDays = if (fields.has("repeat_days") && !fields.isNull("repeat_days")) {
+            val raw = mutableListOf<String>()
+            val arr = fields.optJSONArray("repeat_days")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    arr.optString(i, "").trim().takeIf { it.isNotEmpty() }?.let { raw.add(it) }
+                }
+            }
+            canonicalRepeatDays(raw)
+        } else {
+            null
+        },
+        repeatCustom = flag("repeat_custom"),
+        repeatRule = str("repeat_rule"),
+        parallelable = flag("parallelable"),
+    )
+}
+
+/** Recovers a [BatchFailure] from an HTTP error message, or null when the
+ * message carries no batch envelope (a network failure, a proxy hint). */
+internal fun parseBatchError(message: String): BatchFailure? {
+    val start = message.indexOf('{')
+    if (start < 0) return null
+    val o = runCatching { JSONObject(message.substring(start)) }.getOrNull() ?: return null
+    if (o.isNull("detail")) return null
+    val detail = o.optString("detail", "").trim()
+    if (detail.isEmpty()) return null
+    return BatchFailure(
+        detail = detail,
+        index = o.optInt("index", -1),
+        id = if (o.isNull("id")) "" else o.optString("id", ""),
+        op = if (o.isNull("op")) "" else o.optString("op", ""),
+    )
+}
+
 /** The deadline as an instant, or null when it cannot be parsed. */
 fun ServerTask.dueMillisOrNull(): Long? = dueMillisOrNull(dueDate, dueTime)
 
@@ -739,6 +922,80 @@ class TasksApi(context: Context) {
                     // literal string "null" and reach the toast.
                     task.copy(nextDueDate = optStr(next, "due_date"))
                 }
+            }
+        }
+
+    /**
+     * One atomic bulk run (#345): complete, skip, update, or duplicate a set
+     * of tasks in one server transaction. The whole batch commits or nothing
+     * does; a hard failure names the failing op (index/id/op) with the
+     * single-verb status, so the screen can report WHICH item failed and keep
+     * the selection for retry.
+     */
+    suspend fun batch(ops: List<BulkOp>): Result<List<BulkItemResult>> =
+        withContext(Dispatchers.IO) {
+            if (ops.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Nothing to send"))
+            }
+            call("POST", "/api/tasks/batch", bulkOpsBody(ops)).map { text ->
+                val arr = JSONObject(text).optJSONArray("results")
+                    ?: throw RuntimeException("Unexpected response shape")
+                val out = mutableListOf<BulkItemResult>()
+                for (i in 0 until arr.length()) {
+                    val item = arr.optJSONObject(i)
+                        ?: throw RuntimeException("Unexpected response shape")
+                    val root = item.optJSONObject("task")
+                        ?: throw RuntimeException("Unexpected response shape")
+                    var task = parseTask(root)
+                        ?: throw RuntimeException("Unexpected response shape")
+                    // No lenient fallback to task.id: the server guarantees
+                    // ID (source id, or the new copy's id for duplicate), so
+                    // a missing one is a contract violation, not a gap to
+                    // paper over.
+                    val id = optStr(item, "id")
+                    if (id.isEmpty()) throw RuntimeException("Unexpected response shape")
+                    // Version handling mirrors resolve(): each half versioned
+                    // on its own, warn-not-throw on disagreement.
+                    val next = item.optJSONObject("next")
+                    val nextVersion =
+                        next?.let { parseContractVersion(it.opt("contract_version")) }
+                    if (completeVersionMismatch(task.contractVersion, nextVersion)) {
+                        ContractWarnings.report(listOf("contract_version"), task.name)
+                    }
+                    noteContractVersion(maxOf(task.contractVersion, nextVersion ?: 0))
+                    if (next != null) {
+                        task = task.copy(nextDueDate = optStr(next, "due_date"))
+                    }
+                    // Field-level assertion for update ops, mirroring the
+                    // single-task edit: the request op carries the fields,
+                    // matched by the server's index — never by array
+                    // position, so a future server that omits or reorders
+                    // the index runs no check rather than checking the move
+                    // against the wrong op's fields.
+                    // Complete/skip/duplicate send no fields, so they stay
+                    // version-only — exactly like the single verbs.
+                    if (item.has("index")) {
+                        ops.getOrNull(item.optInt("index", -1))?.let { req ->
+                            if (req.op == "update" && req.fields != null) {
+                                val unknown = bulkUnknownFields(req.fields)
+                                if (unknown.isNotEmpty()) {
+                                    ContractWarnings.report(unknown.map { "fields:$it" }, task.name)
+                                }
+                                checkContract(task, bulkUpdateSent(req.fields), expectedId = id)
+                            }
+                        }
+                    }
+                    out.add(
+                        BulkItemResult(
+                            index = item.optInt("index", i),
+                            id = id,
+                            op = optStr(item, "op"),
+                            task = task,
+                            nextDueDate = task.nextDueDate,
+                        ),
+                    )
+                }
+                out.toList()
             }
         }
 

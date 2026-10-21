@@ -91,34 +91,37 @@ func taskStore(w http.ResponseWriter) (*tasks.Store, bool) {
 // Anything else is logged with full detail but returns a generic message
 // (the endpoint is auth-gated, still no reason to leak DB internals).
 func writeTaskErr(w http.ResponseWriter, err error) {
+	code, body := taskErrBody(err)
+	writeJSON(w, code, body)
+}
+
+// taskErrBody is the mapping writeTaskErr sends, split out so the batch
+// endpoint can reuse the same statuses while naming the failing op.
+func taskErrBody(err error) (int, bson.M) {
 	var se *tasks.StoreError
 	if errors.As(err, &se) {
 		if strings.HasPrefix(se.Msg, "unknown task") {
-			writeJSON(w, http.StatusNotFound, bson.M{"detail": se.Msg})
-			return
+			return http.StatusNotFound, bson.M{"detail": se.Msg}
 		}
 		// A lost revision race is neither missing nor invalid: 409, with
 		// the message the store wrote (it names both revisions and says
 		// to reload), so the app can show it as-is.
 		if se.Conflict {
-			writeJSON(w, http.StatusConflict, bson.M{"detail": se.Msg})
-			return
+			return http.StatusConflict, bson.M{"detail": se.Msg}
 		}
 		// A reused Idempotency-Key with a different body. 422 like any other
 		// validation failure, but named separately: the fix is a NEW key, not
 		// different fields, and the message has to say which.
 		if se.Mismatch {
-			writeJSON(w, http.StatusUnprocessableEntity, bson.M{
+			return http.StatusUnprocessableEntity, bson.M{
 				"detail": se.Msg,
 				"hint":   "idempotency keys are single-use per distinct request body",
-			})
-			return
+			}
 		}
-		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": se.Msg})
-		return
+		return http.StatusUnprocessableEntity, bson.M{"detail": se.Msg}
 	}
 	log.Printf("tasks: internal error: %v", err)
-	writeJSON(w, http.StatusInternalServerError, bson.M{"detail": "internal error"})
+	return http.StatusInternalServerError, bson.M{"detail": "internal error"}
 }
 
 // decodeTaskBody reads a small JSON object body into a field map.
@@ -851,5 +854,9 @@ func registerTasks(mux *http.ServeMux) {
 	// to the catch-all and answers 422 "unknown task 'changes'".
 	mux.HandleFunc("/api/tasks/changes", changesSince)
 	mux.HandleFunc("/api/tasks/changes/", changesSince)
+	// Exact batch path, registered like changes: without it a POST here falls
+	// through to the taskItem catch-all below and 404s as "unknown task".
+	mux.HandleFunc("/api/tasks/batch", batchTasks)
+	mux.HandleFunc("/api/tasks/batch/", batchTasks)
 	mux.HandleFunc("/api/tasks/", taskItem)
 }

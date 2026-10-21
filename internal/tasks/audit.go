@@ -28,12 +28,13 @@ import (
 // can do — the log answers "what did a CALLER change", which is the question that
 // has no other answer.
 const (
-	OpCreate   = "create"
-	OpUpdate   = "update"
-	OpDelete   = "delete"
-	OpComplete = "complete"
-	OpSkip     = "skip"
-	OpReopen   = "reopen"
+	OpCreate    = "create"
+	OpUpdate    = "update"
+	OpDelete    = "delete"
+	OpComplete  = "complete"
+	OpSkip      = "skip"
+	OpReopen    = "reopen"
+	OpDuplicate = "duplicate"
 )
 
 // auditCollection is separate from `tasks` on purpose: it must survive the task.
