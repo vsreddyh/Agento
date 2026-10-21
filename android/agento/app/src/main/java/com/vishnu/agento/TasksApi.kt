@@ -104,6 +104,13 @@ data class BulkOp private constructor(
     val fields: JSONObject? = null,
 ) {
     companion object {
+        // Normalized once, here: op/id trimmed, blank reason dropped to
+        // null, fields deep-copied. After construction, the op's fields are
+        // borrowed read-only (like batch.go's shallow Fields copy): a future
+        // caller that needs to change them must build a new op, never mutate
+        // the object — mutating would move the wire and the per-item
+        // contract assert together, making the drift self-consistent and
+        // invisible.
         operator fun invoke(
             op: String,
             id: String,

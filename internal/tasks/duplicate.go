@@ -41,7 +41,39 @@ func (s *Store) Duplicate(ctx context.Context, id string) (map[string]any, error
 	// the wrong types must fail here, not duplicate as zeros. ABSENT is the
 	// exception, not the rule: it reads as the zero value, the same leniency
 	// the store gives a missing `revision` (the backfill) — a legacy row the
-	// user can still complete must also duplicate.
+	// user can still complete must also duplicate. Present-but-null counts
+	// as absent, like everywhere else null does.
+	strField := func(key string) (string, error) {
+		v, present := cur[key]
+		if !present || v == nil {
+			return "", nil
+		}
+		s, ok := v.(string)
+		if !ok {
+			return "", fail("cannot duplicate: %s is not a string", key)
+		}
+		return s, nil
+	}
+	name, err := strField("name")
+	if err != nil {
+		return nil, err
+	}
+	description, err := strField("description")
+	if err != nil {
+		return nil, err
+	}
+	speakName, err := strField("speak_name")
+	if err != nil {
+		return nil, err
+	}
+	dueDate, err := strField("due_date")
+	if err != nil {
+		return nil, err
+	}
+	dueTime, err := strField("due_time")
+	if err != nil {
+		return nil, err
+	}
 	mins := 0
 	if v, present := cur["estimated_minutes"]; present && v != nil {
 		var ok bool
@@ -58,11 +90,6 @@ func (s *Store) Duplicate(ctx context.Context, id string) (map[string]any, error
 			return nil, fail("cannot duplicate: parallelable is not a boolean")
 		}
 	}
-	name, _ := cur["name"].(string)
-	description, _ := cur["description"].(string)
-	speakName, _ := cur["speak_name"].(string)
-	dueDate, _ := cur["due_date"].(string)
-	dueTime, _ := cur["due_time"].(string)
 	doc, _, err := s.CreateWithKey(ctx, name, description, dueDate, dueTime,
 		&mins, repeatFromDoc(cur), &parallel, speakName, "", "", "")
 	// No idempotency key, source, or fingerprint: a duplicate is a NEW

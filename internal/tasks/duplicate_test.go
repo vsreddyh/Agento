@@ -164,4 +164,11 @@ func TestDuplicateLegacyRowWithoutNumbers(t *testing.T) {
 	if _, err := s.Duplicate(ctx, id); err == nil {
 		t.Fatal("wrong-typed estimate must fail, not duplicate as zero")
 	}
+	if _, err := s.tasks.UpdateOne(ctx, bson.M{"_id": mustOid(t, id)},
+		bson.M{"$set": bson.M{"estimated_minutes": 5, "name": 42}}); err != nil {
+		t.Fatalf("corrupt fixture: %v", err)
+	}
+	if _, err := s.Duplicate(ctx, id); err == nil || !strings.Contains(err.Error(), "not a string") {
+		t.Fatalf("wrong-typed name must name the field, got %v", err)
+	}
 }
