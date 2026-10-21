@@ -145,6 +145,10 @@ func TestTaskMutationsResponseShape(t *testing.T) {
 	// fixed id would collect the previous run's rows and the count
 	// assertions would be measuring history instead of the contract.
 	id := primitive.NewObjectID().Hex()
+	// The setup writes through RecordMutation, which is best-effort by
+	// contract: it returns nothing and swallows its own errors. So a write
+	// that gaps shows up HERE, as a row count that does not match — not as
+	// a write error.
 	store.RecordMutation(ctx, tasks.OpComplete, id, "mcp", "none")
 	// The two writes must land in DIFFERENT milliseconds: `at` is stored at
 	// millisecond precision, and two entries sharing one timestamp would

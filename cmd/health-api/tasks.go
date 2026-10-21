@@ -24,8 +24,7 @@ import (
 )
 
 // parseLimitParam reads the `limit` query parameter, falling back to the
-// store default (0 = "use the default") when it is missing, unparseable or
-// not a number.
+// store default (0 = "use the default") when it is missing or unparseable.
 //
 // Lenient on purpose: a limit can only enlarge the page, which is the answer
 // the caller already had, so a stray query param must never nuke the answer.
