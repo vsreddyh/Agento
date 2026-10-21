@@ -981,7 +981,31 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                         // Pinned UTF-8 like the writer side (#339): the SAF
                         // stream carries no charset, and the platform
                         // default must not decide how a backup decodes.
-                        input.bufferedReader(Charsets.UTF_8).readText()
+                        // BOUNDED read with early abort (#339): the SIZE
+                        // pre-read trusts provider metadata, which cloud
+                        // providers may omit (-1) or understate — readText()
+                        // would then materialize an unbounded string before
+                        // any gate runs. Chunks abort mid-read once the
+                        // estimated peak (chars × UTF-16 + slack) crosses
+                        // the same heap cap the post-read gate below judges,
+                        // so a lying provider OOMs nothing. Same named error
+                        // and remedy either way.
+                        val sb = StringBuilder()
+                        input.bufferedReader(Charsets.UTF_8).use { r ->
+                            val buf = CharArray(65536)
+                            while (true) {
+                                val n = r.read(buf)
+                                if (n < 0) break
+                                sb.append(buf, 0, n)
+                                if (sb.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                                    throw IllegalStateException(
+                                        "Backup too large to import safely. " +
+                                            "Delete old photo threads in the switcher, export a smaller backup, then try again.",
+                                    )
+                                }
+                            }
+                        }
+                        sb.toString()
                     } ?: throw IllegalStateException("Could not open the selected file for reading")
                     // Post-read peak gate, mirroring the export post-build
                     // check (#339): the SIZE pre-read above trusts provider

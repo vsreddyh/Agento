@@ -550,8 +550,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // thread being left, and carrying typed text into the new thread
         // would fire A's draft into B on the next send — the same
         // cross-thread mis-send class the staged-photo discard exists for.
-        // New/delete DOES park text (explicit fresh-thread action, no turn
-        // to confuse); navigation does not. Both drops voice instead of
+        // DELIBERATE SPLIT, named so the next edit doesn't "fix" it into
+        // uniformity (#339): navigate (switch/open) DISCARDS with voice,
+        // fresh-thread (new/delete) PARKS via joinPending. A per-thread
+        // draft map would preserve both safety and words, but no such store
+        // exists today — and uniformity in either direction is wrong (park
+        // mis-sends, clear loses words on New). Both drops voice instead of
         // vanishing: the photo notice below, plus the typed-text notice
         // when a draft was present.
         val sw = _state.value

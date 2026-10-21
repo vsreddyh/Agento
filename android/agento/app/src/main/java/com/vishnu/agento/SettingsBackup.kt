@@ -319,11 +319,17 @@ object SettingsBackup {
                 for (name in backupFiles()) {
                     val text = files.optString(name, "")
                     if (text.isEmpty()) continue
-                    // Validate JSON shape before overwriting live state.
-                    val valid = runCatching { org.json.JSONArray(text); true }
-                        .recoverCatching { org.json.JSONObject(text); true }
-                        .getOrDefault(false)
-                    if (valid) {
+                    if (name.startsWith("chat_threads_")) {
+                        // Single parse, not probe-then-parse (#339): the old
+                        // org.json JSONArray/JSONObject probe decoded the
+                        // whole multi-MB string just to check shape, then
+                        // canonicalizeFile decoded it AGAIN via kotlinx —
+                        // 3x transient (probe + canonical + write) on the
+                        // exact path the hard cap exists to bound.
+                        // canonicalizeFile returns null on any invalid shape
+                        // (decode failure → getOrNull), so the null IS the
+                        // validity check with the same skip contract and one
+                        // fewer full parse.
                         // Thread files canonicalize payloads first (#339):
                         // a hand-edited backup must not persist wrapped or
                         // ragged base64 that the load boundary would then
@@ -345,15 +351,23 @@ object SettingsBackup {
                         // time. Fail-closed and correct; the failure just
                         // surfaces far from the cause, which this note —
                         // and the named error itself — closes.
-                        // Non-thread files keep
-                        // the raw write-through (no decoder to disagree with).
-                        val toWrite = if (name.startsWith("chat_threads_")) {
-                            ChatThreads.canonicalizeFile(text) ?: continue
-                        } else {
-                            text
-                        }
+                        val toWrite = ChatThreads.canonicalizeFile(text) ?: continue
                         runCatching {
                             java.io.File(context.filesDir, name).writeText(toWrite, Charsets.UTF_8)
+                            applied++
+                        }
+                        continue
+                    }
+                    // Validate JSON shape before overwriting live state.
+                    // Non-thread files only: thread files validate via the
+                    // canonicalizeFile null above (no decoder to disagree
+                    // with here, so the org.json probe stays the check).
+                    val valid = runCatching { org.json.JSONArray(text); true }
+                        .recoverCatching { org.json.JSONObject(text); true }
+                        .getOrDefault(false)
+                    if (valid) {
+                        runCatching {
+                            java.io.File(context.filesDir, name).writeText(text, Charsets.UTF_8)
                             applied++
                         }
                     }

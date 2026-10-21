@@ -490,7 +490,12 @@ fun contentWithMarkerVerbatim(content: String, n: Int): String =
  * (#339): a blank payload is not a photo anywhere, including here. The
  * attachment half is user-only, matching the wire marker: a hypothetical
  * assistant photo turn filters as content-less (it would wire as bare
- * text with no marker), so resends never carry a turn the wire drops. */
+ * text with no marker), so resends never carry a turn the wire drops.
+ * Role check is strict == "user" like the wire gate (#339): lenient-search
+ * vs strict-wire/content is the deliberate split — a hand-edited "User"
+ * turn stays findable via the search marker but never counts or wires
+ * here. Same shape as the staged-honest vs wire-strict note on the
+ * marker count. */
 fun messageHasContent(m: ChatMessage): Boolean =
     m.content.isNotBlank() || (m.role == "user" && m.attachments.wiredPhotoCount() > 0)
 
