@@ -8,6 +8,11 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.10.1]
+- **Fixed:** the connection test counts only real model names. Blank entries
+  in the provider catalog no longer inflate the reported model count,
+  matching what the provider picker lists.
+
 ## [5.10.0]
 - **Chat photo attachments (#318).** The composer gains an attach menu:
   pick up to two photos from the gallery or take one with the camera, add
