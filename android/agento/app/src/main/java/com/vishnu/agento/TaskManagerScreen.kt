@@ -845,6 +845,14 @@ internal fun TaskManagerScreen(
         // Ops carry normalized ids (BulkOp trims at construction), so the
         // busy set keys exactly what the wire sends and the error names.
         val ids = ops.map { it.id }
+        // Cap guard, like the 50-cap on selection: unreachable via the UI
+        // (toggleBulkId refuses over-cap adds), but a future direct caller
+        // building BulkOp lists by hand must fail here, not with a server
+        // 422 mid-flow.
+        if (ops.size > MAX_BULK_SELECT) {
+            toasts.toast("You can send up to $MAX_BULK_SELECT tasks in one batch.", ToastKind.Error)
+            return
+        }
         // Re-checked here, not just on the button: recomposition lags a
         // frame, so two taps in the same frame would both pass a stale
         // enabled=true and send two batches (a duplicate batch copies
@@ -913,7 +921,9 @@ internal fun TaskManagerScreen(
         // date: the single-task flow opens a recreate draft, which cannot
         // scale to N tasks, so the bulk toast says where to recreate them
         // instead — for skips exactly like completes, since skipping a
-        // custom occurrence also ends it without a successor.
+        // custom occurrence also ends it without a successor. Counted over
+        // the actionable set only: set-aside rows were not touched, so they
+        // need no recreation guidance.
         val customs = actionable.count { byId[it]?.repeatCustom == true }
         runBulkOps(
             actionable.map { BulkOp(verb, it) },
