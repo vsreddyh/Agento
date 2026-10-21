@@ -93,23 +93,31 @@ func TestParseBatchOpsTrimsAndRequires(t *testing.T) {
 	if ops[0].ID != "abc" || ops[0].Reason != "busy" {
 		t.Fatalf("op/id/reason must trim, got %+v", ops[0])
 	}
-	for name, fields := range map[string]map[string]any{
-		"empty op":  {"ops": []any{map[string]any{"op": "", "id": "abc"}}},
-		"blank id":  {"ops": []any{map[string]any{"op": "complete", "id": "   "}}},
-		"padded op": {"ops": []any{map[string]any{"op": "  complete  ", "id": "abc"}}},
+	for name, tc := range map[string]struct {
+		fields map[string]any
+		want   string
+	}{
+		"missing op":  {map[string]any{"ops": []any{map[string]any{"id": "abc"}}}, "ops[0].op is required"},
+		"empty op":    {map[string]any{"ops": []any{map[string]any{"op": "  ", "id": "abc"}}}, "ops[0].op is required"},
+		"op not text": {map[string]any{"ops": []any{map[string]any{"op": 3, "id": "abc"}}}, "ops[0].op must be a string"},
+		"missing id":  {map[string]any{"ops": []any{map[string]any{"op": "complete"}}}, "ops[0].id is required"},
+		"blank id":    {map[string]any{"ops": []any{map[string]any{"op": "complete", "id": "   "}}}, "ops[0].id is required"},
+		"id not text": {map[string]any{"ops": []any{map[string]any{"op": "complete", "id": 3}}}, "ops[0].id must be a string"},
+	} {
+		_, err := parseBatchOps(tc.fields)
+		if err == nil || err.Error() != tc.want {
+			t.Fatalf("%s: want %q, got %v", name, tc.want, err)
+		}
+	}
+	for _, fields := range []map[string]any{
+		{"ops": []any{map[string]any{"op": "  complete  ", "id": "abc"}}},
 	} {
 		ops, err := parseBatchOps(fields)
-		if name == "padded op" {
-			if err != nil {
-				t.Fatalf("%s: surrounding spaces trim, got %v", name, err)
-			}
-			if ops[0].Op != "complete" {
-				t.Fatalf("%s: want trimmed op, got %+v", name, ops[0])
-			}
-			continue
+		if err != nil {
+			t.Fatalf("surrounding spaces trim, got %v", err)
 		}
-		if err == nil {
-			t.Fatalf("%s: must fail", name)
+		if ops[0].Op != "complete" {
+			t.Fatalf("want trimmed op, got %+v", ops[0])
 		}
 	}
 }

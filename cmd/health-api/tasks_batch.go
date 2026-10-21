@@ -47,13 +47,30 @@ func parseBatchOps(fields map[string]any) ([]tasks.BatchOp, error) {
 		if !ok {
 			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d] must be an object", i)}
 		}
-		op, _ := obj["op"].(string)
-		op = strings.TrimSpace(op)
+		// Missing and mistyped stay distinct: absent means "send it",
+		// wrong-typed means "fix its type", and blank-after-trim reads as
+		// missing — there is no value to type-check.
+		opRaw, opPresent := obj["op"]
+		opStr, opIsStr := opRaw.(string)
+		if !opPresent || opRaw == nil {
+			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].op is required", i)}
+		}
+		if !opIsStr {
+			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].op must be a string", i)}
+		}
+		op := strings.TrimSpace(opStr)
 		if op == "" {
 			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].op is required", i)}
 		}
-		id, _ := obj["id"].(string)
-		id = strings.TrimSpace(id)
+		idRaw, idPresent := obj["id"]
+		idStr, idIsStr := idRaw.(string)
+		if !idPresent || idRaw == nil {
+			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].id is required", i)}
+		}
+		if !idIsStr {
+			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].id must be a string", i)}
+		}
+		id := strings.TrimSpace(idStr)
 		if id == "" {
 			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].id is required", i)}
 		}
