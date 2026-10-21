@@ -34,6 +34,7 @@ class TaskBulkTest {
         assertTrue(bulkActionsLive(setOf("a"), emptySet()))
         assertFalse(bulkActionsLive(setOf("a"), setOf("a")))
         assertTrue(bulkActionsLive(setOf("a", "b"), setOf("c")))
+        assertFalse(bulkActionsLive(setOf("a", "b"), setOf("b")))
     }
 
     @Test

@@ -824,6 +824,11 @@ internal fun TaskManagerScreen(
      */
     fun runBulkOps(ops: List<BulkOp>, success: String) {
         val ids = ops.map { it.id }
+        // Re-checked here, not just on the button: recomposition lags a
+        // frame, so two taps in the same frame would both pass a stale
+        // enabled=true and send two batches (a duplicate batch copies
+        // twice). The button state is only the visual hint.
+        if (!bulkActionsLive(ids.toSet(), busyIds)) return
         ids.forEach(::markBusy)
         scope.launch {
             api.batch(ops).fold(
