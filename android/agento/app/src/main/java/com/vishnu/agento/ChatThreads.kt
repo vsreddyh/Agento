@@ -180,14 +180,29 @@ object ChatThreads {
         }.getOrDefault(emptyList())
     }
 
+    /**
+     * Persists threads, canonicalizing attachments at the boundary (#339):
+     * load() canonicalizes, export()/import canonicalize explicitly — save()
+     * was the one boundary relying on every caller holding canonical memory
+     * (true today: VM memory comes from load(), staged payloads are
+     * throw-validated at stage time). A future direct save() caller
+     * bypassing the VM would otherwise persist ragged base64 that load
+     * heals on every cold start. Send-frequency, IO-confined (VM persist()
+     * hops to IO), so the validity walks never touch the hot path.
+     */
     fun save(context: Context, tab: String, threads: List<ChatThread>) {
         runCatching {
             val capped = threads.take(MAX_THREADS).map { t ->
-                if (t.messages.size > MAX_MESSAGES) {
-                    t.copy(messages = t.messages.takeLast(MAX_MESSAGES))
+                val msgs = if (t.messages.size > MAX_MESSAGES) {
+                    t.messages.takeLast(MAX_MESSAGES)
                 } else {
-                    t
+                    t.messages
                 }
+                t.copy(
+                    messages = msgs.map { m ->
+                        m.copy(attachments = canonicalizeAttachments(m.attachments))
+                    },
+                )
             }
             file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), capped))
         }

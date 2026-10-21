@@ -398,11 +398,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private fun stagedDiscardedNotice() =
         notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
 
-    /** Single pending-joint spelling (#339): the concatenation gap
-     * normalizes to one space while both sides ride verbatim (pasted-code
-     * indentation included). Every composer-merge site uses this. */
+    /** Single pending-joint spelling (#339): the gap is exactly one space
+     * while BOTH sides ride verbatim (pasted-code indentation included) —
+     * the second side is NOT trimmed: a queued code paste handed back into
+     * an occupied composer keeps its first-line indent, exactly like the
+     * idle-send path stores it. Blank-first yields the second side alone
+     * (no stray leading space). Every composer-merge site uses this. */
     private fun joinPending(first: String, second: String): String =
-        "${first.trimEnd()} ${second.trimStart()}"
+        if (first.isBlank()) second else "${first.trimEnd()} $second"
 
     /** Removes a staged composer photo by STAGED slot (#339): the strip
      * passes `i` from wiredPhotosWithIndex() while labeling by wired

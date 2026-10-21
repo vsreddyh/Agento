@@ -408,7 +408,13 @@ internal fun ChatTab(
         // launch 10+ min later. The rotation path keeps the age gate: a
         // young non-keep file there can be an older flight still decoding
         // (a rapid re-tap overwrites cameraPath while the first batch reads
-        // its own file — only the keep is provably live).
+        // its own file — only the keep is provably live). Inherent
+        // wall-clock risk (#339): lastModified is wall-clock by contract
+        // (no monotonic alternative for mtimes), so a user clock jump
+        // forward ages a young protected non-keep past the gate and deletes
+        // a capture still decoding — the keep is spared unconditionally, so
+        // the live capture survives, but the older flight errors "moved or
+        // deleted". Narrow (jump + rapid re-tap + rotation mid-decode).
         // Compared as absolute Files, not raw strings (#339): `keep` is a
         // saveable path string, and a future writer storing a relative or
         // Uri-derived display path would silently un-keep the live capture

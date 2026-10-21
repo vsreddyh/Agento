@@ -145,6 +145,16 @@ object SettingsBackup {
     }
 
     /** Serializes all known prefs plus app files; absent keys are omitted (not nulled). */
+    /**
+     * Full-settings export (prefs + thread files) as one JSONObject.
+     * IO-REQUIRED (#339): a photo-heavy export holds ~3x peak on the
+     * caller's thread (file text + canonical re-encode + JSONObject copy),
+     * bounded by the 200-msg cap — the same Main-never rule as
+     * ChatThreads.load(), stated here instead of at each call site. Both
+     * callers (Settings export + import pickers) run inside
+     * withContext(Dispatchers.IO); a future Main-thread caller must hop to
+     * IO first.
+     */
     fun export(context: Context): JSONObject {
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
         val values = JSONObject()
@@ -196,7 +206,9 @@ object SettingsBackup {
     /**
      * Applies a backup produced by [export]; unknown keys and mistyped values
      * are skipped. Version 1 backups (prefs only) still import. Returns the
-     * number of prefs + files applied.
+     * number of prefs + files applied. IO-REQUIRED like [export] (#339):
+     * file reads + canonicalize + prefs writes all ride the caller's
+     * thread — the picker caller runs inside withContext(Dispatchers.IO).
      */
     fun importFrom(context: Context, json: JSONObject): Result<Int> {
         return try {
