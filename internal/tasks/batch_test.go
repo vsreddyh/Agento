@@ -160,6 +160,10 @@ func TestBatchValidationRejectsBadEnvelopes(t *testing.T) {
 		"reason on update": {
 			{Op: "update", ID: id, Reason: "busy", Fields: map[string]any{"due_date": "2026-12-01"}},
 		},
+		"same id twice": {
+			{Op: "complete", ID: id},
+			{Op: "skip", ID: id},
+		},
 	}
 	for name, ops := range cases {
 		if _, err := s.Batch(ctx, ops); err == nil {

@@ -826,6 +826,7 @@ internal fun TaskManagerScreen(
         scope.launch {
             api.batch(ops).fold(
                 onSuccess = {
+                    ids.forEach(::unmarkBusy)
                     silentRefresh = true
                     refreshTick++
                     pokeWidget()
@@ -833,6 +834,7 @@ internal fun TaskManagerScreen(
                     toasts.toast(success, ToastKind.Success)
                 },
                 onFailure = { e ->
+                    ids.forEach(::unmarkBusy)
                     // The selection is kept: the batch changed nothing, so
                     // the same set is still the right one to retry once the
                     // reload underneath lands. The failure names the task,
@@ -850,7 +852,6 @@ internal fun TaskManagerScreen(
                     toasts.toast(detail, ToastKind.Error)
                 },
             )
-            ids.forEach(::unmarkBusy)
         }
     }
 
@@ -866,12 +867,13 @@ internal fun TaskManagerScreen(
         // A custom repeat has no next occurrence until somebody picks a
         // date: the single-task flow opens a recreate draft, which cannot
         // scale to N tasks, so the bulk toast says where to recreate them
-        // instead.
+        // instead — for skips exactly like completes, since skipping a
+        // custom occurrence also ends it without a successor.
         val customs = tasks.count { it.id in ids && it.repeatCustom }
         runBulkOps(
             ids.map { BulkOp(verb, it) },
             "$doneWord ${ids.size} task${if (ids.size == 1) "" else "s"}." +
-                (if (verb == "complete" && customs > 0) " Recreate custom repeats from Done." else ""),
+                (if (customs > 0) " Recreate custom repeats from Done." else ""),
         )
     }
 

@@ -21,7 +21,7 @@ Returning a done or skipped task to open.
 _Avoid_: uncomplete, restore
 
 **Duplicate**:
-A new task made from an existing one, carrying its contents (details, due date/time, estimate, parallelable, repeat, voice phrase). Reminders follow the carried due date/time.
+A new task made from an existing one, carrying its contents (details, due date/time, estimate, parallelable, repeat, voice phrase). Notification timing follows the carried due date/time.
 _Avoid_: copy, clone
 
 **Move**:

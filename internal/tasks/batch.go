@@ -178,6 +178,7 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 	if len(ops) > BatchMaxOps {
 		return nil, fail("batch holds %d ops, over the %d-op cap; select fewer tasks", len(ops), BatchMaxOps)
 	}
+	seen := make(map[string]bool, len(ops))
 	for i, op := range ops {
 		switch op.Op {
 		case "complete", "skip", "update", "duplicate":
@@ -189,6 +190,16 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
 				Err: fail("batch op %d (%s) has no id", i, op.Op)}
 		}
+		if seen[op.ID] {
+			// The same id twice would self-conflict inside one transaction:
+			// the second verb reads the first's uncommitted write. Reject
+			// up front rather than aborting on our own write. Unreachable
+			// from the UI (the selection is a set), so this guards the raw
+			// API.
+			return nil, &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
+				Err: fail("batch op %d (%s %s) duplicates an earlier op; one op per task", i, op.Op, op.ID)}
+		}
+		seen[op.ID] = true
 		// Extras ride only where they are read: a `reason` on anything but
 		// skip, or `fields` on anything but update, would commit while
 		// silently dropping the value — the exact silent-drop shape the
