@@ -240,6 +240,18 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun `wire alphabet is strict where the decoder is lenient`() {
+        // The deliberate split (#339): the wire refuses framing whitespace
+        // and the URL-safe alphabet, while base64Bytes and
+        // Base64.decode(DEFAULT) tolerate both. A future "unification" would
+        // widen the wire to wrapped data URIs — this pins the disagreement
+        // the comment names.
+        assertFalse(isDecodableBase64("QUJD\nREVG"))
+        assertFalse(isDecodableBase64("ab-_cd"))
+        assertTrue(isDecodableBase64("QUJD"))
+    }
+
+    @Test
     fun dataUriRejectsStorageInjectedOversize() {
         // The per-photo cap wall (#339): a hand-edited multi-MB valid
         // payload passes the 4M-char ceiling, so without this the send

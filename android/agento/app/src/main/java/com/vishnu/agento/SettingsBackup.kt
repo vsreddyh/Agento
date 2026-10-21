@@ -8,9 +8,14 @@ import org.json.JSONObject
  * materialized string (~2x bytes as UTF-16 plus the JSONObject) reliably OOMs
  * low-end 1–2 GB-RAM devices mid-export — a crash, not a slow restore. The
  * meter is DISK bytes but the cap is HEAP, hence the ×2 + slack compare;
- * shared by the export boundary and the Settings pre-meter. */
+ * shared by the export boundary and the Settings pre-meter.
+ *
+ * UNITS, in one place (#339): the cap is 25 MB of HEAP. The user-visible
+ * number is DISK bytes — the export refuses past ~12 MB on disk (the ×2
+ * UTF-16 compare plus the floor slack), and the "this may take a moment"
+ * warning starts at ~5 MB on disk. The three numbers describe ONE gate;
+ * this line is where the conversion lives. */
 internal const val BACKUP_HARD_CAP_BYTES: Long = 25_000_000
-
 /** Headroom added to the floor meter before the hard-cap compare: prefs +
  * JSON framing + JSONObject wrapper. */
 internal const val BACKUP_FLOOR_SLACK_BYTES: Long = 1_000_000

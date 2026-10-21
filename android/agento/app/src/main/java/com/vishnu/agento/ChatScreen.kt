@@ -436,6 +436,10 @@ internal fun ChatTab(
     // True while a gallery picker is outstanding (#339): a second tap
     // before the first returns would open a second picker, and the two
     // results would interleave. Saveable timestamp, like the camera gate.
+    // Same hardening as the camera gate (#339): a MONOTONIC clock
+    // (elapsedRealtime — a wall-clock jump cannot age it out) and a
+    // fresh-process clear (the sweep below), so a kill cannot leave a gate
+    // with no callback to clear it.
     var galleryPendingSince by rememberSaveable { mutableStateOf(0L) }
     // True while a camera intent is outstanding: launchCamera overwrites the
     // shared Uri/path on every tap, so a second tap before the first returns
@@ -892,6 +896,11 @@ internal fun ChatTab(
         // state.threadId in the Main hop after the IO hop widens the lag
         // window, homing the capture to a thread the user already left.
         cameraThread = vm.threadIdNow()
+        // Composition-scoped on purpose (#339): this is the camera's FILE
+        // PREP (mkdirs + FileProvider uri), a few milliseconds of IO. A
+        // cancel here (tab left mid-hop) drops the half-made capture, which
+        // the finally deletes — nothing user-visible is lost, unlike the
+        // decode batch, which is why that one moved to the ViewModel scope.
         scope.launch(Dispatchers.IO) {
             try {
                 val dir = File(appTapContext.cacheDir, "camera")
