@@ -48,9 +48,12 @@ private val threadJson = Json { ignoreUnknownKeys = true }
  * render and switcher-search filter pass. */
 private val titleWhitespace = Regex("\\s+")
 
-/** Grapheme walker for title cuts, thread-local: BreakIterator is stateful and
+/**
+ * Grapheme walker for title cuts, thread-local: BreakIterator is stateful and
  * not thread-safe. ROOT locale pins deterministic cluster rules across devices;
- * each use releases its input via setText(""). */
+ * each use releases its input via setText(""). The ITERATOR itself stays
+ * pinned on the rendering thread (one small object, reused — the expensive
+ * part, the retained title string, is released every time). */
 private val titleBreaks: ThreadLocal<java.text.BreakIterator> =
     ThreadLocal.withInitial {
         java.text.BreakIterator.getCharacterInstance(java.util.Locale.ROOT)
@@ -271,11 +274,18 @@ object ChatThreads {
         // re-canonicalizes the whole list (a full payload walk per thread).
         // The id map keeps the hits; the identity check (same instance)
         // still decides whether the content changed.
-        val prevById = HashMap<String, Pair<ChatThread, ChatThread>>(prevIn.size)
-        prevIn.forEachIndexed { i, t -> prevById[t.id] = t to prevOut[i] }
+        val prevById = HashMap<String, MutableList<Pair<ChatThread, ChatThread>>>()
+        prevIn.forEachIndexed { i, t ->
+            // Size-guarded (#339): the two lists are written together today,
+            // but a mismatch (a changed cap, an interleaved save) must
+            // degrade to a full canonicalize, never an IndexOutOfBounds
+            // swallowed by save()'s runCatching.
+            val out = prevOut.getOrNull(i) ?: return@forEachIndexed
+            prevById.getOrPut(t.id) { mutableListOf() }.add(t to out)
+        }
         return current.map { t ->
-            val entry = prevById[t.id]
-            if (entry != null && entry.first === t) entry.second else canonicalizeThread(t)
+            val entry = prevById[t.id]?.firstOrNull { it.first === t }
+            if (entry != null) entry.second else canonicalizeThread(t)
         }
     }
 

@@ -20,6 +20,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -68,6 +69,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -843,6 +845,12 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                     if (upfront * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(SettingsBackup.backupTooLargeMessage(upfront))
                     }
+                    // The floor counts the THREAD FILES only (#339): the
+                    // prefs snapshot and the JSON framing are not in
+                    // `upfront`, so a prefs-heavy backup reads low here.
+                    // The export's own wall (the built string) is what
+                    // refuses — this is only the "this may take a moment"
+                    // hint, and it may under-warn.
                     if (upfront > BACKUP_LARGE_BYTES) {
                         withContext(Dispatchers.Main) {
                             // Floor, not estimate: the export string runs ~2x
@@ -888,20 +896,30 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                             write(b, 0, b.size)
                         }
                     }
-                    java.io.OutputStreamWriter(counting, Charsets.UTF_8).use { w ->
-                        var off = 0
-                        while (off < text.length) {
-                            // Char-index split is safe: the Writer carries an
-                            // unpaired high surrogate across the write()
-                            // boundary, so a split pair never becomes a
-                            // replacement char. Byte-counted chunks would.
-                            val end = minOf(off + 65536, text.length)
-                            w.write(text, off, end - off)
-                            off = end
+                    try {
+                        java.io.OutputStreamWriter(counting, Charsets.UTF_8).use { w ->
+                            var off = 0
+                            while (off < text.length) {
+                                // Char-index split is safe: the Writer carries an
+                                // unpaired high surrogate across the write()
+                                // boundary, so a split pair never becomes a
+                                // replacement char. Byte-counted chunks would.
+                                val end = minOf(off + 65536, text.length)
+                                w.write(text, off, end - off)
+                                off = end
+                            }
                         }
+                    } catch (e: CancellationException) {
+                        // A cancelled export would leave a HALF-WRITTEN file
+                        // at the user's URI (#339): it looks like a finished
+                        // backup and would fail to import. Delete the partial
+                        // file — the user picked a destination, not a broken
+                        // file. Then let the cancellation through.
+                        runCatching { appContext.contentResolver.delete(uri, null, null) }
+                            .onFailure { Log.w("Agento", "export cleanup failed", it) }
+                        throw e
                     }
-                    written to export.unreadable
-                }
+                    written to export.unreadable                }
             }
             status = result.fold(
                 onSuccess = { (size, unreadable) ->

@@ -479,7 +479,10 @@ internal fun ChatTab(
      * would open a second picker and the two results would interleave. Its
      * own bound: a picker session is long (browsing, a call), so the
      * camera's 10-minute window would expire while the picker is still
-     * open. */
+     * open. RESIDUAL, same shape as the camera gate: a picker left open
+     * past the bound can still be re-opened by a second tap — the bound
+     * only exists so a killed process cannot block the picker forever
+     * (the fresh-process sweep clears it). */
     fun isGalleryPending(): Boolean {
         if (galleryPendingSince == 0L) return false
         val age = SystemClock.elapsedRealtime() - galleryPendingSince
