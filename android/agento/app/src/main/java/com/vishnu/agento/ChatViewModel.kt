@@ -193,9 +193,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * 1 GB device. The UI-hidden trim is the signal that the process may
      * be killed; the bitmaps re-decode on the way back, so dropping them
      * costs time, not data. */
-    private val trimCallback = android.content.ComponentCallbacks2 { level ->
-        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-            thumbCache.evictAll()
+    private val trimCallback = object : android.content.ComponentCallbacks2 {
+        override fun onConfigurationChanged(newConfig: android.content.res.Configuration) = Unit
+        override fun onLowMemory() = Unit
+        override fun onTrimMemory(level: Int) {
+            if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+                thumbCache.evictAll()
+            }
         }
     }
 
