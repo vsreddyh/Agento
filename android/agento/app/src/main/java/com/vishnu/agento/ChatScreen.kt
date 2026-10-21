@@ -177,7 +177,7 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
     fun removeThread(threadKey: String) {
         val prefix = "$threadKey/"
         for (key in cache.snapshot().keys) {
-            val id = (key as? Triple)?.first as? String ?: continue
+            val id = (key as? Triple<*, *, *>)?.first as? String ?: continue
             if (id.startsWith(prefix)) cache.remove(key)
         }
     }
