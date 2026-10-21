@@ -90,12 +90,9 @@ data class ChangeMarker(
  * One op inside a batch (#345): complete, skip, update, or duplicate a
  * task by id. `reason` rides only on skip; `fields` only on update (the same
  * partial-update map the single-task update takes, e.g. due_date for a move
- * plus expected_revision for the concurrency guard).
- *
- * Normalized once, at construction: op/id trimmed, blank reason dropped to
- * null — so the set, the wire, the busy set, and the error all name the same
- * values, and no call site needs to trim. A private constructor forces every
- * construction through the normalizing factory below.
+ * plus expected_revision for the concurrency guard). Construction details
+ * live on the factory below; a private constructor forces every call site
+ * through it.
  */
 data class BulkOp private constructor(
     val op: String,
@@ -105,12 +102,13 @@ data class BulkOp private constructor(
 ) {
     companion object {
         // Normalized once, here: op/id trimmed, blank reason dropped to
-        // null, fields deep-copied. After construction, the op's fields are
-        // borrowed read-only (like batch.go's shallow Fields copy): a future
-        // caller that needs to change them must build a new op, never mutate
-        // the object — mutating would move the wire and the per-item
-        // contract assert together, making the drift self-consistent and
-        // invisible.
+        // null, fields deep-copied — so the set, the wire, the busy set, and
+        // the error all name the same values, and no call site trims. After
+        // construction, the op's fields are borrowed read-only (like
+        // batch.go's shallow Fields copy): a future caller that needs to
+        // change them must build a new op, never mutate the object —
+        // mutating would move the wire and the per-item contract assert
+        // together, making the drift self-consistent and invisible.
         operator fun invoke(
             op: String,
             id: String,
