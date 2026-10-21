@@ -171,9 +171,9 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
     fun remove(key: Any) {
         cache.remove(key)
     }
-    /** Evicts one thread's LEGACY keys (#339): a deleted thread's thumbs
-     * are dead weight (up to 8 MB pinned by LRU pressure alone). Stable-id
-     * keys are global — no thread in them — and stay. */
+    /** Evicts one thread's keys (#339): a deleted thread's thumbs are dead
+     * weight (up to 8 MB pinned by LRU pressure alone). Every key carries
+     * its thread, so the prefix match is exact. */
     fun removeThread(threadKey: String) {
         val prefix = "$threadKey/"
         for (key in cache.snapshot().keys) {
@@ -189,12 +189,16 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
  * ([AttachmentThumb]) uses the returned Triple AS its remember value AND its
  * cache key — identical object, zero drift — and the staged-remove path
  * rebuilds it to evict the exact entry.
+ *
+ * The THREAD is in both branches (#339): a stable id is unique, but without
+ * the thread the key could not be evicted when its thread was deleted, and
+ * the cache would pin dead thumbnails until LRU pressure. The cost is a
+ * re-decode when the same photo shows in two threads (rare — a photo
+ * belongs to one thread). Legacy id-less payloads key on the staged slot
+ * instead of an id, so they are thread-scoped by construction.
  */
 internal fun thumbCacheKey(stableId: String, legacySlot: Int, base64: String, threadKey: String = ""): Any =
-    if (stableId.isNotEmpty()) Triple(stableId, base64.length, base64.sampleKey(64))
-    // Legacy branch carries the thread: slot-keyed entries without it alias
-    // across threads (same slot + same shape, two threads, one per-tab
-    // cache). Stable ids need no thread — UUIDs are globally unique.
+    if (stableId.isNotEmpty()) Triple("$threadKey/$stableId", base64.length, base64.sampleKey(64))
     else Triple("$threadKey/s$legacySlot", base64.length, base64.sampleKey(64))
 
 /**
@@ -325,10 +329,9 @@ internal fun ChatTab(
     val thumbCache = vm.thumbCache
     // New thread, new staging episode: the voice slate belongs to the old
     // thread's staged set. The thumb cache is NOT evicted here by design —
-    // its keys split two ways: STABLE ids are global (a UUID names one
-    // photo everywhere, so a dead thread's bitmap is unreachable), while
-    // LEGACY id-less keys are thread-scoped (they carry the thread, so
-    // they are evicted on thread delete instead).
+    // its keys are thread-scoped (both branches carry the thread), so a
+    // dead thread's bitmaps are unreachable AND evictable (see
+    // ThumbCache.removeThread).
     LaunchedEffect(state.threadId) {
         liveStagedVoicedCount = 0
     }
@@ -1041,18 +1044,28 @@ internal fun ChatTab(
             }
         },
         onTakePhoto = ::requestCamera,
-        onRemovePhoto = { id ->
+        onRemovePhoto = { id, stagedIndex ->
+            // Evict by the SAME key the strip built (#339): the legacy key
+            // carries the staged slot, so rebuilding it with slot 0 evicted
+            // the wrong bitmap.
+            val a = state.pendingAttachments.getOrNull(stagedIndex)
+            if (a != null) {
+                thumbCache.remove(thumbCacheKey(a.id, stagedIndex, a.base64, state.threadId))
+            }
+            // Staging may empty here: reset the slate when it does so the
+            // next episode voices anew (see onLiveStagedPhotos).
             // Removed by stable pick id, not staged index: the strip's index
             // comes from a composition snapshot, and a batch landing between
             // recomposition and tap shifts indices — removing by position then
             // drops the WRONG photo. Ids are minted per pick and immutable, so
-            // the id names the photo regardless of intervening stages.
-            state.pendingAttachments.firstOrNull { it.id == id }?.let { a ->
-                thumbCache.remove(thumbCacheKey(a.id, 0, a.base64, state.threadId))
+            // the id names the photo regardless of intervening stages. A
+            // LEGACY payload has no id (every legacy pick shares the empty
+            // one), so that one goes by index (#339).
+            if (id.isBlank()) {
+                vm.removePendingAttachmentAt(stagedIndex)
+            } else {
+                vm.removePendingAttachmentById(id)
             }
-            // Staging may empty here: reset the slate when it does so the
-            // next episode voices anew (see onLiveStagedPhotos).
-            vm.removePendingAttachmentById(id)
             if (vm.pendingAttachmentCount() == 0) liveStagedVoicedCount = 0
         },
         // Voiced once per staging episode, not per sentence: rapid
@@ -1655,7 +1668,7 @@ internal fun ChatScreen(
      * staged photo. Wired by ChatTab (launchers live there). */
     onPickPhotos: () -> Unit = {},
     onTakePhoto: () -> Unit = {},
-    onRemovePhoto: (String) -> Unit = {},
+    onRemovePhoto: (String, Int) -> Unit = { _, _ -> },
     /** Live transcript heard text while photos are staged: the text parks in
      * the composer for a confirming tap instead of auto-sending with the
      * photos. */
@@ -2553,7 +2566,7 @@ internal fun ChatScreen(
                                         // thumbnail corner is the lesser evil
                                         // next to an untappable remove.
                                         IconButton(
-                                            onClick = { onRemovePhoto(a.id) },
+                                            onClick = { onRemovePhoto(a.id, i) },
                                             modifier = Modifier.align(Alignment.TopEnd).size(48.dp),
                                         ) {
                                             Icon(

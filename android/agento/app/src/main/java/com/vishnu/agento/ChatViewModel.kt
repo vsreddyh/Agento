@@ -407,6 +407,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
     }
 
+    /** Removes the staged photo at [index] (#339): a legacy payload (empty
+     * id) cannot be removed by id — every legacy pick shares that empty id,
+     * so the id path would drop the wrong photo (or nothing). */
+    fun removePendingAttachmentAt(index: Int) {
+        val cur = _state.value.pendingAttachments
+        if (index !in cur.indices) return
+        _state.value = _state.value.copy(
+            pendingAttachments = cur.filterIndexed { i, _ -> i != index },
+        )
+    }
+
     /** Drops the shown head of [ChatUiState.notices] after the toast host shows it. */
     fun consumeNotice() {
         if (_state.value.notices.isNotEmpty()) {

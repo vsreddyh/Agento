@@ -58,7 +58,14 @@ internal fun List<ChatAttachment>.hasDecodablePhoto(): Boolean =
 
 /** Single source of truth for the display predicate: the helpers above
  * delegate here. Blank-only — decode validity is checked at the wire filter,
- * not here; surfaces that must match the wire use [hasDecodablePhoto]. */
+ * not here; surfaces that must match the wire use [hasDecodablePhoto].
+ *
+ * RAGGED COUNTS AS A PHOTO HERE, NEVER ON THE WIRE (#339): a hand-edited
+ * payload with a bad alphabet or odd length shows up in the strip, the
+ * bubble, the title, the search and the export, but the wire filter drops
+ * it (it would be a corrupt part). Deliberate and fail-closed — the app
+ * never writes a ragged payload, and load() heals or blanks it on the way
+ * in, so the two agree for everything the app stores. */
 private fun ChatAttachment.isWired(): Boolean = base64.isNotBlank()
 
 /** Absolute raw-length ceiling for untrusted payloads: no scan, copy, or decode
@@ -105,7 +112,15 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
  * claim Main-never. Looper-exact on device; on JVM unit tests the android.jar
  * stubs throw, which reads as "no Main thread here" and passes. NEVER FATAL on
  * purpose: Main-ness is a jank bug, not a correctness bug, so it logs a
- * stacked error instead of taking the chat tab down. */
+ * stacked error instead of taking the chat tab down.
+ *
+ * ADVISORY, not enforcement — and that matters for the callers' peak
+ * budgets (#339): the backup export holds ~25 MB of heap, which is only
+ * safe OFF Main. Enforcement is the caller's job — every UI caller hops
+ * with withContext(Dispatchers.IO) and every boundary is annotated
+ * @WorkerThread — so this gate is the tripwire for a future caller that
+ * forgets, not the thing that makes the cap safe. A Main caller still
+ * gets the right bytes, just on the wrong thread. */
 internal fun requireIoThread(site: String) {
     // runCatching (not try/catch): the fallback documents the JVM case inline.
     val onMain = runCatching {

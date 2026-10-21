@@ -190,6 +190,11 @@ object SettingsBackup {
         // The cap lives HERE, not only in the caller: the wall belongs on the
         // boundary that builds the peak, so a caller that skips the Settings
         // pre-meter still fails closed. Both use the same constant + wording.
+        // DISK BYTES (File.length of the thread files) x2 + floor slack: the
+        // cap is a HEAP peak and the export string runs ~2x its size as
+        // UTF-16. This is the AUTHORITATIVE meter — the UI's pre-meter and
+        // its post-build string meter are advisory estimates that can
+        // disagree with it (a concurrent save, or UTF-16 vs disk bytes).
         val onDisk = backupFilesBytes(context.filesDir)
         if (onDisk * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
             throw IllegalStateException(backupTooLargeMessage(onDisk))

@@ -827,6 +827,12 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                     // consent-to-proceed, but consent cannot survive an OOM —
                     // fail with a named error naming the remedy. Disk×2 +
                     // slack: the cap is heap peak, the meter is file bytes.
+                    // DISK BYTES: `upfront` is File.length() of the thread
+                    // files. The cap is a HEAP peak, so the meter doubles it
+                    // (the export string runs ~2x as UTF-16) plus the floor
+                    // slack. The string-side meters below measure UTF-16
+                    // code units, not disk bytes — the boundary meter
+                    // (SettingsBackup.export) is the authoritative one.
                     if (upfront * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(SettingsBackup.backupTooLargeMessage(upfront))
                     }
@@ -849,7 +855,8 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                     val text = export.json.toString()
                     // Post-build peak check: a concurrent save can grow the
                     // thread files between the meter and this build. Measured
-                    // on the STRING ITSELF (length × 2 = UTF-16 bytes).
+                    // on the STRING ITSELF (length × 2 = UTF-16 bytes:
+                    // String.length counts code units, not disk bytes).
                     if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup grew past the safe limit during export. " +
@@ -941,6 +948,7 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                     // Symmetric hard refuse with the export path: readText() +
                     // JSONObject() hold ~2x the file bytes, so an unbounded
                     // import OOMs the same way an unbounded export would.
+                    // DISK BYTES (provider-reported size).
                     if (pickedBytes >= 0 && pickedBytes * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup too large to import safely (${formatBytes(pickedBytes)} on disk). " +
@@ -961,6 +969,7 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                                 val n = r.read(buf)
                                 if (n < 0) break
                                 sb.append(buf, 0, n)
+                                // UTF-16 BYTES (StringBuilder length).
                                 if (sb.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                                     throw IllegalStateException(
                                         "Backup too large to import safely. " +
@@ -973,7 +982,8 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                     } ?: throw IllegalStateException("Could not open the selected file for reading")
                     // Post-read peak gate, mirroring the export post-build
                     // check: a lying provider would otherwise sail the pre-read
-                    // refuse into an OOM readText() + JSONObject().
+                    // refuse into an OOM readText() + JSONObject(). UTF-16
+                    // BYTES (String.length counts code units, not bytes).
                     if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup too large to import safely. " +
