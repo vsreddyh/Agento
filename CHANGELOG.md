@@ -14,7 +14,9 @@ see GitHub Releases for older notes.
   return what changed, which task, who changed it (`mcp` for the agent, the
   app's own label otherwise) and when, filterable by task, op and time. It
   matters because a completed task is auto-deleted after 3 days — the log is
-  kept 90 days, so it is the only record left of what happened to it.
+  kept 90 days, so it is the only record left of what happened to it. The
+  `duplicate` op in that log comes from the batch path (a single duplicate
+  has no verb of its own yet).
 - **Task Manager bulk select + per-task Skip (#341).** Long-press or the
   Select action enters selection mode (checkboxes, tap-to-toggle, up to 50
   tasks); the bulk bar completes, skips, moves (one date picker), or

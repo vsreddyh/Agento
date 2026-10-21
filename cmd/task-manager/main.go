@@ -491,6 +491,12 @@ func main() {
 			// The CANONICAL id, not the caller's spelling: the change log
 			// stores the normalized id, so a caller comparing this answer
 			// with a history row must not miss on case.
+			//
+			// The fallback is dead by construction: store.Delete has
+			// already hex-validated the id (and a malformed one errored
+			// there), and both validators accept the same hex grammar. It
+			// stays so a future divergence between them answers with the
+			// caller's id rather than an empty one.
 			deleted := in.ID
 			if id, nerr := tasks.NormalizeTaskID(in.ID); nerr == nil {
 				deleted = id
