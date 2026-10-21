@@ -164,6 +164,10 @@ func TestBatchValidationRejectsBadEnvelopes(t *testing.T) {
 			{Op: "complete", ID: id},
 			{Op: "skip", ID: id},
 		},
+		"same id twice with padding": {
+			{Op: "complete", ID: id},
+			{Op: "skip", ID: "  " + id + "  "},
+		},
 	}
 	for name, ops := range cases {
 		if _, err := s.Batch(ctx, ops); err == nil {
