@@ -387,10 +387,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * fix is `MutableStateFlow` + `update {}`, not more hopping.
      */
     fun notify(msg: String, kind: ToastKind = ToastKind.Error) {
-        // Bounded at 3 (#339): ten rapid failures must not queue ten
-        // toasts — the oldest drop, the newest (most relevant) survive.
+        // Bounded per-kind (#339): the old takeLast(3) newest-wins let a
+        // burst of 3 Info cap/dedupe toasts evict an unseen Error before the
+        // host fired it — while retainedNotices() on thread-switch keeps
+        // Errors over Infos. Errors and Infos now cap independently (3 + 2,
+        // merged back in seq order), so Infos can never evict an Error;
+        // only a newer Error can. Total stays bounded at 5.
+        val combined = _state.value.notices + ToastNotice(msg, kind, noticeSeq.incrementAndGet())
+        val errors = combined.filter { it.kind == ToastKind.Error }.takeLast(3)
+        val infos = combined.filter { it.kind != ToastKind.Error }.takeLast(2)
         _state.value = _state.value.copy(
-            notices = (_state.value.notices + ToastNotice(msg, kind, noticeSeq.incrementAndGet())).takeLast(3),
+            notices = (errors + infos).sortedBy { it.seq },
         )
     }
 

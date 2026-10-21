@@ -209,10 +209,12 @@ internal fun requireIoThread(site: String) {
 fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachment> {
     // Empty fast path (#339): most messages hold no photos — returning an
     // empty list skips both the per-message copy and the walk for every
-    // one of them, on every save/load. A FRESH emptyList(), never the
-    // input instance: the contract is enforced structurally, not by
-    // comment — no caller, present or future, can alias storage through
-    // a shared reference. (emptyList() is a singleton: zero alloc.)
+    // one of them, on every save/load. Safety comes from immutability, not
+    // freshness: emptyList() is a process-wide singleton, shared by every
+    // empty message — which is safe precisely because List<ChatAttachment>
+    // is never mutated in place (callers only map or read). No caller,
+    // present or future, may add a mutating writer; the type contract is
+    // read-only throughout the boundary.
     if (attachments.isEmpty()) return emptyList()
     return attachments.map { a ->
         // Clean-first ordering, stated (#339): the two pre-scans
@@ -1069,24 +1071,21 @@ fun decodeThumbnail(base64: String): Bitmap? {
     return try {
         // Absolute raw ceiling first (#339): no scan or decode runs on
         // giants regardless of decoded size (see MAX_RAW_BASE64_CHARS).
-        // Then the decoded-size gate with its O(1) raw-length fast path
-        // (decoded bytes never exceed raw chars, so at/below-cap raws skip
-        // the full walk; only over-length raws pay the precise measure for
-        // the whitespace-wrapped edge).
+        // Decodability BEFORE the precise measure (#339): the old order
+        // measured first, so an over-length ragged payload paid the
+        // base64Bytes walk and then the isDecodableBase64 walk before
+        // failing anyway. Strict-first short-circuits the ragged case to
+        // one walk. The remaining double-walk (measure + validate on an
+        // over-length VALID payload) is structural, not waste: base64Bytes
+        // tolerates whitespace while isDecodableBase64 refuses it, so no
+        // single walk can prove both. Send-path only, raw-ceiling bounded.
         if (base64.length > MAX_RAW_BASE64_CHARS) return null
+        if (!isDecodableBase64(base64)) return null
         if (base64.length > MAX_IMAGE_BASE64_CHARS &&
             base64Bytes(base64) > MAX_IMAGE_BASE64_CHARS * 3L / 4L
         ) {
             return null
         }
-        // Decodability gate, same as dataUri's wall (#339): the decoder
-        // below (Base64.DEFAULT) tolerates framing whitespace that the wire
-        // refuses — without this, a wrapped-but-valid payload renders a
-        // thumbnail while the send path drops it to bare text, re-splitting
-        // the display/wire agreement the predicate was created to close.
-        // Unreachable via canonical memory (load() strips framing), IO
-        // thread already, so the full walk costs nothing new.
-        if (!isDecodableBase64(base64)) return null
         // DEFAULT on decode is historical leniency, now moot (#339): the
         // gate above already rejected anything DEFAULT would forgive, so
         // the flag changes nothing — kept (not switched to NO_WRAP) to

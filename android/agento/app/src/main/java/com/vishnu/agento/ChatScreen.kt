@@ -368,11 +368,12 @@ internal fun ChatTab(
     val thumbCache = remember(tab) { ThumbCache() }
     // New thread, new staging episode (#339): the voice slate belongs to
     // the old thread's staged set. The thumb cache is NOT evicted here by
-    // design: keys carry thread + id + length, so a dead thread's bitmaps
-    // are unreachable (no wrong-bitmap risk, only LRU pressure), and
-    // switch-back reuses them with no re-decode. Staged-remove evicts
-    // explicitly (it knows the exact key leaving); thread delete rides
-    // the same LRU — no per-thread bookkeeping for a bounded 8 MB cache.
+    // design: keys carry no thread (UUIDs are globally unique, so no two
+    // threads can alias — a dead thread's bitmaps are unreachable, only
+    // LRU pressure remains), and switch-back reuses them with no
+    // re-decode. Staged-remove evicts explicitly (it knows the exact key
+    // leaving); thread delete rides the same LRU — no per-thread
+    // bookkeeping for a bounded 8 MB cache.
     LaunchedEffect(state.threadId) {
         liveStagedVoicedCount = 0
     }

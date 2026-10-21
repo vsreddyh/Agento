@@ -151,8 +151,11 @@ object SettingsBackup {
     /**
      * Metered footprint of everything [export] would read (#339): file
      * lengths only, no reads — so the caller can warn BEFORE the
-     * materialization peak instead of after it. The export string runs
-     * ~2x bytes as UTF-16, so this is a floor, not a ceiling. Deliberately
+     * materialization peak instead of after it. Raw disk bytes (a FLOOR):
+     * the export string runs ~2x bytes as UTF-16 plus the JSONObject copy,
+     * so callers judging the heap peak must scale ×2 (+ slack) — comparing
+     * raw lengths to a heap cap understates ASCII base64 ~2x (12 MB on disk
+     * peaks ~25 MB in memory). Deliberately
      * UNGATED (no requireIoThread): File.length() is a metadata stat, not
      * a blocking read, so any thread may call it — the gate lives on the
      * readers (export/import/load/save), not the meter.

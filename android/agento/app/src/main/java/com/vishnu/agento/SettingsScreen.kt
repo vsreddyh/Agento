@@ -773,14 +773,14 @@ private const val BACKUP_LARGE_BYTES = 5_000_000
 
 /** Backup size past which export REFUSES instead of warning (#339): the
  * 5 MB line above is advisory (explicit tap = consent to proceed), but
- * past ~25 MB on disk the materialized string (~2x bytes as UTF-16 plus
- * the JSONObject) reliably OOMs low-end 1–2 GB-RAM devices mid-export —
+ * past ~25 MB of heap peak the materialized string (~2x bytes as UTF-16
+ * plus the JSONObject) reliably OOMs low-end 1–2 GB-RAM devices mid-export —
  * a crash, not a slow restore. 25 MB ≈ a dozen capped photos; text-only
  * backups never approach it. Refusing with a named error (naming the
- * per-thread delete path as the remedy) beats that. The meter is a
- * floor — prefs JSON + framing + wrapper sit outside it — so the gate
- * compares floor + 1 MB slack; a backup at 24.99 MB on disk must not
- * sail past on wrapping alone. Fails closed, not approximately.
+ * per-thread delete path as the remedy) beats that. The meter is disk
+ * bytes, the cap is heap peak — so the gate compares upfront×2 + 1 MB
+ * slack; a backup at 12 MB on disk peaks ~25 MB and must refuse, not sail
+ * past on raw-length comparison. Fails closed, not approximately.
  */
 private const val BACKUP_HARD_CAP_BYTES = 25_000_000
 
@@ -824,10 +824,12 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // consent-to-proceed, but consent cannot survive an OOM —
                     // fail with a named error naming the remedy (per-thread
                     // delete in the thread switcher — no bulk prune exists
-                    // yet, so the message must say where to go). Floor +
-                    // slack, not floor alone: prefs + framing sit outside
-                    // the meter, so a borderline backup fails closed.
-                    if (upfront + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                    // yet, so the message must say where to go). Disk×2 +
+                    // slack, not raw disk: the meter is file bytes but the
+                    // cap is heap peak (UTF-16 string + JSONObject), so an
+                    // unscaled compare would let 12 MB on disk (~25 MB peak)
+                    // sail past. Fails closed on the estimated peak.
+                    if (upfront * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup too large to export safely (${formatBytes(upfront)} on disk). " +
                                 "Delete old photo threads in the thread switcher, then try again.",
