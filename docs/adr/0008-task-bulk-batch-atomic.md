@@ -12,3 +12,6 @@ Bulk task actions run as one atomic server batch (`POST /api/tasks/batch`): one 
 - No select-all; selection is capped at 50 client-side with `N/50` counter.
 - Duplicate is a canonical server op, not a client `create` copy.
 - Custom-repeat follow-ups stay post-commit; conflicts fail the whole batch for retry after refresh.
+- 503 + no blind retry: a deployment without transactions refuses the batch, and a timeout leaves the outcome unknown — refresh via the changes marker and resend rather than retrying blind (a retry would duplicate twice).
+- Guard split: bulk move carries `expected_revision` per op; bulk complete/skip stay unguarded, like the single verbs.
+- Single duplicate inherits the batch's transaction requirement (it rides a one-op batch).

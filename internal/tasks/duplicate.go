@@ -54,6 +54,9 @@ func (s *Store) Duplicate(ctx context.Context, id string) (map[string]any, error
 	dueTime, _ := cur["due_time"].(string)
 	doc, _, err := s.CreateWithKey(ctx, name, description, dueDate, dueTime,
 		&mins, repeatFromDoc(cur), &parallel, speakName, "", "", "")
+	// No idempotency key, source, or fingerprint: a duplicate is a NEW
+	// write by definition, so it must never dedupe against — or replay as
+	// — any previous task.
 	if err != nil {
 		return nil, err
 	}
