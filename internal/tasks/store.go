@@ -191,6 +191,12 @@ func unknownTask(id string) *StoreError {
 	return fail("unknown task '%s'", TruncateBytes(id, 40))
 }
 
+// badID names the id that could not be read as one. Bounded, like
+// unknownTask: same rule, same reason.
+func badID(id string) *StoreError {
+	return fail("bad id '%s'", TruncateBytes(id, 40))
+}
+
 // checkDue validates the due date/time pair.
 func checkDue(dueDate, dueTime string) error {
 	if dueDate != "" {
@@ -687,7 +693,7 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, fail("bad id '%s'", id)
+		return nil, badID(id)
 	}
 	var doc bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); err != nil {
@@ -714,7 +720,7 @@ func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, fail("bad id '%s'", id)
+		return nil, badID(id)
 	}
 	var cur bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&cur); err != nil {
@@ -1004,7 +1010,7 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, string, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, nil, "", "", fail("bad id '%s'", id)
+		return nil, nil, "", "", badID(id)
 	}
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
@@ -1063,7 +1069,7 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, string, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, nil, "", "", fail("bad id '%s'", id)
+		return nil, nil, "", "", badID(id)
 	}
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
@@ -1157,7 +1163,7 @@ func TruncateBytes(s string, max int) string {
 func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, fail("bad id '%s'", id)
+		return nil, badID(id)
 	}
 	res, err := s.tasks.UpdateOne(ctx,
 		bson.M{"_id": oid, "completedAt": bson.M{"$ne": nil, "$exists": true}},
@@ -1186,7 +1192,7 @@ func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return false, fail("bad id '%s'", id)
+		return false, badID(id)
 	}
 	res, err := s.tasks.DeleteOne(ctx, bson.M{"_id": oid})
 	if err != nil {

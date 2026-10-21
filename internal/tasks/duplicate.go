@@ -28,7 +28,7 @@ import (
 func (s *Store) Duplicate(ctx context.Context, id string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, fail("bad id '%s'", id)
+		return nil, badID(id)
 	}
 	var cur bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&cur); err != nil {

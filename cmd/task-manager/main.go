@@ -172,7 +172,8 @@ type taskHistoryInput struct {
 	// TaskID restricts to one task (the hex id from create_task).
 	TaskID string `json:"task_id,omitempty"`
 	// Op restricts to a set of ops, comma-separated: create, update, delete,
-	// complete, skip, reopen, duplicate.
+	// complete, skip, reopen, duplicate. A filter that names no op (only
+	// commas and spaces) is refused rather than read as the whole log.
 	Op string `json:"op,omitempty"`
 	// Since is an INCLUSIVE RFC3339 lower bound on when the change happened.
 	Since string `json:"since,omitempty"`

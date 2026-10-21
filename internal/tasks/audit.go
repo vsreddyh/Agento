@@ -48,7 +48,10 @@ const (
 //
 // The WRITE side consults it too (RecordMutation drops an op it does not
 // know), so a new op must be added here in the same change as its constant —
-// otherwise the entries for it are dropped on the way in.
+// otherwise the entries for it are dropped on the way in. The constant
+// itself must be LOWERCASE: both sides lowercase before comparing, so a
+// mixed-case constant would be stored as "foo", never match the "Foo" in
+// this list, and ship dead.
 //
 // Unexported, and handed out as a copy: an exported slice is a slice any
 // caller can append to, and one that changes the validation set process-wide
