@@ -15,7 +15,9 @@ see GitHub Releases for older notes.
   sending, ride as image parts with the turn, and render as thumbnails in
   the thread. Oversized photos refuse with a named, actionable message
   instead of a silent failure. Limits: 2 photos/turn, ~1.1 MB each after
-  shrinking; photo threads cost more on disk and in Settings backups (see
+  shrinking; photo threads cost more on disk and in Settings backups
+  (exports refuse past ~25 MB on disk — delete old photo threads in the
+  thread switcher to shrink; see
   `docs/adr/0007-chat-attachments.md`). Documents stay unsupported — Pi
   takes no file input, so unknown attachment types still refuse rather
   than arrive half-parsed.

@@ -55,9 +55,12 @@ explicitly; keep the fail-closed part-type contract.**
   resend the exact composed turn. Cost: roughly 150–600 KB per photo in
   the thread file; the 200-message cap bounds the file; the Settings
   backup mirrors thread files wholesale so photo threads export larger.
-  Exports (sharesheet Markdown, skill drafts) carry a `[n photo(s)
-  attached]` marker instead of payloads — the marker is honest about
-  turns whose content is an image.
+  Exports refuse past ~25 MB on disk with a named error (the materialized
+  string would OOM first) — remedy is per-thread delete in the thread
+  switcher; text-only backups never approach it. Exports (sharesheet
+  Markdown, skill drafts) carry a `[n photo(s) attached]` marker instead
+  of payloads — the marker is honest about turns whose content is an
+  image.
 - App-killed-turn resume covers image tails: resending the identical
   history reproduces the identical reattach key (same text + same image
   signature), so it reattaches rather than duplicating, exactly like

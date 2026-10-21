@@ -823,12 +823,6 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                                 "Delete old photo threads in the thread switcher, then try again.",
                         )
                     }
-                    if (upfront > BACKUP_HARD_CAP_BYTES) {
-                        throw IllegalStateException(
-                            "Backup too large to export safely (${formatBytes(upfront)} on disk). " +
-                                "Delete old photo threads, then try again.",
-                        )
-                    }
                     if (upfront > BACKUP_LARGE_BYTES) {
                         withContext(Dispatchers.Main) {
                             // Floor, not estimate (#339): the export string

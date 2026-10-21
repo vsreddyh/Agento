@@ -238,9 +238,17 @@ object ChatThreads {
                 // below builds the full compact string (and load() reads it
                 // back whole), so a 200-msg × 2-photo thread peaks in the
                 // hundreds of MB here and on load — same shape the export
-                // path now refuses past BACKUP_HARD_CAP_BYTES. Streaming
-                // (Json.encodeToStream/decodeFromStream, available since
-                // kotlinx 1.5) would remove the string peak while the
+                // path now refuses past BACKUP_HARD_CAP_BYTES. No gate here
+                // BY DESIGN, unlike export: refusing load() returns
+                // emptyList(), and the next save would persist that
+                // emptiness over the good file (data loss); trimming oldest
+                // payloads would delete user photos without consent. A
+                // refuse/trim gate belongs on escapable surfaces (export has
+                // one); load/save are automatic and must never destroy what
+                // they cannot send. Growth is bounded structurally instead
+                // (per-photo stage caps, 200-msg/20-thread caps).
+                // Streaming (Json.encodeToStream/decodeFromStream, available
+                // since kotlinx 1.5) would remove the string peak while the
                 // object graph (which the VM holds anyway) stays.
                 // Deliberately deferred: the boundary contract
                 // (canonicalize + caps) is format-stable today, and a
