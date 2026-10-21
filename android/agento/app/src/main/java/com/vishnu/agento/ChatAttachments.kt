@@ -155,8 +155,10 @@ internal fun requireIoThread(site: String) {
  * Canonical form of persisted attachments: storage is hand-editable, so framing
  * whitespace is stripped and anything still undecodable blanks out. Applied
  * once at the load boundary, so the hot-path [isWired] can
- * stay a blank check. Heal-silent BY DESIGN: a toast per healed payload would
- * storm on every cold start.
+ * stay a blank check. Heal-QUIET, not heal-silent: a toast per healed
+ * payload would storm on every cold start (the hand-edit persists), so the
+ * heal only LOGS — the photo's absence with a zero count IS the signal,
+ * and logcat keeps the orphan from vanishing without a trace.
  *
  * IO-CONFINED BY CALLER, not by a guard here (#339): this is a pure
  * per-payload helper (unit-tested on the JVM), and its callers —
@@ -182,6 +184,7 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
             // payload wrapped past the ceiling is therefore blanked on
             // purpose: it wires as no-photo instead of costing a 4 M-char
             // copy, and the app never writes wrapped payloads at all.
+            Log.w("ChatAttachments", "blanked an over-ceiling payload (${a.base64.length} chars)")
             a.copy(base64 = "")
         } else if (a.base64.all { it.isWhitespace() }) {
             // All-whitespace just under the ceiling: blank without building the copy.
@@ -193,13 +196,20 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
             // length is over the ceiling, blank without building it.
             val strippedLen = a.base64.count { !it.isWhitespace() }
             if (strippedLen > MAX_RAW_BASE64_CHARS) {
+                Log.w("ChatAttachments", "blanked an over-ceiling wrapped payload")
                 a.copy(base64 = "")
             } else {
                 val stripped = a.base64.filterNot { c -> c.isWhitespace() }
                 when {
                     stripped.isBlank() -> a.copy(base64 = "")
                     isDecodableBase64(stripped) -> a.copy(base64 = stripped)
-                    else -> a.copy(base64 = "")
+                    else -> {
+                        // Ragged payload: blanked AND logged (#339) — a
+                        // hand-edited photo would otherwise disappear with
+                        // no trace at all (logcat only, never a toast storm).
+                        Log.w("ChatAttachments", "blanked a ragged payload (${stripped.length} chars)")
+                        a.copy(base64 = "")
+                    }
                 }
             }
         }

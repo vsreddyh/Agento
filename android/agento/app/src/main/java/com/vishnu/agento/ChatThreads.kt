@@ -112,6 +112,11 @@ object ChatThreads {
         // The marker reserves its width first, so the row never exceeds 42
         // chars; avail < 2 yields the bare suffix (one grapheme plus "…"
         // needs two cells) — the photo signal is the useful half there.
+        // The fit check counts UTF-16 CODE UNITS while the cut walks
+        // graphemes: a 30-emoji title (60 units) reads as over-budget and
+        // truncates, though it fits in 30 graphemes. Deliberately
+        // conservative — the budget still holds, and counting graphemes per
+        // title render is not worth the cost.
         val suffix = if (photos == 0) "" else if (photos == 1) " [photo]" else " [$photos photos]"
         val avail = maxOf(0, 42 - suffix.length)
         val base = if (oneLine.length <= avail) {

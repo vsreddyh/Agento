@@ -596,6 +596,11 @@ class ChatApi(context: Context) {
         // "this turn carries photos" would attach images the user never
         // staged on that role. The marker split (counts wired, parts need
         // decodable) is documented on attachmentMarker.
+        // CONSEQUENCE, named: a hand-edited TRAILING "system"/"User" turn
+        // becomes the last wire turn (clamped to user) while the real photo
+        // tail keeps only the history marker — the photos park. Fail-closed
+        // and unreachable for app-written threads (only user/assistant are
+        // ever written).
         val lastUserIdx = messages.indexOfLast { it.role == "user" }
         // Named walls throw inside the build: an uncaught throw would escape
         // this producer with no ChatEvent.Error path, and the turn would

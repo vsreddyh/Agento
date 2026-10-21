@@ -251,6 +251,16 @@ object SettingsBackup {
                 }.onFailure { unreadable += name }
             }
         }
+        // Post-read re-check (#339): the cap was metered BEFORE the reads,
+        // and a concurrent save can grow a thread file in between — the
+        // oversize payload would be built anyway, which is the very peak the
+        // cap exists to prevent. Measured from the strings already read (no
+        // second materialization): their UTF-16 size is the export's bulk.
+        val readChars = files.keys().asSequence()
+            .sumOf { files.optString(it, "").length.toLong() }
+        if (readChars * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+            throw IllegalStateException(backupTooLargeMessage(backupFilesBytes(context.filesDir)))
+        }
         return Export(
             JSONObject().put("version", VERSION).put("values", values).put("files", files),
             unreadable,
