@@ -203,7 +203,9 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
     // Empty fast path (#339): most messages hold no photos — returning the
     // input list untouched skips both the per-message copy and the walk
     // for every one of them, on every save/load. Same instance back (not
-    // just equal): callers comparing references keep working.
+    // just equal) — do NOT mutate the result: every caller only maps or
+    // reads it, and an in-place writer would alias storage through the
+    // shared reference.
     if (attachments.isEmpty()) return attachments
     return attachments.map { a ->
         // Clean-first ordering, stated (#339): the two pre-scans

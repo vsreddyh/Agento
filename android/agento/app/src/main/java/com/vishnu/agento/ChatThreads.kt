@@ -234,6 +234,18 @@ object ChatThreads {
                 } else {
                     t.messages
                 }
+                // Whole-file materialization, named (#339): the encoder
+                // below builds the full compact string (and load() reads it
+                // back whole), so a 200-msg × 2-photo thread peaks in the
+                // hundreds of MB here and on load — same shape the export
+                // path now refuses past BACKUP_HARD_CAP_BYTES. Streaming
+                // (Json.encodeToStream/decodeFromStream, available since
+                // kotlinx 1.5) would remove the string peak while the
+                // object graph (which the VM holds anyway) stays.
+                // Deliberately deferred: the boundary contract
+                // (canonicalize + caps) is format-stable today, and a
+                // streaming rework of this I/O is a bigger risk than the
+                // bounded, IO-confined peak it removes.
                 t.copy(
                     messages = msgs.map { m ->
                         m.copy(attachments = canonicalizeAttachments(m.attachments))
