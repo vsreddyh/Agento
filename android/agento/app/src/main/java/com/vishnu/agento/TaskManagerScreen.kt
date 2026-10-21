@@ -982,7 +982,7 @@ internal fun TaskManagerScreen(
                 fields.put("expected_revision", rev)
                 BulkOp("update", id, fields = fields)
             },
-            "Moved ${ids.size} task${if (ids.size == 1) "" else "s"} to $whenText.",
+            "Moved ${ids.size} task${if (ids.size == 1) "" else "s"} to $whenText, times kept.",
         )
     }
 

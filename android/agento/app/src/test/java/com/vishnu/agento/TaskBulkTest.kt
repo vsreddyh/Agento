@@ -56,6 +56,12 @@ class TaskBulkTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun `bulk op rejects fields on non-update`() {
+        BulkOp("complete", "a", null, JSONObject().put("due_date", "2026-12-01"))
+    }
+
+    @Test
+    fun `bulk op allows blank extras like the server does`() {
+        BulkOp("complete", "a", "   ")
         BulkOp("complete", "a", null, JSONObject())
     }
 

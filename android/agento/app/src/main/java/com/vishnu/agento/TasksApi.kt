@@ -101,9 +101,11 @@ data class BulkOp(
     // Fail fast on misplaced extras: the server 422s a reason on non-skip
     // and fields on non-update, aborting the whole atomic batch — so a
     // caller bug here must read as a programming error, not a runtime 422.
+    // Blank counts as absent on both sides (the server trims/skips empties),
+    // so only a real value on the wrong verb throws.
     init {
-        require(reason == null || op == "skip") { "reason rides only on skip" }
-        require(fields == null || op == "update") { "fields ride only on update" }
+        require(reason == null || reason.isBlank() || op == "skip") { "reason rides only on skip" }
+        require(fields == null || fields.length() == 0 || op == "update") { "fields ride only on update" }
     }
 }
 
