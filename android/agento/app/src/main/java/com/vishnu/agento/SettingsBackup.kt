@@ -149,6 +149,16 @@ object SettingsBackup {
 
     /** Serializes all known prefs plus app files; absent keys are omitted (not nulled). */
     /**
+     * Metered footprint of everything [export] would read (#339): file
+     * lengths only, no reads — so the caller can warn BEFORE the
+     * materialization peak instead of after it. The export string runs
+     * ~2x the bytes as UTF-16, so this is a floor, not a ceiling.
+     */
+    internal fun backupFilesBytes(dir: java.io.File): Long =
+        backupFiles().sumOf { name ->
+            java.io.File(dir, name).takeIf { it.exists() }?.length() ?: 0L
+        }
+    /**
      * Full-settings export (prefs + thread files) as one JSONObject.
      * IO-REQUIRED (see requireIoThread, enforced below — not just this
      * comment): a photo-heavy export holds ~2x peak on the caller's thread
@@ -195,10 +205,17 @@ object SettingsBackup {
             (all[k] as? Boolean)?.let { values.put(k, it) }
         }
         for (k in LONG_KEYS) {
-            // Number, not Long (#339): a hand-set Int still carries the
-            // count — toLong keeps it, maxOf drops impossible negatives,
-            // mirroring the import clamp. Anything else skips.
-            (all[k] as? Number)?.let { values.put(k, maxOf(0L, it.toLong())) }
+            // Long-or-Int only (#339): a hand-set Int still carries the
+            // count (widened), but a fractional Double/Float is corruption —
+            // truncating 1.9 to 1 would persist a wrong-but-plausible
+            // count. Skipped like every other mistyped value in this
+            // function; import clamps its own side.
+            val n: Long? = when (val v = all[k]) {
+                is Long -> v
+                is Int -> v.toLong()
+                else -> null
+            }
+            n?.let { values.put(k, maxOf(0L, it)) }
         }
         val files = JSONObject()
         for (name in backupFiles()) {

@@ -591,6 +591,28 @@ class ChatApi(context: Context) {
         // stay in producer context below (trySend/close live there).
         // lastUserIdx hoisted here: cheap role scan, read on both sides.
         val lastUserIdx = messages.indexOfLast { it.role == "user" }
+        // Per-photo oversize pre-check, BEFORE building (#339): the dataUri
+        // wall throws NamedAttachError on storage-injected oversize, and a
+        // throw inside the withContext build below escapes this
+        // callbackFlow producer with no ChatEvent.Error path — collect
+        // throws, the job fails, and the turn wedges (streaming, no banner,
+        // no retry). Emitting the SAME named message up front (shared
+        // spelling via oversizeMessage, never thrown here) gives it a
+        // delivery path; dataUri's wall stays as defense-in-depth. Cheap:
+        // only the trailing turn's wired+decodable attachments are
+        // measured, and at/below-cap raws skip the precise measure.
+        if (lastUserIdx >= 0) {
+            val overMsg = messages[lastUserIdx].attachments
+                .wiredPhotos()
+                .firstNotNullOfOrNull { a ->
+                    a.takeIf { isDecodableBase64(it.base64) }?.oversizeMessage()
+                }
+            if (overMsg != null) {
+                trySend(ChatEvent.Error(overMsg))
+                close()
+                return@callbackFlow
+            }
+        }
         val (body, rawBytes) = withContext(Dispatchers.IO) {
             val payload = JSONObject()
             // An explicit provider/model is always sent; blanks are omitted

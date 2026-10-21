@@ -255,6 +255,26 @@ const val MAX_CHAT_WIRE_BYTES = 3_500_000
  * callers measure `RequestBody.contentLength()`, which is Long (-1 unknown). */
 fun wireSizeExceeded(bytes: Long): Boolean = bytes < 0 || bytes > MAX_CHAT_WIRE_BYTES
 
+/**
+ * Per-photo oversize message for one attachment, or null when within the
+ * cap (#339): shared by the [dataUri] wall (which throws it) and the
+ * streamChat pre-check (which emits it as a ChatEvent.Error WITHOUT
+ * throwing — a throw inside the payload-build block would escape the
+ * callbackFlow producer with no Error path and wedge the turn). One
+ * spelling, one cap, two delivery paths — they can never disagree.
+ * Two-tier like the thumbnail gate: at/below-cap raws skip the precise
+ * measure; only over-length raws pay the full walk.
+ */
+internal fun ChatAttachment.oversizeMessage(): String? {
+    if (base64.length <= MAX_IMAGE_BASE64_CHARS) return null
+    val bytes = base64Bytes(base64)
+    if (bytes <= MAX_IMAGE_BASE64_CHARS * 3L / 4L) return null
+    return "Photo too large even after shrinking (${formatBytes(bytes)}) — " +
+        "the per-photo limit is about " +
+        "${formatBytes(MAX_IMAGE_BASE64_CHARS * 3L / 4L)}. " +
+        "Pick a different photo."
+}
+
 /** Wire form of one attachment: the `image_url` data URI the gateway's
  * multipart parser accepts (`internal/gateway/openai.go`). Remote URLs are
  * never produced — the gateway refuses to fetch them. The type is PINNED,
@@ -290,18 +310,13 @@ fun ChatAttachment.dataUri(): String {
     // conversation preflight fails it; with it the send fails with the SAME
     // named per-photo message as the stage path. Unreachable via the app
     // (staged payloads are capped at pick time) — storage-injected
-    // oversize only. Two-tier like the thumbnail gate: at/below-cap raws
-    // skip the precise measure; only over-length raws pay it.
-    if (base64.length > MAX_IMAGE_BASE64_CHARS &&
-        base64Bytes(base64) > MAX_IMAGE_BASE64_CHARS * 3L / 4L
-    ) {
-        throw NamedAttachError(
-            "Photo too large even after shrinking (${formatBytes(base64Bytes(base64))}) — " +
-                "the per-photo limit is about " +
-                "${formatBytes(MAX_IMAGE_BASE64_CHARS * 3L / 4L)}. " +
-                "Pick a different photo.",
-        )
-    }
+    // oversize only. Shared spelling via oversizeMessage() (#339): the
+    // streamChat pre-check emits the same words as a ChatEvent.Error
+    // WITHOUT throwing (a throw inside the payload-build block escapes the
+    // callbackFlow with no Error path and wedges the turn); this wall
+    // throws it for direct callers. Same cap, same message, two delivery
+    // paths — they can never disagree.
+    oversizeMessage()?.let { throw NamedAttachError(it) }
     return "data:image/jpeg;base64,$base64"
 }
 

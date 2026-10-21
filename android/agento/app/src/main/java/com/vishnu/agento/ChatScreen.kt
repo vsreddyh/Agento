@@ -163,6 +163,7 @@ internal class ThumbCache(maxEntries: Int = 32) {
     fun put(key: Any, bmp: android.graphics.Bitmap) {
         cache.put(key, bmp)
     }
+    fun evictAll() = cache.evictAll()
 }
 
 /**
@@ -320,7 +321,16 @@ internal fun ChatTab(
     // remembers per composition, so scrolling away disposes the bitmap and
     // scrolling back re-decodes. Hoisted here so the cache outlives any
     // one composition; the cache itself is bounded (see ThumbCache).
+    // Scroll-back memory survives composition, not threads (#339):
+    // hoisted here so the cache outlives any one composition — but stable
+    // ids are only unique per pick, not per thread, so a switch/delete
+    // would leave the old thread's bitmaps (up to 32 entries) resident
+    // until LRU pressure evicts them — unreachable forever, yet evicting
+    // the live thread's. Evict eagerly on thread change instead.
     val thumbCache = remember { ThumbCache() }
+    LaunchedEffect(state.threadId) {
+        thumbCache.evictAll()
+    }
     LaunchedEffect(Unit) { vm.refreshConfig() }
     // Task-instruction deep-link (#287): open the instructed thread once
     // the ViewModel has loaded. Consumed on confirmed open (not
@@ -515,32 +525,25 @@ internal fun ChatTab(
     // scope is already dead (tab left / rotation race), no child will run
     // at all — NonCancellable can't resurrect a dead parent — so delete
     // inline instead: unlink is a metadata op, safe on Main as a last
-    // resort, strictly better than an orphan. Declared before first use:
-    // batch returns, camera callback, and launch-failure path all call it.
-    // Main-primary, IO best-effort (#339): UNDISPATCHED + a non-suspending
-    // body executes inline on the caller (Main), NOT on IO — the
-    // Dispatchers.IO context only takes effect if the body ever suspends.
-    // Stated plainly because the older framing above ("fire-and-forget
-    // off-main") overclaims: what is actually guaranteed is never-blocking
-    // (inline unlink or a launched child), and an unlink is cheap enough
-    // that Main-primary is correct, not a compromise.
+    // resort, strictly better than an orphan.
+    // Declared before first use: batch returns, camera callback, and
+    // launch-failure path all call it. Fire-and-forget OFF-main on the
+    // live path (#339): no UNDISPATCHED, so the child actually dispatches
+    // to IO and the picker/camera callback never pays the unlink — unlink
+    // is cheap, but StrictMode-clean is cheaper. The started-proof stays
+    // for the dead-scope race: isActive-then-launch brackets the same
+    // TOCTOU the batch path closed — a scope dying in between launches a
+    // child that never runs, and started==false settles it inline on Main
+    // (metadata op, safe as a last resort, strictly better than an
+    // orphan). A live-scope race (body not yet started when read) only
+    // double-deletes through the exists() gate — harmless by construction.
+    // Atomic flag either way: the write (IO thread) and the read (caller)
+    // have no ordering without it.
     fun deleteQuietly(f: File?) {
         if (f == null) return
-        // UNDISPATCHED + started-proof (#339): the isActive check and the
-        // launch bracket the same TOCTOU the batch path closed — a scope
-        // dying in between would otherwise leak the file until the sweep.
-        // Undispatched runs the body synchronously on this thread, so
-        // started==false after launch() proves never-ran, and the inline
-        // fallback settles it exactly like the batch's !batchStarted path.
-        // Visibility is UNDISPATCHED-dependent (#339): the write and the
-        // read run on the same thread with launch() sequenced between, so
-        // plain ordering would hold — but the flag is atomic anyway, so a
-        // future edit dropping UNDISPATCHED degrades to a redundant inline
-        // delete (harmless: exists()-gated) instead of a stale-false
-        // double-delete race. Belt and braces on a one-file leak.
         val started = java.util.concurrent.atomic.AtomicBoolean(false)
         if (scope.isActive) {
-            scope.launch(Dispatchers.IO + NonCancellable, CoroutineStart.UNDISPATCHED) {
+            scope.launch(Dispatchers.IO + NonCancellable) {
                 started.set(true)
                 runCatching { f.takeIf { it.exists() }?.delete() }
             }
