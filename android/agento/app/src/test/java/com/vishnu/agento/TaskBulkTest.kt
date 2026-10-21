@@ -2,7 +2,9 @@ package com.vishnu.agento
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -24,6 +26,14 @@ class TaskBulkTest {
         val full = (0 until MAX_BULK_SELECT).map { "id$it" }.toSet()
         assertNull(toggleBulkId(full, "one-more"))
         assertEquals(full - "id0", toggleBulkId(full, "id0"))
+    }
+
+    @Test
+    fun `bulk bar is live only with a selection and nothing busy`() {
+        assertFalse(bulkActionsLive(emptySet(), emptySet()))
+        assertTrue(bulkActionsLive(setOf("a"), emptySet()))
+        assertFalse(bulkActionsLive(setOf("a"), setOf("a")))
+        assertTrue(bulkActionsLive(setOf("a", "b"), setOf("c")))
     }
 
     @Test

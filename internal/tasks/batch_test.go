@@ -182,6 +182,11 @@ func TestBatchValidationRejectsBadEnvelopes(t *testing.T) {
 		t.Fatal("over-cap batch must fail")
 	} else if !strings.Contains(err.Error(), "50") {
 		t.Fatalf("cap error must name the cap, got %v", err)
+	} else {
+		var bop *BatchOpError
+		if !errors.As(err, &bop) || bop.Index != -1 {
+			t.Fatalf("envelope-level rejection names no op (index -1), got %v", err)
+		}
 	}
 	if n := openCount(t, s); n != 1 {
 		t.Fatalf("rejected batches apply nothing, %d open (want 1)", n)

@@ -236,9 +236,11 @@ internal fun TaskManagerScreen(
     // and the editor stay live. Synthetic "__create__" covers the dialog
     // save path, which has no task id of its own.
     //
-    // unmarkBusy runs after the request, not in `finally`: this scope is the
-    // screen's own, so a cancelled request dies with the composition and the
-    // busy set with it — there is no cross-screen leak for `finally` to guard.
+    // unmarkBusy runs after the request, not in `finally`: child jobs are
+    // never cancelled individually (no Job handle escapes this scope), only
+    // via scope death when the composable disposes — and the set dies with
+    // it. There is no cancellation-without-dispose to guard, so `finally`
+    // would protect nothing.
     var busyIds by remember { mutableStateOf(setOf<String>()) }
     fun markBusy(id: String) { busyIds = busyIds + id }
     fun unmarkBusy(id: String) { busyIds = busyIds - id }
@@ -956,13 +958,17 @@ internal fun TaskManagerScreen(
                         },
                         title = { Text("${bulkSelected.size}/$MAX_BULK_SELECT selected") },
                         actions = {
+                            // Disabled while any selected row is in flight:
+                            // a second tap would send a second batch, and a
+                            // duplicate batch copies twice.
+                            val bulkLive = bulkActionsLive(bulkSelected, busyIds)
                             TextButton(
                                 onClick = { doBulkResolve("skip") },
-                                enabled = bulkSelected.isNotEmpty(),
+                                enabled = bulkLive,
                             ) { Text("Skip") }
                             IconButton(
                                 onClick = { bulkMoveOpen = true },
-                                enabled = bulkSelected.isNotEmpty(),
+                                enabled = bulkLive,
                             ) {
                                 Icon(
                                     Icons.Filled.DateRange,
@@ -971,7 +977,7 @@ internal fun TaskManagerScreen(
                             }
                             IconButton(
                                 onClick = { doBulkDuplicate() },
-                                enabled = bulkSelected.isNotEmpty(),
+                                enabled = bulkLive,
                             ) {
                                 Icon(
                                     Icons.Filled.ContentCopy,
@@ -980,7 +986,7 @@ internal fun TaskManagerScreen(
                             }
                             TextButton(
                                 onClick = { doBulkResolve("complete") },
-                                enabled = bulkSelected.isNotEmpty(),
+                                enabled = bulkLive,
                             ) { Text("Complete") }
                         },
                     )
@@ -2670,6 +2676,15 @@ internal val BulkSelectionSaver: Saver<Set<String>, List<String>> =
         // over-cap selection past the guard into a 422 batch.
         restore = { it.take(MAX_BULK_SELECT).toSet() },
     )
+
+/**
+ * Whether the bulk bar is live (#345): a non-empty selection with nothing
+ * in flight. A second tap while a batch runs would send a second batch —
+ * and a duplicate batch copies twice — so the bar goes dead until the
+ * first lands.
+ */
+internal fun bulkActionsLive(selected: Set<String>, busyIds: Set<String>): Boolean =
+    selected.isNotEmpty() && selected.none { it in busyIds }
 
 /**
  * Toggles [id] in a bulk selection: removes it when present, adds it when

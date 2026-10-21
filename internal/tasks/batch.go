@@ -171,12 +171,16 @@ func (s *Store) transact(ctx context.Context, fn func(ctx context.Context) error
 // on any op (unknown id, revision conflict, validation failure, failed
 // rollover) aborts the whole batch and names the failing op; an empty batch,
 // an unknown op, and an over-cap batch are rejected before any write.
+// Envelope-level rejections (empty, over-cap) carry Index -1: they name no
+// op, and the client toasts the detail without an item number.
 func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, error) {
 	if len(ops) == 0 {
-		return nil, fail("batch is empty: send 1-%d ops", BatchMaxOps)
+		return nil, &BatchOpError{Index: -1,
+			Err: fail("batch is empty: send 1-%d ops", BatchMaxOps)}
 	}
 	if len(ops) > BatchMaxOps {
-		return nil, fail("batch holds %d ops, over the %d-op cap; select fewer tasks", len(ops), BatchMaxOps)
+		return nil, &BatchOpError{Index: -1,
+			Err: fail("batch holds %d ops, over the %d-op cap; select fewer tasks", len(ops), BatchMaxOps)}
 	}
 	seen := make(map[string]bool, len(ops))
 	for i, op := range ops {
