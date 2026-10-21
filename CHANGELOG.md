@@ -15,7 +15,8 @@ see GitHub Releases for older notes.
   duplicates the whole set in one atomic batch — either everything applies
   or nothing does, with the failing item named. The detail sheet and each
   open row gain a Skip button next to Complete. Server adds
-  `POST /api/tasks/batch` and a canonical duplicate used by duplicate (single + bulk).
+  `POST /api/tasks/batch` and a canonical server-side duplicate op used by
+  single + bulk duplicate.
 
 ## [5.10.1]
 - **Fixed:** the connection test counts only real model names. Blank entries

@@ -97,14 +97,15 @@ func TestParseBatchOpsTrimsAndRequires(t *testing.T) {
 		fields map[string]any
 		want   string
 	}{
-		"missing op":  {map[string]any{"ops": []any{map[string]any{"id": "abc"}}}, "ops[0].op is required"},
-		"empty op":    {map[string]any{"ops": []any{map[string]any{"op": "  ", "id": "abc"}}}, "ops[0].op is required"},
-		"op not text": {map[string]any{"ops": []any{map[string]any{"op": 3, "id": "abc"}}}, "ops[0].op must be a string"},
-		"missing id":  {map[string]any{"ops": []any{map[string]any{"op": "complete"}}}, "ops[0].id is required"},
-		"blank id":    {map[string]any{"ops": []any{map[string]any{"op": "complete", "id": "   "}}}, "ops[0].id is required"},
-		"id not text": {map[string]any{"ops": []any{map[string]any{"op": "complete", "id": 3}}}, "ops[0].id must be a string"},
-		"unknown key": {map[string]any{"ops": []any{map[string]any{"op": "skip", "id": "abc", "reasons": "busy"}}}, "ops[0].reasons is not a batch field; want op, id, reason, or fields"},
-		"wrong level": {map[string]any{"ops": []any{map[string]any{"op": "update", "id": "abc", "due_date": "2026-12-01"}}}, "ops[0].due_date is not a batch field; want op, id, reason, or fields"},
+		"missing op":                 {map[string]any{"ops": []any{map[string]any{"id": "abc"}}}, "ops[0].op is required"},
+		"empty op":                   {map[string]any{"ops": []any{map[string]any{"op": "  ", "id": "abc"}}}, "ops[0].op is required"},
+		"op not text":                {map[string]any{"ops": []any{map[string]any{"op": 3, "id": "abc"}}}, "ops[0].op must be a string"},
+		"missing id":                 {map[string]any{"ops": []any{map[string]any{"op": "complete"}}}, "ops[0].id is required"},
+		"blank id":                   {map[string]any{"ops": []any{map[string]any{"op": "complete", "id": "   "}}}, "ops[0].id is required"},
+		"id not text":                {map[string]any{"ops": []any{map[string]any{"op": "complete", "id": 3}}}, "ops[0].id must be a string"},
+		"unknown key":                {map[string]any{"ops": []any{map[string]any{"op": "skip", "id": "abc", "reasons": "busy"}}}, "ops[0].reasons is not a batch field; want op, id, reason, or fields"},
+		"wrong level":                {map[string]any{"ops": []any{map[string]any{"op": "update", "id": "abc", "due_date": "2026-12-01"}}}, "ops[0].due_date is not a batch field; want op, id, reason, or fields"},
+		"unknown keys deterministic": {map[string]any{"ops": []any{map[string]any{"op": "skip", "id": "abc", "zzz": 1, "aaa": 2}}}, "ops[0].aaa is not a batch field; want op, id, reason, or fields"},
 	} {
 		_, err := parseBatchOps(tc.fields)
 		if err == nil || err.Error() != tc.want {

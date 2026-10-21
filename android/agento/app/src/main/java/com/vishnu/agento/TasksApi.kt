@@ -97,7 +97,15 @@ data class BulkOp(
     val id: String,
     val reason: String? = null,
     val fields: JSONObject? = null,
-)
+) {
+    // Fail fast on misplaced extras: the server 422s a reason on non-skip
+    // and fields on non-update, aborting the whole atomic batch — so a
+    // caller bug here must read as a programming error, not a runtime 422.
+    init {
+        require(reason == null || op == "skip") { "reason rides only on skip" }
+        require(fields == null || op == "update") { "fields ride only on update" }
+    }
+}
 
 /** What one committed batch item produced: the fresh task, plus the next
  * occurrence's due date when a structured cadence rolled over. */

@@ -49,6 +49,16 @@ class TaskBulkTest {
         assertEquals(emptySet<String>(), toggleBulkId(emptySet(), ""))
     }
 
+    @Test(expected = IllegalArgumentException::class)
+    fun `bulk op rejects reason on non-skip`() {
+        BulkOp("complete", "a", "busy")
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `bulk op rejects fields on non-update`() {
+        BulkOp("complete", "a", null, JSONObject())
+    }
+
     @Test
     fun `bulk body carries ops verbatim`() {
         val body = bulkOpsBody(

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,13 +51,20 @@ func parseBatchOps(fields map[string]any) ([]tasks.BatchOp, error) {
 		// No silent extras: a misspelled key (`reasons`, `dueDate` at the
 		// wrong level) would otherwise commit without what the caller
 		// meant — the same silent-drop shape the misplaced reason/fields
-		// rejection guards one level down.
+		// rejection guards one level down. Sorted before reporting, so two
+		// unknown keys name a deterministic one instead of a random map
+		// iteration.
+		var unknown []string
 		for key := range obj {
 			switch key {
 			case "op", "id", "reason", "fields":
 			default:
-				return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].%s is not a batch field; want op, id, reason, or fields", i, key)}
+				unknown = append(unknown, key)
 			}
+		}
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
+			return nil, &tasks.StoreError{Msg: fmt.Sprintf("ops[%d].%s is not a batch field; want op, id, reason, or fields", i, unknown[0])}
 		}
 		// Missing and mistyped stay distinct: absent means "send it",
 		// wrong-typed means "fix its type", and blank-after-trim reads as
