@@ -88,6 +88,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import java.io.File
@@ -362,6 +363,10 @@ internal fun ChatTab(
     // that is still being read. Saveable, so the path outlives the
     // composition; a stale entry only delays one cleanup to the sweep.
     var cameraDecoding by rememberSaveable { mutableStateOf<String?>(null) }
+    // True while a gallery picker is outstanding (#339): a second tap
+    // before the first returns would open a second picker, and the two
+    // results would interleave. Saveable timestamp, like the camera gate.
+    var galleryPendingSince by rememberSaveable { mutableStateOf(0L) }
     // True while a camera intent is outstanding: launchCamera overwrites the
     // shared Uri/path on every tap, so a second tap before the first returns
     // would make the first callback decode the wrong file. Saveable timestamp,
@@ -399,6 +404,14 @@ internal fun ChatTab(
     fun isCameraPending(): Boolean {
         if (cameraPendingSince == 0L) return false
         val age = SystemClock.elapsedRealtime() - cameraPendingSince
+        return age >= 0 && age < CAMERA_PENDING_STALE_MS
+    }
+
+    /** True while a gallery picker is outstanding (#339): a second tap
+     * would open a second picker and the two results would interleave. */
+    fun isGalleryPending(): Boolean {
+        if (galleryPendingSince == 0L) return false
+        val age = SystemClock.elapsedRealtime() - galleryPendingSince
         return age >= 0 && age < CAMERA_PENDING_STALE_MS
     }
     // Startup sweep: a process kill between the TakePicture write and the
@@ -521,7 +534,7 @@ internal fun ChatTab(
         // died — launching then is a no-op whose body never runs, sticking
         // cameraDecoding. Undispatched for the same reason: the body starts
         // synchronously, so the try/finally is entered before any cancel.
-        if (!scope.isActive) {
+        if (!vm.viewModelScope.isActive) {
             deleteQuietly(cleanup)
             onBatchDone()
             return
@@ -530,7 +543,12 @@ internal fun ChatTab(
         // cross-thread flag here: the write lands on the IO thread and the
         // read on Main.
         val batchStarted = java.util.concurrent.atomic.AtomicBoolean(false)
-        scope.launch(Dispatchers.IO, CoroutineStart.UNDISPATCHED) {
+        // The ViewModel's scope, NOT the composition's (#339): a rotation
+        // recreates the composition and cancelled the batch, so the rest
+        // of a valid multi-pick was dropped with a "pick again" notice.
+        // The ViewModel outlives the rotation, and the staged photos live
+        // there too — the batch finishes and the view catches up.
+        vm.viewModelScope.launch(Dispatchers.IO, CoroutineStart.UNDISPATCHED) {
             // First statement: try-entry proof. Combined with UNDISPATCHED,
             // the post-launch check below can tell "body never ran" from
             // "body ran" — and settle the never-ran case inline.
@@ -673,6 +691,8 @@ internal fun ChatTab(
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
     ) { uris ->
+        // Intent settled — the launch gate below re-arms for the next tap.
+        galleryPendingSince = 0L
         processUris(uris, homeThread = galleryThread ?: vm.threadIdNow())
         galleryThread = null
     }
@@ -766,6 +786,10 @@ internal fun ChatTab(
                     withContext(Dispatchers.Main) {
                         // Gate untouched: it arms only in the success Main hop
                         // below; the try/finally drops ioGuard.
+                        // Home dropped too (#339): no capture follows, and a
+                        // stale owner would home the NEXT one to a thread
+                        // the user already left.
+                        cameraThread = null
                         vm.notify("Couldn't start the camera — storage unavailable.")
                     }
                     return@launch
@@ -783,7 +807,9 @@ internal fun ChatTab(
                 withContext(Dispatchers.Main) {
                     if (uri == null) {
                         // Same: gate never armed on this path — notify and
-                        // let the finally drop ioGuard.
+                        // let the finally drop ioGuard. The homed thread
+                        // goes too (#339): no capture follows this launch.
+                        cameraThread = null
                         vm.notify("Couldn't start the camera.")
                         // Shared helper (dead-scope-safe), not an inline
                         // exists()/delete() on Main.
@@ -957,6 +983,13 @@ internal fun ChatTab(
         onRegenerate = vm::regenerate, onContinue = vm::continueTurn,
         onReplace = vm::replaceAndResend, onFork = vm::forkAndResend,
         onPickPhotos = {
+            // Double-launch guard (#339): the camera path has one, the
+            // gallery did not — a second tap opened a second picker and
+            // the two results interleaved.
+            if (isGalleryPending()) {
+                vm.notify("Photo picker is already open.")
+                return@ChatScreen
+            }
             // Home snapshot LIVE at tap time: the callback runs post-switch,
             // so the tap — not current-at-result — owns the batch.
             // vm.threadIdNow(), not the composition snapshot: state.threadId
@@ -971,6 +1004,10 @@ internal fun ChatTab(
             }.onFailure {
                 galleryThread = null
                 vm.notify("Couldn't open the photo picker.")
+            }.onSuccess {
+                // Armed only after a successful launch: a throw fires no
+                // callback, so the gate must not stick.
+                galleryPendingSince = SystemClock.elapsedRealtime()
             }
         },
         onTakePhoto = ::requestCamera,

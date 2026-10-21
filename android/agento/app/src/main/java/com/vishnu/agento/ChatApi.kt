@@ -592,6 +592,13 @@ class ChatApi(context: Context) {
         // image parts. A hand-edited "User"/"SYSTEM" tail rides as clamped
         // bare text — visible, unprivileged, no image part and no marker
         // claim — so index, marker and wire agree nothing was sent.
+        // The index is strict while the ROLE WIRE is clamped (anything not
+        // "assistant" rides as "user"): a case-variant tail therefore
+        // reaches the server as an unprivileged user turn WITHOUT image
+        // parts, which is the point — guessing that an odd-cased role meant
+        // "this turn carries photos" would attach images the user never
+        // staged on that role. The marker split (counts wired, parts need
+        // decodable) is documented on attachmentMarker.
         val lastUserIdx = messages.indexOfLast { it.role == "user" }
         // Named walls throw inside the build: an uncaught throw would escape
         // this producer with no ChatEvent.Error path, and the turn would

@@ -321,6 +321,10 @@ object SettingsBackup {
             val skipped = mutableListOf<String>()
             if (files != null) {
                 for (name in backupFiles()) {
+                    // Absent entry, not a broken one (#339): a backup
+                    // exported before the file existed simply has no entry
+                    // for it — that is not a skip to report.
+                    if (!files.has(name)) continue
                     val text = files.optString(name, "")
                     if (text.isEmpty()) {
                         // An empty entry is not restored, so it counts as

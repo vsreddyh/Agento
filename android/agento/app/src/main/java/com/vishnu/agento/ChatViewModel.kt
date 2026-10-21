@@ -602,7 +602,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * firing, so the unconsumed target retries when ready flips.
      */
     fun openThread(id: String, autosend: Boolean, onDone: () -> Unit = {}) {
-        if (!_state.value.ready) return
+        if (!_state.value.ready) {
+            // Voiced like the other not-ready gates (#339): a deep-link tap
+            // during thread load must not read as a dead button. Silent when
+            // the composer is empty, like switchThread().
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notifyLoading()
+            }
+            return
+        }
         // Written to disk after this ViewModel loaded: merge disk-only threads in.
         viewModelScope.launch {
             if (threads.none { it.id == id }) {
@@ -1788,6 +1798,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // narrowing to `running` would strand exactly the edge cases
             // resume exists for.
             // Image-only tails match on blank prompt: Prompt is the raw text.
+            // PHOTO-BLIND MATCH, by necessity (#339): the server records the
+            // prompt text only, so a text-identical tail can attach to a
+            // different live run. The resend still carries the user's own
+            // tail (photos included) and the newest live run wins.
             val imageOnlyTail = last.content.isBlank() &&
                 last.attachments.wiredPhotoCount() > 0
             // Newest match wins: two image-only tails can both be live.

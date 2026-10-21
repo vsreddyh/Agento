@@ -64,9 +64,11 @@ import androidx.core.net.toUri
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -464,11 +466,14 @@ internal fun SettingsScreen(
                         NotificationsSection()
                     }
                     SettingSection.Storage -> {
-                        SettingsBackupSection(onImported = {
-                            viewModel.refresh()
-                            settingsRefresh++
-                            toasts.toast(Toasts.SAVED, ToastKind.Success)
-                        })
+                        SettingsBackupSection(
+                            scope = viewModel.viewModelScope,
+                            onImported = {
+                                viewModel.refresh()
+                                settingsRefresh++
+                                toasts.toast(Toasts.SAVED, ToastKind.Success)
+                            },
+                        )
                     }
                     SettingSection.Usage -> {
                         UsageSection()
@@ -788,12 +793,15 @@ private fun namesOf(names: List<String>): String {
  * permission; the file the user keeps survives any reinstall gap that outlives
  * cloud backup. [onImported] reloads the on-screen fields from prefs. */
 @Composable
-internal fun SettingsBackupSection(onImported: () -> Unit) {
+internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit) {
     val context = LocalContext.current
     // Application context for everything that crosses a suspend boundary: the
     // IO hops must not hold the Activity. UI-only work (toasts, pickers) does.
     val appContext = context.applicationContext
-    val scope = rememberCoroutineScope()
+    // The scope is the ViewModel's, NOT the composition's (#339): a rotation
+    // cancelled the export mid-write (a truncated backup file) or the import
+    // mid-restore (half-applied). The ViewModel's scope outlives the
+    // rotation, so the work finishes.
 
     var status by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }

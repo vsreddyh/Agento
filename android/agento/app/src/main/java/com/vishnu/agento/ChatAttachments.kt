@@ -121,9 +121,14 @@ internal fun requireIoThread(site: String) {
 /**
  * Canonical form of persisted attachments: storage is hand-editable, so framing
  * whitespace is stripped and anything still undecodable blanks out. Applied
- * once at the load boundary (IO, never Main), so the hot-path [isWired] can
+ * once at the load boundary, so the hot-path [isWired] can
  * stay a blank check. Heal-silent BY DESIGN: a toast per healed payload would
  * storm on every cold start.
+ *
+ * IO-CONFINED BY CALLER, not by a guard here (#339): this is a pure
+ * per-payload helper (unit-tested on the JVM), and its callers —
+ * load/save/export/import — are the IO-gated boundary. Same shape as
+ * [isDecodableBase64].
  *
  * Orientation is NOT normalized here: staged payloads are already EXIF-rotated
  * at capture time; an imported EXIF-6 payload keeps its metadata. */
@@ -180,6 +185,12 @@ fun capRefused(freeSlots: Int): String =
 /** Longest side after downscale, px. A 1568px JPEG at quality 80 is
  * typically 150–600 KB — legible for the agent, small on the wire. */
 const val MAX_IMAGE_SIDE_PX = 1568
+
+/** Decoded-pixel budget for one staged image (#339): the side rule alone
+ * lets a source just under 2x the target decode at FULL size (3135x3135 ≈
+ * 39 MB), and that bitmap lives beside the source bytes. 4 M pixels ≈ 16 MB
+ * per decode. */
+const val MAX_DECODE_PIXELS = 4_000_000L
 
 /** Per-photo base64 cap, chars (~1.1 MiB raw). Two capped photos plus text
  * history stay under [MAX_CHAT_WIRE_BYTES] with headroom. */
@@ -277,7 +288,13 @@ fun ChatAttachment.dataUri(): String {
 }
 
 /** Inline marker for text-only surfaces (exports, search, titles):
- * `[1 photo attached]` / `[3 photos attached]`. */
+ * `[1 photo attached]` / `[3 photos attached]`.
+ *
+ * The marker counts WIRE (blank-only) photos, while the image parts need
+ * decodable ones (#339): a hand-edited ragged tail therefore titles,
+ * exports and searches as a photo while it wires as bare text. Deliberate
+ * and documented at both ends — the marker describes the THREAD, the parts
+ * must be provable. */
 fun attachmentMarker(n: Int): String =
     if (n == 1) "[1 photo attached]" else "[$n photos attached]"
 
@@ -635,15 +652,6 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                     }
                     out.write(buf, 0, n)
                 }
-                // Gate the copy, not just the read: the loop bounds the buffer
-                // at MAX + one chunk, but toByteArray() copies it — fail on
-                // out.size() first.
-                if (out.size() > MAX_SOURCE_BYTES) {
-                    throw OversizeAttachError(
-                        "That file is too large to attach " +
-                            "(over about ${formatBytes(MAX_SOURCE_BYTES.toLong())}).",
-                    )
-                }
                 out.toByteArray()
             } ?: throw NamedAttachError(
                 // A null stream is not proof of deletion: some providers return
@@ -662,9 +670,14 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // next sample still covers it, so the decoded bitmap stays >= the
             // target and the exact fit below is always a downscale. Long
             // counter: the toInt() handoff is small.
+            // Pixel budget too, not just sides (#339): the side rule alone
+            // lets a source just under 2x the target decode at FULL size
+            // (3135x3135 ≈ 39 MB), and that bitmap lives beside the source
+            // bytes. 4 M pixels ≈ 16 MB per decode.
             var sample = 1L
             while (bounds.outWidth / (sample * 2) >= MAX_IMAGE_SIDE_PX ||
-                bounds.outHeight / (sample * 2) >= MAX_IMAGE_SIDE_PX
+                bounds.outHeight / (sample * 2) >= MAX_IMAGE_SIDE_PX ||
+                (bounds.outWidth.toLong() / sample) * (bounds.outHeight.toLong() / sample) > MAX_DECODE_PIXELS
             ) {
                 sample *= 2
             }
@@ -813,7 +826,9 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
 /**
  * Small bitmap for thumbnails (bubbles, composer strip). Decodes sampled to
  * ~256px so a remembered thumbnail costs kilobytes, not the full payload.
- * Null when the payload is corrupt — it degrades to a missing thumbnail. */
+ * Null when the payload is corrupt — it degrades to a missing thumbnail.
+ * Ownership: the returned bitmap is LIVE and belongs to the caller (the
+ * thumbnail cache keeps it; do not recycle it behind the cache's back). */
 suspend fun decodeThumbnail(base64: String): Bitmap? {
     // Explicit try/catch, not runCatching: cancellation must propagate
     // (produceState restart on recompose), never collapse into the null
