@@ -890,11 +890,15 @@ internal fun TaskManagerScreen(
         // last-write-wins on a row the user can't see.
         val byId = tasks.associateBy { it.id }
         if (ids.any { it !in byId }) {
+            // A selected row left the fetched page (filter switch) or is
+            // gone (deleted elsewhere): sending it unguarded would be a
+            // silent last-write-wins on a row the user can't see. Reload
+            // underneath and keep the selection for retry once the rows
+            // land, like a failed batch does.
             silentRefresh = true
             refreshTick++
-            exitBulk()
             toasts.toast(
-                "Some selected tasks aren't in view — reloaded. Reselect and retry.",
+                "Some selected tasks aren't in view — reloading. Retry once they land.",
                 ToastKind.Error,
             )
             return
@@ -2644,16 +2648,22 @@ internal const val MAX_BULK_SELECT = 50
 internal val BulkSelectionSaver: Saver<Set<String>, List<String>> =
     Saver(
         save = { it.toList() },
-        restore = { it.toSet() },
+        // Enforce the cap on restore too: rotation cannot grow the set
+        // today, but a lowered cap or a corrupt Bundle must not sneak an
+        // over-cap selection past the guard into a 422 batch.
+        restore = { it.take(MAX_BULK_SELECT).toSet() },
     )
 
 /**
  * Toggles [id] in a bulk selection: removes it when present, adds it when
  * there is room, and returns null when the cap refuses a new id (the caller
- * toasts instead of silently ignoring the tap).
+ * toasts instead of silently ignoring the tap). Blank ids never enter the
+ * set: one would ride out as an unguarded op and 422 the whole atomic batch.
  */
 internal fun toggleBulkId(selected: Set<String>, id: String): Set<String>? =
-    if (id in selected) {
+    if (id.isBlank()) {
+        selected
+    } else if (id in selected) {
         selected - id
     } else if (selected.size >= MAX_BULK_SELECT) {
         null

@@ -27,6 +27,12 @@ class TaskBulkTest {
     }
 
     @Test
+    fun `toggle refuses blank ids`() {
+        assertEquals(setOf("a"), toggleBulkId(setOf("a"), "   "))
+        assertEquals(emptySet<String>(), toggleBulkId(emptySet(), ""))
+    }
+
+    @Test
     fun `bulk body carries ops verbatim`() {
         val body = bulkOpsBody(
             listOf(
