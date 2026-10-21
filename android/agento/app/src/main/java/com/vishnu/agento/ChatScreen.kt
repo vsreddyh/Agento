@@ -529,22 +529,18 @@ internal fun ChatTab(
     // exists()/delete() are disk IO, and callers run on Main
     // picker/camera callbacks — so fire-and-forget, never blocking the
     // callback. NonCancellable like the batch finally: a tab-leave racing
-    // the call must not cancel the cleanup it just scheduled. And when the
-    // scope is already dead (tab left / rotation race), no child will run
-    // at all — NonCancellable can't resurrect a dead parent — so delete
-    // inline instead: unlink is a metadata op, safe on Main as a last
-    // resort, strictly better than an orphan.
+    // the call must not cancel the cleanup it just scheduled — and as the
+    // launch context's Job it DETACHES the child from this scope, so even
+    // a dead scope can't stop it. When the scope is already dead the child
+    // is skipped and the unlink runs inline instead: a metadata op, safe
+    // on Main as a last resort, strictly better than an orphan.
     // Declared before first use: batch returns, camera callback, and
-    // launch-failure path all call it. Optimistic ownership (#339): the
-    // live path dispatches to IO and the picker/camera callback never pays
-    // the unlink. Die-in-window settle: if the scope dies between the
-    // isActive check and the child start, the child may never run
-    // (cancelled before its first statement) — the invokeOnCompletion
-    // below settles that case inline, mirroring the batch's never-ran
-    // settle. (NonCancellable detaches the child from the scope, so in
-    // practice the delete still lands; the fallback covers the platform
-    // nuance either way.) exists()-gated, so a completed delete makes the
-    // fallback a no-op second unlink.
+    // launch-failure path all call it. Detached fire-and-forget (#339):
+    // the NonCancellable in the launch context replaces the scope's Job
+    // as the child's parent, so scope death cannot cancel it — the child
+    // runs to completion regardless. There is no die-in-window case to
+    // settle (and no completion callback to race): the isActive check
+    // below only skips scheduling on an already-dead scope.
     fun deleteQuietly(f: File?) {
         if (f == null) return
         if (!scope.isActive) {
@@ -553,10 +549,6 @@ internal fun ChatTab(
         }
         scope.launch(Dispatchers.IO + NonCancellable) {
             runCatching { f.takeIf { it.exists() }?.delete() }
-        }.invokeOnCompletion { cause ->
-            if (cause is CancellationException) {
-                runCatching { f.takeIf { it.exists() }?.delete() }
-            }
         }
     }
     fun processUris(
@@ -687,9 +679,12 @@ internal fun ChatTab(
                         // tap time: corrupt-first picks can free the slots a
                         // tap-time prediction assumed lost. First !room ends
                         // the loop, so this fires at most once per batch.
-                        // Marks capToasted so the deferred duplicate notice
-                        // below stays silent — one gesture, one toast.
-                        capToasted.set(true)
+                        // Flag set AFTER the toast inside the same Main hop
+                        // (#339): the IO-thread set raced a tab-leave
+                        // cancelling the hop — the cap toast never rendered
+                        // yet the deferred duplicate notice stayed
+                        // suppressed, reporting neither. Same Main block =
+                        // no suspension between voice and mark.
                         withContext(Dispatchers.Main) {
                             // Free slots re-read live (#339): room is a
                             // boolean, but the cap wording needs the
@@ -698,6 +693,7 @@ internal fun ChatTab(
                                 capRefused(MAX_IMAGES_PER_TURN - vm.pendingAttachmentCount()),
                                 ToastKind.Info,
                             )
+                            capToasted.set(true)
                         }
                         break
                     }
@@ -776,7 +772,7 @@ internal fun ChatTab(
                             if (landed.get() == 1) {
                                 "Stopped staging photos — 1 photo kept in the composer."
                             } else {
-                                "Stopped staging photos — $landed photos kept in the composer."
+                                "Stopped staging photos — ${landed.get()} photos kept in the composer."
                             },
                             ToastKind.Info,
                         )

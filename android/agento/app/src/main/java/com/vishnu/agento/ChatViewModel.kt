@@ -810,8 +810,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // runs per message per keystroke — keystrokes that
                         // match visible text skip it entirely. The marker is
                         // only needed to make "photo" itself findable.
-                        val lower = it.content.lowercase(java.util.Locale.ROOT)
-                        if (lower.contains(q)) {
+                        // contains(ignoreCase=TRUE), not lowercase-then-
+                        // contains (#339): region-matching skips the full-
+                        // string lowercase copy per message per keystroke on
+                        // the filter path (titles per render already pay
+                        // their own walk; search must not double it).
+                        val text = it.content
+                        if (text.contains(q, ignoreCase = true)) {
                             true
                         } else {
                             val photoCount =
