@@ -591,6 +591,14 @@ class ChatApi(context: Context) {
         // joins it. Returns body + measured bytes; preflight + request
         // stay in producer context below (trySend/close live there).
         // lastUserIdx hoisted here: cheap role scan, read on both sides.
+        // Strict-index-by-design (#339), the wire leg of the documented
+        // split (lenient search, strict marker): only a canonical "user"
+        // tail carries image parts. A hand-edited "User"/"SYSTEM" tail
+        // therefore rides as clamped bare text — visible, unprivileged, no
+        // image part and no marker claim — instead of guessing that an
+        // unknown-cased role meant to send photos. messageContentJson's
+        // marker rule is strict for the same reason, so index, marker and
+        // wire all agree that nothing was sent.
         val lastUserIdx = messages.indexOfLast { it.role == "user" }
         // Named walls throw inside the build below (#339): dataUri()
         // fails closed on blank/ragged/oversize, and an uncaught throw

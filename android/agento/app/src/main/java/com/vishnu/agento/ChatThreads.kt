@@ -107,6 +107,12 @@ object ChatThreads {
         // walk — this runs per title render and per switcher-search filter
         // pass over up to 200-message threads, so two full walks per call
         // is churn worth avoiding.
+        // Strict-title-by-design (#339), the display leg of the documented
+        // lenient-search / strict-wire split (see messageMatchesQuery and
+        // the wire marker): a hand-edited "User" turn contributes no title
+        // words and no photo count, while search still finds its marker.
+        // Display-only drift on a payload the app never writes — named here
+        // so the next edit doesn't "fix" one side into the other.
         var textMsg: ChatMessage? = null
         var maxPhotos = 0
         for (m in messages) {

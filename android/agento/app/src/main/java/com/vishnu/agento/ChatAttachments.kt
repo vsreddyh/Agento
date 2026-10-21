@@ -206,6 +206,15 @@ internal fun requireIoThread(site: String) {
  * persists), and the photo's absence with a zero count IS the signal.
  * Fail-closed preserved: nothing corrupt ever wires; the named-error
  * contract covers user actions (pick/stage/send), not storage repair.
+ *
+ * Orientation is NOT normalized here (#339): staged payloads are already
+ * EXIF-rotated at capture time (pixels turned, orientation neutralized), so
+ * the thumbnail's orientationMatrix and the wire's raw bytes agree for
+ * everything this app writes. An imported/hand-edited EXIF-6 payload keeps
+ * its metadata: the thumbnail shows it upright while the wire sends the raw
+ * bytes — display-vs-wire drift on a payload the app cannot produce, left
+ * visible rather than re-encoded at the import boundary (a second JPEG pass
+ * over every imported photo to fix a shape only a hand edit creates).
  */
 fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachment> {
     // Empty fast path (#339): most messages hold no photos — returning an
@@ -248,6 +257,14 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
         // (then stripped + revalidated) or fully-homogeneous payload pays
         // both. Adversarial ceiling for the whole branch is the 4M-char
         // raw cap: bounded CPU on IO, bounded copies, never the send path.
+        // Ceiling-BEFORE-strip is deliberate (#339): a valid payload whose
+        // framing pushes the raw string past the ceiling blanks instead of
+        // healing — healing would first build a filtered copy of that same
+        // giant, the exact allocation the ceiling exists to prevent, and
+        // nothing this app writes wraps at all (only hand-edited/imported
+        // text can). 4M sits far above any legitimate app-written payload;
+        // the crafted wrapped-above-ceiling shape fails closed (blank, not
+        // a huge copy) rather than healing.
         if (isDecodableBase64(a.base64)) {
             a
         } else if (a.base64.length > MAX_RAW_BASE64_CHARS) {
