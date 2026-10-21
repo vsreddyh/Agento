@@ -184,7 +184,27 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
     fun put(key: Any, bmp: android.graphics.Bitmap) {
         cache.put(key, bmp)
     }
+    /** Explicit invalidation for staged-remove (#339): the strip knows the
+     * exact attachment leaving, so its bitmap frees immediately instead of
+     * waiting for LRU pressure. Thread-delete relies on pressure instead
+     * (below) — removals are user-paced and precise, thread exit is not. */
+    fun remove(key: Any) {
+        cache.remove(key)
+    }
 }
+
+/**
+ * Cache-key construction for an attachment's thumbnail (#339): the
+ * produce path ([AttachmentThumb]) uses the returned Triple AS its
+ * remember value AND its cache key — identical object, zero drift — and
+ * the staged-remove path rebuilds it to evict the exact entry.
+ * Stable ids key on (id, length, sample); legacy id-less payloads key on
+ * (slot, length, sample), best-effort like everywhere else (slot shifts
+ * on remove, so a legacy evict may miss — harmless, LRU covers it).
+ */
+internal fun thumbCacheKey(stableId: String, legacySlot: Int, base64: String): Any =
+    if (stableId.isNotEmpty()) Triple(stableId, base64.length, base64.sampleKey(64))
+    else Triple("s$legacySlot", base64.length, base64.sampleKey(64))
 
 /**
  * One staged or sent photo (#318): the remembered ~256px thumbnail, or an
@@ -245,52 +265,42 @@ private fun AttachmentThumb(
     // surviving thumb on a remove (a rare user action); the legacy rebuild
     // rides the same event on self-aging payloads. Value equality holds
     // either way, so produceState never restarts for a remove.
+    // Single construction shared with the staged-remove eviction
+    // (#339): the produce value and the cache key are built once, here,
+    // by thumbCacheKey — the key can never disagree with the value
+    // because there is only one of each. Accepted staleness, stated: a
+    // hand-edited same-id/same-length/middle-changed payload never
+    // recomputes this Triple, so produceState keeps the old key and the
+    // cache may serve a stale thumbnail. Display-only and adversarial-only
+    // (impossible via the app — picks are immutable): the wire always
+    // sends the current payload bytes, never the cached picture, so no
+    // send can go wrong from a stale thumb. Best-effort like the legacy
+    // branch otherwise: head+tail narrows the alias window without
+    // closing it.
     val thumbKey = remember(stableId, legacySlot, base64.length) {
-        if (stableId.isNotEmpty()) {
-            // Same head/tail sample as the legacy branch (#339), computed
-            // INSIDE the remember: the key comparison stays a cheap
-            // identity check (UUID + slot + length) instead of rebuilding a
-            // 128-char sample string on every scroll frame per visible
-            // thumb. Accepted staleness, stated: a hand-edited
-            // same-id/same-length/middle-changed payload never recomputes
-            // this Triple, so produceState keeps the old key and the cache
-            // may serve a stale thumbnail. Display-only and adversarial-only
-            // (impossible via the app — picks are immutable): the wire
-            // always sends the current payload bytes, never the cached
-            // picture, so no send can go wrong from a stale thumb.
-            // Best-effort like the legacy branch otherwise: head+tail
-            // narrows the alias window without closing it.
-            Triple(stableId, base64.length, base64.sampleKey(64))
-        } else {
-            // Legacy fallback, best-effort by construction (#339): two
-            // different pre-id photos with same length + same head/tail CAN
-            // alias here (no crash, no placeholder — just the wrong thumb).
-            // Self-aging as old threads turn over; new picks never land here.
-            Triple("s$legacySlot", base64.length, base64.sampleKey(64))
-        }
+        thumbCacheKey(stableId, legacySlot, base64)
     }
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
         // Explicit try/catch, not runCatching (#339): runCatching would
         // swallow the producer's own CancellationException into a null
         // placeholder — the same cancel-masking fixed inside
         // decodeThumbnail must not be reintroduced at its call site.
-        // Stable picks consult the hoisted cache first (#339): a scroll-back
-        // hit skips decode entirely. Keyed by the produce key ITSELF —
-        // never a weaker shadow: same id + different length restarts
-        // produceState, and the cache lookup uses the identical Triple so
-        // a divergent key can never serve a stale bitmap. Unreachable via
-        // the app (picks are immutable, one UUID per pick), storage-edit
-        // only. Legacy payloads (null key) always decode — slot-keyed
-        // entries would alias across removes. Deliberately no thread in
-        // the key (#339): UUIDs are globally unique, so cross-thread
+        // Cache lookup uses the produce key ITSELF — never a weaker
+        // shadow: the identical Triple is built once above and read here,
+        // so a divergent key can never serve a stale bitmap. Unreachable
+        // via the app (picks are immutable, one UUID per pick),
+        // storage-edit only. Legacy payloads key on the same slot-based
+        // Triple (no null bypass — the key already carries the slot, and
+        // the remove path evicts by the identical construction). No thread
+        // in the key (#339): UUIDs are globally unique, so cross-thread
         // aliasing is impossible and forks share the decoded bitmap
         // for free.
-        val cacheKey = stableId.takeIf { it.isNotEmpty() }?.let { thumbKey }
+        val cacheKey = thumbKey
         value = try {
-            val hit = cacheKey?.let { key -> cache?.get(key) }
+            val hit = cache?.get(cacheKey)
             hit ?: withContext(Dispatchers.IO) {
                 decodeThumbnail(base64)?.also { bmp ->
-                    if (cacheKey != null) cache?.put(cacheKey, bmp)
+                    cache?.put(cacheKey, bmp)
                 }
             }
         } catch (e: CancellationException) {
@@ -366,9 +376,12 @@ internal fun ChatTab(
     // one composition; the cache itself is bounded (see ThumbCache).
     val thumbCache = remember(tab) { ThumbCache() }
     // New thread, new staging episode (#339): the voice slate belongs to
-    // the old thread's staged set. (The thumb cache is per-tab and dies
-    // with it — switch-back re-decodes; keys carry no thread since UUIDs
-    // are globally unique, and the LRU bound keeps the residency small.)
+    // the old thread's staged set. The thumb cache is NOT evicted here by
+    // design: keys carry thread + id + length, so a dead thread's bitmaps
+    // are unreachable (no wrong-bitmap risk, only LRU pressure), and
+    // switch-back reuses them with no re-decode. Staged-remove evicts
+    // explicitly (it knows the exact key leaving); thread delete rides
+    // the same LRU — no per-thread bookkeeping for a bounded 8 MB cache.
     LaunchedEffect(state.threadId) {
         liveStagedVoicedCount = 0
     }
@@ -1227,10 +1240,19 @@ internal fun ChatTab(
             }
         },
         onTakePhoto = ::requestCamera,
-        onRemovePhoto = {
+        onRemovePhoto = { i ->
+            // Evict the exact bitmap (#339): the strip knows which attachment
+            // leaves — free it now instead of waiting for LRU pressure.
+            // Key rebuilt with the same helper the produce path uses, so it
+            // can never disagree; a miss (legacy slot shift mid-tap) just
+            // means LRU handles it. Staged index i IS the legacy slot at tap
+            // time (state snapshot, same as the thumb rendered).
+            state.pendingAttachments.getOrNull(i)?.let { a ->
+                thumbCache.remove(thumbCacheKey(a.stableId, i, a.base64))
+            }
             // Staging may empty here (#339): reset the slate when it does
             // so the next episode voices anew (see onLiveStagedPhotos).
-            vm.removePendingAttachment(it)
+            vm.removePendingAttachment(i)
             if (vm.pendingAttachmentCount() == 0) liveStagedVoicedCount = 0
         },
         // Voiced once per staging episode, not per sentence (#339): rapid
