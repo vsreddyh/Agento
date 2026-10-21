@@ -121,13 +121,22 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
  * @WorkerThread — so this gate is the tripwire for a future caller that
  * forgets, not the thing that makes the cap safe. A Main caller still
  * gets the right bytes, just on the wrong thread. */
-internal fun requireIoThread(site: String) {
+internal fun requireIoThread(site: String, context: Context? = null) {
     // runCatching (not try/catch): the fallback documents the JVM case inline.
     val onMain = runCatching {
         val mainLooper = android.os.Looper.getMainLooper()
         android.os.Looper.myLooper() !== null && android.os.Looper.myLooper() === mainLooper
     }.getOrDefault(false)
     if (onMain) {
+        // Debug builds FAIL FAST (#339): a debuggable app throws, so a dev
+        // device surfaces the slip immediately instead of janking silently.
+        // Production only logs — a crash there would take the chat tab
+        // down over a performance mistake.
+        if (context != null &&
+            (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        ) {
+            throw IllegalStateException("$site must run on an IO thread, never Main")
+        }
         // Stacked, not thrown: a Main-thread caller still does the right work.
         Log.e("ChatAttachments", "$site ran on Main (should be IO)", IllegalStateException(site))
     }

@@ -965,6 +965,11 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                         // trusts provider metadata, which cloud providers may
                         // omit or understate — readText() would then materialize
                         // an unbounded string. Chunks abort mid-read on the cap.
+                        // The cap is checked INSIDE the loop, so the string
+                        // never exceeds it by more than one 64 KB chunk: an
+                        // unknown size is bounded by the read, not by the
+                        // pre-read. Refusing an unknown size up front would
+                        // break the providers that do not report SIZE at all.
                         val sb = StringBuilder()
                         input.bufferedReader(Charsets.UTF_8).use { r ->
                             val buf = CharArray(65536)

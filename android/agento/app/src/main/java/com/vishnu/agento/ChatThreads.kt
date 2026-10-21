@@ -152,7 +152,7 @@ object ChatThreads {
 
     @androidx.annotation.WorkerThread
     fun load(context: Context, tab: String): List<ChatThread> {
-        requireIoThread("ChatThreads.load")
+        requireIoThread("ChatThreads.load", context)
         val f = file(context, tab)
         if (!f.exists()) return emptyList()
         // The scans (whitespace strip + alphabet validation over photo
@@ -194,7 +194,7 @@ object ChatThreads {
      */
     @androidx.annotation.WorkerThread
     fun save(context: Context, tab: String, threads: List<ChatThread>) {
-        requireIoThread("ChatThreads.save")
+        requireIoThread("ChatThreads.save", context)
         runCatching {
             val capped = threads.take(MAX_THREADS).map { t ->
                 if (t.messages.size > MAX_MESSAGES) {
@@ -245,7 +245,10 @@ object ChatThreads {
      * dirty-tracking cache behind [save]. The CURRENT list is compared
      * element-wise against the last INPUT, never the last output (the VM keeps
      * its original instances, so canonicalized copies would never match). It
-     * pins shells only, never a second copy of the base64. */
+     * pins only SHELLS (#339): the payload strings are the caller's own
+     * immutable instances, shared by reference — the cache never duplicates
+     * photo bytes — and the entry is replaced wholesale by the next save of
+     * that tab, so an evicted thread's payloads are released then. */
     private val lastCanonical: MutableMap<String, Pair<List<ChatThread>, List<ChatThread>>> =
         java.util.concurrent.ConcurrentHashMap()
 

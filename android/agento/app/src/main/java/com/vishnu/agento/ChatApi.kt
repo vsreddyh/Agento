@@ -524,14 +524,11 @@ class ChatApi(context: Context) {
                                 val marr = o.optJSONArray("models")
                                 if (marr != null) {
                                     for (j in 0 until marr.length()) {
-                                        // Same predicate as the picker path above
-                                        // blank strings are not models.
                                         // Deliberately `is String`, not optString:
                                         // optString coerces numbers via toString
                                         // and would count them — the picker
                                         // doesn't, so neither does this.
-                                        val s = marr.opt(j)
-                                        if (s is String && s.isNotBlank()) models++
+                                        if (marr.opt(j) is String) models++
                                     }
                                 }
                             }
@@ -658,6 +655,19 @@ class ChatApi(context: Context) {
             // The sibling wall, caught explicitly: OversizeAttachError is an
             // IllegalStateException (not a NamedAttachError), so a wire edit
             // throwing it directly would escape the producer and wedge the turn.
+            trySend(ChatEvent.Error(e.message ?: "Couldn't build that message."))
+            close()
+            return@callbackFlow
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Anything else the build throws (a JSONException from a put, an
+            // OOM building a ~3.5 MB string) used to escape the producer:
+            // no Error frame, no close(), and the collector saw a dead
+            // stream — the turn wedged in "streaming" with nothing to show.
+            // The named walls above keep their own wording; this is the
+            // generic net, so the user gets a failed turn instead of a
+            // spinner that never ends.
             trySend(ChatEvent.Error(e.message ?: "Couldn't build that message."))
             close()
             return@callbackFlow

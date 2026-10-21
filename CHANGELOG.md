@@ -21,9 +21,6 @@ see GitHub Releases for older notes.
   `docs/adr/0007-chat-attachments.md`). Documents stay unsupported — Pi
   takes no file input, so unknown attachment types still refuse rather
   than arrive half-parsed.
-- **Fixed:** the connection test counts only real model names. Blank entries
-  in the provider catalog no longer inflate the reported model count,
-  matching what the provider picker lists.
 
 ## [5.9.0]
 - **Live mode is a proper call (#317).** Talking over the agent now cuts
