@@ -16,6 +16,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -195,8 +196,12 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	// A store that was never connected is a programmer error, and a
 	// programmer error that reads as a nil-pointer panic costs the reader
 	// the stack that says where. The message says it instead.
+	//
+	// A plain error, NOT a StoreError: the domain error is what the HTTP
+	// layer maps to 422 "your request was wrong", and this is not that —
+	// it is the server's fault, and it belongs in the 500 branch.
 	if s == nil || s.db == nil {
-		return nil, false, fail("store is not connected")
+		return nil, false, errors.New("tasks: store is not connected")
 	}
 	filt := bson.M{}
 	if taskID != "" {

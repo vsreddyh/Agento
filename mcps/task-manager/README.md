@@ -285,6 +285,26 @@ task's history (`task_id`) or one kind of change (`op`) rather than paging
 through the whole log. A 90-day personal log fits a page; if it ever does
 not, the fix is a cursor — `(at, _id)` — not a bigger `limit`.
 
+### What `detail` holds, per op
+
+`detail` is the op-specific extra, and the two transports do not always
+write the same one — the log records what each caller chose to say, and
+that is worth knowing before diffing two rows:
+
+| op | `detail` |
+|---|---|
+| `create` | the door that created it (`http POST /api/tasks`, `mcp create_task`) |
+| `update` | the changed field names, sorted (`name,due_date`) |
+| `complete`, `skip` | the rollover outcome (`created`, `none`, `custom`, …) |
+| `reopen` | empty over HTTP, `mcp reopen_task` over MCP |
+| `delete` | the door that deleted it (`http DELETE`, `mcp delete_task`) |
+| `duplicate` | empty |
+
+`at` is RFC3339 **with milliseconds** — unlike the task documents, whose
+`completedAt`/`createdAt` are RFC3339 to the second. Both are valid
+timestamps; the app parses the two shapes with one lenient parser rather
+than assuming one format.
+
 `source` is a self-attested LABEL (`mcp` for the agent, the app's own
 `X-Agento-Source` otherwise), not an authenticated identity — see the tamper
 note above.
