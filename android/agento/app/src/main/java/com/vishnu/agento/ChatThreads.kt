@@ -217,52 +217,94 @@ object ChatThreads {
      * thread-ops, stop, recovery) — never the per-token streaming loop —
      * so "per-send" means per turn, not per keystroke or per chunk; the
      * review's "per-keystroke-adjacent" premise does not hold.
-     * Full-file every save, BY DESIGN (#339): dirty-thread-only tracking would need mutable cross-call state (last-saved refs) at a
-     * boundary that is deliberately stateless — and immutable copies mean
-     * the active thread's ref changes on every streaming update anyway, so
-     * the flag would only ever skip inactive threads while adding an
-     * invalidation risk no test can see. The re-scan is the price of the
-     * trust-no-caller boundary round-77 asked for.
+     * Ref-identity dirty tracking, not full-file re-validation (#339):
+     * the same-input-same-content rule for immutable data classes makes
+     * element-wise identity against the last INPUT a sound skip signal —
+     * see canonicalizeUnchanged. A version-stamp / already-canonical flag
+     * would be a storage-format change and go soft on foreign writers;
+     * refs cost nothing, change nothing on disk, and degrade to full
+     * validation whenever the shape shifts.
      */
     @androidx.annotation.WorkerThread
     fun save(context: Context, tab: String, threads: List<ChatThread>) {
         requireIoThread("ChatThreads.save")
         runCatching {
             val capped = threads.take(MAX_THREADS).map { t ->
-                val msgs = if (t.messages.size > MAX_MESSAGES) {
-                    t.messages.takeLast(MAX_MESSAGES)
+                if (t.messages.size > MAX_MESSAGES) {
+                    t.copy(messages = t.messages.takeLast(MAX_MESSAGES))
                 } else {
-                    t.messages
+                    t
                 }
-                // Whole-file materialization, named (#339): the encoder
-                // below builds the full compact string (and load() reads it
-                // back whole), so a 200-msg × 2-photo thread peaks in the
-                // hundreds of MB here and on load — same shape the export
-                // path now refuses past BACKUP_HARD_CAP_BYTES. No gate here
-                // BY DESIGN, unlike export: refusing load() returns
-                // emptyList(), and the next save would persist that
-                // emptiness over the good file (data loss); trimming oldest
-                // payloads would delete user photos without consent. A
-                // refuse/trim gate belongs on escapable surfaces (export has
-                // one); load/save are automatic and must never destroy what
-                // they cannot send. Growth is bounded structurally instead
-                // (per-photo stage caps, 200-msg/20-thread caps).
-                // Streaming (Json.encodeToStream/decodeFromStream, available
-                // since kotlinx 1.5) would remove the string peak while the
-                // object graph (which the VM holds anyway) stays.
-                // Deliberately deferred: the boundary contract
-                // (canonicalize + caps) is format-stable today, and a
-                // streaming rework of this I/O is a bigger risk than the
-                // bounded, IO-confined peak it removes.
-                t.copy(
-                    messages = msgs.map { m ->
-                        m.copy(attachments = canonicalizeAttachments(m.attachments))
-                    },
-                )
             }
-            file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), capped), Charsets.UTF_8)
+            // Canonicalize only what changed since the last save (#339):
+            // same instance means same immutable content, already proven
+            // canonical by the save that cached it. Whole-file
+            // materialization still applies (encoder below builds the full
+            // string — no refuse/trim gate here, BY DESIGN unlike export:
+            // refusing load() returns emptyList(), and the next save would
+            // persist that emptiness over the good file; trimming deletes
+            // user photos without consent. A refuse/trim gate belongs on
+            // escapable surfaces; load/save are automatic and must never
+            // destroy what they cannot send. Streaming
+            // (Json.encodeToStream/decodeFromStream) would remove the
+            // string peak while the object graph stays; deliberately
+            // deferred — a streaming rework of this I/O is a bigger risk
+            // than the bounded, IO-confined peak it removes.
+            val cached = lastCanonical[tab]
+            val out = canonicalizeUnchanged(cached?.first, cached?.second, capped)
+            file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), out), Charsets.UTF_8)
+            lastCanonical[tab] = capped to out
         }
     }
+
+    /** Last save's (input, canonicalized-output) snapshot per tab (#339):
+     * the dirty-tracking cache behind [save]. Element-wise identity of the
+     * CURRENT list is checked against the last INPUT — never the last
+     * output (the VM keeps its original instances; comparing against
+     * canonicalized copies would never match). Same instance means same
+     * immutable content, so the corresponding cached output is reused
+     * without re-walking payloads; only new or copied threads pay the
+     * alphabet walk. Bounded by tab count (a handful); entries hold the
+     * same objects the VM already holds, so no payload is duplicated. A
+     * foreign caller bypassing the VM always misses (fresh instances, no
+     * cache entry) and gets the full boundary treatment — the cache can
+     * only skip work the boundary itself already proved, never vouch for
+     * strangers. Shifts (insert/delete) safely degrade to full
+     * canonicalize for the misaligned tail. */
+    private val lastCanonical: MutableMap<String, Pair<List<ChatThread>, List<ChatThread>>> =
+        java.util.concurrent.ConcurrentHashMap()
+
+    /**
+     * Canonicalizes only threads that changed since the last save (#339):
+     * element-wise identity of the CURRENT list against the last INPUT
+     * (see [lastCanonical] for why the output side is never the comparison
+     * target). Unchanged threads reuse the cached output by reference (no
+     * walk, no copy); new or copied threads canonicalize fully, with the
+     * empty-attachments fast path inside. Pure for testability; the
+     * trust-no-caller boundary holds because every cached output was
+     * canonicalized here.
+     */
+    internal fun canonicalizeUnchanged(
+        prevIn: List<ChatThread>?,
+        prevOut: List<ChatThread>?,
+        current: List<ChatThread>,
+    ): List<ChatThread> {
+        if (prevIn == null || prevOut == null) return current.map(::canonicalizeThread)
+        return current.mapIndexed { i, t ->
+            if (prevIn.getOrNull(i) === t) prevOut[i] else canonicalizeThread(t)
+        }
+    }
+
+    /** Canonicalizes one thread's attachments, skipping text-only messages
+     * without copying them (#339): empty attachments have nothing to
+     * prove, and the copy would be pure churn on every save. */
+    private fun canonicalizeThread(t: ChatThread): ChatThread =
+        t.copy(
+            messages = t.messages.map { m ->
+                if (m.attachments.isEmpty()) m
+                else m.copy(attachments = canonicalizeAttachments(m.attachments))
+            },
+        )
 
     /**
      * Canonical form of a raw thread file for backup import (#339): the
