@@ -842,7 +842,12 @@ internal fun TaskManagerScreen(
      * reload and names the failing item.
      */
     fun runBulkOps(ops: List<BulkOp>, success: String) {
-        val ids = ops.map { it.id }
+        // Trimmed once, here: the busy set keys the same trimmed ids the
+        // wire sends (bulkOpsBody) and the errors name (server-side trim),
+        // so set / wire / busy-set / error agree even for a directly
+        // constructed BulkOp with padding. The selection set is already
+        // trimmed at entry (toggleBulkId).
+        val ids = ops.map { it.id.trim() }
         // Re-checked here, not just on the button: recomposition lags a
         // frame, so two taps in the same frame would both pass a stale
         // enabled=true and send two batches (a duplicate batch copies
