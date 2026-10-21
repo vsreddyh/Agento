@@ -885,6 +885,25 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
+                    // Metered BEFORE reading (#339): symmetric with the
+                    // export pre-peak warning — a photo-heavy backup reads
+                    // + parses the whole file before any warning could
+                    // display. SIZE via the provider (metadata, no read);
+                    // unknown (-1) skips the warning, not the import. The
+                    // explicit tap is consent to proceed.
+                    val pickedBytes = runCatching {
+                        context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                            val i = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                            if (i >= 0 && c.moveToFirst()) c.getLong(i) else -1L
+                        } ?: -1L
+                    }.getOrDefault(-1L)
+                    if (pickedBytes > BACKUP_LARGE_BYTES) {
+                        withContext(Dispatchers.Main) {
+                            status = "Large backup (${formatBytes(pickedBytes)}) — " +
+                                "restoring may take a moment."
+                            failed = false
+                        }
+                    }
                     val text = context.contentResolver.openInputStream(uri)?.use { input ->
                         input.bufferedReader().readText()
                     } ?: throw IllegalStateException("Could not open the selected file for reading")

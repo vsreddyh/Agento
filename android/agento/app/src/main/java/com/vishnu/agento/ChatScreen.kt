@@ -331,6 +331,9 @@ internal fun ChatTab(
     LaunchedEffect(state.threadId) {
         thumbCache.evictAll()
     }
+    // Staged-toast episode marker, reset by the lambda below (#339): which
+    // staged count the "photo still staged" notice already voiced for.
+    var liveStagedVoicedCount by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) { vm.refreshConfig() }
     // Task-instruction deep-link (#287): open the instructed thread once
     // the ViewModel has loaded. Consumed on confirmed open (not
@@ -527,28 +530,21 @@ internal fun ChatTab(
     // inline instead: unlink is a metadata op, safe on Main as a last
     // resort, strictly better than an orphan.
     // Declared before first use: batch returns, camera callback, and
-    // launch-failure path all call it. Fire-and-forget OFF-main on the
-    // live path (#339): no UNDISPATCHED, so the child actually dispatches
-    // to IO and the picker/camera callback never pays the unlink — unlink
-    // is cheap, but StrictMode-clean is cheaper. The started-proof stays
-    // for the dead-scope race: isActive-then-launch brackets the same
-    // TOCTOU the batch path closed — a scope dying in between launches a
-    // child that never runs, and started==false settles it inline on Main
-    // (metadata op, safe as a last resort, strictly better than an
-    // orphan). A live-scope race (body not yet started when read) only
-    // double-deletes through the exists() gate — harmless by construction.
-    // Atomic flag either way: the write (IO thread) and the read (caller)
-    // have no ordering without it.
+    // launch-failure path all call it. Optimistic ownership (#339): the
+    // flag is set BEFORE launch, so the live path dispatches to IO and the
+    // picker/camera callback never pays the unlink — the old set-inside
+    // read false on the caller ~always (the child hadn't run yet), paying
+    // Main-thread disk IO plus a second unlink on every call. Die-in-window
+    // (scope dies between the check and the child start) leaks to the
+    // startup sweep instead — bounded by design, and the sweep exists for
+    // exactly these orphans. Dead scope deletes inline, same as before.
     fun deleteQuietly(f: File?) {
         if (f == null) return
-        val started = java.util.concurrent.atomic.AtomicBoolean(false)
-        if (scope.isActive) {
-            scope.launch(Dispatchers.IO + NonCancellable) {
-                started.set(true)
-                runCatching { f.takeIf { it.exists() }?.delete() }
-            }
+        if (!scope.isActive) {
+            runCatching { f.takeIf { it.exists() }?.delete() }
+            return
         }
-        if (!started.get()) {
+        scope.launch(Dispatchers.IO + NonCancellable) {
             runCatching { f.takeIf { it.exists() }?.delete() }
         }
     }
@@ -1127,11 +1123,24 @@ internal fun ChatTab(
         },
         onTakePhoto = ::requestCamera,
         onRemovePhoto = vm::removePendingAttachment,
+        // Voiced once per staging episode, not per sentence (#339): rapid
+        // multi-sentence speech would otherwise queue identical "photo
+        // still staged" notices back to back for one ongoing condition.
+        // Re-voices when the staged COUNT changes (a new episode), and the
+        // slate clears when staging empties (sent or removed) — same count
+        // re-staged stays silent, which is the accepted miss (a rare
+        // re-stage reads as a continuation, not a new condition).
         onLiveStagedPhotos = {
-            vm.notify(
-                "Heard you — photo still staged, tap send to include it.",
-                ToastKind.Info,
-            )
+            val n = vm.pendingAttachmentCount()
+            if (n > 0 && n != liveStagedVoicedCount) {
+                liveStagedVoicedCount = n
+                vm.notify(
+                    "Heard you — photo still staged, tap send to include it.",
+                    ToastKind.Info,
+                )
+            } else if (n == 0) {
+                liveStagedVoicedCount = 0
+            }
         },
         onAppendPending = vm::appendPending,
         hasStagedPhotos = { vm.pendingAttachmentCount() > 0 },

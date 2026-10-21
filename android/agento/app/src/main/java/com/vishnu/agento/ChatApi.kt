@@ -673,14 +673,16 @@ class ChatApi(context: Context) {
             // whole request JSON (full thread + framing), so "this turn"
             // would misname the number on a long text-only thread — and a
             // photo-less trip must not say "remove a photo". The actionable
-            // second half is conditional on what the turn carries (counted
-            // wired, like the wire filter itself). Unknown length (-1)
-            // phrases separately: formatBytes(-1) would print "-1 B" — a
-            // defense-in-depth branch only, since a String-built body
+            // second half is conditional on what the turn carries (decodable
+            // count, like the wire filter itself — NOT the blank-only
+            // display count: a ragged-only trailing turn on an over-limit
+            // thread must not name photos that never wire). Unknown length
+            // (-1) phrases separately: formatBytes(-1) would print "-1 B" —
+            // a defense-in-depth branch only, since a String-built body
             // always measures; revisit it if bodies ever stream chunked,
             // which has no fixed length to preflight.
             val hasPhotos = lastUserIdx >= 0 &&
-                messages[lastUserIdx].attachments.wiredPhotoCount() > 0
+                messages[lastUserIdx].attachments.hasDecodablePhoto()
             trySend(
                 ChatEvent.Error(
                     (if (rawBytes < 0) {

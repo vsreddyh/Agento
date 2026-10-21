@@ -74,6 +74,14 @@ fun List<ChatAttachment>.wiredPhotos(): List<ChatAttachment> =
 fun List<ChatAttachment>.wiredPhotoCount(): Int =
     count { it.isWired() }
 
+/** Any photo that would actually wire, wired AND decodable (#339): for
+ * surfaces that must agree with the wire filter (the preflight's "remove
+ * a photo" advice), not just the blank-only display count — a ragged-only
+ * turn must not name photos that never wire. Single pass, no list, same
+ * cost class as the count above. */
+internal fun List<ChatAttachment>.hasDecodablePhoto(): Boolean =
+    any { it.isWired() && isDecodableBase64(it.base64) }
+
 /** Single source of truth for the wired predicate (#339): both helpers
  * above delegate here, so the next edit that changes what counts (e.g.
  * trimming whitespace-only payloads) cannot silently re-split the
@@ -269,6 +277,18 @@ internal fun ChatAttachment.oversizeMessage(): String? {
     if (base64.length <= MAX_IMAGE_BASE64_CHARS) return null
     val bytes = base64Bytes(base64)
     if (bytes <= MAX_IMAGE_BASE64_CHARS * 3L / 4L) return null
+    return oversizeMessageFor(base64)
+}
+
+/**
+ * Shared per-photo oversize wording (#339): the stage failure, the
+ * dataUri wall, and the streamChat pre-check all say exactly this — the
+ * next reword fixes all three paths instead of two. Takes the raw
+ * payload, not the attachment: the stage path measures candidates that
+ * never become attachments.
+ */
+internal fun oversizeMessageFor(base64: String): String {
+    val bytes = base64Bytes(base64)
     return "Photo too large even after shrinking (${formatBytes(bytes)}) — " +
         "the per-photo limit is about " +
         "${formatBytes(MAX_IMAGE_BASE64_CHARS * 3L / 4L)}. " +
@@ -912,15 +932,17 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 // Empty means the loop threw before measuring (OOM in the
                 // encode): report unprocessable, never "0 B" or a sentinel.
                 // Sizes exact via base64Bytes (#339): padding-adjusted, so
-                // the named number is the real one, not 1–2 B high.
-                (if (lastCandidate.isNotEmpty()) {
-                    "Photo too large even after shrinking (${formatBytes(base64Bytes(lastCandidate))}) — "
+                // the named number is the real one, not 1–2 B high. Shared
+                // spelling via oversizeMessageFor: the dataUri wall and the
+                // streamChat pre-check say exactly this too.
+                if (lastCandidate.isNotEmpty()) {
+                    oversizeMessageFor(lastCandidate)
                 } else {
-                    "Photo too large to process — "
-                }) +
-                    "the per-photo limit is about " +
-                    "${formatBytes(MAX_IMAGE_BASE64_CHARS * 3L / 4L)}. " +
-                    "Pick a different photo.",
+                    "Photo too large to process — " +
+                        "the per-photo limit is about " +
+                        "${formatBytes(MAX_IMAGE_BASE64_CHARS * 3L / 4L)}. " +
+                        "Pick a different photo."
+                },
             )
             ChatAttachment(mimeType = "image/jpeg", base64 = final, id = java.util.UUID.randomUUID().toString())
         }.let { result ->

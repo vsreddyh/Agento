@@ -196,7 +196,7 @@ object SettingsBackup {
         // are not all one type. Sorted, so two exports of the same prefs are
         // byte-identical and can be diffed.
         for (k in prefs.all.keys.filter { isWidgetDisplayKey(it) }.sorted()) {
-            when (val v = prefs.all[k]) {
+            when (val v = all[k]) {
                 is String -> values.put(k, v)
                 is Boolean -> values.put(k, v)
             }

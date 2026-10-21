@@ -1971,7 +1971,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path, queued = "",
         )
-        val history = msgs + ChatMessage("user", "Continue", ChatThreads.now())
+        val history = msgs + ChatMessage(
+            "user",
+            "Continue",
+            ChatThreads.now(),
+            // Carry the interrupted turn's photos (#339): the "Continue"
+            // turn becomes the new lastUserIdx — the ONLY turn that keeps
+            // image parts. Without the carry, the photo turn that produced
+            // the interrupted reply drops to marker text and the continued
+            // turn reasons without the pixels (unless Pi's session already
+            // holds them). Same carry rule as Replace/Fork.
+            attachments = msgs.lastOrNull { it.role == "user" }
+                ?.attachments?.wiredPhotos().orEmpty(),
+        )
         // Typed draft survives like retry()/regenerate() (#339): blanking
         // pending here would vaporize a draft typed while the interrupted
         // reply offered Continue — the same silent-loss class the parked
