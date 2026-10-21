@@ -102,10 +102,12 @@ data class BulkOp(
     // and fields on non-update, aborting the whole atomic batch — so a
     // caller bug here must read as a programming error, not a runtime 422.
     // Blank counts as absent on both sides (the server trims/skips empties),
-    // so only a real value on the wrong verb throws.
+    // so only a real value on the wrong verb throws. Compared trimmed, like
+    // the wire the body builder sends.
     init {
-        require(reason == null || reason.isBlank() || op == "skip") { "reason rides only on skip" }
-        require(fields == null || fields.isEmptyOrNullOnly() || op == "update") { "fields ride only on update" }
+        val cleanOp = op.trim()
+        require(reason == null || reason.isBlank() || cleanOp == "skip") { "reason rides only on skip" }
+        require(fields == null || fields.isEmptyOrNullOnly() || cleanOp == "update") { "fields ride only on update" }
     }
 }
 
@@ -124,12 +126,13 @@ data class BulkItemResult(
 internal fun bulkOpsBody(ops: List<BulkOp>): JSONObject {
     val arr = JSONArray()
     for (op in ops) {
-        val o = JSONObject().put("op", op.op).put("id", op.id)
-        // Trimmed once, here: like toggleBulkId trims ids, the wire carries
-        // what the set holds, and a blank reason is omitted as absent.
+        // Normalized once, here: op/id trimmed like the selection set is,
+        // blank reason omitted as absent, null-only/empty fields omitted as
+        // absent — so set, wire, and error all name the same values.
+        val o = JSONObject().put("op", op.op.trim()).put("id", op.id.trim())
         val reason = op.reason?.trim()
         if (!reason.isNullOrEmpty()) o.put("reason", reason)
-        if (op.fields != null) o.put("fields", op.fields)
+        if (op.fields != null && !op.fields.isEmptyOrNullOnly()) o.put("fields", op.fields)
         arr.put(o)
     }
     return JSONObject().put("ops", arr)

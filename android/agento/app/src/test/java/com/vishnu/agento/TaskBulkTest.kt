@@ -90,6 +90,22 @@ class TaskBulkTest {
     }
 
     @Test
+    fun `bulk body normalizes the envelope`() {
+        val body = bulkOpsBody(
+            listOf(
+                BulkOp("  update  ", "  abc  ", null, JSONObject().put("due_date", JSONObject.NULL)),
+                BulkOp("complete", "def", null, JSONObject().put("due_date", "2026-12-01")),
+            ),
+        )
+        val ops = body.getJSONArray("ops")
+        assertEquals("update", ops.getJSONObject(0).getString("op"))
+        assertEquals("abc", ops.getJSONObject(0).getString("id"))
+        // Null-only fields ride as absent, like a blank reason.
+        assertFalse(ops.getJSONObject(0).has("fields"))
+        assertTrue(ops.getJSONObject(1).has("fields"))
+    }
+
+    @Test
     fun `bulk body carries update fields`() {
         val body = bulkOpsBody(
             listOf(BulkOp("update", "a", null, JSONObject().put("due_date", "2026-12-01"))),

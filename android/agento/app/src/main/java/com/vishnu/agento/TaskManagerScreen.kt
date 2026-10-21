@@ -570,7 +570,9 @@ internal fun TaskManagerScreen(
         // still pokes and toasts; the row appears on the next reload only
         // if the filter would carry it).
         tasks = if (filter == ServerTaskFilter.Done) prev else listOf(placeholder) + prev
-        markBusy(tempId)
+        // Busy only what is shown: on Done the placeholder never renders, so
+        // an orphan tempId would sit in the set for the whole request.
+        if (filter != ServerTaskFilter.Done) markBusy(tempId)
         markBusy(t.id)
         scope.launch {
             try {
