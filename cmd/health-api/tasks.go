@@ -858,5 +858,9 @@ func registerTasks(mux *http.ServeMux) {
 	// through to the taskItem catch-all below and 404s as "unknown task".
 	mux.HandleFunc("/api/tasks/batch", batchTasks)
 	mux.HandleFunc("/api/tasks/batch/", batchTasks)
+	// The change log (#350), registered the same way: /api/tasks/mutations
+	// must resolve here and not be read as a task id by the catch-all below.
+	mux.HandleFunc("/api/tasks/mutations", taskMutations)
+	mux.HandleFunc("/api/tasks/mutations/", taskMutations)
 	mux.HandleFunc("/api/tasks/", taskItem)
 }

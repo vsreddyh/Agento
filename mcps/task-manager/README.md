@@ -17,6 +17,7 @@ store, same validation — see `cmd/health-api/main.go`).
 | `skip_task` | Skip the occurrence without claiming the work was done (retained 3 days like a completion; `reopen_task` restores it); structured repeats roll over server-side like `complete_task` |
 | `reopen_task` | Reopen a completed or skipped task (cancels expiry) |
 | `delete_task` | Permanently delete |
+| `task_history` | Read the change log (#350): every create/update/complete/skip/reopen/delete, with op, task_id, source and at. Filters: `task_id`, `op` (comma-separated), `since` (inclusive RFC3339), `limit` |
 
 ## Schema (MongoDB `hermes` DB)
 
@@ -235,6 +236,33 @@ that is the failure this caveat is here to prevent. Writes are best-effort: a fa
   (Legacy skipped rows from before the skip verb was removed expire the same
   way — a skip set `expiresAt` exactly as `complete_task` does.)
   Open tasks never expire. `reopen_task` clears the expiry.
+
+## Reading the change log (#350)
+
+The log (`task_mutations`) has been written since #176 and had no read path:
+no route, no tool. It matters more than it used to, because the task rows
+themselves are **deleted 3 days** after completion — the log is the only
+record left of what happened to a completed task, and it is kept 90 days.
+
+- HTTP: `GET /api/tasks/mutations?task_id=&op=&since=&limit=`
+- MCP: `task_history` with the same filters
+- Store: `tasks.Store.ListMutations` (both transports read through it, so
+  there is one history rather than two)
+
+Every entry carries the four facts the log exists for — `op` (what), `task_id`
+(which), `source` (who) and `at` (when) — plus a `detail` (the changed field
+names for an update, the rollover outcome for a completion). Newest first,
+`at` then `_id` as the tiebreak, so two mutations in the same millisecond do
+not reshuffle between two reads of the same window.
+
+`since` is **inclusive** and must be RFC3339. A malformed `since` or `op` is
+a 422, not a silently widened answer: "the whole log" is the wrong data, not
+merely more of it. A malformed `limit` falls back to the default, like
+`?limit=` on the task list.
+
+`source` is a self-attested LABEL (`mcp` for the agent, the app's own
+`X-Agento-Source` otherwise), not an authenticated identity — see the tamper
+note above.
 
 ## Run
 

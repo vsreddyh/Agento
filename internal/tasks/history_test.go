@@ -1,0 +1,275 @@
+package tasks
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
+
+// The op filter is a filter, not a free-text search: an op the log does not
+// hold is a caller mistake, and saying so beats an empty history that reads
+// like "nothing happened".
+func TestParseOpsAcceptsKnownOps(t *testing.T) {
+	ops, err := ParseOps("complete, skip")
+	if err != nil {
+		t.Fatalf("ParseOps: %v", err)
+	}
+	if len(ops) != 2 || ops[0] != OpComplete || ops[1] != OpSkip {
+		t.Fatalf("ops = %v, want [complete skip]", ops)
+	}
+}
+
+func TestParseOpsRejectsUnknownOp(t *testing.T) {
+	_, err := ParseOps("complete,frobnicate")
+	if err == nil {
+		t.Fatal("unknown op must be rejected")
+	}
+	// The message must name the offending op AND the valid ones, so the
+	// caller can fix the call without reading the source.
+	if !strings.Contains(err.Error(), "frobnicate") {
+		t.Errorf("error must name the bad op: %v", err)
+	}
+	if !strings.Contains(err.Error(), OpComplete) {
+		t.Errorf("error must list the known ops: %v", err)
+	}
+}
+
+// An empty filter is "every op", not "no ops": the whole log is the default
+// reading of the question.
+func TestParseOpsEmptyMeansEveryOp(t *testing.T) {
+	ops, err := ParseOps("   ")
+	if err != nil {
+		t.Fatalf("ParseOps: %v", err)
+	}
+	if len(ops) != 0 {
+		t.Fatalf("ops = %v, want none", ops)
+	}
+}
+
+// Validation is a pure rule, so it is testable without a database — and the
+// store applies it BEFORE touching MongoDB, which is why a zero-value Store
+// is enough to prove it.
+func TestListMutationsRejectsUnknownOpWithoutTouchingMongo(t *testing.T) {
+	var s Store
+	_, _, err := s.ListMutations(context.Background(), MutationFilter{Ops: []string{"frobnicate"}})
+	if err == nil {
+		t.Fatal("unknown op must be rejected")
+	}
+}
+
+func TestListMutationsReturnsNewestFirst(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "mcp create_task")
+	s.RecordMutation(ctx, OpUpdate, "task-a", "http", "name")
+	s.RecordMutation(ctx, OpComplete, "task-a", "mcp", "none")
+
+	rows, truncated, err := s.ListMutations(ctx, MutationFilter{})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if truncated {
+		t.Error("3 rows under the default limit must not be truncated")
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(rows))
+	}
+	// Newest first: complete, then update, then create.
+	want := []string{OpComplete, OpUpdate, OpCreate}
+	for i, op := range want {
+		if rows[i].Op != op {
+			t.Errorf("row %d op = %q, want %q", i, rows[i].Op, op)
+		}
+	}
+	// Every entry carries the four facts the log exists for: what, which
+	// task, who, when.
+	if rows[0].TaskID != "task-a" {
+		t.Errorf("task_id = %q, want task-a", rows[0].TaskID)
+	}
+	if rows[0].Source != "mcp" {
+		t.Errorf("source = %q, want mcp", rows[0].Source)
+	}
+	if rows[0].At.IsZero() {
+		t.Error("at must be set")
+	}
+}
+
+func TestListMutationsFiltersByTaskAndOp(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
+	s.RecordMutation(ctx, OpUpdate, "task-a", "http", "name")
+	s.RecordMutation(ctx, OpCreate, "task-b", "mcp", "")
+
+	rows, _, err := s.ListMutations(ctx, MutationFilter{TaskID: "task-a"})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("task-a rows = %d, want 2", len(rows))
+	}
+	for _, r := range rows {
+		if r.TaskID != "task-a" {
+			t.Errorf("row for %q leaked into the task-a filter", r.TaskID)
+		}
+	}
+
+	rows, _, err = s.ListMutations(ctx, MutationFilter{Ops: []string{OpCreate}})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("create rows = %d, want 2", len(rows))
+	}
+
+	rows, _, err = s.ListMutations(ctx, MutationFilter{TaskID: "task-a", Ops: []string{OpCreate}})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("task-a create rows = %d, want 1", len(rows))
+	}
+}
+
+// `since` is INCLUSIVE: a caller that has seen an entry at time T and asks
+// for "since T" means "from T onwards", and dropping that entry would make
+// the caller miss the very change it was polling for.
+func TestListMutationsSinceIsInclusive(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
+	s.RecordMutation(ctx, OpUpdate, "task-a", "mcp", "name")
+
+	all, _, err := s.ListMutations(ctx, MutationFilter{})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("rows = %d, want 2", len(all))
+	}
+	newer, older := all[0].At, all[1].At
+
+	rows, _, err := s.ListMutations(ctx, MutationFilter{Since: older})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("since=older rows = %d, want 2 (inclusive)", len(rows))
+	}
+
+	rows, _, err = s.ListMutations(ctx, MutationFilter{Since: newer})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("since=newer rows = %d, want 1", len(rows))
+	}
+}
+
+// The truncation flag is the same contract List has: a caller must be able to
+// tell "exactly N" from "N of many" without a second query.
+func TestListMutationsReportsTruncation(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
+	}
+
+	rows, truncated, err := s.ListMutations(ctx, MutationFilter{Limit: 2})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if !truncated {
+		t.Error("limit 2 over 3 rows must report truncation")
+	}
+
+	rows, truncated, err = s.ListMutations(ctx, MutationFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(rows))
+	}
+	if truncated {
+		t.Error("limit 10 over 3 rows must not report truncation")
+	}
+}
+
+// A limit above the ceiling is clamped, not rejected: a caller asking for a
+// huge page gets the biggest page the store serves, and the truncation flag
+// tells it there was more.
+func TestListMutationsClampsTheLimit(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
+	}
+	rows, _, err := s.ListMutations(ctx, MutationFilter{Limit: MaxLimit + 1000})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(rows))
+	}
+}
+
+// The log outlives its subject: a completed task is deleted by the 3-day TTL,
+// but its entries stay readable for the log's own 90-day window. That is the
+// whole point of the reader, so it is asserted rather than assumed.
+func TestListMutationsSurvivesTheTaskItDescribes(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	doc, err := s.Create(ctx, "Pay rent", "bank transfer", "2026-10-01", "09:00", intP(15), customRep("monthly on the 1st"), boolP(false), "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	id := doc["id"].(string)
+	s.RecordMutation(ctx, OpCreate, id, "mcp", "")
+	s.RecordMutation(ctx, OpComplete, id, "mcp", "none")
+
+	// The task goes away (here: deleted outright, as the TTL would).
+	if _, err := s.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.Get(ctx, id); err == nil {
+		t.Fatal("task should be gone")
+	}
+
+	rows, _, err := s.ListMutations(ctx, MutationFilter{TaskID: id})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 — the log must outlive the task", len(rows))
+	}
+	for _, r := range rows {
+		if r.TaskID != id {
+			t.Errorf("row for %q leaked into the %q filter", r.TaskID, id)
+		}
+	}
+}
+
+// The timestamps are stored and returned in UTC, so a log read from two
+// machines does not disagree about when an entry happened.
+func TestListMutationsTimestampsAreUTC(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	s.RecordMutation(ctx, OpCreate, "task-a", "mcp", "")
+	rows, _, err := s.ListMutations(ctx, MutationFilter{})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if _, offset := rows[0].At.Zone(); offset != 0 {
+		t.Errorf("at must be UTC, got offset %d", offset)
+	}
+	if time.Since(rows[0].At) > time.Minute {
+		t.Errorf("at = %v, want roughly now", rows[0].At)
+	}
+}

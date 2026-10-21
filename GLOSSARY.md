@@ -35,3 +35,7 @@ _Avoid_: multi-select action
 **Batch**:
 A single server request carrying one bulk run; it commits atomically or not at all.
 _Avoid_: bulk request
+
+**Change log**:
+The record of every task mutation — what changed, which task, which caller, when — kept 90 days and outliving the task it describes, since a completed task is deleted after 3 days.
+_Avoid_: transaction (that means a money record here), history, activity log

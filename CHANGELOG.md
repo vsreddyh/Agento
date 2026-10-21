@@ -9,6 +9,12 @@ Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
 ## [5.11.0]
+- **Task Manager change log (#350).** Every task change is now readable: a
+  new `GET /api/tasks/mutations` endpoint and a `task_history` agent tool
+  return what changed, which task, who changed it (`mcp` for the agent, the
+  app's own label otherwise) and when, filterable by task, op and time. It
+  matters because a completed task is auto-deleted after 3 days — the log is
+  kept 90 days, so it is the only record left of what happened to it.
 - **Task Manager bulk select + per-task Skip (#341).** Long-press or the
   Select action enters selection mode (checkboxes, tap-to-toggle, up to 50
   tasks); the bulk bar completes, skips, moves (one date picker), or

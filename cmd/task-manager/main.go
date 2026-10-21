@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"agento/internal/mongostore"
 	"agento/internal/tasks"
@@ -165,6 +166,21 @@ type deleteTaskInput struct {
 	ID string `json:"id"`
 }
 
+// taskHistoryInput filters the change log. Every field is optional: the whole
+// log is the default reading of the question, and a caller that wants one
+// task's history sends task_id.
+type taskHistoryInput struct {
+	// TaskID restricts to one task (the hex id from create_task).
+	TaskID string `json:"task_id,omitempty"`
+	// Op restricts to a set of ops, comma-separated: create, update, delete,
+	// complete, skip, reopen, duplicate.
+	Op string `json:"op,omitempty"`
+	// Since is an INCLUSIVE RFC3339 lower bound on when the change happened.
+	Since string `json:"since,omitempty"`
+	// Limit caps the rows returned (default 200, max 500).
+	Limit int `json:"limit,omitempty"`
+}
+
 // createTask is the create_task handler's body, named so it can be called directly.
 //
 // It is extracted for testability, not style: a handler closed over `mcp.AddTool` cannot
@@ -213,6 +229,50 @@ func createTask(ctx context.Context, store *tasks.Store, in createTaskInput) (ma
 // which caller wrote a row. Logging agent writes under "http" would make the field
 // actively misleading, which is worse than not having it.
 const mcpSource = "mcp"
+
+// taskHistory reads the change log (#350).
+//
+// It is the same reader the HTTP endpoint uses, so the agent and the app see
+// one history rather than two — and the agent's own writes are the ones it
+// most often needs to explain ("what did you do with that task?").
+//
+// Every entry carries op, task_id, source and at. `source` is a LABEL, not an
+// identity: "mcp" is this server, the app labels its own calls, and either
+// could claim either. It answers "which client made this change" well enough
+// to explain an accident, and badly enough to be evidence against anyone.
+func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (map[string]any, error) {
+	ops, err := tasks.ParseOps(in.Op)
+	if err != nil {
+		return nil, err
+	}
+	var since time.Time
+	if raw := strings.TrimSpace(in.Since); raw != "" {
+		t, perr := time.Parse(time.RFC3339, raw)
+		if perr != nil {
+			return nil, &tasks.StoreError{
+				Msg: "since must be an RFC3339 timestamp, e.g. 2026-10-21T00:00:00Z"}
+		}
+		since = t
+	}
+	rows, truncated, err := store.ListMutations(ctx, tasks.MutationFilter{
+		TaskID: strings.TrimSpace(in.TaskID),
+		Ops:    ops,
+		Since:  since,
+		Limit:  in.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		rows = []tasks.Mutation{}
+	}
+	return map[string]any{
+		"ok":        true,
+		"count":     len(rows),
+		"truncated": truncated,
+		"mutations": rows,
+	}, nil
+}
 
 func main() {
 	var err error
@@ -411,6 +471,16 @@ func main() {
 				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown task '%s'", in.ID)})
 			}
 			return result(map[string]any{"ok": true, "deleted": in.ID})
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "task_history",
+		Description: "Read the change log: every create, update, complete, skip, reopen and delete, with the op, the task id, who made it (source) and when (at). The log is kept 90 days, so it still answers for a task that was completed and auto-deleted after 3 days — use it when the user asks what happened to a task, or when a task changed without the agent doing it. Filters: task_id (one task), op (comma-separated: create, update, delete, complete, skip, reopen, duplicate), since (INCLUSIVE RFC3339 timestamp, e.g. 2026-10-21T00:00:00Z), limit (default 200, max 500). Newest first. `source` is a self-attested LABEL ('mcp' for this server, the app's own label otherwise), not an authenticated identity."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in taskHistoryInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := taskHistory(ctx, store, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
 		})
 
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

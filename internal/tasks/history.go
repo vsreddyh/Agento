@@ -1,0 +1,143 @@
+package tasks
+
+// Change log, read side (#350).
+//
+// The write side is audit.go: every create, update, complete, skip, reopen
+// and delete appends one row to `task_mutations` — the op, the task, the
+// caller, the time. That log has been written since #176 with no way to READ
+// it: no HTTP route, no MCP tool. The record of "who changed this, and when"
+// existed only for whoever opened a Mongo shell.
+//
+// It matters more than it used to. A completed task is DELETED three days
+// after it is completed (the `expiresAt` TTL), so the task row — its name,
+// its due date, everything a person would recognise it by — is gone long
+// before the log's 90-day window ends. The log outlives its subject on
+// purpose (see audit.go); this is the door into it.
+
+import (
+	"context"
+	"slices"
+	"strings"
+	"time"
+
+	"agento/internal/mongostore"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo/options"
+)
+
+// Mutation is one row of the change log.
+//
+// The four fields are the whole contract, and each answers one of the
+// questions the log exists for: `op` is WHAT happened, `task_id` is WHICH
+// task, `source` is WHO did it, `at` is WHEN. `detail` carries the
+// op-specific extra — the changed field names for an update, the rollover
+// outcome for a completion — and is empty for ops that have nothing to add.
+//
+// `source` is a LABEL, not an identity: it is self-attested by the caller
+// (see mcps/task-manager/README.md), so it answers "which client made this
+// change" well enough to explain an accident and badly enough to be evidence
+// against anyone.
+type Mutation struct {
+	TaskID string    `json:"task_id" bson:"task_id"`
+	Op     string    `json:"op" bson:"op"`
+	Source string    `json:"source" bson:"source"`
+	Detail string    `json:"detail" bson:"detail"`
+	At     time.Time `json:"at" bson:"at"`
+}
+
+// MutationFilter narrows a change-log query. Every field is optional: the
+// zero filter is the whole log.
+type MutationFilter struct {
+	// TaskID restricts to one task. Empty means every task.
+	TaskID string
+	// Ops restricts to a set of operations. Empty means every op.
+	Ops []string
+	// Since is an INCLUSIVE lower bound on `at`. The zero time means no
+	// bound. Inclusive because a caller that has seen an entry at time T and
+	// asks for "since T" means "from T onwards" — dropping that entry would
+	// make it miss the very change it was polling for.
+	Since time.Time
+	// Limit caps the rows returned. Zero or less means DefaultLimit, and
+	// anything above MaxLimit is clamped rather than rejected.
+	Limit int
+}
+
+// ParseOps parses a comma-separated op filter ("complete,skip") into the ops
+// it names.
+//
+// An empty string means EVERY op, not none: the whole log is the default
+// reading of the question, and "op=" is a caller who asked for the log.
+func ParseOps(s string) ([]string, error) {
+	parts := strings.Split(s, ",")
+	ops := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		ops = append(ops, p)
+	}
+	if err := ValidateOps(ops); err != nil {
+		return nil, err
+	}
+	return ops, nil
+}
+
+// ValidateOps checks op names against the ones the log can hold.
+//
+// An unknown op is a caller mistake, and the error names the valid set: an
+// empty history that reads like "nothing happened" is the wrong answer to a
+// typo, and "you asked for a thing that does not exist" is the right one.
+func ValidateOps(ops []string) error {
+	for _, op := range ops {
+		if !slices.Contains(KnownOps, op) {
+			return fail("unknown op %q; known ops are %s", op, strings.Join(KnownOps, ", "))
+		}
+	}
+	return nil
+}
+
+// ListMutations returns change-log entries, newest first.
+//
+// The second return value reports truncation: a +1 probe row is fetched and
+// dropped, so a caller can tell "exactly N" from "N of many" without a second
+// query — the same contract List has.
+func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation, bool, error) {
+	// Validated BEFORE any store use, so an unknown op costs no database
+	// round trip to discover — and so this rule is testable without one.
+	if err := ValidateOps(f.Ops); err != nil {
+		return nil, false, err
+	}
+	filt := bson.M{}
+	if f.TaskID != "" {
+		filt["task_id"] = f.TaskID
+	}
+	if len(f.Ops) > 0 {
+		filt["op"] = bson.M{"$in": f.Ops}
+	}
+	if !f.Since.IsZero() {
+		filt["at"] = bson.M{"$gte": f.Since}
+	}
+	lim := mongostore.ClampLimit(f.Limit, DefaultLimit, MaxLimit)
+	// Newest first, with `_id` as the tiebreak: two mutations in the same
+	// millisecond would otherwise come back in an order the database chose,
+	// and a history that reshuffles itself between two reads of the same
+	// window is a history nobody can read.
+	cur, err := s.db.Collection(auditCollection).Find(ctx, filt,
+		options.Find().
+			SetSort(bson.D{{Key: "at", Value: -1}, {Key: "_id", Value: -1}}).
+			SetLimit(lim+1))
+	if err != nil {
+		return nil, false, err
+	}
+	defer cur.Close(ctx)
+	var rows []Mutation
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, false, err
+	}
+	if int64(len(rows)) > lim {
+		return rows[:int(lim)], true, nil
+	}
+	return rows, false, nil
+}

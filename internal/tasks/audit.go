@@ -37,6 +37,15 @@ const (
 	OpDuplicate = "duplicate"
 )
 
+// KnownOps is every op the log can hold.
+//
+// It is the validation set for a filter, so it lives next to the constants
+// that define the vocabulary rather than in the reader: a new op is added in
+// one place, and that place is where the op is written. A copy of this list
+// somewhere else is a list that goes stale, and a stale list rejects a valid
+// op — the caller asking "what changed?" gets an error instead of an answer.
+var KnownOps = []string{OpCreate, OpUpdate, OpDelete, OpComplete, OpSkip, OpReopen, OpDuplicate}
+
 // auditCollection is separate from `tasks` on purpose: it must survive the task.
 // A log that goes away with its subject cannot answer "what happened to it".
 const auditCollection = "task_mutations"

@@ -44,6 +44,10 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		{"skip_task", skipTaskInput{}, []string{"id"}},
 		{"reopen_task", reopenTaskInput{}, []string{"id"}},
 		{"delete_task", deleteTaskInput{}, []string{"id"}},
+		// Every filter is optional: the whole log is the default reading of
+		// the question, and a tool that made the agent invent a filter to
+		// ask "what happened?" would be a tool nobody calls.
+		{"task_history", taskHistoryInput{}, nil},
 	}
 
 	for _, c := range cases {
@@ -88,12 +92,14 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"update_task": {"name", "description", "due_date", "due_time",
 			"estimated_minutes", "repeat_every", "repeat_unit", "repeat_custom",
 			"repeat_rule", "expected_revision", "parallelable"},
+		"task_history": {"task_id", "op", "since", "limit"},
 	}
 
 	inputs := map[string]any{
-		"create_task": createTaskInput{},
-		"list_tasks":  listTasksInput{},
-		"update_task": updateTaskInput{},
+		"create_task":  createTaskInput{},
+		"list_tasks":   listTasksInput{},
+		"update_task":  updateTaskInput{},
+		"task_history": taskHistoryInput{},
 	}
 
 	for tool, names := range optional {
