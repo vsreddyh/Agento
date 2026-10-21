@@ -401,6 +401,34 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun searchFoldingIsUnicodeRegionMatching() {
+        // BY DECISION, not by accident (#339): region-matching (ignoreCase)
+        // folds differently from ROOT-lowercasing on Turkish dotted/dotless
+        // I. "I" matches dotless "ı" here; under the old lowercase-
+        // everything shape ("I"→"i" vs query "ı") it missed. A future
+        // "restore lowercase" edit must keep this green — i.e., keep the
+        // shared predicate in messageMatchesQuery.
+        assertTrue(messageMatchesQuery(ChatMessage("user", "I"), "ı"))
+        assertTrue(messageMatchesQuery(ChatMessage("user", "I"), "i"))
+        assertTrue(messageMatchesQuery(ChatMessage("user", "photo", 0L), "PHOTO"))
+    }
+
+    @Test
+    fun searchFindsStagedPhotosByMarker() {
+        // Marker-only findability (#339): an image turn's text need not
+        // mention photos for "photo" to find the thread — but an assistant
+        // turn never claims photos (user-only marker rule).
+        val pic = ChatMessage("user", "look", 0L, attachments = listOf(attachment()))
+        assertTrue(messageMatchesQuery(pic, "photo"))
+        assertFalse(
+            messageMatchesQuery(
+                ChatMessage("assistant", "look", 0L, attachments = listOf(attachment())),
+                "photo",
+            ),
+        )
+    }
+
+    @Test
     fun photoOnlyThreadTitlesNamePhotos() {
         assertEquals(
             "Photo",

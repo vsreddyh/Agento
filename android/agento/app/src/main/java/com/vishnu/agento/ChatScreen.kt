@@ -165,14 +165,21 @@ private val cleanupScope =
  * no thread in the key (#339): UUIDs are globally unique, so no two
  * threads can alias it, and forks share the decoded bitmap for free.
  * Legacy (id-less) payloads bypass the cache (slot-keyed entries would
- * alias across removes). Bounded (32 entries ≈ 8 MB of ~256px thumbs)
- * for low-end devices; eviction does NOT recycle — GC reclaims, because
- * recycling risks pulling pixels from under a late outgoing draw (the
- * same class the no-recycle rule in AttachmentThumb exists for). LruCache
- * is internally synchronized, so Main gets and IO puts are safe.
+ * alias across removes). Bounded by BYTES, not entries (#339): sizeOf
+ * reports kilobytes so the LRU evicts by footprint (~8 MB cap) instead of
+ * holding a fixed count under memory pressure with no trim hook. A
+ * composition-local cache has no lifecycle for onTrimMemory; the byte
+ * bound is the pressure valve, and it needs no callback to work. Still
+ * no recycle on evict — GC reclaims, because recycling risks pulling
+ * pixels from under a late outgoing draw (the same class the no-recycle
+ * rule in AttachmentThumb exists for). LruCache is internally
+ * synchronized, so Main gets and IO puts are safe.
  */
-internal class ThumbCache(maxEntries: Int = 32) {
-    private val cache = android.util.LruCache<Any, android.graphics.Bitmap>(maxEntries)
+internal class ThumbCache(maxKb: Int = 8 * 1024) {
+    private val cache = object : android.util.LruCache<Any, android.graphics.Bitmap>(maxKb) {
+        override fun sizeOf(key: Any, value: android.graphics.Bitmap): Int =
+            maxOf(1, value.byteCount / 1024)
+    }
     fun get(key: Any): android.graphics.Bitmap? = cache.get(key)
     fun put(key: Any, bmp: android.graphics.Bitmap) {
         cache.put(key, bmp)
@@ -238,7 +245,7 @@ private fun AttachmentThumb(
     // surviving thumb on a remove (a rare user action); the legacy rebuild
     // rides the same event on self-aging payloads. Value equality holds
     // either way, so produceState never restarts for a remove.
-    val thumbKey = remember(stableId, legacySlot, base64.length) {
+    val thumbKey = remember(stableId, legacySlot, base64.length, base64.sampleKey(64)) {
         if (stableId.isNotEmpty()) {
             // Same head/tail sample as the legacy branch (#339): a
             // hand-edited same-length/middle-changed payload keeps its id

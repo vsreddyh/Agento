@@ -334,6 +334,24 @@ internal fun oversizeMessageFor(base64: String): String {
         "Pick a different photo."
 }
 
+/**
+ * Per-message search predicate, shared by thread search (#339): raw-text
+ * region match first (no marker alloc on hits), marker only on miss.
+ * Case-folding is Unicode region-matching (ignoreCase), NOT
+ * ROOT-lowercasing, BY DECISION — pinned by the Turkish-folding tests
+ * below (`I` matches dotless `ı` under region matching, misses under
+ * ROOT-lowercasing). A future "restore lowercase for locale safety" edit
+ * must keep those tests green, which it cannot do without keeping this
+ * predicate. Same rule on both branches (raw and marker): one folding,
+ * no split-brain locale behavior.
+ */
+internal fun messageMatchesQuery(m: ChatMessage, query: String): Boolean {
+    if (m.content.contains(query, ignoreCase = true)) return true
+    val photoCount = if (m.role == "user") m.attachments.wiredPhotoCount() else 0
+    return photoCount > 0 &&
+        contentWithMarker(m.content, photoCount).contains(query, ignoreCase = true)
+}
+
 /** Wire form of one attachment: the `image_url` data URI the gateway's
  * multipart parser accepts (`internal/gateway/openai.go`). Remote URLs are
  * never produced — the gateway refuses to fetch them. The type is PINNED,
@@ -1037,9 +1055,18 @@ fun decodeThumbnail(base64: String): Bitmap? {
         ) {
             return null
         }
-        // DEFAULT on decode is deliberate asymmetry with the NO_WRAP encode
-        // above: encode must not emit newlines (data URIs are single-line),
-        // while decode stays lenient toward payloads written by older builds.
+        // Decodability gate, same as dataUri's wall (#339): the decoder
+        // below (Base64.DEFAULT) tolerates framing whitespace that the wire
+        // refuses — without this, a wrapped-but-valid payload renders a
+        // thumbnail while the send path drops it to bare text, re-splitting
+        // the display/wire agreement the predicate was created to close.
+        // Unreachable via canonical memory (load() strips framing), IO
+        // thread already, so the full walk costs nothing new.
+        if (!isDecodableBase64(base64)) return null
+        // DEFAULT on decode is historical leniency, now moot (#339): the
+        // gate above already rejected anything DEFAULT would forgive, so
+        // the flag changes nothing — kept (not switched to NO_WRAP) to
+        // avoid churning a path whose contract lives in the gate.
         val bytes = Base64.decode(base64, Base64.DEFAULT)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)

@@ -800,29 +800,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // Same untitled fallback as summaries() so "new
                 // conversation" finds threads without a custom title.
                 t.title.ifBlank { UNTITLED }.contains(q, ignoreCase = true) ||
-                    t.messages.any {
-                        // Photo threads are findable by "photo" (#318): their
-                        // images are payloads with no searchable text. One
-                        // marker spelling shared with export + wire (#339),
-                        // counted wired so blanks never claim a photo — and
-                        // user-only like the wire rule (#339): a hypothetical
-                        // assistant attachment must not make the thread
-                        // findable while title and wire stay silent on it.
-                        // Raw-text first, marker only on miss (#339): the
-                        // marker build (regex + trim + concat) plus the count
-                        // runs per message per keystroke — keystrokes that
-                        // match visible text skip it entirely. The marker is
-                        // only needed to make "photo" itself findable.
-                        val text = it.content
-                        if (text.contains(q, ignoreCase = true)) {
-                            true
-                        } else {
-                            val photoCount =
-                                if (it.role == "user") it.attachments.wiredPhotoCount() else 0
-                            photoCount > 0 && contentWithMarker(it.content, photoCount)
-                                .contains(q, ignoreCase = true)
-                        }
-                    }
+                    // Per-message predicate lives with the marker helpers
+                    // (#339): one folding rule (region-matching) shared by
+                    // title, raw text, and marker — see messageMatchesQuery.
+                    t.messages.any { messageMatchesQuery(it, q) }
                 )
         }.map {
             ThreadSummary(
