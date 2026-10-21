@@ -356,10 +356,12 @@ internal fun ChatTab(
     // cameraThread to home or drop-with-notice, and clearing the intent gate
     // would let a new tap overwrite the in-flight capture.
     LaunchedEffect(state.threadId) { showCameraSettings = false }
-    // True while a camera batch is decoding: launchCamera's delete-previous
-    // must skip a file with an in-flight decode, or a rapid re-tap deletes it
-    // mid-read. Plain remember — a rotation during decode cancels the batch.
-    var cameraBusy by remember { mutableStateOf(false) }
+    // Path of the capture currently decoding (not a boolean): the
+    // delete-previous guard must compare FILE IDENTITY, so a rotation
+    // (which cancels the batch) cannot let the next tap delete a file
+    // that is still being read. Saveable, so the path outlives the
+    // composition; a stale entry only delays one cleanup to the sweep.
+    var cameraDecoding by rememberSaveable { mutableStateOf<String?>(null) }
     // True while a camera intent is outstanding: launchCamera overwrites the
     // shared Uri/path on every tap, so a second tap before the first returns
     // would make the first callback decode the wrong file. Saveable timestamp,
@@ -517,7 +519,7 @@ internal fun ChatTab(
         // Settled inline when the scope is already dead: a navigate-away +
         // result race can deliver picker output after the composition scope
         // died — launching then is a no-op whose body never runs, sticking
-        // cameraBusy. Undispatched for the same reason: the body starts
+        // cameraDecoding. Undispatched for the same reason: the body starts
         // synchronously, so the try/finally is entered before any cancel.
         if (!scope.isActive) {
             deleteQuietly(cleanup)
@@ -691,9 +693,9 @@ internal fun ChatTab(
         // third case: unreachable by construction, but a good capture deleted
         // in silence would be the worst outcome.
         if (ok && u != null) {
-            cameraBusy = true
+            cameraDecoding = f?.absolutePath
             processUris(listOf(u), f, {
-                cameraBusy = false
+                cameraDecoding = null
                 // Conditional clear: a rapid re-tap overwrites the path with
                 // the second capture while the first still decodes —
                 // blanking unconditionally would strand the second flight
@@ -791,9 +793,9 @@ internal fun ChatTab(
                     // Delete-before-replace, liveness re-checked HERE: the
                     // pre-IO snapshot this replaces could go stale if the
                     // in-flight batch finished mid-hop. On Main both reads
-                    // are fresh: skip only while a capture is actively
-                    // decoding. The delete rides deleteQuietly (async IO).
-                    if (!cameraBusy) {
+                    // are fresh: skip only while this exact capture is
+                    // actively decoding (identity, not a stale boolean).
+                    if (cameraDecoding != cameraPath) {
                         cameraPath?.let(::File)?.takeIf { it.exists() }?.let { deleteQuietly(it) }
                     }
                     cameraUri = uri

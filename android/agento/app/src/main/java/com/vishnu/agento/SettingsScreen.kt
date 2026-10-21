@@ -829,7 +829,8 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                     // slow restores. Streamed in chunks, not via toByteArray():
                     // the string must exist to write at all, but the duplicate
                     // byte[] copy is avoidable. Compact, not pretty.
-                    val text = SettingsBackup.export(appContext).toString()
+                    val export = SettingsBackup.export(appContext)
+                    val text = export.json.toString()
                     // Post-build peak check: a concurrent save can grow the
                     // thread files between the meter and this build. Measured
                     // on the STRING ITSELF (length × 2 = UTF-16 bytes).
@@ -869,16 +870,21 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                             off = end
                         }
                     }
-                    written
+                    written to export.unreadable
                 }
             }
             status = result.fold(
-                onSuccess = { size ->
+                onSuccess = { (size, unreadable) ->
+                    val missing = if (unreadable.isEmpty()) {
+                        ""
+                    } else {
+                        " " + unreadable.size + " file(s) could not be read and are missing."
+                    }
                     if (size > BACKUP_LARGE_BYTES) {
                         Toasts.EXPORTED + " Large backup (${formatBytes(size)}) — " +
-                            "photo threads make restores slow."
+                            "photo threads make restores slow." + missing
                     } else {
-                        Toasts.EXPORTED
+                        Toasts.EXPORTED + missing
                     }
                 },
                 onFailure = { e -> e.message ?: e.javaClass.simpleName },
@@ -962,8 +968,15 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                 }
             }
             result.fold(
-                onSuccess = { n ->
-                    status = "Restored $n setting(s)."
+                onSuccess = { outcome ->
+                    // Skipped files are named (#339): a dropped thread file is
+                    // not restored, and "Restored N" alone reads as success.
+                    val skippedNote = if (outcome.skipped.isEmpty()) {
+                        ""
+                    } else {
+                        " " + outcome.skipped.size + " file(s) skipped (invalid or unreadable)."
+                    }
+                    status = "Restored ${outcome.applied} setting(s).$skippedNote"
                     onImported()
                 },
                 onFailure = { e -> status = e.message ?: e.javaClass.simpleName },

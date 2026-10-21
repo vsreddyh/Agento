@@ -169,12 +169,23 @@ object SettingsBackup {
         backupFiles().sumOf { name ->
             java.io.File(dir, name).takeIf { it.exists() }?.length() ?: 0L
         }
+    /** One export's result (#339): the payload plus the files that could not
+     * be read. A thread file that fails to read is simply MISSING from the
+     * backup, and reporting that beats a "complete" backup that quietly
+     * lost a conversation. */
+    data class Export(val json: JSONObject, val unreadable: List<String>)
+
+    /** One import's result (#339): what was applied plus the files that were
+     * skipped (invalid shape, unreadable, or unwritable). A skipped thread
+     * file is NOT restored, so the count has to reach the user. */
+    data class Outcome(val applied: Int, val skipped: List<String>)
+
     /** Full-settings export (prefs + thread files) as one JSONObject; absent
      * keys are omitted (not nulled). IO-REQUIRED (enforced via
      * requireIoThread): a photo-heavy export holds ~2x peak on the caller's
      * thread — the same Main-never rule as ChatThreads.load(). */
     @androidx.annotation.WorkerThread
-    fun export(context: Context): JSONObject {
+    fun export(context: Context): Export {
         requireIoThread("SettingsBackup.export")
         // The cap lives HERE, not only in the caller: the wall belongs on the
         // boundary that builds the peak, so a caller that skips the Settings
@@ -220,6 +231,9 @@ object SettingsBackup {
             n?.let { values.put(k, maxOf(0L, it)) }
         }
         val files = JSONObject()
+        // Unreadable files are named, not swallowed (#339): the backup
+        // silently loses that thread, so the UI says which ones.
+        val unreadable = mutableListOf<String>()
         for (name in backupFiles()) {
             val f = java.io.File(context.filesDir, name)
             if (f.exists()) {
@@ -229,18 +243,22 @@ object SettingsBackup {
                 // backup crosses devices, so the contract belongs in the call.
                 runCatching {
                     files.put(name, f.readText(Charsets.UTF_8))
-                }
+                }.onFailure { unreadable += name }
             }
         }
-        return JSONObject().put("version", VERSION).put("values", values).put("files", files)
+        return Export(
+            JSONObject().put("version", VERSION).put("values", values).put("files", files),
+            unreadable,
+        )
     }
 
     /** Applies a backup produced by [export]; unknown keys and mistyped values
      * are skipped. Version 1 backups (prefs only) still import. Returns the
-     * number of prefs + files applied. IO-REQUIRED like [export] (enforced):
+     * number of prefs + files applied, plus the files that were skipped.
+     * IO-REQUIRED like [export] (enforced):
      * file reads + canonicalize + prefs writes all ride the caller's thread. */
     @androidx.annotation.WorkerThread
-    fun importFrom(context: Context, json: JSONObject): Result<Int> {
+    fun importFrom(context: Context, json: JSONObject): Result<Outcome> {
         requireIoThread("SettingsBackup.importFrom")
         return try {
             val values = json.optJSONObject("values")
@@ -297,6 +315,10 @@ object SettingsBackup {
                 }
             }
             val files = json.optJSONObject("files")
+            // Skipped files are named (#339): a skipped thread file is NOT
+            // restored, and "Restored N setting(s)" over a dropped
+            // conversation reads as a clean success.
+            val skipped = mutableListOf<String>()
             if (files != null) {
                 for (name in backupFiles()) {
                     val text = files.optString(name, "")
@@ -312,7 +334,11 @@ object SettingsBackup {
                         // threads the import just overwrote.
                         // Oversize persists until send: canonicalize does not
                         // enforce the 1.5M staging cap.
-                        val toWrite = ChatThreads.canonicalizeFile(text) ?: continue
+                        val toWrite = ChatThreads.canonicalizeFile(text)
+                        if (toWrite == null) {
+                            skipped += name
+                            continue
+                        }
                         runCatching {
                             java.io.File(context.filesDir, name).writeText(toWrite, Charsets.UTF_8)
                             // Invalidate the save cache: the import bypasses
@@ -322,7 +348,7 @@ object SettingsBackup {
                                 name.removePrefix("chat_threads_").removeSuffix(".json"),
                             )
                             applied++
-                        }
+                        }.onFailure { skipped += name }
                         continue
                     }
                     // Validate JSON shape before overwriting live state
@@ -335,11 +361,13 @@ object SettingsBackup {
                         runCatching {
                             java.io.File(context.filesDir, name).writeText(text, Charsets.UTF_8)
                             applied++
-                        }
+                        }.onFailure { skipped += name }
+                    } else {
+                        skipped += name
                     }
                 }
             }
-            Result.success(applied)
+            Result.success(Outcome(applied, skipped))
         } catch (e: Exception) {
             Result.failure(e)
         }

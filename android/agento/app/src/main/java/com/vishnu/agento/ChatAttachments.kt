@@ -884,7 +884,15 @@ suspend fun decodeThumbnail(base64: String): Bitmap? {
         }
         val matrix = orientationMatrix(orientation, bmp.width.toFloat(), bmp.height.toFloat())
         if (matrix != null) {
-            val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
+            val rotated = try {
+                Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
+            } catch (e: Throwable) {
+                // The source bitmap is still live here: the createBitmap
+                // call owns no reference of its own, so it must be
+                // recycled before the throw leaves the function.
+                bmp.recycle()
+                throw e
+            }
             // Referential on purpose: only a new instance may recycle the old.
             if (rotated !== bmp) {
                 bmp.recycle()
