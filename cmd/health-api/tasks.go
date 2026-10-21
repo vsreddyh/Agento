@@ -31,6 +31,11 @@ import (
 // the caller already had, so a stray query param must never nuke the answer.
 // One helper, because two copies of this rule are two rules — and the next
 // edit to one of them would drift from the other.
+//
+// A limit that parses but is zero or negative is NOT decided here: it falls
+// back to the default further down, in the store's ClampLimit, which also
+// clamps a limit above the ceiling. The full rule, in one line: unparseable,
+// zero or negative → the default; parseable-but-huge → the ceiling.
 func parseLimitParam(q url.Values) int {
 	raw := strings.TrimSpace(q.Get("limit"))
 	if raw == "" {

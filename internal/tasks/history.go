@@ -135,7 +135,11 @@ func ParseOps(s string) ([]string, error) {
 // answer differently about the same input.
 func ValidateOps(ops []string) error {
 	if len(normalizeOps(ops)) == 0 && len(ops) > 0 {
-		return fail("op filter names no operation; known ops are %s", strings.Join(knownOps, ", "))
+		// The joined input is echoed, bounded, so a caller can see what the
+		// server judged empty — the same rule the unknown-op branch and
+		// the transport's parser follow.
+		return fail("op filter %q names no operation; known ops are %s",
+			TruncateBytes(strings.Join(ops, ","), 40), strings.Join(knownOps, ", "))
 	}
 	for _, op := range ops {
 		norm := normalizeOp(op)
@@ -211,10 +215,6 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	// Validated BEFORE any store use, so an unknown op costs no database
 	// round trip to discover — and so this rule is testable without one.
 	//
-	// The ops are normalized here, on a copy, by the SAME rule the
-	// transport's parser uses: the stored ops are lowercase, and a caller
-	// that reached the store directly must not be told "create" is an
-	// unknown op, nor asked about an empty one.
 	// The ops are normalized here, on a copy, by the SAME rule the
 	// transport's parser uses: the stored ops are lowercase, and a caller
 	// that reached the store directly must not be told "create" is an

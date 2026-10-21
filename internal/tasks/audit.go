@@ -69,6 +69,21 @@ const auditCollection = "task_mutations"
 
 // RecordMutation appends one entry. Best-effort — see the package comment.
 func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail string) {
+	// The id and the op are normalized HERE, on the write side, for the
+	// same reason the read side normalizes them.
+	//
+	// The verbs accept an UPPERCASE hex id — ObjectIDFromHex does — and
+	// would go on to write a row whose `task_id` is upper case, which the
+	// lowercased read filter can never match. The row would be invisible:
+	// the empty history that reads like "this task was never touched",
+	// for a task that was very much touched. The op is normalized for the
+	// same reason: a direct caller passing "CREATE" would otherwise store
+	// a row the filter misses.
+	//
+	// Normalized FIRST, so every drop path below logs the same spelling
+	// of the same bad call — two greps for one mistake should match.
+	taskID = strings.ToLower(strings.TrimSpace(taskID))
+	op = strings.ToLower(strings.TrimSpace(op))
 	// A store that was never connected cannot record anything, and the
 	// function is best-effort by contract: it swallows its own failures
 	// rather than failing the mutation they describe. The read side says
@@ -80,18 +95,6 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 			TruncateBytes(op, 40), TruncateBytes(taskID, 40))
 		return
 	}
-	// The id and the op are normalized HERE, on the write side, for the
-	// same reason the read side normalizes them.
-	//
-	// The verbs accept an UPPERCASE hex id — ObjectIDFromHex does — and
-	// would go on to write a row whose `task_id` is upper case, which the
-	// lowercased read filter can never match. The row would be invisible:
-	// the empty history that reads like "this task was never touched",
-	// for a task that was very much touched. The op is normalized for the
-	// same reason: a direct caller passing "CREATE" would otherwise store
-	// a row the filter misses.
-	taskID = strings.ToLower(strings.TrimSpace(taskID))
-	op = strings.ToLower(strings.TrimSpace(op))
 	if op == "" || taskID == "" {
 		// A programmer error, not a caller error: the transports always
 		// pass both, and a dropped entry is a hole in the log. Logged, the
