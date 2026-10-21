@@ -380,6 +380,14 @@ internal fun ChatTab(
     // will ever clear it), so staleness bounds it — an intent older than
     // the bound is treated as dead and the launch proceeds.
     var cameraPendingSince by rememberSaveable { mutableStateOf(0L) }
+    // In-memory double-tap guard for the launchCamera IO window (#339):
+    // the saveable gate arms only in the Main hop AFTER IO, so a second
+    // tap landing mid-hop would otherwise pass both checks. Deliberately
+    // NOT saveable (see launchCamera): a rotation disposes this
+    // composition and cancels the IO work with it, so a restored true
+    // would stick with nothing outstanding. Atomic: armed on Main, dropped
+    // on IO/cancel threads — no snapshot involvement either way.
+    val ioGuard = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     /** True while a camera intent launched recently enough to still return.
      * Monotonic clock (#339): wall-clock jumps (user-set time, NTP slew)
      * would age a 1-minute-old intent into a 31-minute-old one and reopen
@@ -795,9 +803,18 @@ internal fun ChatTab(
     fun launchCamera() {
         // Single outstanding intent + hardware gate first (both Main-safe,
         // both synchronous reads): overlapping launches and camera-less
-        // devices refuse here, before any work starts.
-        if (isCameraPending()) {
-            vm.notify("Camera is already open — finish it first.", ToastKind.Info)
+        // devices refuse here, before any work starts. Two gates, two
+        // windows (#339): the saveable timestamp covers the outstanding
+        // intent (survives rotation AND death), while ioGuard covers the
+        // IO prep window below — the saveable gate arms only in the Main
+        // hop after IO, so without ioGuard a rapid double-tap would pass
+        // both checks and mint two files + two intents.
+        if (isCameraPending() || ioGuard.get()) {
+            vm.notify(
+                if (isCameraPending()) "Camera is already open — finish it first."
+                else "Camera is starting — one moment.",
+                ToastKind.Info,
+            )
             return
         }
         // Hardware gate, idempotent (#339): requestCamera refuses first so
@@ -831,28 +848,26 @@ internal fun ChatTab(
         // touches snapshot state again.
         val wasBusy = cameraBusy
         val prevPath = cameraPath
-        // Arm synchronously at tap (#339): the gate above is checked here
-        // on Main, but the old code armed only after the IO hop below —
-        // a rapid double-tap passed both gates, minted two files + two
-        // intents, and the second overwrote cameraUri/cameraPath so the
-        // first callback decoded the wrong file (leaking the first to the
-        // sweep). Cleared on every early IO failure below; the callback
-        // clears on settle.
-        cameraPendingSince = SystemClock.elapsedRealtime()
-        // Never-fired release (#339): rotation/tab-leave mid-hop cancels
-        // this coroutine before the Main hop runs — without the finally,
-        // the tap-time arm sticks till the 10-min stale bound and every
-        // Take-photo tap reads "already open" with no camera open. Atomic
-        // like the deleteQuietly flag: set on Main before the intent fires,
-        // read on whatever thread the cancel lands on — a stale read only
-        // risks a redundant clear (harmless), never a stuck gate.
-        val intentFired = java.util.concurrent.atomic.AtomicBoolean(false)
+        // Arm the IO-window guard synchronously at tap (#339): the check
+        // above runs on Main, and this closes the double-tap window across
+        // the IO hop below. The SAVEABLE gate stays disarmed until the Main
+        // hop after IO — arming it here would stick across rotation (the
+        // new composition restores the timestamp while the old coroutine's
+        // cancel-settle writes to a dead object). ioGuard is deliberately
+        // in-memory: a rotation disposes this composition and cancels the
+        // IO work with it, so there is nothing outstanding to guard — the
+        // fresh composition mints a fresh false. Death is covered by the
+        // saveable gate (armed only once an intent actually exists);
+        // strays by the staleness bound.
+        ioGuard.set(true)
         scope.launch(Dispatchers.IO) {
             try {
                 val dir = File(appTapContext.cacheDir, "camera")
                 if (!dir.isDirectory && !dir.mkdirs()) {
                     withContext(Dispatchers.Main) {
-                        cameraPendingSince = 0L
+                        // Gate untouched: it arms only in the success Main
+                        // hop below, so nothing is outstanding to release —
+                        // the try/finally drops ioGuard on the way out.
                         vm.notify("Couldn't start the camera — storage unavailable.")
                     }
                     return@launch
@@ -879,7 +894,8 @@ internal fun ChatTab(
                 }.getOrNull()
                 withContext(Dispatchers.Main) {
                     if (uri == null) {
-                        cameraPendingSince = 0L
+                        // Same: gate never armed on this path — notify and
+                        // let the finally drop ioGuard.
                         vm.notify("Couldn't start the camera.")
                         // Shared helper (dead-scope-safe), not an inline
                         // exists()/delete() on Main (#339).
@@ -891,16 +907,19 @@ internal fun ChatTab(
                     // Owner recorded with the launch (#339): the callback homes the
                     // batch to this thread even across a switch.
                     cameraThread = state.threadId
-                    // Re-armed at launch (already armed at tap above, #339): the
-                    // tap-time arm closes the double-tap window across the IO
-                    // hop; refreshing here keeps the stale bound measured from
-                    // the intent, not the tap.
+                    // Armed at launch, cleared in the callback (#339): from
+                    // here on the saveable gate owns the outstanding intent
+                    // (survives rotation AND death — the keep!=null sweep
+                    // rule and the callback settle it). ioGuard's job ends
+                    // here: drop it so the gate below is the single
+                    // authority — a second tap now reads "already open",
+                    // not silence.
                     // Guarded: if launch() itself throws (no camera activity to
                     // resolve, broken FileProvider on an odd OEM), no callback ever
                     // fires — so the gate resets, the path nulls, and the orphan file
                     // deletes here instead of sticking the gate till the stale bound.
                     cameraPendingSince = SystemClock.elapsedRealtime()
-                    intentFired.set(true)
+                    ioGuard.set(false)
                     runCatching {
                         cameraLauncher.launch(uri)
                     }.onFailure {
@@ -911,17 +930,16 @@ internal fun ChatTab(
                     }
                 }
             } finally {
-                // Cancel-safe gate release (#339): early failures above
-                // already cleared; a fired intent is settled by its callback
-                // (TakePicture outlives this coroutine). Only the
-                // never-fired path — cancel mid-hop — clears here, on
-                // NonCancellable + Main so the state write survives the
-                // cancel that triggered it.
-                if (!intentFired.get()) {
-                    withContext(NonCancellable + Dispatchers.Main) {
-                        cameraPendingSince = 0L
-                    }
-                }
+                // IO-window guard release, cancel-safe (#339): a rotation or
+                // tab-leave mid-hop cancels this coroutine before the Main
+                // hop runs — the saveable gate was never armed, so there is
+                // nothing stale to clear there; but ioGuard was armed at tap
+                // and must drop, or every later tap in THIS composition
+                // reads "starting" forever. Plain AtomicBoolean: no Main hop
+                // needed (no snapshot state), thread-safe on whatever thread
+                // the cancel lands on. A post-dispose write targets a dead
+                // instance the fresh composition never reads — harmless.
+                ioGuard.set(false)
             }
         }
     }

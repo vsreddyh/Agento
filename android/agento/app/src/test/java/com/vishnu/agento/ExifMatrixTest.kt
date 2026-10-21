@@ -11,16 +11,20 @@ import org.junit.Test
  * corner mapping.
  *
  * Pure 3x3 replication on purpose: android.graphics is stubbed on the
- * JVM, so this mirrors the production op ORDER with identical semantics —
- * row-major [a b tx; c d ty; 0 0 1], setX() replaces, preFoo() = Foo * M
- * (applies to the point AFTER what is already accumulated, so production
- * reads top-down as the pixel flows) — and asserts the EXIF-semantics
- * outcome (CIPA DC-008: TRANSPOSE = rot90 + flip-H, TRANSVERSE = rot270 +
- * flip-H) on a W=2,H=1 probe. If production edits the op order, this
- * test — not the device camera roll — catches it. The framework's
- * createBitmap normalization is deliberately NOT modeled: the matrices
- * must already be positive-mapped (asserted), so normalization is never
- * load-bearing.
+ * JVM, so this mirrors the production op ORDER with the DOCUMENTED
+ * platform identities — row-major [a b tx; c d ty; 0 0 1],
+ * postFoo(op) = op * M per
+ * developer.android.com/reference/android/graphics/Matrix (preFoo would be
+ * M * op, op applied first) — and asserts the EXIF-semantics outcome
+ * (CIPA DC-008: TRANSPOSE = rot90 + flip-H, TRANSVERSE = rot270 + flip-H)
+ * on a W=2,H=1 probe. The replication source is the platform doc, not
+ * the production call order: a shared order misunderstanding between the
+ * two files would still have to survive the CIPA geometric assertions
+ * below, which are derived from the EXIF spec, not from Matrix. If
+ * production edits the op order, this test — not the device camera roll
+ * — catches it. The framework's createBitmap normalization is deliberately
+ * NOT modeled: the matrices must already be positive-mapped (asserted),
+ * so normalization is never load-bearing.
  */
 class ExifMatrixTest {
 
@@ -53,33 +57,34 @@ class ExifMatrixTest {
     private fun matrixFor(orientation: Int): FloatArray {
         val w = 2f
         val h = 1f
-        // setX replaces, preFoo left-multiplies — exactly the production
-        // set+pre pattern above.
-        fun pre(m: FloatArray, op: FloatArray) = mul(op, m)
+        // postFoo left-multiplies — exactly the production post+post
+        // pattern above: each call applies AFTER everything before it, so
+        // both files read top-down as the pixel flows.
+        fun post(m: FloatArray, op: FloatArray) = mul(op, m)
         var m = ident()
         when (orientation) {
             ExifInterface.ORIENTATION_ROTATE_90 -> {
-                m = rot(90f); m = pre(m, trans(h, 0f))
+                m = post(m, rot(90f)); m = post(m, trans(h, 0f))
             }
             ExifInterface.ORIENTATION_ROTATE_180 -> {
-                m = rot(180f); m = pre(m, trans(w, h))
+                m = post(m, rot(180f)); m = post(m, trans(w, h))
             }
             ExifInterface.ORIENTATION_ROTATE_270 -> {
-                m = rot(270f); m = pre(m, trans(0f, w))
+                m = post(m, rot(270f)); m = post(m, trans(0f, w))
             }
             ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> {
-                m = scale(-1f, 1f); m = pre(m, trans(w, 0f))
+                m = post(m, scale(-1f, 1f)); m = post(m, trans(w, 0f))
             }
             ExifInterface.ORIENTATION_FLIP_VERTICAL -> {
-                m = scale(1f, -1f); m = pre(m, trans(0f, h))
+                m = post(m, scale(1f, -1f)); m = post(m, trans(0f, h))
             }
             ExifInterface.ORIENTATION_TRANSPOSE -> {
-                m = rot(90f); m = pre(m, trans(h, 0f))
-                m = pre(m, scale(-1f, 1f)); m = pre(m, trans(h, 0f))
+                m = post(m, rot(90f)); m = post(m, trans(h, 0f))
+                m = post(m, scale(-1f, 1f)); m = post(m, trans(h, 0f))
             }
             ExifInterface.ORIENTATION_TRANSVERSE -> {
-                m = rot(270f); m = pre(m, trans(0f, w))
-                m = pre(m, scale(-1f, 1f)); m = pre(m, trans(h, 0f))
+                m = post(m, rot(270f)); m = post(m, trans(0f, w))
+                m = post(m, scale(-1f, 1f)); m = post(m, trans(h, 0f))
             }
             else -> Unit
         }

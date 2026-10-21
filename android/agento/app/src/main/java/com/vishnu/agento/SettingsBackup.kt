@@ -166,11 +166,17 @@ object SettingsBackup {
         requireIoThread("SettingsBackup.export")
         val prefs = context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
         val values = JSONObject()
+        // Single snapshot, type-guarded reads (#339): contains()+get throws
+        // ClassCastException on a mistyped value (old build, hand-edit) and
+        // fails the WHOLE export. Import already guards with opt-is checks;
+        // export mirrors it — skip, never coerce. Snapshot once, not per
+        // key, so the check and the read can't disagree mid-export either.
+        val all = prefs.all
         for (k in STRING_KEYS) {
-            if (prefs.contains(k)) values.put(k, prefs.getString(k, "") ?: "")
+            (all[k] as? String)?.let { values.put(k, it) }
         }
         for (k in effortKeys(prefs)) {
-            values.put(k, prefs.getString(k, "") ?: "")
+            (all[k] as? String)?.let { values.put(k, it) }
         }
         // Per-widget display settings (#169): enumerated live because the key
         // ends in an appWidgetId, and written by type because the four fields
@@ -183,10 +189,13 @@ object SettingsBackup {
             }
         }
         for (k in BOOLEAN_KEYS) {
-            if (prefs.contains(k)) values.put(k, prefs.getBoolean(k, false))
+            (all[k] as? Boolean)?.let { values.put(k, it) }
         }
         for (k in LONG_KEYS) {
-            if (prefs.contains(k)) values.put(k, prefs.getLong(k, 0L))
+            // Number, not Long (#339): a hand-set Int still carries the
+            // count — toLong keeps it, maxOf drops impossible negatives,
+            // mirroring the import clamp. Anything else skips.
+            (all[k] as? Number)?.let { values.put(k, maxOf(0L, it.toLong())) }
         }
         val files = JSONObject()
         for (name in backupFiles()) {
@@ -286,15 +295,17 @@ object SettingsBackup {
                         // Thread files canonicalize payloads first (#339):
                         // a hand-edited backup must not persist wrapped or
                         // ragged base64 that the load boundary would then
-                        // have to heal. Valid-JSON-but-wrong-shape falls back
-                        // to raw like export does (#339) — never skip: the old
-                        // code kept any valid-JSON file, and a silent skip on
-                        // fresh reinstall loses the thread with no signal.
-                        // (load() still fails closed on the wrong shape at
-                        // read time — raw here preserves bytes, it never
-                        // executes them.)
+                        // have to heal. Valid-JSON-but-wrong-shape SKIPS for
+                        // chat_threads_* (#339): the old raw fallback wrote
+                        // bytes load() cannot decode, so the next load
+                        // returned emptyList() — wiping the LIVE threads the
+                        // import just overwrote. A skip keeps them; the count
+                        // still hints at it (applied excludes the file).
+                        // Fresh-reinstall loss is identical either way (the
+                        // shape was never loadable). Non-thread files keep
+                        // the raw write-through (no decoder to disagree with).
                         val toWrite = if (name.startsWith("chat_threads_")) {
-                            ChatThreads.canonicalizeFile(text) ?: text
+                            ChatThreads.canonicalizeFile(text) ?: continue
                         } else {
                             text
                         }

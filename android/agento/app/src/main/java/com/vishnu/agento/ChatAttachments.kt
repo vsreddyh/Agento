@@ -750,17 +750,22 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 // negative-scale flip recipe renders into negative space and
                 // relies on createBitmap to re-normalize — which the rotation
                 // cases visibly get (they need it just as much) but must
-                // never be load-bearing. The preTranslate companions below
+                // never be load-bearing. The postTranslate companions below
                 // make each matrix positive by construction, correct with or
-                // without normalization. set+pre reads in POINT order (#339):
-                // preConcat applies to the point AFTER what is already in
-                // the matrix, so the code below reads top-down as the pixel
-                // flows (rotate, shift positive, mirror, shift positive) —
-                // postConcat would read bottom-up and invite exactly the
-                // translate-backwards bug. The Bitmap path is JVM-untestable
-                // by design (stubbed android.jar), so the affine math — not
+                // without normalization. POST reads in POINT order (#339):
+                // per the platform contract postFoo(op) is M' = op * M, so
+                // each call applies AFTER everything above it — the block
+                // below reads top-down as the pixel flows (rotate, shift
+                // positive, mirror, shift positive). preFoo would read
+                // bottom-up (M' = M * op, op applied FIRST) and invite
+                // exactly the translate-backwards bug — verified against
+                // developer.android.com/reference/android/graphics/Matrix,
+                // not from memory. The Bitmap path is JVM-untestable by
+                // design (stubbed android.jar), so the affine math — not
                 // just the prose — is pinned by ExifMatrixTest's 2x1 corner
-                // probe; do not "simplify" the mirror cases into pure
+                // probe, which replicates these documented post identities
+                // (not the code's call order) and asserts the CIPA geometric
+                // outcomes; do not "simplify" the mirror cases into pure
                 // rotations, and keep the explicit translates. Pinned
                 // matrix, all 8 values (#339): 1=identity, 2=flip-H, 3=rot180,
                 // 4=flip-V, 5=transpose(rot90 then flip-H), 6=rot90,
@@ -769,36 +774,36 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 val h = bitmap.height.toFloat()
                 val matrix: Matrix? = when (orientation) {
                     ExifInterface.ORIENTATION_ROTATE_90 -> Matrix().apply {
-                        setRotate(90f)
-                        preTranslate(h, 0f)
+                        postRotate(90f)
+                        postTranslate(h, 0f)
                     }
                     ExifInterface.ORIENTATION_ROTATE_180 -> Matrix().apply {
-                        setRotate(180f)
-                        preTranslate(w, h)
+                        postRotate(180f)
+                        postTranslate(w, h)
                     }
                     ExifInterface.ORIENTATION_ROTATE_270 -> Matrix().apply {
-                        setRotate(270f)
-                        preTranslate(0f, w)
+                        postRotate(270f)
+                        postTranslate(0f, w)
                     }
                     ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> Matrix().apply {
-                        setScale(-1f, 1f)
-                        preTranslate(w, 0f)
+                        postScale(-1f, 1f)
+                        postTranslate(w, 0f)
                     }
                     ExifInterface.ORIENTATION_FLIP_VERTICAL -> Matrix().apply {
-                        setScale(1f, -1f)
-                        preTranslate(0f, h)
+                        postScale(1f, -1f)
+                        postTranslate(0f, h)
                     }
                     ExifInterface.ORIENTATION_TRANSPOSE -> Matrix().apply {
-                        setRotate(90f)
-                        preTranslate(h, 0f)
-                        preScale(-1f, 1f)
-                        preTranslate(h, 0f)
+                        postRotate(90f)
+                        postTranslate(h, 0f)
+                        postScale(-1f, 1f)
+                        postTranslate(h, 0f)
                     }
                     ExifInterface.ORIENTATION_TRANSVERSE -> Matrix().apply {
-                        setRotate(270f)
-                        preTranslate(0f, w)
-                        preScale(-1f, 1f)
-                        preTranslate(h, 0f)
+                        postRotate(270f)
+                        postTranslate(0f, w)
+                        postScale(-1f, 1f)
+                        postTranslate(h, 0f)
                     }
                     else -> null
                 }

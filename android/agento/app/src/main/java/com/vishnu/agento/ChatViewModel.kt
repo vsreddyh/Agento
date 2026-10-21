@@ -2069,8 +2069,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = api.pathFor(tab)
         // Same photo-carry rule as Replace above (#339): the forked turn is
         // the edited turn, photos included — stored verbatim like send(),
-        // carried wired like Replace. Composer staging survives here
-        // too, for the same reason stated there — it is unrelated input.
+        // carried wired like Replace. Composer staging does NOT survive
+        // here, unlike Replace (#339): forking switches to a FRESH thread,
+        // and every thread change discards staging like switchThread (a
+        // parked photo firing into the new thread would be a silent
+        // mis-send — the round-2 leak class). The typed draft still parks
+        // back (it is thread-agnostic input); the photos belong to the
+        // old thread and die with the voice below.
         val forked = msgs.take(index) +
             ChatMessage(
                 "user",
@@ -2092,21 +2097,26 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         retargetMemory()
         // Typed draft parks back like Replace above (#339): forking must
         // not eat composer text either — it stays sendable behind the turn
-        // on the new thread.
+        // on the new thread. Staged photos do NOT park — they die with the
+        // thread being left, said out loud like every other thread change
+        // (switchThread/newConversation/deleteThread): the notice dies with
+        // them too, and only this carry-over survives.
         val forkDraft = _state.value.pending
-        // Same staged-photos voice as Replace above (#339): the forked turn
-        // carries the edited turn's photos while the composer's staging
-        // parks unexplained without it.
-        noteParkedPhotos("Forked")
+        val hadStagedFork = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
             error = "", pending = forkDraft, streaming = true, queued = "",
+            pendingAttachments = emptyList(),
+            notices = emptyList(),
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
             activeRunId = "", busyRunId = "",
             showRuns = false, runsLoading = false,
         )
+        if (hadStagedFork) {
+            stagedDiscardedNotice()
+        }
         persist()
         doSend(forked, path, provider, model, effort)
     }

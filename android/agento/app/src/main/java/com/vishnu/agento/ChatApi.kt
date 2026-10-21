@@ -522,7 +522,14 @@ class ChatApi(context: Context) {
                                 val marr = o.optJSONArray("models")
                                 if (marr != null) {
                                     for (j in 0 until marr.length()) {
-                                        if (marr.opt(j) is String) models++
+                                        // Same predicate as the picker path above
+                                        // (#339): blank strings are not models.
+                                        // Deliberately `is String`, not optString:
+                                        // optString coerces numbers via toString
+                                        // and would count them — the picker
+                                        // doesn't, so neither does this.
+                                        val s = marr.opt(j)
+                                        if (s is String && s.isNotBlank()) models++
                                     }
                                 }
                             }

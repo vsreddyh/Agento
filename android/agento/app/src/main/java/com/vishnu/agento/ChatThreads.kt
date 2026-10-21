@@ -83,7 +83,14 @@ object ChatThreads {
      * text turn titles even when a later turn is more substantive ("ok"
      * then an essay still titles "ok") — search/export carry markers so
      * the thread stays findable, and longest-text heuristics guess wrong
-     * as often as they help. */
+     * as often as they help. Photo signal is STAGED-honest, not
+     * wire-strict, BY DECISION (#339): the title answers "does this thread
+     * hold photos" (wired/blank-only count, hot-path cheap, per render),
+     * while the wire answers "what did the agent receive" (wired AND
+     * decodable, send-frequency). A ragged payload can title a photo the
+     * wire drops — but load() blanks ragged on read, so in practice the two
+     * agree; title-time decode scans would tax every render for a case the
+     * boundary already heals. */
     fun titleFor(messages: List<ChatMessage>): String {
         // Single pass (#339): first text turn + largest photo count in one
         // walk — this runs per title render and per switcher-search filter
@@ -229,6 +236,9 @@ object ChatThreads {
      * import boundary enforces the same contract the load boundary does,
      * so a hand-edited backup can't persist wrapped-or-ragged payloads
      * that load-then-persist would otherwise self-heal a cycle later.
+     * Mirrors load()'s row contract too (#339): empty-id threads drop and
+     * the file caps at MAX_THREADS — otherwise an oversize/garbage file
+     * persists whole until the next save trims it.
      * Returns null when the text isn't a threads list — the caller keeps
      * its skip-invalid behavior. Tasks files never reach here (shape).
      */
@@ -237,6 +247,8 @@ object ChatThreads {
         requireIoThread("ChatThreads.canonicalizeFile")
         return runCatching {
             val threads = threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), text)
+                .filter { it.id.isNotEmpty() }
+                .take(MAX_THREADS)
             threadJson.encodeToString(
                 ListSerializer(ChatThread.serializer()),
                 threads.map { t ->
