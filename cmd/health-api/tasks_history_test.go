@@ -59,8 +59,15 @@ func TestTaskMutationsRejectsBadFilters(t *testing.T) {
 		{"/api/tasks/mutations?op=frobnicate", "frobnicate"},
 		{"/api/tasks/mutations?since=yesterday", "since"},
 		// A filter that names no op is a filter the caller sent: answering
-		// it with the whole log is the wrong data, so it is refused.
-		{"/api/tasks/mutations?op=,", "names no operation"},
+		// it with the whole log is the wrong data, so it is refused. The
+		// exact shape the README uses to teach the rule — spaces around a
+		// comma — is the one sent here.
+		{"/api/tasks/mutations?op=%20%2C%20", "names no operation"},
+		// An unencoded "+" in a UTC offset is a space in a query string, so
+		// the timestamp never parses. The 422 an app author debugs here
+		// comes from the ENCODING, not from the timestamp grammar — the
+		// fix is %2B, which is what the README says.
+		{"/api/tasks/mutations?since=2026-10-21T00:00:00+02:00", "since"},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodGet, tc.target, nil)
@@ -100,6 +107,102 @@ func TestTaskMutationsRouteRegistration(t *testing.T) {
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("mutations/ route not resolved: got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// A batch duplicate is recorded as `op: duplicate`, and the change log
+// finds it. The filter vocabulary is wider than the single verbs (there is
+// no single-duplicate verb), so this is the writer half of that contract:
+// without it, `op=duplicate` would be a filter nothing could ever match.
+func TestBatchDuplicateIsInTheChangeLog(t *testing.T) {
+	uri := os.Getenv("MONGODB_URI")
+	if uri == "" {
+		t.Skip("MONGODB_URI not set")
+	}
+	const dbName = "task_batch_history_test"
+	store, err := tasks.New(uri, dbName)
+	if err != nil {
+		t.Skipf("mongo unreachable: %v", err)
+	}
+	defer store.Close(context.Background())
+	// The handler's store comes from the environment and is cached
+	// process-wide, so the test points the environment at its own database
+	// and empties the cache.
+	t.Setenv("MONGODB_DB", dbName)
+	tasksStoreMu.Lock()
+	tasksCache = nil
+	tasksStoreMu.Unlock()
+	t.Cleanup(func() {
+		tasksStoreMu.Lock()
+		defer tasksStoreMu.Unlock()
+		if tasksCache != nil {
+			_ = tasksCache.Close(context.Background())
+			tasksCache = nil
+		}
+	})
+	ctx := context.Background()
+	minutes, parallelable := 5, false
+	doc, err := store.Create(ctx, "batch history probe", "d", "2026-10-09", "08:00",
+		&minutes, tasks.Repeat{}, &parallelable, "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	id, _ := doc["id"].(string)
+
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	body := `{"ops":[{"op":"duplicate","id":"` + id + `"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/batch", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	batchTasks(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch: got %d (%s)", w.Code, w.Body.String())
+	}
+	// The copy's id is what the log row is about.
+	var batch struct {
+		Results []struct {
+			ID string `json:"id"`
+			Op string `json:"op"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &batch); err != nil {
+		t.Fatalf("decoding %s: %v", w.Body.String(), err)
+	}
+	if len(batch.Results) != 1 || batch.Results[0].Op != "duplicate" {
+		t.Fatalf("results = %+v, want one duplicate", batch.Results)
+	}
+	copyID := batch.Results[0].ID
+
+	// Scoped to this run's copy: the test database is not dropped between
+	// runs, so a filter on the op alone would also find the previous run's
+	// row.
+	rows, _, err := store.ListMutations(ctx, tasks.MutationFilter{
+		TaskID: copyID,
+		Ops:    []string{tasks.OpDuplicate},
+	})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("duplicate rows = %d, want 1", len(rows))
+	}
+	if rows[0].TaskID != copyID {
+		t.Errorf("task_id = %q, want the copy's id %q", rows[0].TaskID, copyID)
+	}
+	// And the op filter alone finds it too — the vocabulary is what the
+	// caller filters on, so a duplicate must be reachable by op alone.
+	rows, _, err = store.ListMutations(ctx, tasks.MutationFilter{Ops: []string{tasks.OpDuplicate}})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	found := false
+	for _, r := range rows {
+		if r.TaskID == copyID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("op=duplicate did not find the copy %q", copyID)
 	}
 }
 

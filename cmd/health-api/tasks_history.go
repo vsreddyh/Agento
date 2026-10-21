@@ -24,9 +24,10 @@ import (
 
 // taskMutations serves the change log.
 //
-// Filters: `task_id` (one task), `op` (comma-separated, e.g. "complete,skip"),
-// `since` (an inclusive RFC3339 lower bound on `at` — fractional seconds
-// accepted) and `limit`.
+// Filters: `task_id` (one task), `op` (comma-separated, e.g. "complete,skip";
+// `duplicate` matches only duplicates made through a batch), `since` (an
+// inclusive RFC3339 lower bound on `at` — fractional seconds accepted) and
+// `limit`.
 //
 // The filter params are STRICT and the limit is LENIENT, and the difference
 // is deliberate: a malformed `since`, `op` or `task_id` would silently widen

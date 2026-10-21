@@ -71,7 +71,8 @@ Use it when the user asks what happened to a task, or when a task changed
 without the agent doing it. Every argument is optional: `task_id` (one
 task — the 24-character hex id `create_task` returned), `op`
 (comma-separated: create, update, delete, complete, skip, reopen,
-duplicate), `since` (INCLUSIVE RFC3339 timestamp, fractional seconds
+duplicate — `duplicate` appears only for duplicates made through a batch),
+`since` (INCLUSIVE RFC3339 timestamp, fractional seconds
 accepted, e.g. `2026-10-21T00:00:00Z`; a `+02:00` offset needs
 percent-encoding as `%2B`), `limit` (default 200, max 500; zero or
 negative gives the default, a huge one is clamped). Newest first. A
