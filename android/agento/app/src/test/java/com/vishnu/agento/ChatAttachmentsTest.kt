@@ -334,7 +334,9 @@ class ChatAttachmentsTest {
     fun literalMarkerLookalikeQuotes() {
         // A user-typed trailing marker must not read as a produced one:
         // the typed occurrence quotes (visible in every render — plain
-        // Text and Markdown alike), the real marker appends plain.
+        // Text and Markdown alike), the real marker appends plain. Same
+        // for a mid-string lookalike (no $ anchor): one real photo, two
+        // identical markers would otherwise read as two photos.
         assertEquals(
             "\"[1 photo attached]\" [1 photo attached]",
             contentWithMarkerVerbatim("[1 photo attached]", 1),
@@ -342,6 +344,10 @@ class ChatAttachmentsTest {
         assertEquals(
             "look \"[2 photos attached]\" [1 photo attached]",
             contentWithMarker("look [2 photos attached]", 1),
+        )
+        assertEquals(
+            "\"[1 photo attached]\" hello [1 photo attached]",
+            contentWithMarkerVerbatim("[1 photo attached] hello", 1),
         )
     }
 
@@ -370,7 +376,11 @@ class ChatAttachmentsTest {
     fun requireIoThreadPassesOffMain() {
         // Suite runs on a worker thread (never named "main"), so the
         // boundary gate must pass here — this is the JVM half of the
-        // Looper-first/name-fallback contract.
+        // Looper-first/name-fallback contract. Runner assumption, stated
+        // (#339): Gradle workers are named "Test worker", not "main". If
+        // a future runner DID name test threads "main", this test would
+        // throw — loudly failing, never silently voiding the gate. The
+        // on-device gate itself is Looper-exact and runner-independent.
         requireIoThread("test")
     }
 

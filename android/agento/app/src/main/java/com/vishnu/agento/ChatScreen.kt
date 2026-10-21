@@ -582,7 +582,7 @@ internal fun ChatTab(
         val slots = MAX_IMAGES_PER_TURN - vm.pendingAttachmentCount()
         if (slots <= 0) {
             // One cap string + Info, shared with the backstop (#339).
-            vm.notify(capRefused(), ToastKind.Info)
+            vm.notify(capRefused(slots), ToastKind.Info)
             // Same leak as above: refusal skips the body, so the capture
             // is deleted here, not in finally.
             deleteQuietly(cleanup)
@@ -604,13 +604,12 @@ internal fun ChatTab(
         // stages 1 with no other toast, which reads as 2 lost picks.
         val overCap = unique.size > slots
         if (overCap) {
-            vm.notify(capRefused(), ToastKind.Info)
-        }
-        // Collapsed duplicates voice even under cap pressure (#339): same
-        // pick 3x with 1 slot free stages 1 copy via dedupe AND hits the
-        // cap — cap-only would hide the dedupe that also fired. Two Info
-        // toasts through the same queue the batch notices already share.
-        if (unique.size < uris.size) {
+            vm.notify(capRefused(slots), ToastKind.Info)
+        } else if (unique.size < uris.size) {
+            // Collapse-under-cap stays cap-only (#339): firing both toasts
+            // for one tap nags (two Info notices back to back for one
+            // gesture). The cap is the limiting fact; the dedupe still
+            // voices whenever it fires alone.
             vm.notify("Duplicate photos attached once.", ToastKind.Info)
         }
         // Hoisted ABOVE the launch (#339): the resolver is all the batch
@@ -676,7 +675,13 @@ internal fun ChatTab(
                     if (!room) {
                         if (!overCap) {
                             withContext(Dispatchers.Main) {
-                                vm.notify(capRefused(), ToastKind.Info)
+                                // Free slots re-read live (#339): room is a
+                                // boolean, but the cap wording needs the
+                                // count (full composer vs excess drop).
+                                vm.notify(
+                                    capRefused(MAX_IMAGES_PER_TURN - vm.pendingAttachmentCount()),
+                                    ToastKind.Info,
+                                )
                             }
                         }
                         break

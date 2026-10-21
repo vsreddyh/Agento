@@ -315,7 +315,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // storage-read attachments.
         val room = MAX_IMAGES_PER_TURN - cur.wiredPhotoCount()
         if (room <= 0) {
-            notify(capRefused(), ToastKind.Info)
+            notify(capRefused(room), ToastKind.Info)
             return
         }
         val take = wired.take(room)
@@ -326,7 +326,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // room either. Same shape as send()'s stored photos.wiredPhotos().
         _state.value = _state.value.copy(pendingAttachments = cur.wiredPhotos() + take)
         if (dropped > 0) {
-            notify(capRefused(), ToastKind.Info)
+            notify(capRefused(room), ToastKind.Info)
         }
     }
 

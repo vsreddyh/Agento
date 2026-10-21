@@ -237,13 +237,20 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
 const val MAX_IMAGES_PER_TURN = 2
 
 /**
- * Single wording for the whole per-turn cap family (#339): tap-time
+ * Single wording family for the whole per-turn cap (#339): tap-time
  * refusal, tap-time excess, mid-batch exhaustion, and the ViewModel
- * backstop all say exactly this with Info styling — nothing failed, the
- * cap held, so neither the words nor the styling may disagree by path.
+ * backstop all share the head with Info styling — nothing failed, the
+ * cap held, so neither the head nor the styling may disagree by path.
+ * The tail is conditional on free slots: a full composer ("remove one
+ * first") is a different action from a partial stage ("extras dropped"),
+ * and the unified string used to misname the no-op full-refusal path.
  */
-fun capRefused(): String =
-    "At most $MAX_IMAGES_PER_TURN photos per turn — extra photos were dropped."
+fun capRefused(freeSlots: Int): String =
+    if (freeSlots <= 0) {
+        "At most $MAX_IMAGES_PER_TURN photos per turn — the composer is full, remove one first."
+    } else {
+        "At most $MAX_IMAGES_PER_TURN photos per turn — extra photos were dropped."
+    }
 
 /** Longest side after downscale, px. A 1568px JPEG at quality 80 is
  * typically 150–600 KB — legible for the agent, small on the wire. */
@@ -354,11 +361,15 @@ fun ChatAttachment.dataUri(): String {
 fun attachmentMarker(n: Int): String =
     if (n == 1) "[1 photo attached]" else "[$n photos attached]"
 
-/** Trailing user-typed marker lookalike (#339): `[N photo(s) attached]$`. */
-private val literalMarker = Regex("""\[(\d+ photos?) attached\]$""")
+/** Trailing user-typed marker lookalike (#339): `[N photo(s) attached]`
+ * ANYWHERE in the text (not just trailing) — a mid-string lookalike
+ * ("[1 photo attached] hello" + a real photo) would otherwise ride with
+ * two identical markers for one photo. No `$` anchor by design: the real
+ * marker is appended AFTER escaping, so it can never self-quote. */
+private val literalMarker = Regex("""\[(\d+ photos?) attached\]""")
 
 /**
- * Quotes a user-typed trailing marker lookalike (#339): a user who
+ * Quotes a user-typed marker lookalike ANYWHERE in the text (#339): a user who
  * literally types `[1 photo attached]` would otherwise read
  * `"<typed> [1 photo attached]"`, indistinguishable from a real photo
  * turn on text surfaces. Quoted, not backslash-escaped: the escape
@@ -392,7 +403,7 @@ fun contentWithMarker(content: String, n: Int): String =
  * visibly paired and the next edit can't silently re-split them.
  * Trim/preserve split, stated once: export uses this too (reproducing
  * what the agent saw); search uses the trimming twin (matching is
- * trim-tolerant). A literal trailing lookalike quotes like the twin.
+ * trim-tolerant). A literal lookalike quotes like the twin.
  */
 fun contentWithMarkerVerbatim(content: String, n: Int): String =
     if (n <= 0) {
@@ -480,6 +491,12 @@ fun messageContentJson(
     // Scanning every history payload per send just to mark stripped turns
     // would tax O(history) per tap for no wire effect; validity is proven
     // only where parts are built, on the trailing turn below.
+    // STAGED-HONEST vs WIRE-STRICT split, named here (#339): the over-limit
+    // preflight counts decodable (it advises the SEND — "remove a photo"
+    // must name photos that would actually wire), while this marker counts
+    // wired (it describes the THREAD). A hand-edited ragged payload marks
+    // but never wires — both positions reasoned, disagreeing only on that
+    // hand-edited shape, which load() heals on read anyway.
     val markerCount = attachments.wiredPhotoCount()
     if (role != "user" || !includeImages) {
         // Stripped earlier photo turns stay honest (#339): the server
