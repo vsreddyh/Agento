@@ -157,51 +157,47 @@ private fun AttachmentThumb(
     // exists for the id == "" fallback. Named legacySlot (not slot) so
     // the stable value can't accidentally consume it. It IS a remember
     // key (single-slot safety — see below), but a slot shift only rebuilds
-    // the stable sample string, never re-decodes: the value still keys on
-    // UUID + length, so Triple equality holds across removes.
+    // the legacy sample string, never re-decodes: the stable value keys on
+    // UUID + length alone, so value equality holds across removes.
     legacySlot: Int = 0,
     stableId: String = "",
 ) {
     // Identity without walking the payload (#339): the per-pick UUID is
     // stable across removes — the stable VALUE ignores slot, so photo 1
-    // keeps its thumbnail when photo 0 leaves (Triple equality holds, no
+    // keeps its thumbnail when photo 0 leaves (value equality holds, no
     // re-decode, no flicker) — and distinct across identical picks (no
-    // aliasing). A
-    // 256-char-total head/tail sample (128+128) rides along in the stable
-    // value (128-char total, 64+64, in the legacy value below) as a second disambiguator for DISTINCT
-    // payloads: burst-shot headers can share a 64-char prefix, so the
-    // sample is wide enough that only adversarial mutation aliases — which
-    // a full-string walk (the cost this key exists to avoid) could close.
-    // Honestly scoped (#339): the remember keys are the cheap identity
-    // (UUID + slot + length) WITHOUT the sample, so a same-id +
-    // same-length + mutated-middle payload would reuse the cached Triple and never
-    // re-fire produceState. Impossible in practice — payloads are immutable
-    // from pick time, one UUID per pick — so the sample guards distinct
-    // payloads, not mutation. Legacy payloads (id "") key on slot + length
-    // with the same non-mutation caveat, best-effort by construction: two
-    // different pre-id photos with same length + same head/tail CAN alias
-    // here (no crash, no placeholder — just the wrong thumb). Self-aging
-    // as old threads turn over; new picks never land here.
+    // aliasing). The stable value carries NO sample (#339): distinct picks
+    // already differ by id, and the one case a sample would matter (same
+    // id + same length, mutated middle) never recomputes — the keys are
+    // unchanged, so the cached value (with its stale sample) is reused and
+    // the 256-char alloc per thumb per remove buys nothing on either path.
+    // Pick-time immutability (one UUID per pick, payloads never mutated)
+    // is what the stable branch rests on, stated here — not the sample.
+    // Legacy payloads (id "") have no UUID, so the legacy value keeps its
+    // 128-char-total sample (64+64): same slot + same length + same
+    // head/tail CAN still alias (no crash, no placeholder — just the wrong
+    // thumb), best-effort by construction. Self-aging as old threads turn
+    // over; new picks never land here.
     // Decoded off-main: ~1 MB Base64.decode + decodeByteArray during
     // composition janks low-end scroll, so produceState moves it to IO
     // (placeholder shows until it lands). No manual recycle: it can pull
     // pixels from under a late outgoing draw ("trying to use a recycled
     // bitmap") — ~256px thumbnails are GC-cheap, and prompt freeing is
     // not worth a crash.
-    // Remembered, not rebuilt per recomposition (#339): the sample string
-    // otherwise allocates fresh on every scroll frame per visible thumb.
-    // ONE remember slot with the branch inside (#339): stable ignores
-    // legacySlot, so a shared key rebuilds every survivor's sample string
-    // on each remove (indices shift i: 1→0) — accepted, because the
-    // alternative (conditional remember, one slot per branch) splits the
-    // slot by call position, and a future edit migrating an id in place
-    // would unmount/remount instead of re-keying. The rebuild cost is one
-    // 256-char alloc per surviving thumb on a remove (a rare user action),
-    // and Triple equality holds so produceState never restarts — the
-    // shift-reload fix holds either way.
+    // Remembered, not rebuilt per recomposition (#339): the legacy sample
+    // string otherwise allocates fresh on every scroll frame per visible
+    // thumb. ONE remember slot with the branch inside (#339): a shared key
+    // rebuilds the legacy branch's sample on each remove (indices shift
+    // i: 1→0) — accepted, because the alternative (conditional remember,
+    // one slot per branch) splits the slot by call position, and a future
+    // edit migrating an id in place would unmount/remount instead of
+    // re-keying. The stable branch allocates nothing per remove (a Pair,
+    // no sample walk); the legacy rebuild rides a rare user action on
+    // self-aging payloads, and value equality holds so produceState never
+    // restarts either way.
     val thumbKey = remember(stableId, legacySlot, base64.length) {
         if (stableId.isNotEmpty()) {
-            Triple(stableId, base64.length, base64.sampleKey(128))
+            stableId to base64.length
         } else {
             // Legacy fallback, best-effort by construction (#339): two
             // different pre-id photos with same length + same head/tail CAN
@@ -386,6 +382,9 @@ internal fun ChatTab(
         // process and survives rotation, which is exactly the distinction
         // needed. Only a truly fresh process clears the gate; rotation
         // keeps it via the timestamp bound.
+        // Snapshot on Main, compared as absolute below (#339): cameraPath
+        // is remember-backed snapshot state — snapshotting the plain value
+        // here keeps the IO block from touching snapshot state off-thread.
         val keep = cameraPath
         // Fresh-process vs rotation, told apart by the VM (#339): the sweep
         // gate reset fires once, only when the ViewModel died with the
@@ -410,13 +409,20 @@ internal fun ChatTab(
         // young non-keep file there can be an older flight still decoding
         // (a rapid re-tap overwrites cameraPath while the first batch reads
         // its own file — only the keep is provably live).
+        // Compared as absolute Files, not raw strings (#339): `keep` is a
+        // saveable path string, and a future writer storing a relative or
+        // Uri-derived display path would silently un-keep the live capture
+        // — the sweep would delete the file being written. File() wrap is
+        // identity for absolute inputs, so this costs nothing today and
+        // can't drift from the writer tomorrow.
+        val keepAbs = keep?.let { java.io.File(it).absolutePath }
         val sweepDir = appCacheDir.resolve("camera")
         withContext(Dispatchers.IO) {
             runCatching {
                 val now = System.currentTimeMillis()
                 sweepDir.takeIf { it.exists() }?.listFiles()
                     ?.filter {
-                        it.absolutePath != keep &&
+                        it.absolutePath != keepAbs &&
                             (freshProcess || now - it.lastModified() > CAMERA_SWEEP_STALE_MS)
                     }
                     ?.forEach { runCatching { it.delete() } }

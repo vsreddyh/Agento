@@ -315,6 +315,21 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun raggedPayloadCountsButWiresAsText() {
+        // Split-by-design contract (#339): a non-load construction (ragged
+        // alphabet here — load would have blanked it) counts as a photo in
+        // display/titles/search (blank-only predicate, hot-path cheap) but
+        // the wire filter drops it, so it rides as bare text — never a
+        // corrupt image part. Fail-closed at the wire, not silent.
+        val ragged = attachment(data = "!!!")
+        assertEquals(1, listOf(ragged).wiredPhotoCount())
+        assertEquals(
+            WireContent.Text("hi"),
+            messageContentJson("user", "hi", listOf(ragged), includeImages = true),
+        )
+    }
+
+    @Test
     fun photoOnlyThreadTitlesNamePhotos() {
         assertEquals(
             "Photo",

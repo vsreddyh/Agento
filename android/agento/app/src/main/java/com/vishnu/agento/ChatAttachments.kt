@@ -43,7 +43,9 @@ data class ChatAttachment(
 )
 
 /**
- * Attachments that actually wire (#339): blank payloads (hand-edited
+ * Attachments that count as photos: non-blank payloads (#339). The name is
+ * kept short for its ~30 call sites, so read this contract, not the name:
+ * NON-BLANK-guaranteed, not wire-guaranteed. Blank payloads (hand-edited
  * threads, writer bugs) count as no attachment everywhere — the wire
  * filter, display markers, titles, and search must all agree, or a blank
  * wires as bare text while the UI claims a photo. Load-bearing assumption,
@@ -53,12 +55,15 @@ data class ChatAttachment(
  * Any future reader bypassing load() (backup import, debug share) must
  * canonicalize first or re-split the contract. Decodability specifically
  * is LOAD-guaranteed, not predicate-guaranteed (#339): isWired() stays
- * blank-only (hot paths must not pay the alphabet scan), while the wire
- * filter asserts isDecodableBase64 per send — the two agree because load
- * blanked the ragged, not because the predicate checks it. An in-memory
- * construction bypassing load (unit-built ChatMessage, a future receiver
- * like TaskInstructReceiver) re-splits them: ragged counts as a photo in
- * display but wires as bare text.
+ * blank-only because the alphabet scan would run per search keystroke and
+ * per title render, while sends (the only place validity matters) are
+ * rare — so the wire filter asserts isDecodableBase64 per send instead.
+ * The two agree because load blanked the ragged, not because the predicate
+ * checks it. An in-memory construction bypassing load (unit-built
+ * ChatMessage, a future receiver like TaskInstructReceiver) re-splits
+ * them by design: ragged counts as a photo in display but wires as bare
+ * text (fail-closed at the wire, never a corrupt part). Pinned by test
+ * (`raggedPayloadCountsButWiresAsText`), not just prose.
  */
 fun List<ChatAttachment>.wiredPhotos(): List<ChatAttachment> =
     filter { it.isWired() }
