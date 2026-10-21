@@ -806,6 +806,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             }
         }
         threads = threads.filterNot { it.id == id }
+        // The deleted thread's LEGACY thumbs die with it (#339): they would
+        // otherwise sit in the cache until LRU pressure evicted them.
+        thumbCache.removeThread(id)
         if (threadId == id) {
             // `id` is already filtered out above: the fallback is the newest remaining thread.
             val next = threads.firstOrNull { it.messages.isNotEmpty() }

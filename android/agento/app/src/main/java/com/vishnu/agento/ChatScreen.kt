@@ -137,8 +137,13 @@ private fun String.sampleKey(half: Int): String =
  * Process-lifetime IO scope for fire-and-forget file cleanup: deleteQuietly
  * must survive tab-leave, rotation AND composition death — so it launches
  * here, not on a composition scope.
+ *
+ * NEVER CANCELLED, BY DESIGN (#339): a cleanup that is cancelled by a
+ * tab-leave would leak the file it was meant to delete. Named
+ * `processCleanupScope` so the lifetime is explicit — do NOT launch real
+ * work here (it would inherit a process-lifetime scope by accident).
  */
-private val cleanupScope =
+private val processCleanupScope =
     kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
     )
@@ -165,6 +170,16 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
      * for LRU pressure. Thread-delete rides LRU pressure instead. */
     fun remove(key: Any) {
         cache.remove(key)
+    }
+    /** Evicts one thread's LEGACY keys (#339): a deleted thread's thumbs
+     * are dead weight (up to 8 MB pinned by LRU pressure alone). Stable-id
+     * keys are global — no thread in them — and stay. */
+    fun removeThread(threadKey: String) {
+        val prefix = "$threadKey/"
+        for (key in cache.snapshot().keys) {
+            val id = (key as? Triple)?.first as? String ?: continue
+            if (id.startsWith(prefix)) cache.remove(key)
+        }
     }
     fun evictAll() = cache.evictAll()
 }
@@ -310,7 +325,10 @@ internal fun ChatTab(
     val thumbCache = vm.thumbCache
     // New thread, new staging episode: the voice slate belongs to the old
     // thread's staged set. The thumb cache is NOT evicted here by design —
-    // keys carry no thread, so a dead thread's bitmaps are unreachable.
+    // its keys split two ways: STABLE ids are global (a UUID names one
+    // photo everywhere, so a dead thread's bitmap is unreachable), while
+    // LEGACY id-less keys are thread-scoped (they carry the thread, so
+    // they are evicted on thread delete instead).
     LaunchedEffect(state.threadId) {
         liveStagedVoicedCount = 0
     }
@@ -485,7 +503,7 @@ internal fun ChatTab(
     // cleanupScope; when that scope is dead the unlink runs inline.
     fun deleteQuietly(f: File?) {
         if (f == null) return
-        cleanupScope.launch {
+        processCleanupScope.launch {
             runCatching { f.takeIf { it.exists() }?.delete() }
         }
     }
@@ -646,9 +664,21 @@ internal fun ChatTab(
                 // deduped set still overflows, so the notice waits for the
                 // loop outcome — voiced only when something staged AND no
                 // cap toast fired.
-                if (hadDupes && landed.get() > 0 && !capToasted.get()) {
+                // Landed notice (#339): the batch outlives the tab (it runs
+                // in the ViewModel's scope), so photos can land in a
+                // composer the user is not looking at — say so instead of
+                // letting them appear silently on return.
+                if (landed.get() > 0 && !capToasted.get()) {
                     withContext(Dispatchers.Main) {
-                        vm.notify("Duplicate photos attached once.", ToastKind.Info)
+                        val n = landed.get()
+                        vm.notify(
+                            when {
+                                hadDupes -> "Duplicate photos attached once."
+                                n == 1 -> "Photo added to the composer."
+                                else -> "$n photos added to the composer."
+                            },
+                            ToastKind.Info,
+                        )
                     }
                 }
             } catch (e: CancellationException) {

@@ -143,6 +143,12 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
         if (isDecodableBase64(a.base64)) {
             a
         } else if (a.base64.length > MAX_RAW_BASE64_CHARS) {
+            // Over the raw ceiling: blanked, NOT healed (#339) — healing
+            // would first build a filtered copy of that same giant, the
+            // exact allocation the ceiling exists to prevent. A valid
+            // payload wrapped past the ceiling is therefore blanked on
+            // purpose: it wires as no-photo instead of costing a 4 M-char
+            // copy, and the app never writes wrapped payloads at all.
             a.copy(base64 = "")
         } else if (a.base64.all { it.isWhitespace() }) {
             // All-whitespace just under the ceiling: blank without building the copy.
