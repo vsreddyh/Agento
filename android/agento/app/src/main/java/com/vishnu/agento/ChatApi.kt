@@ -669,6 +669,11 @@ class ChatApi(context: Context) {
             // payload's alphabet, which is up to hundreds of millions of
             // characters — on the producer's thread outside this block it
             // would sit on the collector's path.
+            // RAGGED-ONLY TURN, documented (#339): the marker counts WIRE
+            // photos (the thread titles as "[1 photo attached]") while this
+            // advice counts DECODABLE ones (a ragged payload never wires),
+            // so such a turn is advised as "shorten the thread" — the photo
+            // it claims is not one the wire would send.
             val hasPhotos = messages.any { it.attachments.hasDecodablePhoto() }
             Triple(built, built.contentLength(), hasPhotos)
             }

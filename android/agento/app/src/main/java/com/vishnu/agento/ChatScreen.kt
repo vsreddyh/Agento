@@ -272,8 +272,11 @@ private fun AttachmentThumb(
     // (previews, single-use callers with cache = null).
     threadKey: String = "",
     // Scroll-back memory, hoisted by the caller: null disables the cache
-    // (previews, single-use). Stable picks need no threadKey — UUIDs are
-    // globally unique, so the (id, length) key can never alias across threads.
+    // (previews, single-use). The thread is in EVERY key (#339) — a UUID
+    // alone would be unique, but without the thread the key could not be
+    // evicted when its thread was deleted, and the cache would pin the
+    // dead thread's bitmaps. The cost is a re-decode when the same photo
+    // shows in two threads (rare — a photo belongs to one thread).
     cache: ThumbCache? = null,
 ) {
     // Identity without walking the payload: the per-pick UUID is stable
