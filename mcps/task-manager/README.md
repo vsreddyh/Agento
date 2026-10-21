@@ -17,7 +17,7 @@ store, same validation — see `cmd/health-api/main.go`).
 | `skip_task` | Skip the occurrence without claiming the work was done (retained 3 days like a completion; `reopen_task` restores it); structured repeats roll over server-side like `complete_task` |
 | `reopen_task` | Reopen a completed or skipped task (cancels expiry) |
 | `delete_task` | Permanently delete |
-| `task_history` | Read the change log (#350): every create/update/complete/skip/reopen/delete, with op, task_id, source and at. Filters: `task_id`, `op` (comma-separated), `since` (inclusive RFC3339), `limit` |
+| `task_history` | Read the change log (#350): every create/update/complete/skip/reopen/delete, with op, task_id, source and at. Filters: `task_id`, `op` (comma-separated), `since` (inclusive RFC3339, fractional seconds accepted), `limit` |
 
 ## Schema (MongoDB `hermes` DB)
 

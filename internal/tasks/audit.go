@@ -110,7 +110,10 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		// Still best-effort: the user's mutation succeeded, so a log gap is the lesser
 		// failure. But it is logged loudly rather than swallowed, because a silent gap
 		// is indistinguishable from "nothing happened".
-		log.Printf("tasks: mutation log write failed (op=%s task=%s): %v", op, taskID, err)
+		// Quoted, like the two drop paths above: op and task_id are
+		// constants and hex today, so this is only about a future caller
+		// that passes a raw label and splits a log line with it.
+		log.Printf("tasks: mutation log write failed (op=%q task=%q): %v", op, taskID, err)
 	}
 }
 

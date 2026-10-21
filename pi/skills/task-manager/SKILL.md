@@ -72,9 +72,11 @@ without the agent doing it. Every argument is optional: `task_id` (one
 task — the 24-character hex id `create_task` returned), `op`
 (comma-separated: create, update, delete, complete, skip, reopen,
 duplicate), `since` (INCLUSIVE RFC3339 timestamp, fractional seconds
-accepted, e.g. `2026-10-21T00:00:00Z`), `limit` (default 200, max 500).
-Newest first. A malformed `task_id`, `op` or `since` is refused, not
-answered with an empty history.
+accepted, e.g. `2026-10-21T00:00:00Z`; a `+02:00` offset needs
+percent-encoding as `%2B`), `limit` (default 200, max 500; zero or
+negative gives the default, a huge one is clamped). Newest first. A
+malformed `task_id`, `op` or `since` is refused, not answered with an
+empty history.
 
 `source` is a self-attested LABEL — `mcp` for the agent, the app's own label
 otherwise — not an authenticated identity. Say "the app changed it", not
