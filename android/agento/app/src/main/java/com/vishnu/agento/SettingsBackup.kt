@@ -326,7 +326,18 @@ object SettingsBackup {
                         // import just overwrote. A skip keeps them; the count
                         // still hints at it (applied excludes the file).
                         // Fresh-reinstall loss is identical either way (the
-                        // shape was never loadable). Non-thread files keep
+                        // shape was never loadable).
+                        // Oversize persists until send, BY DESIGN (#339):
+                        // canonicalize strips whitespace and blanks ragged
+                        // payloads but does NOT enforce the 1.5M staging cap
+                        // — an old thread must stay readable even if a newer
+                        // build would refuse to stage it. So a 3 MB imported
+                        // payload loads, titles, and searches as a photo,
+                        // then trips the named per-photo wire cap at send
+                        // time. Fail-closed and correct; the failure just
+                        // surfaces far from the cause, which this note —
+                        // and the named error itself — closes.
+                        // Non-thread files keep
                         // the raw write-through (no decoder to disagree with).
                         val toWrite = if (name.startsWith("chat_threads_")) {
                             ChatThreads.canonicalizeFile(text) ?: continue

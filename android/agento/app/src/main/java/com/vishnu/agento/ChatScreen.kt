@@ -165,7 +165,6 @@ internal class ThumbCache(maxEntries: Int = 32) {
     fun put(key: Any, bmp: android.graphics.Bitmap) {
         cache.put(key, bmp)
     }
-    fun evictAll() = cache.evictAll()
 }
 
 /**
@@ -331,13 +330,10 @@ internal fun ChatTab(
     // remembers per composition, so scrolling away disposes the bitmap and
     // scrolling back re-decodes. Hoisted here so the cache outlives any
     // one composition; the cache itself is bounded (see ThumbCache).
-    // Scroll-back memory survives composition, not threads (#339):
-    // hoisted here so the cache outlives any one composition — but stable
-    // ids are only unique per pick, not per thread, so a switch/delete
-    // would leave the old thread's bitmaps (up to 32 entries) resident
-    // until LRU pressure evicts them — unreachable forever, yet evicting
-    // the live thread's. Evict eagerly on thread change instead.
-    val thumbCache = remember { ThumbCache() }
+    // Keyed by tab like every other tab-scoped state (#339): the entry
+    // keys already carry threadId (no cross-thread bitmaps), but a tab
+    // reuse must not inherit the other tab's LRU pressure either.
+    val thumbCache = remember(tab) { ThumbCache() }
     // New thread, new staging episode (#339): the voice slate belongs to
     // the old thread's staged set. (The cache is NOT evicted here — keys
     // carry the thread, so old entries age out via LRU instead of forcing
@@ -632,8 +628,13 @@ internal fun ChatTab(
             onBatchDone()
             return
         }
-        // Try-entry proof for the TOCTOU below (#339).
-        var batchStarted = false
+        // Try-entry proof for the TOCTOU below (#339). Atomic like every
+        // other cross-thread flag in this file (cameraBusy is snapshot,
+        // ioGuard/started are atomics): the write lands on the IO thread
+        // and the read on Main — plain ordering would hold by construction
+        // (same launch-then-read sequence as deleteQuietly's old flag),
+        // but the file gates every cross-thread write the same way.
+        val batchStarted = java.util.concurrent.atomic.AtomicBoolean(false)
         scope.launch(Dispatchers.IO, CoroutineStart.UNDISPATCHED) {
             // First statement: try-entry proof (#339). Combined with
             // UNDISPATCHED (body starts synchronously inside launch()),
@@ -641,10 +642,21 @@ internal fun ChatTab(
             // (scope died between the isActive check and launch) from
             // "body ran" — and settle the never-ran case inline, since
             // its finally/onBatchDone will never fire.
-            batchStarted = true
+            batchStarted.set(true)
             // Landed count for the cancel notice below: only a batch that
-            // staged something before dying has anything to report.
-            var landed = 0
+            // staged something before dying has anything to report. Atomic
+            // with the same reasoning: written on Main hops, read on the
+            // IO-thread catch below.
+            val landed = java.util.concurrent.atomic.AtomicInteger(0)
+            // Consecutive-failure abort (#339): failures yield to the next
+            // Uri by design (a bad pick must not cost a later good one its
+            // slot), but 50 corrupt URIs would each burn a full
+            // prepareAttachment (up to 32 MB read + decodes + EXIF) before
+            // the room check fills. Three in a row aborts the rest with a
+            // named notice — a mixed batch (bad, good, bad) still stages
+            // the good ones, since only CONSECUTIVE failures count.
+            val consecutiveFailures = java.util.concurrent.atomic.AtomicInteger(0)
+            val batchAborted = java.util.concurrent.atomic.AtomicBoolean(false)
             try {
                 // No pre-truncation (#339): a failed pick must not cost a
                 // later good pick its slot — the room re-check below stops
@@ -713,15 +725,29 @@ internal fun ChatTab(
                         // Landed counts actual growth (#339), not attempts:
                         // the backstop can drop on a concurrent-batch race,
                         // and the cancel notice must name kept photos, not
-                        // attempted ones.
+                        // attempted ones. A failure yields to the next Uri —
+                        // unless failures run consecutively past the abort
+                        // bound, which ends the batch instead of burning a
+                        // full prepareAttachment per corrupt pick.
                         result
                             .onSuccess {
                                 val before = vm.pendingAttachmentCount()
                                 vm.addPendingAttachments(listOf(it))
-                                if (vm.pendingAttachmentCount() > before) landed++
+                                if (vm.pendingAttachmentCount() > before) landed.incrementAndGet()
+                                consecutiveFailures.set(0)
                             }
-                            .onFailure { vm.notify(it.message ?: "Couldn't attach that photo.") }
+                            .onFailure {
+                                vm.notify(it.message ?: "Couldn't attach that photo.")
+                                if (consecutiveFailures.incrementAndGet() >= MAX_CONSECUTIVE_ATTACH_FAILURES) {
+                                    vm.notify(
+                                        "Stopped after repeated unreadable photos — the rest were skipped.",
+                                        ToastKind.Info,
+                                    )
+                                    batchAborted.set(true)
+                                }
+                            }
                     }
+                    if (batchAborted.get()) break
                 }
             } catch (e: CancellationException) {
                 // Cancelled mid-batch (tab left, #339): staged picks stay,
@@ -731,10 +757,10 @@ internal fun ChatTab(
                 // toast firing on return would report a non-event.
                 // Immediately rethrown: swallowing cancel breaks structured
                 // concurrency.
-                if (landed > 0) {
+                if (landed.get() > 0) {
                     withContext(Dispatchers.Main + NonCancellable) {
                         vm.notify(
-                            if (landed == 1) {
+                            if (landed.get() == 1) {
                                 "Stopped staging photos — 1 photo kept in the composer."
                             } else {
                                 "Stopped staging photos — $landed photos kept in the composer."
@@ -766,11 +792,11 @@ internal fun ChatTab(
         }
         // Never-ran settle (#339): with UNDISPATCHED above, a live scope
         // runs the body (and its first statement) synchronously inside
-        // launch() — so batchStarted == false here proves the scope died
-        // in the TOCTOU window and the finally above never ran. Settle
+        // launch() — so batchStarted.get() == false here proves the scope
+        // died in the TOCTOU window and the finally above never ran. Settle
         // inline on Main (this thread): the capture deletes best-effort
         // via helper (IO), the flag resets directly.
-        if (!batchStarted) {
+        if (!batchStarted.get()) {
             deleteQuietly(cleanup)
             onBatchDone()
         }

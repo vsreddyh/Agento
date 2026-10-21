@@ -236,6 +236,13 @@ fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachm
  * gateway's 4 MiB limit (see the invariant test in [ChatAttachmentsTest]). */
 const val MAX_IMAGES_PER_TURN = 2
 
+/** Consecutive unreadable picks before a batch aborts (#339): failures
+ * yield to the next Uri by design, but each burns a full prepareAttachment
+ * (up to 32 MB read + decodes + EXIF) — without a bound, one bad batch
+ * spins through the whole picker result. Mixed batches are safe: only
+ * CONSECUTIVE failures count, so bad-good-bad still stages the good. */
+const val MAX_CONSECUTIVE_ATTACH_FAILURES = 3
+
 /**
  * Single wording family for the whole per-turn cap (#339): tap-time
  * refusal, tap-time excess, mid-batch exhaustion, and the ViewModel
