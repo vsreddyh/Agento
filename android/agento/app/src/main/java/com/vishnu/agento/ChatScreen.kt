@@ -2781,11 +2781,15 @@ internal fun ChatScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End,
                         ) {
+                            // Both stop the readout first, like the IME send
+                            // (#339): a spoken reply must not keep playing
+                            // over the state these buttons change — the
+                            // keyboard path already did this via stopThen.
                             if (state.activeRunId.isNotBlank()) {
-                                TextButton(onClick = onSteer) { Text("Steer") }
+                                TextButton(onClick = { tts.stop(); onSteer() }) { Text("Steer") }
                             }
                             if (state.queued.isBlank()) {
-                                TextButton(onClick = onSend) { Text("Queue send") }
+                                TextButton(onClick = { tts.stop(); onSend() }) { Text("Queue send") }
                             }
                         }
                     }

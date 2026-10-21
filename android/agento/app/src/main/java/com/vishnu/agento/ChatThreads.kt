@@ -268,6 +268,16 @@ object ChatThreads {
         }
     }
 
+    /** Drops the dirty-tracking snapshot for [tab] (#339): an out-of-band
+     * writer (the backup import writes the thread file directly, bypassing
+     * [save]) must invalidate it, or the next save with unchanged VM
+     * instances would hit the cache and restore the pre-import bytes over
+     * the just-imported file. Cheap: the cache is a perf hint, never a
+     * source of truth. */
+    internal fun invalidate(tab: String) {
+        lastCanonical.remove(tab)
+    }
+
     /** Last save's (input, canonicalized-output) snapshot per tab (#339):
      * the dirty-tracking cache behind [save]. Element-wise identity of the
      * CURRENT list is checked against the last INPUT — never the last

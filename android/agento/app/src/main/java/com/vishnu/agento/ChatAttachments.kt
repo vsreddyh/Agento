@@ -132,7 +132,16 @@ const val MAX_RAW_BASE64_CHARS = 4_000_000
  * standard base64 exclusively, so a `-_` payload is foreign input and
  * fail-closed blanks it — a future share path emitting URL-safe must
  * normalize first, or its photos will wire as text-only with no marker
- * (silent-looking data loss, by this design on purpose). */
+ * (silent-looking data loss, by this design on purpose).
+ * Alphabet, NOT image magic (#339), accepted risk: a hand-edited payload
+ * that is valid base64 but not a JPEG ("aGVsbG8=") passes and wires as an
+ * image_url part the gateway refuses. Checking the JPEG SOI (FF D8 FF)
+ * here would mean decoding every part on every send (and flip the
+ * alphabet-only wire fixtures), while the app never produces such a
+ * payload: staging re-encodes to JPEG, load() only strips/blank, and the
+ * outcome is a named server refusal for that hand-edited turn — not
+ * corrupt local state. The "never a corrupt part" contract covers the
+ * staged path; storage-injected non-JPEG stays a server-side refusal. */
 internal fun isDecodableBase64(s: String): Boolean {
     if (s.isEmpty() || s.length % 4 != 0 || s.length > MAX_RAW_BASE64_CHARS) return false
     var paddingStarted = false
@@ -852,6 +861,26 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
     withContext(Dispatchers.IO) {
         runCatching {
             val resolver = context.contentResolver
+            // Known-size fast fail (#339): a mislabeled video reports its
+            // size through OpenableColumns, so refuse it BEFORE the read
+            // allocates anything. Without this the loop reads up to 32 MB
+            // and then toByteArray() copies it, peaking ~64 MB on exactly
+            // the shape (giant media picked as a photo) the cap exists for.
+            // Unknown size (-1) or a provider that throws falls through to
+            // the bounded read below.
+            val knownBytes = runCatching {
+                resolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)
+                    ?.use { c ->
+                        val i = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (i >= 0 && c.moveToFirst()) c.getLong(i) else -1L
+                    } ?: -1L
+            }.getOrDefault(-1L)
+            if (knownBytes > MAX_SOURCE_BYTES) {
+                throw OversizeAttachError(
+                    "That file is too large to attach " +
+                        "(over about ${formatBytes(MAX_SOURCE_BYTES.toLong())}).",
+                )
+            }
             // Scoped read+decode (#339): bounds, sample, pixels, and EXIF
             // all run inside this block from one bounded read, so `bytes`
             // falls out of scope before rotation/scale/compress — the
@@ -861,10 +890,14 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
             // the single read and drops the retention.)
             val decoded = run {
                 val bytes = resolver.openInputStream(uri)?.use { stream ->
-                // Pre-sized 1 MB (#339): the default 32-byte buffer doubles
-                // its way to 32 MB (~64 MB transient at the top copy), and
-                // real photos land within an order of this anyway.
-                val out = ByteArrayOutputStream(1 shl 20)
+                // Pre-sized 1 MB, or the provider's known size when it is in
+                // range (#339): the default buffer doubles its way to the
+                // file, paying up to ~3x transient on a large read — an
+                // exact-size buffer allocates once. Oversize files already
+                // failed above, so the fallback only serves unknown sizes.
+                val out = ByteArrayOutputStream(
+                    if (knownBytes in 1L..MAX_SOURCE_BYTES.toLong()) knownBytes.toInt() else 1 shl 20,
+                )
                 val buf = ByteArray(8192)
                 var total = 0L
                 // A 0 return is legal but progress-less (#339): bail after

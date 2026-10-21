@@ -1240,6 +1240,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val text = rawText.trim()
         // Photos send with or without text (#318): an image-only turn is a
         // real turn (the server treats blank text + images as non-blank).
+        // This snapshot is the TURN's payload (stored/sent below); the
+        // streaming-branch notices read pendingAttachmentCount() live
+        // instead (#339), so a future suspension between here and a toast
+        // cannot misname how many photos stayed staged.
         val photos = _state.value.pendingAttachments
         // Ready-gated with a voice (#339): the button disables on !ready,
         // but the IME send action bypasses it — an ungated return would
@@ -1272,7 +1276,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // said here too, not just for the image-only tap. Info:
                     // the photos are safe, nothing failed. Counted wired
                     // like every marker in this file (#339).
-                    val parkedQueuedCount = photos.wiredPhotoCount()
+                    val parkedQueuedCount = pendingAttachmentCount()
                     if (parkedQueuedCount > 0) {
                         notify(
                             "Queued behind this reply — text sends, " +
@@ -1287,7 +1291,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // toast the tap reads dead — the class this PR keeps
                     // eliminating. Names staged photos like the branch
                     // above so the two queued notices agree (wired count).
-                    val parkedSecondCount = photos.wiredPhotoCount()
+                    val parkedSecondCount = pendingAttachmentCount()
                     notify(
                         "Already queued — sends when this reply finishes." +
                             if (parkedSecondCount > 0) {
@@ -1298,7 +1302,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         ToastKind.Info,
                     )
                 }
-            } else if (photos.wiredPhotoCount() > 0) {
+            } else if (pendingAttachmentCount() > 0) {
                 // Image-only tap while streaming (#339): nothing queues
                 // (the queue is text), so say the photos are waiting —
                 // otherwise the enabled send button looks dead. Info, same

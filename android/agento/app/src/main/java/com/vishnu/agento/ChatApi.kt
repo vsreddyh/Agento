@@ -6,12 +6,14 @@ import androidx.core.content.edit
 import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -783,7 +785,21 @@ class ChatApi(context: Context) {
                         is SseEnd.EndOfStream -> trySend(doneFor(end, full.toString(), seenUsage))
                     }
                 }
+            } catch (e: CancellationException) {
+                // Cancel is not a turn failure (#339): awaitClose's
+                // job.cancel() must propagate so structured concurrency
+                // stays intact, and no Error frame may be emitted over the
+                // user's own stop — same rule namedReadError applies on the
+                // attach path.
+                throw e
             } catch (e: Exception) {
+                // Cancel-induced IOException (#339): OkHttp surfaces
+                // call.cancel() as IOException("Canceled") rather than a
+                // CancellationException, and the job's scope is already
+                // inactive by then. Emitting an Error frame here toasted a
+                // failure for a turn the user had just stopped (or left).
+                // A dead scope means "nobody is listening": say nothing.
+                if (!isActive) return@launch
                 trySend(ChatEvent.Error(e.message ?: e.javaClass.simpleName))
             } finally {
                 close()

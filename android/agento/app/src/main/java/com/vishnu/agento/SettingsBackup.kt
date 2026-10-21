@@ -312,12 +312,20 @@ object SettingsBackup {
                         applied++
                     }
                 }
-                // Real token totals: JSON numbers only (optLong coerces, so the
-                // raw type is checked first like the other allowlists).
-                // Negatives (hand-edited files) clamp to 0 — totals never go below.
+                // Real token totals: Long/Int only, mirroring export (#339).
+                // opt() type check then optLong() would coerce a fractional
+                // Double (1.9) into a wrong-but-plausible 1 — the two sides
+                // now reject the same shapes, so a corrupted count is
+                // skipped, not silently truncated. Negatives (hand-edited)
+                // clamp to 0 — totals never go below.
                 for (k in LONG_KEYS) {
-                    if (values.has(k) && values.opt(k) is Number) {
-                        putLong(k, maxOf(0L, values.optLong(k, 0L)))
+                    val n: Long? = when (val v = values.opt(k)) {
+                        is Long -> v
+                        is Int -> v.toLong()
+                        else -> null
+                    }
+                    if (n != null) {
+                        putLong(k, maxOf(0L, n))
                         applied++
                     }
                 }
@@ -387,6 +395,14 @@ object SettingsBackup {
                         val toWrite = ChatThreads.canonicalizeFile(text) ?: continue
                         runCatching {
                             java.io.File(context.filesDir, name).writeText(toWrite, Charsets.UTF_8)
+                            // Invalidate the save cache for this tab (#339):
+                            // the import bypasses save(), so a stale snapshot
+                            // would make the next save with unchanged VM
+                            // instances write the pre-import bytes back over
+                            // the file we just restored.
+                            ChatThreads.invalidate(
+                                name.removePrefix("chat_threads_").removeSuffix(".json"),
+                            )
                             applied++
                         }
                         continue
