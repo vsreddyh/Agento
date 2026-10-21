@@ -1,0 +1,116 @@
+package main
+
+import (
+	"agento/internal/tasks"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestBatchRequiresAuth(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/batch", strings.NewReader(`{"ops":[]}`))
+	w := httptest.NewRecorder()
+	batchTasks(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token: got %d", w.Code)
+	}
+}
+
+func TestBatchRejectsGet(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/batch", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	batchTasks(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("get: got %d", w.Code)
+	}
+}
+
+func TestParseBatchOpsValid(t *testing.T) {
+	fields := map[string]any{
+		"ops": []any{
+			map[string]any{"op": "complete", "id": "abc"},
+			map[string]any{"op": "skip", "id": "def", "reason": "busy"},
+			map[string]any{"op": "update", "id": "ghi", "fields": map[string]any{"due_date": "2026-12-01"}},
+		},
+	}
+	ops, err := parseBatchOps(fields)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(ops) != 3 || ops[0].Op != "complete" || ops[1].Reason != "busy" {
+		t.Fatalf("unexpected ops: %+v", ops)
+	}
+	if ops[2].Fields["due_date"] != "2026-12-01" {
+		t.Fatalf("update fields lost: %+v", ops[2])
+	}
+}
+
+func TestParseBatchOpsRejectsBadShapes(t *testing.T) {
+	cases := map[string]map[string]any{
+		"missing ops":  {},
+		"null ops":     {"ops": nil},
+		"ops not array": {"ops": "complete"},
+		"item not object": {"ops": []any{"complete"}},
+		"missing op":      {"ops": []any{map[string]any{"id": "abc"}}},
+		"missing id":      {"ops": []any{map[string]any{"op": "complete"}}},
+		"op not string":   {"ops": []any{map[string]any{"op": 3, "id": "abc"}}},
+		"id not string":   {"ops": []any{map[string]any{"op": "complete", "id": 3}}},
+		"reason not string": {"ops": []any{map[string]any{"op": "skip", "id": "abc", "reason": 3}}},
+		"fields not object": {"ops": []any{map[string]any{"op": "update", "id": "abc", "fields": "soon"}}},
+	}
+	for name, fields := range cases {
+		if _, err := parseBatchOps(fields); err == nil {
+			t.Fatalf("%s: must fail", name)
+		}
+	}
+}
+
+func TestBatchHandlerRejectsBadShapes(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	for _, body := range []string{`{}`, `{"ops": "complete"}`, `{"ops": [{"id": "abc"}]}`, `not json`} {
+		req := httptest.NewRequest(http.MethodPost, "/api/tasks/batch", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-secret-12345678")
+		w := httptest.NewRecorder()
+		batchTasks(w, req)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("body %s: got %d, want 422", body, w.Code)
+		}
+	}
+}
+
+func TestWriteBatchErrNamesTheFailingOp(t *testing.T) {
+	// Conflict keeps its 409 through the batch wrapper, with index/id/op added.
+	w := httptest.NewRecorder()
+	writeBatchErr(w, &tasks.BatchOpError{Index: 2, Op: "update", ID: "abc",
+		Err: &tasks.StoreError{Msg: "conflict: task changed", Conflict: true}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("conflict: got %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{`"index":2`, `"id":"abc"`, `"op":"update"`, "conflict"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %s: %s", want, body)
+		}
+	}
+	// Unknown id keeps its 404.
+	w2 := httptest.NewRecorder()
+	writeBatchErr(w2, &tasks.BatchOpError{Index: 0, Op: "complete", ID: "missing",
+		Err: &tasks.StoreError{Msg: "unknown task 'missing'"}})
+	if w2.Code != http.StatusNotFound {
+		t.Fatalf("unknown task: got %d", w2.Code)
+	}
+	if !strings.Contains(w2.Body.String(), `"index":0`) {
+		t.Fatalf("body missing index: %s", w2.Body.String())
+	}
+	// Non-batch errors delegate to the single-verb mapping.
+	w3 := httptest.NewRecorder()
+	writeBatchErr(w3, errors.New("boom"))
+	if w3.Code != http.StatusInternalServerError {
+		t.Fatalf("plain error: got %d", w3.Code)
+	}
+}
