@@ -165,11 +165,24 @@ private val processCleanupScope =
  */
 internal class ThumbCache(maxKb: Int = 8 * 1024) {
     private val cache = object : android.util.LruCache<ThumbKey, android.graphics.Bitmap>(maxKb) {
+        // allocationByteCount, not byteCount (#339): a hardware-config
+        // bitmap can report 0 logical bytes while the real allocation is
+        // larger, so byteCount alone would let the cache hold far more
+        // than its byte bound. allocationByteCount covers both configs.
         override fun sizeOf(key: ThumbKey, value: android.graphics.Bitmap): Int =
-            maxOf(1, value.byteCount / 1024)
+            maxOf(1, value.allocationByteCount / 1024)
     }
+    /** Threads whose thumbs are dead (#339): a deleted thread's id never
+     * comes back, so a decode that finishes AFTER the eviction must not
+     * re-pin its bitmap. */
+    private val deadThreads: MutableSet<String> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
     fun get(key: ThumbKey): android.graphics.Bitmap? = cache.get(key)
     fun put(key: ThumbKey, bmp: android.graphics.Bitmap) {
+        // A put for a deleted thread is refused (#339): the eviction and
+        // the decode race, and the cache must not resurrect the dead one.
+        if (key.thread.isNotEmpty() && deadThreads.contains(key.thread)) return
         cache.put(key, bmp)
     }
     /** Explicit invalidation for staged-remove: the strip knows the exact
@@ -182,6 +195,9 @@ internal class ThumbCache(maxKb: Int = 8 * 1024) {
      * weight (up to 8 MB pinned by LRU pressure alone). The key TYPE carries
      * the thread, so this is a field read, not a shape cast. */
     fun removeThread(threadKey: String) {
+        // Marked dead first (#339): a decode in flight would otherwise put
+        // its bitmap back after the eviction.
+        deadThreads.add(threadKey)
         for (key in cache.snapshot().keys) {
             if (key.thread == threadKey) cache.remove(key)
         }
@@ -504,6 +520,13 @@ internal fun ChatTab(
         if (freshProcess && keep == null) {
             cameraPendingSince = 0L
         }
+        // The gallery gate clears on a fresh process too (#339): the OS
+        // never redelivers a GetMultipleContents result to a new process,
+        // so a restored gate would block the picker for its whole window on
+        // the device that just died.
+        if (freshProcess) {
+            galleryPendingSince = 0L
+        }
         // Age out orphans, keep the live capture UNCONDITIONALLY: a restored
         // keep older than the bound is still the file the returning camera may
         // be writing to. Fresh-process path deletes every non-keep file
@@ -537,7 +560,7 @@ internal fun ChatTab(
     // Best-effort file cleanup, shared by every delete below: disk IO on Main
     // picker/camera callbacks, so fire-and-forget. It must survive tab-leave,
     // rotation AND composition death, so it launches on the process-lifetime
-    // cleanupScope; when that scope is dead the unlink runs inline.
+    // cleanupScope (never cancelled by design — see its declaration).
     fun deleteQuietly(f: File?) {
         if (f == null) return
         processCleanupScope.launch {
@@ -1095,8 +1118,12 @@ internal fun ChatTab(
         onRemovePhoto = { id, stagedIndex ->
             // Evict by the SAME key the strip built (#339): the legacy key
             // carries the staged slot, so rebuilding it with slot 0 evicted
-            // the wrong bitmap.
-            val a = state.pendingAttachments.getOrNull(stagedIndex)
+            // the wrong bitmap. The payload comes from the LIVE list — the
+            // strip's index is a composition snapshot, and a batch landing
+            // between recomposition and tap shifts it, which would free the
+            // survivor's bitmap and leave the removed one cached.
+            val a = vm.pendingAttachmentById(id)
+                ?: state.pendingAttachments.getOrNull(stagedIndex)
             if (a != null) {
                 thumbCache.remove(thumbCacheKey(a.id, stagedIndex, a.base64, state.threadId))
             }

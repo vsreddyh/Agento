@@ -443,6 +443,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
     }
 
+    /** The staged photo with [id] (#339): the remove path resolves the
+     * payload from the LIVE list, not a composition snapshot — a batch
+     * landing between recomposition and tap shifts the snapshot's index. */
+    internal fun pendingAttachmentById(id: String): ChatAttachment? =
+        if (id.isEmpty()) null else _state.value.pendingAttachments.firstOrNull { it.id == id }
+
     /** Removes the staged photo at [index] (#339): a legacy payload (empty
      * id) cannot be removed by id — every legacy pick shares that empty id,
      * so the id path would drop the wrong photo (or nothing). */
