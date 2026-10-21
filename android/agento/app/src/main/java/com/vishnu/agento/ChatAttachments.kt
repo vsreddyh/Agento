@@ -816,9 +816,17 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                 // flatten onto black. hasAlpha()-gated.
                 if (bitmap.hasAlpha()) {
                     val opaque = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
-                    android.graphics.Canvas(opaque).apply {
-                        drawColor(android.graphics.Color.WHITE)
-                        drawBitmap(bitmap, 0f, 0f, null)
+                    // A failed draw recycles the fill before it leaves (#339):
+                    // an OOM inside drawBitmap would otherwise leave native
+                    // pixels behind until the GC notices.
+                    try {
+                        android.graphics.Canvas(opaque).apply {
+                            drawColor(android.graphics.Color.WHITE)
+                            drawBitmap(bitmap, 0f, 0f, null)
+                        }
+                    } catch (e: Throwable) {
+                        opaque.recycle()
+                        throw e
                     }
                     if (opaque !== bitmap) {
                         bitmap.recycle()

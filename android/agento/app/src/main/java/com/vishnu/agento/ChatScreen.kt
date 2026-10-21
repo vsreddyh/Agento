@@ -819,7 +819,11 @@ internal fun ChatTab(
         if (ok && u != null) {
             cameraDecoding = f?.absolutePath
             processUris(listOf(u), f, {
-                cameraDecoding = null
+                // Only the OWNING batch retires the slot (#339): a second
+                // capture may already be decoding, and clearing the shared
+                // flag would let the next tap delete the file that batch is
+                // still reading.
+                if (cameraDecoding == f?.absolutePath) cameraDecoding = null
                 // Conditional clear: a rapid re-tap overwrites the path with
                 // the second capture while the first still decodes —
                 // blanking unconditionally would strand the second flight
@@ -1120,10 +1124,10 @@ internal fun ChatTab(
             // carries the staged slot, so rebuilding it with slot 0 evicted
             // the wrong bitmap. The payload comes from the LIVE list — the
             // strip's index is a composition snapshot, and a batch landing
-            // between recomposition and tap shifts it, which would free the
-            // survivor's bitmap and leave the removed one cached.
+            // between recomposition and tap shifts it. A MISS skips the
+            // evict: guessing from the snapshot could free the survivor's
+            // bitmap and leave the removed one cached.
             val a = vm.pendingAttachmentById(id)
-                ?: state.pendingAttachments.getOrNull(stagedIndex)
             if (a != null) {
                 thumbCache.remove(thumbCacheKey(a.id, stagedIndex, a.base64, state.threadId))
             }

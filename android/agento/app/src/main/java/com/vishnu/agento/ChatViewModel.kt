@@ -622,7 +622,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             }
             return
         }
-        if (id == threadId || _state.value.streaming) return
+        if (id == threadId || _state.value.streaming) {
+            // Voiced (#339): a switch during a live turn reads as a dead
+            // tap otherwise.
+            if (id != threadId && _state.value.streaming) {
+                notify("Still answering — switch after this reply finishes.", ToastKind.Info)
+            }
+            return
+        }
         val target = threads.firstOrNull { it.id == id } ?: return
         // Past every no-op return: this tap republishes thread state, so it outranks init's load.
         touchThreads()
@@ -726,7 +733,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (id != threadId) {
             // Blocked on a live turn: NOT consumed, so the retained target
             // retries on the next tap.
-            if (_state.value.streaming) return false
+            if (_state.value.streaming) {
+                // Voiced (#339), like the switch path above.
+                notify("Still answering — open after this reply finishes.", ToastKind.Info)
+                return false
+            }
             // Real publish past every no-op return, same rule as switchThread.
             touchThreads()
             // Staged thumbs are keyed by the thread they were staged in
@@ -1289,6 +1300,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 (text.isNotEmpty() || _state.value.pendingAttachments.wiredPhotoCount() > 0)
             ) {
                 notifyLoading()
+            } else if (text.isEmpty() && _state.value.pendingAttachments.wiredPhotoCount() > 0) {
+                // Photos alone cannot be steered (#339): the steer turn is
+                // text-only, so say that instead of swallowing the tap.
+                notify("Steering needs text — photos ride the next message.", ToastKind.Info)
             }
             return
         }

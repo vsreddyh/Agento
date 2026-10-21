@@ -18,13 +18,21 @@ import org.junit.Test
  * M * op, op applied first) — and asserts the EXIF-semantics outcome
  * (CIPA DC-008: TRANSPOSE = rot90 + flip-H, TRANSVERSE = rot270 + flip-H)
  * on a W=2,H=1 probe. The replication source is the platform doc, not
- * the production call order: a shared order misunderstanding between the
- * two files would still have to survive the CIPA geometric assertions
- * below, which are derived from the EXIF spec, not from Matrix. If
- * production edits the op order, this test — not the device camera roll
- * — catches it. The framework's createBitmap normalization is deliberately
- * NOT modeled: the matrices must already be positive-mapped (asserted),
- * so normalization is never load-bearing.
+ * the production call order: the EXIF geometry below is derived from the
+ * spec, so a shared order misunderstanding between the two files would
+ * have to survive those assertions.
+ *
+ * WHAT IT DOES NOT COVER, stated plainly: the test re-implements the op
+ * sequence, so a production ORDER regression (postRotate vs preScale
+ * swapped) would NOT fail here — the assertions would still pass on the
+ * replicated (correct) order. android.graphics.Matrix does not exist on
+ * the JVM, so a true prod-parity check needs an instrumented test, which
+ * this project does not run. The production sequence is therefore pinned
+ * by the KDoc on `orientationMatrix` (op order + the mirror-after-rotation
+ * rule) and by the reference-pinned comments there — this test pins the
+ * GEOMETRY, not the call order. The framework's createBitmap normalization
+ * is deliberately NOT modeled: the matrices must already be positive-mapped
+ * (asserted), so normalization is never load-bearing.
  */
 class ExifMatrixTest {
 
