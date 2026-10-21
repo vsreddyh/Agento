@@ -69,9 +69,17 @@ type MutationFilter struct {
 //
 // An empty string means EVERY op, not none: the whole log is the default
 // reading of the question, and "op=" is a caller who asked for the log.
+//
+// A non-blank filter that names NO op ("op=,") is an error, not the whole
+// log: the caller sent a filter, and answering it with the whole log is the
+// "wrong data, not merely more of it" this filter is strict about. A stray
+// comma beside a real op ("complete,") is tolerated — it names one op and
+// adds nothing.
+//
 // Repeats are dropped, so "create,create" is one op and not two.
 func ParseOps(s string) ([]string, error) {
-	parts := strings.Split(s, ",")
+	raw := strings.TrimSpace(s)
+	parts := strings.Split(raw, ",")
 	ops := make([]string, 0, len(parts))
 	seen := map[string]bool{}
 	for _, p := range parts {
@@ -81,6 +89,9 @@ func ParseOps(s string) ([]string, error) {
 		}
 		seen[p] = true
 		ops = append(ops, p)
+	}
+	if len(ops) == 0 && raw != "" {
+		return nil, fail("op %q names no operation; known ops are %s", raw, strings.Join(knownOps, ", "))
 	}
 	if err := ValidateOps(ops); err != nil {
 		return nil, err
@@ -207,6 +218,12 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	var rows []Mutation
 	if err := cur.All(ctx, &rows); err != nil {
 		return nil, false, err
+	}
+	// An empty result is an empty LIST, never a nil slice: the transports
+	// both promise `[]` on the wire, and a direct store caller marshalling
+	// this slice must not get `null` for the same answer.
+	if rows == nil {
+		rows = []Mutation{}
 	}
 	if int64(len(rows)) > lim {
 		return rows[:int(lim)], true, nil

@@ -274,6 +274,11 @@ rather than answered with an empty history that reads like "this task was
 never touched". Ids are lowercased — the same id in either case is the same
 task.
 
+`op=duplicate` is accepted but only the **batch** path records it (#341): a
+single duplicate is a store operation with no verb of its own, so the filter
+vocabulary is wider than the current set of writers. Rows come back only for
+duplicates made through a batch.
+
 `source` is a self-attested LABEL (`mcp` for the agent, the app's own
 `X-Agento-Source` otherwise), not an authenticated identity — see the tamper
 note above.

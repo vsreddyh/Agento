@@ -59,6 +59,25 @@ func TestParseOpsDropsRepeats(t *testing.T) {
 	}
 }
 
+// A filter that names NO op is a filter the caller sent and got the whole
+// log for — the "wrong data, not merely more of it" the strict filters
+// exist to prevent.
+func TestParseOpsRejectsAFilterThatNamesNoOp(t *testing.T) {
+	for _, raw := range []string{",", ",,"} {
+		if _, err := ParseOps(raw); err == nil {
+			t.Errorf("ParseOps(%q) must be rejected, not read as the whole log", raw)
+		}
+	}
+	// A stray comma beside a real op is tolerated: it names one op.
+	ops, err := ParseOps("complete,")
+	if err != nil {
+		t.Fatalf("ParseOps: %v", err)
+	}
+	if len(ops) != 1 || ops[0] != OpComplete {
+		t.Fatalf("ops = %v, want [complete]", ops)
+	}
+}
+
 // The op set is the validation rule, so a caller must not be able to edit it
 // for everyone else by accident.
 func TestKnownOpsHandsOutACopy(t *testing.T) {
@@ -413,6 +432,28 @@ func TestListMutationsSurvivesTheTaskItDescribes(t *testing.T) {
 		if r.TaskID != id {
 			t.Errorf("row for %q leaked into the %q filter", r.TaskID, id)
 		}
+	}
+}
+
+// The store returns an empty LIST, never a nil slice: the transports both
+// promise `[]` on the wire, and a direct caller marshalling this slice must
+// not get `null` for the same answer.
+func TestListMutationsReturnsAnEmptyListNotNil(t *testing.T) {
+	s := testStore(t)
+	rows, truncated, err := s.ListMutations(context.Background(), MutationFilter{
+		TaskID: "aaaaaaaaaaaaaaaaaaaaaaaa",
+	})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if rows == nil {
+		t.Fatal("rows must be an empty list, not nil")
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows = %d, want 0", len(rows))
+	}
+	if truncated {
+		t.Error("an empty result must not be truncated")
 	}
 }
 

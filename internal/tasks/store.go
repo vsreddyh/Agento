@@ -133,6 +133,11 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	// second place to forget the call, so there is now one place to add an index and
 	// one place that runs.
 	_, err = s.db.Collection(auditCollection).Indexes().CreateMany(ctx, []mongoDrv.IndexModel{
+		// The two singles predate the change log's read path (#176) and are
+		// kept: they are prefixes of the compounds below, so a reader may
+		// find them redundant — but REMOVING an index is a migration
+		// against every deployed database, not a code edit, and these still
+		// serve the retention prune and a plain task_id lookup.
 		{Keys: bson.D{{Key: "at", Value: 1}}, Options: options.Index().SetName("at_1")},
 		{Keys: bson.D{{Key: "task_id", Value: 1}}, Options: options.Index().SetName("task_id_1")},
 		// One task's history, newest first — the query the change log is
