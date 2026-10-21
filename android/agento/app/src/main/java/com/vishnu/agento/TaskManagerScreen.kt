@@ -2629,9 +2629,10 @@ internal fun isConflict(e: Throwable): Boolean =
     "HTTP 409" in (e.message ?: "")
 
 /**
- * How many tasks one bulk selection may hold (#345). The client cap matches
- * the server's batch cap, so a whole selection always fits in one atomic
- * batch and no chunking protocol is needed on either side.
+ * How many tasks one bulk selection may hold (#345). Matches the server's
+ * batch cap (BatchMaxOps in internal/tasks/batch.go — keep the two in sync),
+ * so a whole selection always fits in one atomic batch and no chunking
+ * protocol is needed on either side.
  */
 internal const val MAX_BULK_SELECT = 50
 

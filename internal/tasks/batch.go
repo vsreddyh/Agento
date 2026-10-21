@@ -35,8 +35,9 @@ import (
 )
 
 // BatchMaxOps caps one batch. One bulk run is capped client-side at the same
-// number, so a whole selection always fits in a single transaction and no
-// chunking protocol is needed on either side.
+// number (MAX_BULK_SELECT in TaskManagerScreen.kt — keep the two in sync),
+// so a whole selection always fits in a single transaction and no chunking
+// protocol is needed on either side.
 const BatchMaxOps = 50
 
 // BatchOp is one operation inside a batch: complete, skip, update, or
