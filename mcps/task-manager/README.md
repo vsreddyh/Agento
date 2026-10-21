@@ -284,6 +284,12 @@ it falls back to `0`, because a poll that 422s on a mangled cursor 422s
 forever. The two are right for their own jobs, and they are not the same
 rule.
 
+An UNKNOWN parameter is ignored, so a misspelled filter name reads the
+whole log — `?taskid=<hex>` filters nothing and answers with everything.
+The strict 422s are about a bad VALUE; a bad NAME cannot be told apart from
+a parameter meant for someone else, so it is ignored (the same the task list
+does). Check the spelling.
+
 "Inclusive" holds at every precision, because both sides go through the
 same BSON datetime: `at` is written in whole milliseconds, and the filter
 value is truncated to milliseconds the same way, so a hand-built
@@ -357,7 +363,9 @@ than assuming one format.
 note above. It is stored **as the caller sent it** (trimmed, capped at 40
 bytes): unlike the op and the task id, it is not canonicalised, so `App` and
 `app` are two labels for what may be one caller. Grouping them is a choice
-the app makes, not the server's.
+the app makes, not the server's. A direct store caller may leave it empty —
+the transports never do — so an app should read an empty `source` as
+"unknown", not as a third caller.
 
 ## Run
 
