@@ -478,6 +478,11 @@ fun messageContentJson(
         // Stripped earlier photo turns stay honest: any other reader of this
         // history should see that photos were here — not a blank. Verbatim twin
         // (NOT the trimming helper): history rides exactly as typed.
+        // STRICT ROLE, on purpose (#339): a hand-edited "User"/"System" tail
+        // with photos drops them entirely (no image part AND no marker) —
+        // fail-closed, and the same strict rule the image index uses, so
+        // index, marker and wire agree on what rode. Only canonical "user"
+        // turns keep photos, and the app only ever writes those.
         if (role == "user" && markerCount > 0 && !includeImages) {
             return WireContent.Text(contentWithMarkerVerbatim(content, markerCount))
         }
@@ -901,6 +906,11 @@ suspend fun decodeThumbnail(base64: String): Bitmap? {
         // rendered sideways here while the staged bubble showed upright — same
         // orientationMatrix table as the stage path. Display-only: the wire
         // always sends the staged bytes, so a mis-read is a tilted thumbnail.
+        // DEFENSE IN DEPTH (#339): staged payloads are EXIF-rotated at capture
+        // and re-encoded (compress strips metadata), so this read returns
+        // NORMAL for everything the app writes — it only matters for an
+        // imported/hand-edited payload that kept its EXIF block. One parse
+        // per visible row, paid for the imported case.
         val orientation = try {
             java.io.ByteArrayInputStream(bytes).use {
                 ExifInterface(it).getAttributeInt(

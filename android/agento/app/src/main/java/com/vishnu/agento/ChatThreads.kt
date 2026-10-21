@@ -121,15 +121,20 @@ object ChatThreads {
             // sequences, flag pairs and surrogate pairs never split
             // mid-cluster. The process-sticky walker releases input below.
             val breaks = titleBreaks.get()
-            breaks.setText(oneLine)
             var end = 0
-            var n = breaks.first()
-            while (n != java.text.BreakIterator.DONE && n <= avail - 1) {
-                end = n
-                n = breaks.next()
+            try {
+                breaks.setText(oneLine)
+                var n = breaks.first()
+                while (n != java.text.BreakIterator.DONE && n <= avail - 1) {
+                    end = n
+                    n = breaks.next()
+                }
+            } finally {
+                // Drop the retained title string now, not on the next render
+                // — and on a throw too, or the title stays pinned in the
+                // process-sticky ThreadLocal.
+                breaks.setText("")
             }
-            // Drop the retained title string now, not on the next render.
-            breaks.setText("")
             // A cluster wider than the budget leaves end == 0: fall back
             // like avail < 2 — only a no-suffix title keeps the ellipsis.
             if (end > 0) {

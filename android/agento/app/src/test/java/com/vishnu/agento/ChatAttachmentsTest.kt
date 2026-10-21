@@ -735,8 +735,21 @@ class ChatAttachmentsTest {
     }
 
     @Test
-    fun `rewrite counter is per tab`() {
-        // The import announces the tab it rewrote (#339): a counter per tab
+    fun `thumb cache key carries its thread`() {
+        // The eviction path reads the thread off the key (#339): a key
+        // without one could not be evicted when its thread was deleted, so
+        // the cache would pin dead thumbnails.
+        val a = thumbCacheKey("id1", 0, "QUJD", "t1")
+        assertEquals("t1", a.thread)
+        assertTrue("keys of different threads must differ", a != thumbCacheKey("id1", 0, "QUJD", "t2"))
+        assertEquals(a, thumbCacheKey("id1", 0, "QUJD", "t1"))
+        // A legacy (id-less) payload keys on its staged slot, still
+        // thread-scoped.
+        assertEquals("t1", thumbCacheKey("", 3, "QUJD", "t1").thread)
+    }
+
+    @Test
+    fun `rewrite counter is per tab`() {        // The import announces the tab it rewrote (#339): a counter per tab
         // keeps one tab's restore from disturbing another's ViewModel.
         val before = ChatThreads.rewrites.value["chat"] ?: 0L
         ChatThreads.notifyRewritten("chat")

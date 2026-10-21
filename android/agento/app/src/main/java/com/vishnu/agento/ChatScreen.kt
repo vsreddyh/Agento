@@ -150,56 +150,77 @@ private val processCleanupScope =
 
 /**
  * Bounded decoded-thumbnail memory: produceState remembers per composition,
- * so scrolling back re-decodes. The key IS the produce key (id + length +
- * head/tail sample, never the id alone) — a weaker shadow could serve a
- * stale bitmap. Legacy id-less payloads key on (slot, length, sample) and
- * can alias across threads (wrong thumb, never wrong send). Bounded by BYTES
- * (~8 MB), not entries — no onTrimMemory hook exists.
+ * so scrolling back re-decodes. The key IS the produce key ([ThumbKey]:
+ * thread + id + length + head/tail sample, never the id alone) — a weaker
+ * shadow could serve a stale bitmap. Legacy id-less payloads key on the
+ * staged slot and can alias across threads (wrong thumb, never wrong send).
+ * Bounded by BYTES (~8 MB), not entries — no onTrimMemory hook exists.
  */
 internal class ThumbCache(maxKb: Int = 8 * 1024) {
-    private val cache = object : android.util.LruCache<Any, android.graphics.Bitmap>(maxKb) {
-        override fun sizeOf(key: Any, value: android.graphics.Bitmap): Int =
+    private val cache = object : android.util.LruCache<ThumbKey, android.graphics.Bitmap>(maxKb) {
+        override fun sizeOf(key: ThumbKey, value: android.graphics.Bitmap): Int =
             maxOf(1, value.byteCount / 1024)
     }
-    fun get(key: Any): android.graphics.Bitmap? = cache.get(key)
-    fun put(key: Any, bmp: android.graphics.Bitmap) {
+    fun get(key: ThumbKey): android.graphics.Bitmap? = cache.get(key)
+    fun put(key: ThumbKey, bmp: android.graphics.Bitmap) {
         cache.put(key, bmp)
     }
     /** Explicit invalidation for staged-remove: the strip knows the exact
      * attachment leaving, so its bitmap frees immediately instead of waiting
-     * for LRU pressure. Thread-delete rides LRU pressure instead. */
-    fun remove(key: Any) {
+     * for LRU pressure. Thread-delete evicts the whole thread instead. */
+    fun remove(key: ThumbKey) {
         cache.remove(key)
     }
     /** Evicts one thread's keys (#339): a deleted thread's thumbs are dead
-     * weight (up to 8 MB pinned by LRU pressure alone). Every key carries
-     * its thread, so the prefix match is exact. */
+     * weight (up to 8 MB pinned by LRU pressure alone). The key TYPE carries
+     * the thread, so this is a field read, not a shape cast. */
     fun removeThread(threadKey: String) {
-        val prefix = "$threadKey/"
         for (key in cache.snapshot().keys) {
-            val id = (key as? Triple<*, *, *>)?.first as? String ?: continue
-            if (id.startsWith(prefix)) cache.remove(key)
+            if (key.thread == threadKey) cache.remove(key)
         }
     }
     fun evictAll() = cache.evictAll()
 }
 
 /**
+ * One thumbnail cache key (#339): a named type, not a bare Triple, so the
+ * eviction path reads the thread off the key instead of casting a shape it
+ * hopes for. A key-shape change would then be a compile error here rather
+ * than a silent no-op that pins a deleted thread's bitmaps.
+ */
+internal data class ThumbKey(
+    /** Thread the key belongs to: every key carries one, so a deleted
+     * thread's keys are exactly evictable. */
+    val thread: String,
+    /** Stable per-pick id, or the legacy staged slot. */
+    val id: String,
+    /** Payload length: a same-id payload of a different length is a
+     * different photo. */
+    val length: Int,
+    /** Head/tail content sample: catches a same-id, same-length swap. */
+    val sample: String,
+)
+
+/**
  * Cache-key construction for an attachment's thumbnail: the produce path
- * ([AttachmentThumb]) uses the returned Triple AS its remember value AND its
+ * ([AttachmentThumb]) uses the returned key AS its remember value AND its
  * cache key — identical object, zero drift — and the staged-remove path
  * rebuilds it to evict the exact entry.
  *
- * The THREAD is in both branches (#339): a stable id is unique, but without
+ * The THREAD is in every key (#339): a stable id is unique, but without
  * the thread the key could not be evicted when its thread was deleted, and
  * the cache would pin dead thumbnails until LRU pressure. The cost is a
  * re-decode when the same photo shows in two threads (rare — a photo
  * belongs to one thread). Legacy id-less payloads key on the staged slot
  * instead of an id, so they are thread-scoped by construction.
  */
-internal fun thumbCacheKey(stableId: String, legacySlot: Int, base64: String, threadKey: String = ""): Any =
-    if (stableId.isNotEmpty()) Triple("$threadKey/$stableId", base64.length, base64.sampleKey(64))
-    else Triple("$threadKey/s$legacySlot", base64.length, base64.sampleKey(64))
+internal fun thumbCacheKey(stableId: String, legacySlot: Int, base64: String, threadKey: String = ""): ThumbKey =
+    ThumbKey(
+        thread = threadKey,
+        id = if (stableId.isNotEmpty()) stableId else "s$legacySlot",
+        length = base64.length,
+        sample = base64.sampleKey(64),
+    )
 
 /**
  * One staged or sent photo: the remembered ~256px thumbnail, or an icon
@@ -246,7 +267,7 @@ private fun AttachmentThumb(
     val produced by produceState<android.graphics.Bitmap?>(null, thumbKey) {
         // Explicit try/catch, not runCatching: runCatching would swallow the
         // producer's own CancellationException into a null placeholder. Cache
-        // lookup uses the produce key ITSELF — the identical Triple built
+        // lookup uses the produce key ITSELF — the identical key built
         // above, so a divergent key can never serve a stale bitmap.
         val cacheKey = thumbKey
         value = try {
