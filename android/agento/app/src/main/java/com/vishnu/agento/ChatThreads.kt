@@ -107,7 +107,11 @@ object ChatThreads {
             // An image-only thread has no words to title from: name the
             // LARGEST photo turn (#339), like the suffix below — a 1-photo
             // opener followed by a 2-photo turn holds a 2-photo turn.
-            // Counted wired like every other signal.
+            // Counted wired (blank-only, NOT decodable) like every other
+            // display signal — deliberately staged-honest while the wire
+            // is strict (see titleFor KDoc): load() blanks ragged on read
+            // so the two agree in practice; title-time decode scans would
+            // tax every render for a case the boundary already heals.
             if (maxPhotos > 0) return if (maxPhotos == 1) "Photo" else "$maxPhotos photos"
             return "New conversation"
         }

@@ -429,9 +429,32 @@ fun messageContentJson(
     // part the gateway would feed Pi. Empty payloads count as no
     // attachment for wire purposes (an image-only turn of blanks falls
     // back to bare text, which the server refuses with its named
-    // blank-turn error instead of a corrupt image part). Ragged payloads
-    // (bad length/alphabet) filter here too — validity is send-frequency,
-    // so the alphabet scan lives at the wire, never in the hot-path
+    // blank-turn error instead of a corrupt image part).
+    // Marker count is blank-only cheap (#339): stripped (non-trailing)
+    // turns ride as text with a marker, and the marker answers "were
+    // photos staged" — staged-honest like titles/search, NOT wire-strict.
+    // Scanning every history payload per send just to mark stripped turns
+    // would tax O(history) per tap for no wire effect; validity is proven
+    // only where parts are built, on the trailing turn below.
+    val markerCount = attachments.wiredPhotoCount()
+    if (role != "user" || !includeImages) {
+        // Stripped earlier photo turns stay honest (#339): the server
+        // prompts with the trailing turn alone, but any other reader of
+        // this history should see that photos were here — not a blank.
+        // Verbatim twin (NOT the trimming helper): history rides exactly
+        // as typed, marker only appended.
+        if (role == "user" && markerCount > 0 && !includeImages) {
+            return WireContent.Text(contentWithMarkerVerbatim(content, markerCount))
+        }
+        // Assistant turns never stage photos: the marker rule above is
+        // user-only by construction, and a bare return here keeps a
+        // hypothetical assistant-with-attachments payload from silently
+        // widening the wire shape (fail-closed, like the gateway).
+        return WireContent.Text(content)
+    }
+    // Trailing turn: parts need PROVEN payloads (#339). Ragged payloads
+    // (bad length/alphabet) filter here — validity is send-frequency, so
+    // the alphabet scan lives at the wire, never in the hot-path
     // isWired() predicate. Single pass: blank-check then validity per
     // attachment, not a wiredPhotos() list followed by a second walk.
     // Then dataUri() re-validates per part (#339): the filter walk plus
@@ -444,19 +467,7 @@ fun messageContentJson(
     // closed. Send-frequency on the send path (never scroll/search), so
     // the walks are a send tax, not a scroll tax.
     val images = attachments.filter { it.isWired() && isDecodableBase64(it.base64) }
-    if (role != "user" || images.isEmpty() || !includeImages) {
-        // Stripped earlier photo turns stay honest (#339): the server
-        // prompts with the trailing turn alone, but any other reader of
-        // this history should see that photos were here — not a blank.
-        // Verbatim twin (NOT the trimming helper): history rides exactly
-        // as typed, marker only appended.
-        if (role == "user" && images.isNotEmpty() && !includeImages) {
-            return WireContent.Text(contentWithMarkerVerbatim(content, images.size))
-        }
-        // Assistant turns never stage photos: the marker rule above is
-        // user-only by construction, and a bare return here keeps a
-        // hypothetical assistant-with-attachments payload from silently
-        // widening the wire shape (fail-closed, like the gateway).
+    if (images.isEmpty()) {
         return WireContent.Text(content)
     }
     val arr = JSONArray()

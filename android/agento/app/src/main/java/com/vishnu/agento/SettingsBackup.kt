@@ -88,12 +88,15 @@ object SettingsBackup {
     }
 
     /**
-     * Dynamic per-model effort memory keys: present in prefs but unknowable
-     * statically, so they are enumerated live. Only string values are exported.
+     * Dynamic per-model effort keys, enumerated from ONE prefs snapshot
+     * (#339): the caller passes the same `all` map it type-checks against,
+     * so a prefs write landing mid-export cannot list a key the snapshot
+     * lacks (skipped despite existing) or split check-vs-read across two
+     * reads. Only string values are exported.
      */
-    private fun effortKeys(prefs: android.content.SharedPreferences): List<String> =
-        prefs.all.keys.filter { k ->
-            isEffortMemoryKey(k) && prefs.all[k] is String
+    private fun effortKeys(all: Map<String, *>): List<String> =
+        all.keys.filter { k ->
+            isEffortMemoryKey(k) && all[k] is String
         }.sorted()
 
     /**
@@ -175,7 +178,7 @@ object SettingsBackup {
         for (k in STRING_KEYS) {
             (all[k] as? String)?.let { values.put(k, it) }
         }
-        for (k in effortKeys(prefs)) {
+        for (k in effortKeys(all)) {
             (all[k] as? String)?.let { values.put(k, it) }
         }
         // Per-widget display settings (#169): enumerated live because the key

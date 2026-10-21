@@ -189,6 +189,21 @@ class ChatAttachmentsTest {
     }
 
     @Test
+    fun strippedTurnMarkerCountsStagedNotDecodable() {
+        // Marker branch is staged-honest (#339): stripped turns mark what
+        // was staged (blank-only count, no per-send validity scan of all
+        // history) — only the trailing turn proves decodability for parts.
+        assertEquals(
+            WireContent.Text("hi [1 photo attached]"),
+            messageContentJson(
+                "user", "hi",
+                listOf(ChatAttachment(base64 = "!!!")),
+                includeImages = false,
+            ),
+        )
+    }
+
+    @Test
     fun raggedPayloadPositionsRejected() {
         // Padding is positional: interior '=' never wires, even with
         // clean length and alphabet — the corrupt part stays out.

@@ -146,9 +146,10 @@ private fun String.sampleKey(half: Int): String =
 /**
  * Bounded decoded-thumbnail memory (#339): produceState remembers per
  * composition, so scrolling away disposes the bitmap and scrolling back
- * re-runs Base64.decode + decodeByteArray per photo. Keyed by stable pick
- * UUID — immutable and unique per pick, so a key always names the same
- * payload. Bounded (32 entries ≈ 8 MB of ~256px thumbs) for low-end
+ * re-runs Base64.decode + decodeByteArray per photo. Keyed by the full
+ * stable identity (id + length pair, never id alone — a same-id length
+ * change restarts produceState and must miss the cache). Bounded
+ * (32 entries ≈ 8 MB of ~256px thumbs) for low-end
  * devices; eviction does NOT recycle — GC reclaims, because recycling
  * risks pulling pixels from under a late outgoing draw (the same class
  * the no-recycle rule in AttachmentThumb exists for). Stable picks only;
@@ -157,9 +158,9 @@ private fun String.sampleKey(half: Int): String =
  * gets and IO puts are safe.
  */
 internal class ThumbCache(maxEntries: Int = 32) {
-    private val cache = android.util.LruCache<String, android.graphics.Bitmap>(maxEntries)
-    fun get(key: String): android.graphics.Bitmap? = cache.get(key)
-    fun put(key: String, bmp: android.graphics.Bitmap) {
+    private val cache = android.util.LruCache<Any, android.graphics.Bitmap>(maxEntries)
+    fun get(key: Any): android.graphics.Bitmap? = cache.get(key)
+    fun put(key: Any, bmp: android.graphics.Bitmap) {
         cache.put(key, bmp)
     }
 }
@@ -236,9 +237,15 @@ private fun AttachmentThumb(
         // placeholder — the same cancel-masking fixed inside
         // decodeThumbnail must not be reintroduced at its call site.
         // Stable picks consult the hoisted cache first (#339): a scroll-back
-        // hit skips decode entirely. Legacy payloads (null key) always
-        // decode — slot-keyed cache entries would alias across removes.
-        val cacheKey = stableId.ifEmpty { null }
+        // hit skips decode entirely. Keyed by the full stable identity
+        // (id + length, NOT id alone): same id + different length restarts
+        // produceState, and an id-only cache key would serve the stale
+        // bitmap with no re-decode — the cache must never disagree with
+        // the produce key it shadows. Unreachable via the app (picks are
+        // immutable, one UUID per pick), storage-edit only. Legacy
+        // payloads (null key) always decode — slot-keyed entries would
+        // alias across removes.
+        val cacheKey = stableId.takeIf { it.isNotEmpty() }?.let { it to base64.length }
         value = try {
             val hit = cacheKey?.let { key -> cache?.get(key) }
             hit ?: withContext(Dispatchers.IO) {
@@ -1056,12 +1063,18 @@ internal fun ChatTab(
     // (double toast). Safe ordering only because toast() is synchronous —
     // no suspension point sits between the two where cancel could land.
     // Keyed on the entry (text+kind+seq) so identical repeats re-fire
-    // rather than deduping into a dead second tap.
+    // rather than deduping into a dead second tap. runCatching, not bare
+    // (#339): the ordering above is rotation-safe but not throw-safe — a
+    // toast-path throw with the head already consumed would eat the notice
+    // AND kill this effect (no retry surfaces it). Swallowing the throw
+    // still loses this one notice, but the effect — and the queue behind
+    // it — survives. Consume-after-success would need a rotation guard
+    // against the double-fire above; this is the smaller invariant.
     val headNotice = state.notices.firstOrNull()
     LaunchedEffect(headNotice) {
         if (headNotice != null) {
             vm.consumeNotice()
-            toasts.toast(headNotice.text, headNotice.kind)
+            runCatching { toasts.toast(headNotice.text, headNotice.kind) }
         }
     }
     // #64: never show raw "not set" — the header shows the model name when
