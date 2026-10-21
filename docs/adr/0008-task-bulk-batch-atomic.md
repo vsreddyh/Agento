@@ -15,3 +15,4 @@ Bulk task actions run as one atomic server batch (`POST /api/tasks/batch`): one 
 - 503 + no blind retry: a deployment without transactions refuses the batch, and a timeout leaves the outcome unknown — refresh via the changes marker and resend rather than retrying blind (a retry would duplicate twice).
 - Guard split: bulk move carries `expected_revision` per op; selected rows that left the fetched page fail closed client-side (reload underneath, selection kept for retry) instead of going out unguarded. Bulk complete/skip stay unguarded, like the single verbs.
 - Single duplicate inherits the batch's transaction requirement (it rides a one-op batch).
+- Bulk move is date-only: each row keeps its own stored time. A mixed selection (timed + untimed rows) lands on one date with per-row times, said once in the toast, never per row.

@@ -84,6 +84,16 @@ class TaskBulkTest {
     }
 
     @Test
+    fun `bulk unknown fields names only real extras`() {
+        val fields = JSONObject().put("due_date", "2026-12-01")
+            .put("expected_revision", 3)
+            .put("due_time", JSONObject.NULL)
+            .put("someday_field", "x")
+        assertEquals(listOf("someday_field"), bulkUnknownFields(fields))
+        assertTrue(bulkUnknownFields(JSONObject()).isEmpty())
+    }
+
+    @Test
     fun `bulk update sent canonicalises days and reads numbers`() {
         val sent = bulkUpdateSent(
             JSONObject().put("repeat_days", org.json.JSONArray(listOf("Wed", "mon")))

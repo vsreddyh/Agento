@@ -136,6 +136,30 @@ internal data class BatchFailure(
 )
 
 /**
+ * Field names the per-item contract assert understands. Anything else in a
+ * bulk update's `fields` is a caller bug or a contract the app predates —
+ * either way it must surface, not pass a weakened assert. `expected_revision`
+ * is guard metadata, not a stored field, so it never counts.
+ */
+internal val BULK_UPDATE_KNOWN_FIELDS = setOf(
+    "name", "speak_name", "description", "due_date", "due_time",
+    "estimated_minutes", "repeat_every", "repeat_unit", "repeat_days",
+    "repeat_custom", "repeat_rule", "parallelable", "expected_revision",
+)
+
+/** Names the `fields` entries [bulkUpdateSent] cannot assert. Empty means
+ * the op asserts everything it sent. */
+internal fun bulkUnknownFields(fields: JSONObject): List<String> {
+    val out = mutableListOf<String>()
+    val keys = fields.keys()
+    while (keys.hasNext()) {
+        val key = keys.next()
+        if (key !in BULK_UPDATE_KNOWN_FIELDS && !fields.isNull(key)) out.add(key)
+    }
+    return out.sorted()
+}
+
+/**
  * Builds the "what the app asked the server to store" record for one bulk
  * update op (#345), so a bulk move gets the same field-level assertion as a
  * single-task edit. Complete/skip/duplicate send no fields — there is
@@ -901,6 +925,10 @@ class TasksApi(context: Context) {
                     if (item.has("index")) {
                         ops.getOrNull(item.optInt("index", -1))?.let { req ->
                             if (req.op == "update" && req.fields != null) {
+                                val unknown = bulkUnknownFields(req.fields)
+                                if (unknown.isNotEmpty()) {
+                                    ContractWarnings.report(unknown.map { "fields:$it" }, task.name)
+                                }
                                 checkContract(task, bulkUpdateSent(req.fields), expectedId = id)
                             }
                         }
