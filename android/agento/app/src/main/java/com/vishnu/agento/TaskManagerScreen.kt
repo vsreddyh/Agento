@@ -879,19 +879,42 @@ internal fun TaskManagerScreen(
         val ids = bulkSelected.toList()
         if (ids.isEmpty()) return
         val doneWord = if (verb == "skip") "Skipped" else "Completed"
+        val byId = tasks.associateBy { it.id }
+        // Ids that left the fetched page fail closed like a bulk move:
+        // reload underneath and retry once the rows land.
+        if (ids.any { it !in byId }) {
+            silentRefresh = true
+            refreshTick++
+            toasts.toast(
+                "Some selected tasks aren't in view — reloading. Retry once they land.",
+                ToastKind.Error,
+            )
+            return
+        }
+        // Only open rows can resolve: a Done-filter selection may hold
+        // already-resolved tasks, and sending one aborts the whole atomic
+        // batch on a row the user knows is done. Those are set aside with a
+        // count instead; duplicate and move take any state, so the selection
+        // is kept for those.
+        val actionable = ids.filter { byId.getValue(it).isOpen() }
+        val skipped = ids.size - actionable.size
+        if (actionable.isEmpty()) {
+            toasts.toast(
+                "Selected tasks are already resolved — nothing to ${verb}.",
+                ToastKind.Error,
+            )
+            return
+        }
         // A custom repeat has no next occurrence until somebody picks a
         // date: the single-task flow opens a recreate draft, which cannot
         // scale to N tasks, so the bulk toast says where to recreate them
         // instead — for skips exactly like completes, since skipping a
-        // custom occurrence also ends it without a successor. Ids that left
-        // the fetched page count as maybe-custom: their repeat block is
-        // unreadable, and a missing notice loses the cadence while an extra
-        // sentence only restates where to look.
-        val customs = tasks.count { it.id in ids && it.repeatCustom } +
-            ids.count { id -> tasks.none { it.id == id } }
+        // custom occurrence also ends it without a successor.
+        val customs = actionable.count { byId.getValue(it).repeatCustom }
         runBulkOps(
-            ids.map { BulkOp(verb, it) },
-            "$doneWord ${ids.size} task${if (ids.size == 1) "" else "s"}." +
+            actionable.map { BulkOp(verb, it) },
+            "$doneWord ${actionable.size} task${if (actionable.size == 1) "" else "s"}." +
+                (if (skipped > 0) " ($skipped already resolved.)" else "") +
                 (if (customs > 0) " Recreate custom repeats from Done." else ""),
         )
     }
@@ -2704,18 +2727,20 @@ internal fun bulkActionsLive(selected: Set<String>, busyIds: Set<String>): Boole
     selected.isNotEmpty() && selected.none { it in busyIds }
 
 /**
- * Toggles [id] in a bulk selection: removes it when present, adds it when
+ * Toggles [id] in a bulk selection: trims it first, so the set, the wire,
+ * and any error all name the same id; removes it when present, adds it when
  * there is room, and returns null when the cap refuses a new id (the caller
  * toasts instead of silently ignoring the tap). Blank ids never enter the
  * set: one would ride out as an unguarded op and 422 the whole atomic batch.
  */
-internal fun toggleBulkId(selected: Set<String>, id: String): Set<String>? =
-    if (id.isBlank()) {
-        selected
-    } else if (id in selected) {
-        selected - id
+internal fun toggleBulkId(selected: Set<String>, id: String): Set<String>? {
+    val clean = id.trim()
+    if (clean.isEmpty()) return selected
+    return if (clean in selected) {
+        selected - clean
     } else if (selected.size >= MAX_BULK_SELECT) {
         null
     } else {
-        selected + id
+        selected + clean
     }
+}

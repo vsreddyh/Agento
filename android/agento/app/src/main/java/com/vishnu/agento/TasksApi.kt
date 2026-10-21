@@ -892,12 +892,17 @@ class TasksApi(context: Context) {
                     }
                     // Field-level assertion for update ops, mirroring the
                     // single-task edit: the request op carries the fields,
-                    // matched by position (the server preserves order).
+                    // matched by the server's index — never by array
+                    // position, so a future server that omits or reorders
+                    // the index runs no check rather than checking the move
+                    // against the wrong op's fields.
                     // Complete/skip/duplicate send no fields, so they stay
                     // version-only — exactly like the single verbs.
-                    ops.getOrNull(item.optInt("index", i))?.let { req ->
-                        if (req.op == "update" && req.fields != null) {
-                            checkContract(task, bulkUpdateSent(req.fields), expectedId = id)
+                    if (item.has("index")) {
+                        ops.getOrNull(item.optInt("index", -1))?.let { req ->
+                            if (req.op == "update" && req.fields != null) {
+                                checkContract(task, bulkUpdateSent(req.fields), expectedId = id)
+                            }
                         }
                     }
                     out.add(

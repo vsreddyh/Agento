@@ -38,6 +38,12 @@ class TaskBulkTest {
     }
 
     @Test
+    fun `toggle trims ids`() {
+        assertEquals(setOf("a"), toggleBulkId(emptySet(), "  a  "))
+        assertEquals(emptySet<String>(), toggleBulkId(setOf("a"), "a "))
+    }
+
+    @Test
     fun `toggle refuses blank ids`() {
         assertEquals(setOf("a"), toggleBulkId(setOf("a"), "   "))
         assertEquals(emptySet<String>(), toggleBulkId(emptySet(), ""))
