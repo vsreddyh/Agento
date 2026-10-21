@@ -2,18 +2,21 @@ package com.vishnu.agento
 
 import android.content.Context
 import java.io.File
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 /** One persisted message (ChatMessage + timestamp; ts=0 reads as unknown).
- * tools/skills default empty so pre-visibility history reads as unknown;
- * token fields default zero so pre-usage history reads as unreported. */
+ * Optional fields default empty/zero so older history reads as unknown
+ * rather than as recorded data. */
 @Serializable
 data class StoredMessage(
     val role: String = "",
     val content: String = "",
     val ts: Long = 0L,
+    val attachments: List<ChatAttachment> = emptyList(),
     val tools: List<String> = emptyList(),
     val skills: List<String> = emptyList(),
     val prompt: Long = 0L,
@@ -25,10 +28,8 @@ data class StoredMessage(
     val reasoning: String = "",
     val interrupted: Boolean = false,
     // Stored as a string rather than the enum so a record written before #214 still
-    // deserialises — kotlinx.serialization has no default for a missing enum field on a
-    // @Serializable class, and an unreadable thread would be worse than a missing cause.
-    // Unknown or absent values fall back to `user`, which is correct for every record
-    // that predates a dropped stream.
+    // deserialises — an unreadable thread would be worse than a missing cause.
+    // Unknown or absent values fall back to `user`, correct for every pre-#214 record.
     val interruptedBy: String = InterruptedBy.USER.storageKey,
 )
 
@@ -42,6 +43,21 @@ data class ChatThread(
 )
 
 private val threadJson = Json { ignoreUnknownKeys = true }
+
+/** Whitespace splitter for titles, hoisted: compiled once, not per title
+ * render and switcher-search filter pass. */
+private val titleWhitespace = Regex("\\s+")
+
+/**
+ * Grapheme walker for title cuts, thread-local: BreakIterator is stateful and
+ * not thread-safe. ROOT locale pins deterministic cluster rules across devices;
+ * each use releases its input via setText(""). The ITERATOR itself stays
+ * pinned on the rendering thread (one small object, reused — the expensive
+ * part, the retained title string, is released every time). */
+private val titleBreaks: ThreadLocal<java.text.BreakIterator> =
+    ThreadLocal.withInitial {
+        java.text.BreakIterator.getCharacterInstance(java.util.Locale.ROOT)
+    }
 
 /**
  * Per-tab conversation persisted as JSON (`#17` history survival,
@@ -61,25 +77,157 @@ object ChatThreads {
 
     fun newId(): String = java.util.UUID.randomUUID().toString()
 
-    /** Title from the first user message, truncated; falls back to date. */
+    /** Title from the first user message carrying text, truncated; falls back to
+     * the photo name when no user turn has words, to the default when the thread
+     * has no user turns at all.
+     * Opener-by-design: the first text turn titles the thread even when a later
+     * turn is more substantive ("ok" then an essay still titles "ok") — search and
+     * export carry markers, so the thread stays findable.
+     * The photo signal is STAGED-honest, not wire-strict: the title counts wired
+     * photos (cheap, per render), the wire counts wired AND decodable ones;
+     * load() blanks ragged payloads on read, so the two agree in practice.
+     * Cluster rules are ROOT-pinned, not locale-following: deterministic across
+     * devices and tests, at the cost of Thai/Lao cluster subtleties. */
     fun titleFor(messages: List<ChatMessage>): String {
-        val first = messages.firstOrNull { it.role == "user" }?.content?.trim().orEmpty()
-        if (first.isEmpty()) return "New conversation"
-        val oneLine = first.replace(Regex("\\s+"), " ")
-        return if (oneLine.length <= 42) oneLine else oneLine.take(41) + "…"
+        // Single pass: first text turn + largest photo count in one walk (it
+        // runs per title render and per switcher-search filter pass). Strict
+        // title, lenient search: a hand-edited "User" turn contributes no
+        // title words and no photo count, while search still finds it.
+        var textMsg: ChatMessage? = null
+        var maxPhotos = 0
+        for (m in messages) {
+            if (m.role != "user") continue
+            maxPhotos = maxOf(maxPhotos, m.attachments.wiredPhotoCount())
+            if (textMsg == null && m.content.isNotBlank()) textMsg = m
+        }
+        if (textMsg == null) {
+            // An image-only thread has no words: name the LARGEST photo turn,
+            // like the suffix below. Counted wired (blank-only, not decodable)
+            // — staged-honest, as the KDoc explains.
+            if (maxPhotos > 0) return if (maxPhotos == 1) "Photo" else "$maxPhotos photos"
+            return "New conversation"
+        }
+        val first = textMsg.content.trim()
+        // Suffix from the LARGEST photo turn, not the first — the signal
+        // should say so. Counted wired so blanks never title a thread.
+        val photos = maxPhotos
+        val oneLine = first.replace(titleWhitespace, " ")
+        // The marker reserves its width first, so the row never exceeds 42
+        // chars; avail < 2 yields the bare suffix (one grapheme plus "…"
+        // needs two cells) — the photo signal is the useful half there.
+        // The fit check counts UTF-16 CODE UNITS while the cut walks
+        // graphemes: a 30-emoji title (60 units) reads as over-budget and
+        // truncates, though it fits in 30 graphemes. Deliberately
+        // conservative — the budget still holds, and counting graphemes per
+        // title render is not worth the cost.
+        val suffix = if (photos == 0) "" else if (photos == 1) " [photo]" else " [$photos photos]"
+        val avail = maxOf(0, 42 - suffix.length)
+        val base = if (oneLine.length <= avail) {
+            oneLine
+        } else if (avail >= 2) {
+            // Grapheme-safe cut: the last boundary within budget, so ZWJ
+            // sequences, flag pairs and surrogate pairs never split
+            // mid-cluster. The process-sticky walker releases input below.
+            val breaks = titleBreaks.get()
+            var end = 0
+            try {
+                breaks.setText(oneLine)
+                var n = breaks.first()
+                while (n != java.text.BreakIterator.DONE && n <= avail - 1) {
+                    end = n
+                    n = breaks.next()
+                }
+            } finally {
+                // Drop the retained title string now, not on the next render
+                // — and on a throw too, or the title stays pinned in the
+                // process-sticky ThreadLocal.
+                breaks.setText("")
+            }
+            // A cluster wider than the budget leaves end == 0: fall back
+            // like avail < 2 — only a no-suffix title keeps the ellipsis.
+            if (end > 0) {
+                oneLine.substring(0, end) + "…"
+            } else if (suffix.isEmpty()) {
+                "…"
+            } else {
+                ""
+            }
+        } else {
+            ""
+        }
+        return base + suffix
     }
 
+    /** The file stamp behind the load cache (#339): mtime + size, so an
+     * unchanged file skips the payload re-walk. */
+    private data class LoadStamp(val mtime: Long, val size: Long)
+
+    /** Last successful load per tab (#339): the stamp and the canonical
+     * threads it produced. The payloads are the caller's own strings
+     * (shared, never copied), so the cache pins no extra bytes. */
+    private val lastLoad: MutableMap<String, Pair<LoadStamp, List<ChatThread>>> =
+        java.util.concurrent.ConcurrentHashMap()
+
+    @androidx.annotation.WorkerThread
     fun load(context: Context, tab: String): List<ChatThread> {
+        requireIoThread("ChatThreads.load")
         val f = file(context, tab)
         if (!f.exists()) return emptyList()
-        return runCatching {
-            threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText())
+        // Unchanged-file fast path (#339): every load re-walks every photo
+        // payload (a full alphabet scan each), which is hundreds of
+        // millions of characters for a photo-heavy thread — on every cold
+        // start and every thread switch. The stamp (mtime + size) skips
+        // the walk while the file is untouched. The list is SHARED, not
+        // copied: ChatThread is immutable, so every caller can hold it.
+        val stamp = LoadStamp(f.lastModified(), f.length())
+        val cached = lastLoad[tab]
+        if (cached != null && cached.first == stamp) return cached.second
+        // The scans (whitespace strip + alphabet validation over photo
+        // payloads) must never run on Main: every caller — VM, Settings
+        // export/import — is inside Dispatchers.IO.
+        val loaded: List<ChatThread> = runCatching {
+            threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText(Charsets.UTF_8))
                 .filter { it.id.isNotEmpty() }
                 .take(MAX_THREADS)
+                // Same message cap as save() (#339): a file with 1000
+                // messages would load whole and then be silently trimmed to
+                // 200 by the next save — the trim must happen at the
+                // boundary that reads, or the loss is invisible.
+                // Canonicalized on load: storage is hand-editable, so memory
+                // holds no wrapped-or-ragged payloads — that is what lets the
+                // hot-path isWired() stay a blank check while the wire filter
+                // asserts decode-validity. The next persist writes it back.
+                .map { t ->
+                    val capped = if (t.messages.size > MAX_MESSAGES) {
+                        t.copy(messages = t.messages.takeLast(MAX_MESSAGES))
+                    } else {
+                        t
+                    }
+                    capped.copy(messages = capped.messages.map { m ->
+                        m.copy(attachments = canonicalizeAttachments(m.attachments))
+                    })
+                }
         }.getOrDefault(emptyList())
+        // Only a successful parse is cached (#339): an unreadable file
+        // must not pin an empty result under its stamp.
+        if (loaded.isNotEmpty()) {
+            lastLoad[tab] = stamp to loaded
+        }
+        return loaded
     }
 
+    /**
+     * Persists threads, canonicalizing attachments at the boundary: load()
+     * canonicalizes and export()/import canonicalize explicitly, so save()
+     * cannot trust every caller to hold canonical memory. The re-walk is the
+     * price; a version-stamp flag would skip it, but that is a storage-format
+     * change and foreign-written files must validate anyway.
+     * Dirty tracking is by reference (see canonicalizeUnchanged); persists
+     * happen at turn boundaries, never the per-token streaming loop.
+     */
+    @androidx.annotation.WorkerThread
     fun save(context: Context, tab: String, threads: List<ChatThread>) {
+        requireIoThread("ChatThreads.save")
         runCatching {
             val capped = threads.take(MAX_THREADS).map { t ->
                 if (t.messages.size > MAX_MESSAGES) {
@@ -88,8 +236,155 @@ object ChatThreads {
                     t
                 }
             }
-            file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), capped))
+            // Never wipe a file that still has content (#339): load()
+            // returns an empty list when a file fails to parse, and the
+            // next save would then persist that empty list over the
+            // user's threads. An INTENTIONAL clear (the user deleted
+            // every conversation) still writes: the file on disk parses
+            // fine, so it is the live data, not a corrupt one.
+            val target = file(context, tab)
+            if (capped.isEmpty() && target.exists() && target.length() > 0L) {
+                val existingParses = runCatching {
+                    threadJson.decodeFromString(
+                        ListSerializer(ChatThread.serializer()),
+                        target.readText(Charsets.UTF_8),
+                    )
+                }.isSuccess
+                if (!existingParses) {
+                    // Corrupt file, empty list: keep the bytes on disk
+                    // (they may be recoverable by hand) and skip the write.
+                    return@runCatching
+                }
+            }
+            // Canonicalize only what changed since the last save: same
+            // instance means same immutable content, already proven canonical
+            // by the save that cached it. No refuse/trim gate here, by design
+            // (unlike export): refusing would persist load()'s emptyList()
+            // over the good file, and trimming deletes user photos.
+            val cached = lastCanonical[tab]
+            val out = canonicalizeUnchanged(cached?.first, cached?.second, capped)
+            file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), out), Charsets.UTF_8)
+            lastCanonical[tab] = capped to out
+            // The load cache is dropped here (#339): the app's own write
+            // invalidates the stamp fast path, so a same-size write inside
+            // one mtime tick can never serve a stale list.
+            lastLoad.remove(tab)
+        }.onFailure { e ->
+            // Logged, not swallowed (#339): a failed write (disk full, an
+            // OOM) leaves memory and disk diverging, and the next cold
+            // start would load stale threads with no sign of a failure.
+            // The JVM stub of Log throws, and this path is unit tested, so
+            // the call is guarded.
+            runCatching { android.util.Log.e("ChatThreads", "save failed for $tab", e) }
         }
+    }
+
+    /** Drops the dirty-tracking snapshot for [tab]: an out-of-band writer (the
+     * backup import writes the thread file directly, bypassing [save]) must
+     * invalidate it, or the next save restores the pre-import bytes. */
+    internal fun invalidate(tab: String) {
+        lastCanonical.remove(tab)
+        lastLoad.remove(tab)
+    }
+
+    /** Tabs whose thread file was rewritten out-of-band, with a per-tab
+     * counter (#339): the backup import writes the file directly, so a live
+     * ViewModel still holds the pre-import threads and its next persist
+     * would write them back over the restore. A counter per tab (not a
+     * global flag) so a rewrite of one tab never disturbs another, and
+     * replayed through a StateFlow so a ViewModel that starts after the
+     * rewrite still sees the newest count. */
+    private val rewriteCounters = kotlinx.coroutines.flow.MutableStateFlow<Map<String, Long>>(emptyMap())
+
+    /** The rewrite counters, for ViewModels to watch. */
+    val rewrites: kotlinx.coroutines.flow.StateFlow<Map<String, Long>> = rewriteCounters.asStateFlow()
+
+    /** Announces that [tab]'s thread file was rewritten out-of-band. */
+    internal fun notifyRewritten(tab: String) {
+        rewriteCounters.update { current ->
+            current + (tab to ((current[tab] ?: 0L) + 1L))
+        }
+    }
+
+    /** Last save's (input, canonicalized-output) snapshot per tab: the
+     * dirty-tracking cache behind [save]. The CURRENT list is compared
+     * element-wise against the last INPUT, never the last output (the VM keeps
+     * its original instances, so canonicalized copies would never match). It
+     * pins only SHELLS (#339): the payload strings are the caller's own
+     * immutable instances, shared by reference — the cache never duplicates
+     * photo bytes — and the entry is replaced wholesale by the next save of
+     * that tab, so an evicted thread's payloads are released then. */
+    private val lastCanonical: MutableMap<String, Pair<List<ChatThread>, List<ChatThread>>> =
+        java.util.concurrent.ConcurrentHashMap()
+
+    /** Canonicalizes only threads that changed since the last save: unchanged
+     * threads reuse the cached output by reference; new or copied threads
+     * canonicalize fully. */
+    internal fun canonicalizeUnchanged(
+        prevIn: List<ChatThread>?,
+        prevOut: List<ChatThread>?,
+        current: List<ChatThread>,
+    ): List<ChatThread> {
+        if (prevIn == null || prevOut == null) return current.map(::canonicalizeThread)
+        // By ID, not by position (#339): a new thread is PREPENDED, so a
+        // positional compare shifts every index and the next save
+        // re-canonicalizes the whole list (a full payload walk per thread).
+        // The id map keeps the hits; the identity check (same instance)
+        // still decides whether the content changed.
+        val prevById = HashMap<String, MutableList<Pair<ChatThread, ChatThread>>>()
+        prevIn.forEachIndexed { i, t ->
+            // Size-guarded (#339): the two lists are written together today,
+            // but a mismatch (a changed cap, an interleaved save) must
+            // degrade to a full canonicalize, never an IndexOutOfBounds
+            // swallowed by save()'s runCatching.
+            val out = prevOut.getOrNull(i) ?: return@forEachIndexed
+            prevById.getOrPut(t.id) { mutableListOf() }.add(t to out)
+        }
+        return current.map { t ->
+            val entry = prevById[t.id]?.firstOrNull { it.first === t }
+            if (entry != null) entry.second else canonicalizeThread(t)
+        }
+    }
+
+    /** Canonicalizes one thread's attachments, skipping text-only messages
+     * without copying them: empty attachments have nothing to prove. */
+    private fun canonicalizeThread(t: ChatThread): ChatThread =
+        t.copy(
+            messages = t.messages.map { m ->
+                if (m.attachments.isEmpty()) m
+                else m.copy(attachments = canonicalizeAttachments(m.attachments))
+            },
+        )
+
+    /** Canonical form of a raw thread file for backup import: the import
+     * boundary enforces the same contract as load(), so a hand-edited backup
+     * can't persist ragged payloads. Mirrors load()'s row contract (empty-id
+     * threads drop, the file caps at MAX_THREADS). Null when the text isn't a
+     * threads list — the caller keeps its skip-invalid behavior. */
+    @androidx.annotation.WorkerThread
+    fun canonicalizeFile(text: String): String? {
+        requireIoThread("ChatThreads.canonicalizeFile")
+        return runCatching {
+            val threads = threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), text)
+                .filter { it.id.isNotEmpty() }
+                .take(MAX_THREADS)
+            threadJson.encodeToString(
+                ListSerializer(ChatThread.serializer()),
+                threads.map { t ->
+                    // Same message cap as load()/save() (#339): an imported
+                    // file must not carry messages the next save would
+                    // silently drop.
+                    val capped = if (t.messages.size > MAX_MESSAGES) {
+                        t.copy(messages = t.messages.takeLast(MAX_MESSAGES))
+                    } else {
+                        t
+                    }
+                    capped.copy(messages = capped.messages.map { m ->
+                        m.copy(attachments = canonicalizeAttachments(m.attachments))
+                    })
+                },
+            )
+        }.getOrNull()
     }
 
     /**
@@ -117,6 +412,9 @@ object ChatThreads {
                 role = it.role,
                 content = it.content,
                 ts = it.ts,
+                // Already canonical: load() normalized every payload, so
+                // no per-message work happens here on the Main thread.
+                attachments = it.attachments,
                 tools = it.tools,
                 skills = it.skills,
                 prompt = it.prompt,
@@ -137,12 +435,16 @@ object ChatThreads {
             )
         }
 
-    fun toStored(messages: List<ChatMessage>): List<StoredMessage> =
-        messages.map {
+    /** UI memory → storage shape, intentionally RAW: no canonicalization walk
+     * here (this runs on Main). The canonicalizing boundary is
+     * save()/load()/export()/import (IO-gated): a ragged payload heals on the
+     * next load, and the wire filter fails closed meanwhile. */
+    fun toStored(messages: List<ChatMessage>): List<StoredMessage> =        messages.map {
             StoredMessage(
                 role = it.role,
                 content = it.content,
                 ts = it.ts,
+                attachments = it.attachments,
                 tools = it.tools,
                 skills = it.skills,
                 prompt = it.prompt,

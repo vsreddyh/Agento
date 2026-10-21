@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -30,6 +31,14 @@ private const val RECOVERY_FIRST_DELAY_MS = 6_000L
  * producing, the only completion signal without a server resume primitive. */
 private const val RECOVERY_SECOND_DELAY_MS = 15_000L
 
+/** One toast-host notice: text + styling + re-fire identity (identical texts
+ * can sit in the queue as distinct entries). */
+data class ToastNotice(
+    val text: String,
+    val kind: ToastKind = ToastKind.Error,
+    val seq: Long = 0L,
+)
+
 data class ChatUiState(
     val provider: String = "",
     val model: String = "",
@@ -38,6 +47,11 @@ data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val streaming: Boolean = false,
     val pending: String = "",
+    /** Photos staged in the composer. Cleared on send; parked untouched while streaming.
+     * Staged payloads are never blank: staged read raw, wire sites count wiredPhotos(). */
+    val pendingAttachments: List<ChatAttachment> = emptyList(),
+    /** Queued notices for the toast host, head-first so two rapid notifies surface. */
+    val notices: List<ToastNotice> = emptyList(),
     val error: String = "",
     /** True once the persisted conversations finish loading; sends wait for it. */
     val ready: Boolean = false,
@@ -171,6 +185,59 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private val serverApi = ServerApi(app)
     private val appCtx: Application = app
 
+    /** Decoded-thumbnail memory, VM-held so it survives rotation; evicted on
+     * clear. Lazy (#339): constructing android.util.LruCache touches the
+     * android.jar stubs, which would make a plain-JUnit ViewModel test
+     * impossible — the cache is only needed once a photo renders. */
+    private val thumbCacheDelegate = lazy { ThumbCache() }
+    internal val thumbCache by thumbCacheDelegate
+
+    /** Evict the thumbnails IF the cache exists (#339): the cache is lazy,
+     * and a trim or a clear must not construct it just to empty it. */
+    private fun evictThumbs() {
+        if (thumbCacheDelegate.isInitialized()) thumbCache.evictAll()
+    }
+
+    /** The same guard for the per-key evictions (#339): constructing the
+     * cache touches android.util.LruCache, whose android.jar stub throws
+     * — a plain-JUnit ViewModel test must never build it. */
+    private fun removeThumbKey(key: ThumbKey) {
+        if (thumbCacheDelegate.isInitialized()) thumbCache.remove(key)
+    }
+
+    /** The same guard for a whole thread's thumbs (#339). */
+    private fun removeThreadThumbs(threadKey: String) {
+        if (thumbCacheDelegate.isInitialized()) thumbCache.removeThread(threadKey)
+    }
+
+    /** Memory-trim hook (#339): the cache is byte-bounded (~8 MB) but that
+     * is still a lot to hold while the app sits in the background on a
+     * 1 GB device. The UI-hidden trim is the signal that the process may
+     * be killed; the bitmaps re-decode on the way back, so dropping them
+     * costs time, not data. */
+    private val trimCallback = object : android.content.ComponentCallbacks2 {
+        override fun onConfigurationChanged(newConfig: android.content.res.Configuration) = Unit
+        override fun onLowMemory() {
+            // The legacy low-memory signal: free the bitmaps here too (#339).
+            evictThumbs()
+        }
+        override fun onTrimMemory(level: Int) {
+            if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+                evictThumbs()
+            }
+        }
+    }
+
+    init {
+        appCtx.registerComponentCallbacks(trimCallback)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        appCtx.unregisterComponentCallbacks(trimCallback)
+        evictThumbs()
+    }
+
     private val _state = mutableStateOf(
         ChatUiState(
             provider = api.providerFor(tab),
@@ -218,34 +285,74 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private var resumedThreads = mutableSetOf<String>()
     private var threadId: String = ""
     private var threads: List<ChatThread> = emptyList()
+    /** Bumped by threads-mutating user ops so init's async publish can tell a
+     * stale load from the live list. Bumped on the SUCCESS path of such an op
+     * only — an op that returns early (not ready, wrong thread, blocked by a
+     * live turn) changes nothing, so the in-flight load may still publish. */
+    private val initGen = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** Marks "the live list is newer than any in-flight load" (#339): every
+     * threads-mutating op calls this on its success path, so a new op cannot
+     * forget the bump. One helper, one place to look. */
+    private fun touchThreads() {
+        initGen.incrementAndGet()
+    }
 
     init {
+        // Load on IO, publish on Main; publish applies fully only when nothing outranked it.
         viewModelScope.launch(Dispatchers.IO) {
             val loaded = ChatThreads.load(appCtx, tab)
                 .filter { it.id.isNotEmpty() }
                 .sortedByDescending { it.updatedAt }
             // Empty threads never enter history: drop persisted drafts, keep chats.
-            threads = loaded.filter { it.messages.isNotEmpty() }
-            var active = threads.firstOrNull()
-            if (active == null) {
-                active = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
-                threads = listOf(active)
-                ChatThreads.save(appCtx, tab, threads)
+            val freshThreads = loaded.filter { it.messages.isNotEmpty() }
+            // One thread must exist to open: a fresh empty id when nothing loaded (first() is safe).
+            val fresh = if (freshThreads.isEmpty()) {
+                ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
+            } else {
+                null
             }
-            threadId = active.id
-            _state.value = _state.value.copy(
-                messages = ChatThreads.toUi(active.messages),
-                threads = summaries(),
-                threadId = threadId,
-                ready = true,
-            )
+            val threadsFinal = fresh?.let { listOf(it) } ?: freshThreads
+            val activeFinal = threadsFinal.first()
+            if (fresh != null) {
+                // Persist the fresh empty thread on IO (save is IO-gated).
+                ChatThreads.save(appCtx, tab, threadsFinal)
+            }
+            withContext(Dispatchers.Main) {
+                if (initGen.get() == 0) {
+                    threads = threadsFinal
+                    threadId = activeFinal.id
+                    _state.value = _state.value.copy(
+                        messages = ChatThreads.toUi(activeFinal.messages),
+                        threads = summaries(),
+                        threadId = threadId,
+                        ready = true,
+                    )
+                } else {
+                    // A user op already published newer state — just mark ready so the UI unblocks.
+                    _state.value = _state.value.copy(ready = true)
+                }
+            }
             refreshServerTotals()
-            // Pending proposals badge without opening the sheet: one light
-            // list at launch, then again on every retarget below.
+            // Pending proposals badge without opening the sheet.
             pollMemoryCount(api.pathFor(tab))
-            // App-killed turn recovery (#311): an unanswered user tail with
-            // a live server run resends into the existing run.
-            maybeResume(threadId, ChatThreads.toUi(active.messages))
+            // App-killed turn recovery (#311): an unanswered tail with a live run resends into it.
+            threads.firstOrNull { it.id == threadId }?.let {
+                maybeResume(threadId, ChatThreads.toUi(it.messages))
+            }
+        }
+        // Out-of-band rewrite (backup import) → re-read the file (#339):
+        // the import writes it directly, so the in-memory list is stale and
+        // the next persist would write it back over the restore.
+        viewModelScope.launch {
+            var seen = ChatThreads.rewrites.value[tab] ?: 0L
+            ChatThreads.rewrites.collect { map ->
+                val v = map[tab] ?: 0L
+                if (v != seen) {
+                    seen = v
+                    onThreadFileRewritten()
+                }
+            }
         }
         checkReachability()
     }
@@ -258,13 +365,144 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             effort = api.effortFor(tab, model),
             path = api.pathFor(tab),
         )
-        // The path can change here (profile switch in Settings): rows and
-        // the badge belong to the new profile, not the old one.
+        // The path can change here (profile switch in Settings).
         retargetMemory()
     }
 
     fun onPending(v: String) {
         _state.value = _state.value.copy(pending = v)
+    }
+
+    /** Stages picked photos, capped at [MAX_IMAGES_PER_TURN] — excess is dropped
+     * with an Info notice (nothing failed, the cap held). Only wired photos
+     * occupy cap slots; growth is a before/after diff. */
+    fun addPendingAttachments(items: List<ChatAttachment>) {
+        val wired = items.wiredPhotos()
+        // Silent, not a cap refusal: blanks are not photos, so nothing was dropped.
+        if (wired.isEmpty()) return
+        val cur = _state.value.pendingAttachments
+        val room = MAX_IMAGES_PER_TURN - cur.wiredPhotoCount()
+        if (room <= 0) {
+            notify(capRefused(room), ToastKind.Info)
+            return
+        }
+        val take = wired.take(room)
+        val dropped = wired.size - take.size
+        // Stored canonical-filtered: only wired photos occupy slots — the
+        // same rule the history store uses (photos.wiredPhotos()). A blank
+        // in the staged set is therefore dropped silently; the stage path
+        // never produces one (prepareAttachment throws instead), so this
+        // is a boundary rule, not a user-visible drop.
+        _state.value = _state.value.copy(pendingAttachments = cur.wiredPhotos() + take)
+        if (dropped > 0) {
+            notify(capRefused(room), ToastKind.Info)
+        }
+    }
+
+    /** True while the composer has a free photo slot (re-checked mid-batch). Counted wired. */
+    fun hasAttachmentRoom(): Boolean =
+        _state.value.pendingAttachments.wiredPhotoCount() < MAX_IMAGES_PER_TURN
+
+    /** Whether [id] is still the active thread: batches drop if a switch landed mid-decode. */
+    fun isThreadCurrent(id: String): Boolean = id == threadId
+
+    /** Live thread id for batch homing (see [isThreadCurrent]). */
+    fun threadIdNow(): String = threadId
+
+    /** Live staged-photo count for tap-time cap math (the UI reads the VM live). Counted wired. */
+    fun pendingAttachmentCount(): Int = _state.value.pendingAttachments.wiredPhotoCount()
+
+    /** Appends heard text to the composer: read + write atomic so rapid results
+     * can't clobber each other. Preserves user-typed text. */
+    fun appendPending(text: String) {
+        if (text.isBlank()) return
+        val cur = _state.value.pending
+        _state.value = _state.value.copy(
+            pending = if (cur.isBlank()) text else joinPending(cur, text),
+        )
+    }
+
+    /** Toast-host notice: appended to the queue, so a repeated identical notice
+     * re-fires (distinct sequence) instead of deduping silent. Main-confined. */
+    fun notify(msg: String, kind: ToastKind = ToastKind.Error) {
+        // Bounded per kind: Errors and Infos cap independently (3 + 2) — Infos never evict an Error.
+        val combined = _state.value.notices + ToastNotice(msg, kind, noticeSeq.incrementAndGet())
+        val errors = combined.filter { it.kind == ToastKind.Error }.takeLast(3)
+        val infos = combined.filter { it.kind != ToastKind.Error }.takeLast(2)
+        _state.value = _state.value.copy(
+            notices = (errors + infos).sortedBy { it.seq },
+        )
+    }
+
+    /** Monotonic notice sequence for re-fire identity (see [notify]); atomic. */
+    private val noticeSeq = java.util.concurrent.atomic.AtomicLong(0L)
+
+    /** Single spelling for the thread-load dead-tap answer. */
+    private fun notifyLoading() =
+        notify("Conversations still loading — try again in a moment.", ToastKind.Info)
+
+    /** Single spelling for the thread-change staged-discard notice. */
+    private fun stagedDiscardedNotice() =
+        notify("Staged photos discarded — they belonged to the previous thread.", ToastKind.Info)
+
+    /** Notices that survive a thread change: Info toasts must not render over the
+     * new composer — Errors are failures. */
+    private fun retainedNotices(): List<ToastNotice> =
+        _state.value.notices.filter { it.kind == ToastKind.Error }
+
+    /** Single pending-joint spelling: one-space gap, both sides ride verbatim. */
+    private fun joinPending(first: String, second: String): String =
+        if (first.isBlank()) second else "${first.trimEnd()} $second"
+
+    /** Removes a staged composer photo by stable pick id: the strip's index comes
+     * from a state snapshot, so removing by position drops the WRONG photo. */
+    fun removePendingAttachmentById(id: String) {
+        if (id.isEmpty()) return
+        val cur = _state.value.pendingAttachments
+        if (cur.none { it.id == id }) return
+        _state.value = _state.value.copy(
+            pendingAttachments = cur.filterNot { it.id == id },
+        )
+    }
+
+    /** The staged photo with [id] (#339): the remove path resolves the
+     * payload from the LIVE list, not a composition snapshot — a batch
+     * landing between recomposition and tap shifts the snapshot's index. */
+    internal fun pendingAttachmentById(id: String): ChatAttachment? =
+        if (id.isEmpty()) null else _state.value.pendingAttachments.firstOrNull { it.id == id }
+
+    /** The staged photo at [index] (#339): the LEGACY remove path (an
+     * empty id — every legacy pick shares it) can only be resolved by
+     * position, and the LIVE list is the only one that is not a stale
+     * composition snapshot. */
+    internal fun pendingAttachmentAt(index: Int): ChatAttachment? =
+        _state.value.pendingAttachments.getOrNull(index)
+
+    /** Removes the staged photo at [index] (#339): a legacy payload (empty
+     * id) cannot be removed by id — every legacy pick shares that empty id,
+     * so the id path would drop the wrong photo (or nothing). */
+    fun removePendingAttachmentAt(index: Int) {
+        val cur = _state.value.pendingAttachments
+        if (index !in cur.indices) return
+        _state.value = _state.value.copy(
+            pendingAttachments = cur.filterIndexed { i, _ -> i != index },
+        )
+    }
+
+    /** Drops the shown head of [ChatUiState.notices] after the toast host shows it. */
+    fun consumeNotice() {
+        if (_state.value.notices.isNotEmpty()) {
+            _state.value = _state.value.copy(notices = _state.value.notices.drop(1))
+        }
+    }
+
+    /** Fresh-process detector for the camera-gate reset: true once, on the first sweep ever. */
+    private var sweepGateResetDone = false
+
+    fun consumeSweepGateReset(): Boolean {
+        if (sweepGateResetDone) return false
+        sweepGateResetDone = true
+        return true
     }
 
     /** History rows: only threads with actual chats, newest first. */
@@ -280,10 +518,109 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
 
     private fun persist() {
+        // A pending rewrite (backup import) merges FIRST: the restored file
+        // is newer than this list for every thread but the live one (#339),
+        // so persisting the list alone would resurrect the pre-import
+        // conversations over the restore.
+        val merged = consumePendingRewrite()
         // Drafts never hit disk: only threads with chats are worth keeping.
-        val snapshot = threads.filter { it.messages.isNotEmpty() }
+        val snapshot = merged ?: threads.filter { it.messages.isNotEmpty() }
         viewModelScope.launch(Dispatchers.IO) {
             ChatThreads.save(appCtx, tab, snapshot)
+        }
+    }
+
+    /** The restored threads of a rewrite that landed mid-turn (#339): the
+     * live turn's messages are not in the file yet, so the file is adopted
+     * at the next persist instead of immediately. */
+    private var pendingRestored: List<ChatThread>? = null
+
+    /** Merges a pending rewrite into the in-memory list (#339): the
+     * restored file wins for every thread but the live one, whose
+     * just-produced messages would otherwise be lost.
+     *
+     * LIVE WINS, ON PURPOSE: the merge only runs when a turn is in flight
+     * (the file predates that turn), so the live thread's messages are the
+     * newest thing the user has. A restored file that no longer holds it
+     * does not delete it — the turn finishes, and the merge keeps it. */
+    private fun consumePendingRewrite(): List<ChatThread>? {
+        val restored = pendingRestored ?: return null
+        pendingRestored = null
+        val live = threads.firstOrNull { it.id == threadId }
+        val merged = restored.filter { it.id != threadId } + listOfNotNull(live)
+        threads = merged
+        _state.value = _state.value.copy(threads = summaries())
+        return merged.filter { it.messages.isNotEmpty() }
+    }
+
+    /** A thread file was rewritten out-of-band (#339): the backup import
+     * writes it directly, so the in-memory list is stale. Re-read it, or
+     * the next persist writes the pre-import threads back over the
+     * restore. */
+    private fun onThreadFileRewritten() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val restored = ChatThreads.load(appCtx, tab)
+                .filter { it.id.isNotEmpty() }
+                .sortedByDescending { it.updatedAt }
+                .filter { it.messages.isNotEmpty() }
+            withContext(Dispatchers.Main) {
+                if (_state.value.streaming) {
+                    // Mid-turn: the file predates the live turn, so
+                    // adopting it now would drop that turn. Merge at the
+                    // next persist instead.
+                    pendingRestored = restored
+                } else {
+                    applyRewrite(restored)
+                }
+            }
+        }
+    }
+
+    /** Adopts a rewritten thread file (#339): the restored list is
+     * authoritative, and a conversation it no longer holds must not stay
+     * on screen (its next persist would put it back). */
+    private fun applyRewrite(restored: List<ChatThread>) {
+        // The composer clears like every other thread change (#339): staged
+        // photos belong to the conversation the restore just replaced, and
+        // sending them into the restored one is the mis-send class the
+        // switch/new/delete sites already close.
+        val hadStaged = _state.value.pendingAttachments.wiredPhotoCount() > 0
+        // Staged thumbs are keyed by the thread they were staged in (#339).
+        val stagedRewrite = _state.value.pendingAttachments
+        val stagedRewriteThread = threadId
+        val active = restored.firstOrNull { it.id == threadId }
+        if (active != null) {
+            threads = restored
+            _state.value = _state.value.copy(
+                messages = ChatThreads.toUi(active.messages),
+                threads = summaries(),
+                pendingAttachments = emptyList(),
+                notices = retainedNotices(),
+            )
+        } else {
+            val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
+            threads = listOf(fresh) + restored
+            threadId = fresh.id
+            _state.value = _state.value.copy(
+                messages = emptyList(),
+                threads = summaries(),
+                threadId = threadId,
+                pendingAttachments = emptyList(),
+                notices = retainedNotices(),
+            )
+        }
+        if (hadStaged) {
+            stagedDiscardedNotice()
+        }
+        evictStagedThumbs(stagedRewrite, stagedRewriteThread)
+    }
+
+    /** Evicts the thumbnails of a discarded staged set (#339): they live in
+     * the cache under the thread they were staged in, and a discard left
+     * them there until pressure, a trim, or the thread's deletion. */
+    private fun evictStagedThumbs(staged: List<ChatAttachment>, thread: String) {
+        staged.forEachIndexed { i, a ->
+            removeThumbKey(thumbCacheKey(a.id, i, a.base64, thread))
         }
     }
 
@@ -305,29 +642,71 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Switches to another conversation; the draft stays on the old one. */
     fun switchThread(id: String) {
-        if (id == threadId || _state.value.streaming || !_state.value.ready) return
+        // Voiced on staged content like newConversation()/deleteThread(): an empty composer stays silent.
+        if (!_state.value.ready) {
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notifyLoading()
+            }
+            return
+        }
+        if (id == threadId || _state.value.streaming) {
+            // Voiced (#339): a switch during a live turn reads as a dead
+            // tap otherwise.
+            if (id != threadId && _state.value.streaming) {
+                notify("Still answering — switch after this reply finishes.", ToastKind.Info)
+            }
+            return
+        }
         val target = threads.firstOrNull { it.id == id } ?: return
+        // Past every no-op return: this tap republishes thread state, so it outranks init's load.
+        touchThreads()
+        // Staged photos are keyed by the thread they were staged in (#339):
+        // capture the set and that thread before the switch, so the
+        // discard can evict the exact cache entries.
+        val stagedSwitch = _state.value.pendingAttachments
+        val stagedThread = threadId
         threadId = id
         cancelRecovery()
         runsJob?.cancel()
         stopApprovalWatch()
         retargetApprovals()
         retargetMemory()
+        // Composer clears on switch: carrying typed text into the new thread
+        // would fire A's draft into B on the next send.
+        // DELIBERATE SPLIT, named so the next edit doesn't "fix" it into
+        // uniformity: navigate (switch/open) DISCARDS with voice, fresh-thread
+        // (new/delete) PARKS via joinPending — park mis-sends, clear loses words.
+        // Both drops voice: the photo notice below, plus the typed-text one.
+        val sw = _state.value
+        val hadTypedSwitch = sw.pending.isNotBlank() || sw.queued.isNotBlank()
+        val hadStaged = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
             messages = ChatThreads.toUi(target.messages),
             threads = summaries(),
             threadId = id,
             error = "",
             pending = "",
+            // The notice queue drops Infos with them (Errors survive).
+            pendingAttachments = emptyList(),
+            notices = retainedNotices(),
             activeTools = emptyList(),
             activeToolLabel = "",
             serverTokens = null,
             queued = "",
             // Run ids belong to the old thread's turn: a switch must not
-            // highlight (or stop, via a stale read) another thread's run.
+            // stop another thread's run.
             activeRunId = "", busyRunId = "",
             showRuns = false, runsLoading = false,
         )
+        if (hadStaged) {
+            stagedDiscardedNotice()
+        }
+        evictStagedThumbs(stagedSwitch, stagedThread)
+        if (hadTypedSwitch) {
+            notify("Typed draft discarded — it belonged to the previous thread.", ToastKind.Info)
+        }
         refreshServerTotals()
         maybeResume(id, ChatThreads.toUi(target.messages))
     }
@@ -348,16 +727,32 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * firing, so the unconsumed target retries when ready flips.
      */
     fun openThread(id: String, autosend: Boolean, onDone: () -> Unit = {}) {
-        if (!_state.value.ready) return
-        // The thread was written to disk by the notification receiver after
-        // this ViewModel loaded, so it is not in memory yet: merge any
-        // disk-only threads in (in-memory wins on id clash — it is newer).
+        if (!_state.value.ready) {
+            // Voiced like the other not-ready gates (#339): a deep-link tap
+            // during thread load must not read as a dead button. Silent when
+            // the composer is empty, like switchThread().
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notifyLoading()
+            }
+            return
+        }
+        // Written to disk after this ViewModel loaded: merge disk-only threads in.
         viewModelScope.launch {
             if (threads.none { it.id == id }) {
                 val loaded = withContext(Dispatchers.IO) {
-                    ChatThreads.load(appCtx, tab).filter { it.id.isNotEmpty() }
+                    ChatThreads.load(appCtx, tab)
+                        .filter { it.id.isNotEmpty() && it.messages.isNotEmpty() }
                 }
-                threads = threads + loaded.filter { l -> threads.none { it.id == l.id } }
+                // Newest-first, like init's load (#339): the append path
+                // left the switcher out of order, and a persisted empty
+                // draft must not enter history.
+                threads = (threads + loaded.filter { l -> threads.none { it.id == l.id } })
+                    .sortedByDescending { it.updatedAt }
+                    // The storage cap, like load()'s (#339): the merged list
+                    // must not exceed what the next persist would write.
+                    .take(ChatThreads.MAX_THREADS)
             }
             // Consumed only when the open was not blocked on a live turn:
             // a streaming-blocked tap keeps its target and retries on re-tap.
@@ -369,21 +764,39 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val target = threads.firstOrNull { it.id == id } ?: return true
         if (id != threadId) {
             // Blocked on a live turn: NOT consumed, so the retained target
-            // retries on the next tap (each tap bumps the gen). Consuming
-            // here would lose the tap the moment the turn ends.
-            if (_state.value.streaming) return false
+            // retries on the next tap.
+            if (_state.value.streaming) {
+                // Voiced (#339), like the switch path above.
+                notify("Still answering — open after this reply finishes.", ToastKind.Info)
+                return false
+            }
+            // Real publish past every no-op return, same rule as switchThread.
+            touchThreads()
+            // Staged thumbs are keyed by the thread they were staged in
+            // (#339): capture both before the switch.
+            val stagedOpen = _state.value.pendingAttachments
+            val stagedOpenThread = threadId
             threadId = id
             cancelRecovery()
             runsJob?.cancel()
             stopApprovalWatch()
             retargetApprovals()
             retargetMemory()
+            // Composer clears on open like switchThread (cross-thread mis-send), and voices it.
+            val op = _state.value
+            val hadTypedOpen = op.pending.isNotBlank() || op.queued.isNotBlank()
+            // Same staged-discard voice as switchThread above.
+            val hadStagedOpen = _state.value.pendingAttachments.wiredPhotoCount() > 0
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(target.messages),
                 threads = summaries(),
                 threadId = id,
                 error = "",
                 pending = "",
+                // Staged photos die with the text draft: a parked photo firing into
+                // the wrong thread is a silent mis-send.
+                pendingAttachments = emptyList(),
+                notices = retainedNotices(),
                 activeTools = emptyList(),
                 activeToolLabel = "",
                 serverTokens = null,
@@ -391,24 +804,32 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
             )
+            if (hadStagedOpen) {
+                stagedDiscardedNotice()
+            }
+            evictStagedThumbs(stagedOpen, stagedOpenThread)
+            if (hadTypedOpen) {
+                notify("Typed draft discarded — it belonged to the previous thread.", ToastKind.Info)
+            }
             refreshServerTotals()
             maybeResume(id, ChatThreads.toUi(target.messages))
         }
         if (!autosend || _state.value.streaming) return true
         val msgs = _state.value.messages
         val last = msgs.lastOrNull() ?: return true
-        // No assistant reply yet anywhere in this thread — which for the
-        // single-message instruction thread is the same as a user-only
-        // tail. Anything else (already answered, empty, assistant tail)
-        // means leave it alone: a re-tap after a reply must not resend.
+        // No assistant reply yet in this thread: anything else means leave it alone.
         if (last.role != "user" || msgs.any { it.role == "assistant" }) return true
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
+        // Photos sit out an autosend like every other resend.
+        noteParkedPhotos("Opened")
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
-            pending = "", streaming = true, error = "", queued = "",
+            // Draft and queue stay in the composer: autosend fires the thread's own tail.
+            pending = withParkedQueue(_state.value.pending),
+            streaming = true, error = "", queued = "",
         )
         doSend(msgs, path, provider, model, effort)
         return true
@@ -417,20 +838,61 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** + starts a new conversation; threads with chats are kept, empty
      * drafts are dropped so they never pile up in history. */
     fun newConversation() {
-        if (!_state.value.ready) return
+        // Voiced on staged content like send()/retry(): an empty composer stays silent.
+        if (!_state.value.ready) {
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notifyLoading()
+            }
+            return
+        }
+        // Real publish past the not-ready return: only from here may this op outrank init's load.
+        touchThreads()
+        // Bump the generation like stop(): a Done/Error already buffered in
+        // the callbackFlow channel must go stale, or it lands on the fresh
+        // thread and persists the old turn's assistant message there.
+        sendGen++
         streamJob?.cancel()
         streamJob = null
         serverTotalsJob?.cancel()
+        // Stop the server-side run too, not just the local socket: a New that
+        // stayed local would leave the agent running invisibly. Fire-and-forget.
+        val newRunToCancel = _state.value.activeRunId
+        val newCancelPath = _state.value.path
+        if (newRunToCancel.isNotBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { runsApi.cancel(newCancelPath, newRunToCancel) }
+                    .onFailure { runCatching { Log.w("ChatRuns", "cancel $newRunToCancel failed", it) } }
+            }
+        }
         val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
         threads = listOf(fresh) + threads.filter { it.messages.isNotEmpty() }
+        // Staged thumbs are keyed by the thread they were staged in (#339).
+        val stagedNew = _state.value.pendingAttachments
+        val stagedNewThread = threadId
         threadId = fresh.id
         cancelRecovery()
         runsJob?.cancel()
         stopApprovalWatch()
         retargetApprovals()
         retargetMemory()
+        // Same queued→pending restore as stop(): killing the stream must not eat
+        // queued text.
+        val s = _state.value
+        val parked = when {
+            s.queued.isBlank() -> ""
+            s.pending.isBlank() -> s.queued
+            else -> joinPending(s.pending, s.queued)
+        }
+        // Same staged-discard voice as switchThread.
+        val hadStagedNew = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
-            messages = emptyList(), error = "", streaming = false, pending = "",
+            messages = emptyList(), error = "", streaming = false, pending = parked,
+            // Staged photos die with the draft like every other thread change: a
+            // New with a parked photo must not fire it into the fresh thread.
+            pendingAttachments = emptyList(),
+            notices = retainedNotices(),
             threads = summaries(), threadId = threadId,
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
@@ -438,6 +900,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeRunId = "", busyRunId = "",
             showRuns = false, runsLoading = false,
         )
+        if (hadStagedNew) {
+            stagedDiscardedNotice()
+        }
+        evictStagedThumbs(stagedNew, stagedNewThread)
         // Skip the write when nothing has been chatted yet — a pure-empty
         // list carries no information and is dropped on next launch anyway.
         if (threads.any { it.messages.isNotEmpty() }) persist()
@@ -454,13 +920,38 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Deletes a conversation; if it was active, falls back to the newest
      * thread with chats (never a blank draft). */
     fun deleteThread(id: String) {
-        if (!_state.value.ready) return
+        // Voiced on staged content like send()/retry(): an empty composer stays silent.
+        if (!_state.value.ready) {
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notifyLoading()
+            }
+            return
+        }
+        // Real publish past the not-ready return, same rule as newConversation.
+        touchThreads()
+        // Bump the generation like stop(): a buffered Done/Error must go
+        // stale, or it lands on the fallback thread and persists there.
+        sendGen++
         streamJob?.cancel()
         streamJob = null
+        // Stop the server-side run when deleting the ACTIVE thread: same orphan class New closes above.
+        val deleteRunToCancel = _state.value.activeRunId
+        val deleteCancelPath = _state.value.path
+        val deletingActive = threadId == id
+        if (deletingActive && deleteRunToCancel.isNotBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { runsApi.cancel(deleteCancelPath, deleteRunToCancel) }
+                    .onFailure { runCatching { Log.w("ChatRuns", "cancel $deleteRunToCancel failed", it) } }
+            }
+        }
         threads = threads.filterNot { it.id == id }
+        // The deleted thread's thumbs die with it (#339): every key carries
+        // its thread, so this frees them now instead of at LRU pressure.
+        removeThreadThumbs(id)
         if (threadId == id) {
-            // `id` is already filtered out above, so the second fallback is
-            // just the newest remaining thread, whatever it is.
+            // `id` is already filtered out above: the fallback is the newest remaining thread.
             val next = threads.firstOrNull { it.messages.isNotEmpty() }
                 ?: threads.firstOrNull()
                 ?: ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
@@ -471,13 +962,28 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             stopApprovalWatch()
             retargetApprovals()
             retargetMemory()
+            // Same restore as newConversation above.
+            val d = _state.value
+            val kept = when {
+                d.queued.isBlank() -> ""
+                d.pending.isBlank() -> d.queued
+                else -> joinPending(d.pending, d.queued)
+            }
+            // Same staged-discard voice as switchThread.
+            val hadStagedDelete = d.pendingAttachments.wiredPhotoCount() > 0
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
-                threadId = next.id, error = "", streaming = false, pending = "",
+                threadId = next.id, error = "", streaming = false, pending = kept,
+                // Same staged-photos-die-with-the-draft rule as the other thread changes.
+                pendingAttachments = emptyList(),
+                notices = retainedNotices(),
                 serverTokens = null, queued = "",
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
             )
+            if (hadStagedDelete) {
+                stagedDiscardedNotice()
+            }
         }
         _state.value = _state.value.copy(threads = summaries())
         persist()
@@ -486,14 +992,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Threads matching [query] in title or message text (switcher search). */
     fun searchThreads(query: String): List<ThreadSummary> {
-        val q = query.trim().lowercase()
+        // Trimmed, NOT lowercased: one folding rule, region matching, covers all three paths.
+        val q = query.trim()
         if (q.isEmpty()) return _state.value.threads
         return threads.filter { t ->
             t.messages.isNotEmpty() && (
-                // Same untitled fallback as summaries() so "new
-                // conversation" finds threads without a custom title.
-                t.title.ifBlank { UNTITLED }.lowercase().contains(q) ||
-                    t.messages.any { it.content.lowercase().contains(q) }
+                // Same untitled fallback as summaries().
+                t.title.ifBlank { UNTITLED }.contains(q, ignoreCase = true) ||
+                    // One folding rule (region-matching) shared by title, raw text and marker.
+                    t.messages.any { messageMatchesQuery(it.role, it.content, it.attachments, q) }
                 )
         }.map {
             ThreadSummary(
@@ -512,10 +1019,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * less than was sent, and the writer must know. */
     fun saveThreadAsSkill(id: String, name: String, description: String, done: (String?, Boolean) -> Unit) {
         // Check messages, not the export: exportMarkdown always emits at
-        // least a "# title" header, so a blank check on the body never fires
-        // and an empty thread would save a header-only draft.
-        // Gone vs empty: a thread deleted while the dialog was open is
-        // not an empty conversation, and must not read as one.
+        // least a "# title" header, so a blank check on the body never fires. Gone vs empty.
         val thread = threads.firstOrNull { it.id == id }
         if (thread == null) {
             done("Conversation is gone.", false)
@@ -526,9 +1030,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             return
         }
         // Sent whole: the server clips at its body cap and reports
-        // truncated, which the toast surfaces. A client-side cap would
-        // duplicate the server constant and drift from it; the worst case
-        // is one large POST the user explicitly tapped to send.
+        // truncated, which the toast surfaces. A client-side cap would drift.
         val body = exportMarkdown(id)
         if (body.isBlank()) {
             done("Conversation is empty.", false)
@@ -537,34 +1039,24 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
             // Rechecked, not captured: a profile switch mid-save must not
-            // write the old profile's draft. An error, not a silent success:
-            // done(null) would toast "Draft saved" for nothing written.
+            // write the old profile's draft. An error, not a silent success.
             if (path != api.pathFor(tab)) {
                 withContext(Dispatchers.Main) { done("Profile changed — try again.", false) }
                 return@launch
             }
-            // Source links the draft to its thread: the review surface
-            // shows where the procedure came from.
+            // Source links the draft to its thread.
             val result = teachApi.createDraft(path, name.trim(), description.trim(), body, source = "thread:$id")
             withContext(Dispatchers.Main) {
                 // Rechecked after the write too: a switch during the network
-                // call lands the draft on the old profile, and success must
-                // not toast for a row the user no longer looks at.
+                // call lands the draft on the old profile.
                 if (path != api.pathFor(tab)) {
                     done("Profile changed — try again.", false)
                     return@withContext
                 }
-                // Always answered, even across a profile switch: the dialog
-                // spins on this callback, and a stuck "Saving…" is worse
-                // than a toast for the old profile. Local misconfiguration
-                // surfaces verbatim (it names the fix); server failures stay
-                // code-only.
+                // Always answered across a profile switch: a stuck "Saving…" is worse.
                 val detail = result.exceptionOrNull()?.message.orEmpty()
                 val truncated = result.getOrNull()?.second == true
-                // Server messages pass through bounded like loadTaught does:
-                // they are validation/contract strings ("unparseable
-                // response body", "skill name must be…"), never memory text,
-                // and the actionable one beats a bare code.
+                // Server messages pass through bounded like loadTaught: never memory text.
                 done(
                     if (result.isSuccess) null
                     else detail.take(120).ifBlank {
@@ -584,10 +1076,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val sb = StringBuilder("# $title\n\n")
         for (m in t.messages) {
             val who = if (m.role == "user") "You" else "Assistant"
-            sb.append("**$who:** ${m.content.trim()}\n\n")
+            // Photos are payloads, not text: the marker keeps the export honest
+            // about image turns. Deliberate split from the wire: the wire keeps
+            // trailing newlines exactly (verbatim send guarantee), the export
+            // matches what the bubble SHOWED. Counted wired, user-only.
+            val wiredCount = if (m.role == "user") m.attachments.wiredPhotoCount() else 0
+            val marker = if (wiredCount > 0) {
+                contentWithMarkerVerbatim(m.content.trimEnd(), wiredCount)
+            } else {
+                m.content.trim()
+            }
+            sb.append("**$who:** $marker\n\n")
             if (m.role != "user" && (m.tools.isNotEmpty() || m.skills.isNotEmpty())) {
                 // Backticked so a tool/skill name can never break the export's
-                // Markdown; inner backticks are quoted first so the fence holds.
+                // Markdown.
                 val used = listOf(
                     m.tools.takeIf { it.isNotEmpty() }
                         ?.let { "tools: " + it.joinToString(", ") { n -> "`${n.replace("`", "'")}`" } },
@@ -623,8 +1125,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     fun stop() {
         val wasStreaming = _state.value.streaming
-        // Bump the generation first: a Done/Error already buffered from
-        // this turn goes stale and can no longer overwrite the patch below.
+        // Bump the generation first: a buffered Done/Error goes stale.
         sendGen++
         streamJob?.cancel()
         streamJob = null
@@ -632,17 +1133,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // resurrect text behind whatever the user does next.
         cancelRecovery()
         stopApprovalWatch()
-        // The badge may still name a gate held at stop time: refresh it like
-        // the Done/Error paths do, instead of freezing the pre-turn count.
+        // The badge may still name a gate held at stop time: refresh it.
         refreshApprovalCount()
-        // Stop the server-side run this tab started, not just the local
-        // socket (#311): closing the stream no longer cancels the work, so a
-        // stop that stayed local would leave the agent running invisibly.
-        // Only the active run: a 429-parked busy run belongs to another turn
-        // and is cancelled from the Runs sheet, never as a side effect here.
-        // Fire and forget — the cancelled stream ending (or its absence, when
-        // the run already settled) is the confirmation; failures are logged,
-        // never silent, so a cleared id always means "asked to stop".
+        // Stop the server-side run this tab started, not just the local socket:
+        // closing the stream no longer cancels the work. Only the active run —
+        // a 429-parked busy run belongs to another turn. Fire and forget.
         val runToCancel = _state.value.activeRunId
         val cancelPath = _state.value.path
         if (runToCancel.isNotBlank()) {
@@ -651,10 +1146,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     .onFailure { runCatching { Log.w("ChatRuns", "cancel $runToCancel failed", it) } }
             }
         }
-        // Mark the in-flight reply as stopped (#122): the partial text
-        // stays with an explicit interrupted flag (Continue/Regenerate
-        // offered in the UI). A queued send is restored to the composer
-        // rather than dropped or fired blindly.
+        // Mark the in-flight reply as stopped: the partial text keeps an interrupted flag.
         val msgs = _state.value.messages
         val last = msgs.lastOrNull()
         val patched = if (wasStreaming && last?.role == "assistant") {
@@ -664,24 +1156,27 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     interruptedBy = InterruptedBy.USER,
                 )
             } else {
-                // Stopped before anything arrived: drop the empty
-                // placeholder so it never enters history or counts.
+                // Stopped before anything arrived: drop the empty placeholder.
                 msgs.dropLast(1)
             }
         } else {
             msgs
         }
         val queued = _state.value.queued
+        val livePending = _state.value.pending
         _state.value = _state.value.copy(
             messages = patched, streaming = false,
             activeTools = emptyList(), activeToolLabel = "",
             queued = "",
             activeRunId = "",
-            // A no-op stop (idle tab after a 429) keeps the parked busy run:
-            // clearing it would wipe the sheet highlight for no reason.
+            // A no-op stop (idle tab after a 429) keeps the parked busy run.
             busyRunId = if (wasStreaming) "" else _state.value.busyRunId,
-            pending = if (queued.isNotBlank() && _state.value.pending.isBlank()) queued
-                else _state.value.pending,
+            // Queued text concatenates when the composer is occupied; trimmed at the JOINT only.
+            pending = when {
+                queued.isBlank() -> livePending
+                livePending.isBlank() -> queued
+                else -> joinPending(livePending, queued)
+            },
         )
         // Persist the stopped partial so the interrupted flag (and the
         // text/trace so far) survives a thread switch or restart.
@@ -695,6 +1190,30 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
+    /** Queued text merged into a draft, for every path that republishes the
+     * composer: every path that clears `queued` parks it instead — no resend
+     * path may lose text the user typed mid-stream. */
+    private fun withParkedQueue(draft: String): String {
+        val queued = _state.value.queued
+        return when {
+            queued.isBlank() -> draft
+            draft.isBlank() -> queued
+            else -> joinPending(draft, queued)
+        }
+    }
+
+    /** Toasts that staged photos sit out this resend: retry/regenerate/continue
+     * resend history, never the composer's staging. Info, not Error. */
+    private fun noteParkedPhotos(verb: String) {
+        if (_state.value.pendingAttachments.wiredPhotoCount() > 0) {
+            notify(
+                "$verb without the staged photos — they stay in the " +
+                    "composer for your next message.",
+                ToastKind.Info,
+            )
+        }
+    }
+
     /** Resends the current history (used after a failed request).
      *
      * A trailing fragment never goes back out (#214): retry used to resend
@@ -704,23 +1223,82 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * until the new turn's Done replaces it (doSend rebuilds from history).
      */
     fun retry() {
-        if (_state.value.streaming || !_state.value.ready) return
+        // Gated like send(): the !ready tap voices, the streaming tap stays silent.
+        if (!_state.value.ready) {
+            // Voiced on text-or-wired-photos like send().
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 || _state.value.pending.isNotBlank()) {
+                notifyLoading()
+            }
+            return
+        }
+        if (_state.value.streaming) return
+        // messageHasContent, not content.isNotBlank: an image-only turn resends.
         val history = stripTrailingFragmentForResend(_state.value.messages)
-            .filter { it.content.isNotBlank() }
+            .filter { messageHasContent(it) }
         if (history.none { it.role == "user" }) return
+        noteParkedPhotos("Retried")
+        // The queue parks back into the composer (#339), like every other
+        // resend (regenerate/continue/replace/fork): a retry that cleared
+        // it would strand the queued text (or fire it twice in the narrow
+        // window where the queue is non-empty and nothing is streaming).
+        val retryDraft = withParkedQueue(_state.value.pending)
+        _state.value = _state.value.copy(pending = retryDraft, queued = "")
         doSend(history)
     }
 
     fun send() {
-        val text = _state.value.pending.trim()
-        if (text.isEmpty() || !_state.value.ready) return
-        // Queue-or-send (#122): the composer stays live while streaming —
-        // a send mid-stream parks the text and auto-fires on Done, instead
-        // of being swallowed by the streaming guard. First queued text wins;
-        // later sends wait for the composer (no silent overwrite).
+        // Raw stored, trimmed checked: the stored content rides exactly as typed.
+        val rawText = _state.value.pending
+        val text = rawText.trim()
+        // Photos send with or without text: an image-only turn is a real turn.
+        val photos = _state.value.pendingAttachments
+        // Ready-gated with a voice: the IME send action bypasses the disabled button.
+        if (!_state.value.ready) {
+            if (text.isNotEmpty() || photos.wiredPhotoCount() > 0) {
+                notifyLoading()
+            }
+            return
+        }
+        if (text.isEmpty() && photos.wiredPhotoCount() == 0) return
+        // Queue-or-send: a send mid-stream parks the text and auto-fires on Done.
+        // First queued text wins. Photos stay parked throughout: the queued fire
+        // is text only, so staged photos never ride an unconfirmed turn.
         if (_state.value.streaming) {
-            if (_state.value.queued.isBlank()) {
-                _state.value = _state.value.copy(pending = "", queued = text)
+            if (text.isNotEmpty()) {
+                if (_state.value.queued.isBlank()) {
+                    // Queued verbatim like the direct send: the turn keeps indentation.
+                    _state.value = _state.value.copy(pending = "", queued = rawText)
+                    // Same narrowing note: the queued fire is text-only, so staged photos park.
+                    val parkedQueuedCount = pendingAttachmentCount()
+                    if (parkedQueuedCount > 0) {
+                        notify(
+                            "Queued behind this reply — text sends, " +
+                                attachmentMarker(parkedQueuedCount) +
+                                " stays staged for the next message.",
+                            ToastKind.Info,
+                        )
+                    }
+                } else {
+                    // Second tap while a queue is parked: the new text stays in
+                    // the composer, but with no toast the tap reads dead.
+                    val parkedSecondCount = pendingAttachmentCount()
+                    notify(
+                        "Already queued — sends when this reply finishes." +
+                            if (parkedSecondCount > 0) {
+                                " " + attachmentMarker(parkedSecondCount) + " stays staged."
+                            } else {
+                                ""
+                            },
+                        ToastKind.Info,
+                    )
+                }
+            } else if (pendingAttachmentCount() > 0) {
+                // Image-only tap while streaming: nothing queues, so say the photos wait.
+                notify(
+                    "Still answering — photos stay staged and " +
+                        "send with your next message.",
+                    ToastKind.Info,
+                )
             }
             return
         }
@@ -729,10 +1307,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
+        // Queued text survives this send: it was typed for the NEXT turn, so park it back.
+        val draftAfterSend = withParkedQueue("")
         _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path, queued = "")
+        // Stored canonical AND wired: whitespace-only text with photos normalizes to "".
+        val stored = if (text.isEmpty()) "" else rawText
         val history = _state.value.messages +
-            ChatMessage("user", text, ChatThreads.now())
-        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+            ChatMessage("user", stored, ChatThreads.now(), attachments = photos.wiredPhotos())
+        _state.value = _state.value.copy(
+            messages = history, pending = draftAfterSend, pendingAttachments = emptyList(),
+            streaming = true, error = "",
+        )
         doSend(history, path, provider, model, effort)
     }
 
@@ -745,11 +1330,28 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      */
     fun steer() {
         val text = _state.value.pending.trim()
-        if (text.isEmpty() || !_state.value.ready) return
+        // Raw snapshot for the settle-time strip: it must match the composer.
+        val sentRaw = _state.value.pending
+        // Ready-gated with a voice like send(): !ready is reachable; ungated dead-taps.
+        if (text.isEmpty() || !_state.value.ready) {
+            if (!_state.value.ready &&
+                (text.isNotEmpty() || _state.value.pendingAttachments.wiredPhotoCount() > 0)
+            ) {
+                notifyLoading()
+            } else if (text.isEmpty() && _state.value.pendingAttachments.wiredPhotoCount() > 0) {
+                // Photos alone cannot be steered (#339): the steer turn is
+                // text-only, so say that instead of swallowing the tap.
+                notify("Steering needs text — photos ride the next message.", ToastKind.Info)
+            }
+            return
+        }
         if (!_state.value.streaming || _state.value.activeRunId.isBlank()) {
             send()
             return
         }
+        // Steering carries text only: staged photos park with no part in the
+        // steered turn — said out loud, or the steer button drops the staging.
+        // Voiced only on the Queued outcome (the Conflict branch calls send()).
         val runId = _state.value.activeRunId
         val path = _state.value.path
         viewModelScope.launch(Dispatchers.IO) {
@@ -760,16 +1362,34 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // the composer text belongs to whatever the user does next.
                 if (!_state.value.streaming || _state.value.activeRunId != runId) return@withContext
                 when (outcome) {
-                    // Clear only what this steer sent: typing that landed
-                    // mid-round-trip belongs to the user, not the turn.
-                    is SteerOutcome.Queued ->
-                        if (_state.value.pending.trim() == text) {
-                            _state.value = _state.value.copy(pending = "")
+                    // Strip only what this steer sent: typing that landed
+                    // mid-round-trip belongs to the user. Prefix on the RAW
+                    // snapshot, not the trimmed instruction. One joint space
+                    // dropped, the remainder verbatim.
+                    is SteerOutcome.Queued -> {
+                        val curPending = _state.value.pending
+                        val sentBase = sentRaw.trimEnd()
+                        _state.value = _state.value.copy(
+                            pending = if (sentBase.isNotEmpty() && curPending.startsWith(sentBase)) {
+                                curPending.removePrefix(sentBase).removePrefix(" ")
+                            } else {
+                                curPending
+                            },
+                        )
+                        // Parked-photos voice lives here, not pre-launch: the
+                        // Conflict branch calls send(), which voices its own notice.
+                        val liveParked = _state.value.pendingAttachments.wiredPhotoCount()
+                        if (liveParked > 0) {
+                            notify(
+                                "Steered the text — " +
+                                    attachmentMarker(liveParked) +
+                                    " stays staged for your next message.",
+                                ToastKind.Info,
+                            )
                         }
-                    // Settled race: the text becomes the next turn. When the
-                    // queue was already occupied send() parks nothing and the
-                    // composer keeps the text, so say the queue is full
-                    // rather than claiming it queued behind.
+                    }
+                    // Settled race: the text becomes the next turn. When the queue
+                    // was already occupied send() parks nothing, so say the queue is full.
                     is SteerOutcome.Conflict -> {
                         val queuedWasOccupied = _state.value.queued.isNotBlank()
                         send()
@@ -1312,7 +1932,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      */
     private fun maybeResume(threadId: String, messages: List<ChatMessage>) {
         val last = messages.lastOrNull() ?: return
-        if (last.role != "user" || last.content.isBlank()) return
+        // Image-only tails count: their text is blank but the photos resend.
+        if (last.role != "user" || !messageHasContent(last)) return
         if (threadId in resumedThreads) return
         viewModelScope.launch(Dispatchers.IO) {
             val path = api.pathFor(tab)
@@ -1330,9 +1951,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // terminal is live (running, cancelling, or a future state) —
             // narrowing to `running` would strand exactly the edge cases
             // resume exists for.
-            val run = runs.firstOrNull {
-                !it.isTerminal() && it.conversationId == threadId && promptMatches(last.content, it.prompt)
-            } ?: return@launch
+            // Image-only tails match on blank prompt: Prompt is the raw text.
+            // PHOTO-BLIND MATCH, by necessity (#339): the server records the
+            // prompt text only, so a text-identical tail can attach to a
+            // different live run. The resend still carries the user's own
+            // tail (photos included) and the newest live run wins.
+            val imageOnlyTail = last.content.isBlank() &&
+                last.attachments.wiredPhotoCount() > 0
+            // Newest match wins: two image-only tails can both be live.
+            val run = runs.filter {
+                !it.isTerminal() && it.conversationId == threadId &&
+                    (promptMatches(last.content, it.prompt) ||
+                        (imageOnlyTail && it.prompt.isBlank()))
+            }.maxByOrNull { it.updatedAt } ?: return@launch
             // Bounded: re-clearing only loses the once-guard for threads long
             // dead, whose resend finds no live run and no-ops.
             withContext(Dispatchers.Main) {
@@ -1341,6 +1972,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 }
                 val cur = _state.value.messages
                 if (cur.lastOrNull()?.role != "user") return@withContext
+                // Prompt-identity re-check under Main: re-verify cur.last after the list() window.
+                val curLast = cur.lastOrNull() ?: return@withContext
+                if (!messageHasContent(curLast)) return@withContext
+                val curImageOnly = curLast.content.isBlank() &&
+                    curLast.attachments.wiredPhotoCount() > 0
+                if (!(promptMatches(curLast.content, run.prompt) ||
+                        (curImageOnly && run.prompt.isBlank()))
+                ) {
+                    return@withContext
+                }
                 // Re-check under Main: two concurrent opens would otherwise
                 // both pass the entry check and resend twice.
                 if (threadId in resumedThreads) return@withContext
@@ -1359,6 +2000,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 _state.value = _state.value.copy(
                     provider = provider, model = model, effort = effort, path = path,
                 )
+                // Photos sit out a resume like every other resend.
+                noteParkedPhotos("Resumed")
                 doSend(cur, path, provider, model, effort)
             }
         }
@@ -1384,17 +2027,30 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Regenerates the last reply (#122, v1 replace semantics): drops the
      * trailing assistant message and resends the remaining history. */
     fun regenerate() {
-        if (_state.value.streaming || !_state.value.ready) return
-        val msgs = _state.value.messages.filter { it.content.isNotBlank() }
+        // Same gate split as retry(): voice !ready, silent on streaming.
+        if (!_state.value.ready) {
+            // Voiced on text-or-wired-photos like send().
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 || _state.value.pending.isNotBlank()) {
+                notifyLoading()
+            }
+            return
+        }
+        if (_state.value.streaming) return
+        // Same image-only rule as retry().
+        val msgs = _state.value.messages.filter { messageHasContent(it) }
         if (msgs.none { it.role == "user" }) return
         val trimmed = if (msgs.lastOrNull()?.role == "assistant") msgs.dropLast(1) else msgs
         if (trimmed.none { it.role == "user" }) return
+        noteParkedPhotos("Regenerated")
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
+        // Queued text parks back with the draft: same rule as send().
+        val draftParked = withParkedQueue(_state.value.pending)
         _state.value = _state.value.copy(
-            provider = provider, model = model, effort = effort, path = path, queued = "",
+            provider = provider, model = model, effort = effort, path = path,
+            pending = draftParked, queued = "",
         )
         doSend(trimmed, path, provider, model, effort)
     }
@@ -1403,76 +2059,163 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * and sends (the stateless loop resends full history, so continuation
      * is a fresh turn — never presented as server-side resumption). */
     fun continueTurn() {
-        if (_state.value.streaming || !_state.value.ready) return
+        // Same gate split as retry().
+        if (!_state.value.ready) {
+            // Voiced on text-or-wired-photos like send().
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 || _state.value.pending.isNotBlank()) {
+                notifyLoading()
+            }
+            return
+        }
+        if (_state.value.streaming) return
         val msgs = _state.value.messages
         val last = msgs.lastOrNull()
         if (last?.role != "assistant" || !last.interrupted) return
+        noteParkedPhotos("Continued")
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
+        // Queued text parks back with the draft, same rule as send().
+        val draftParked = withParkedQueue(_state.value.pending)
         _state.value = _state.value.copy(
-            provider = provider, model = model, effort = effort, path = path, queued = "",
+            provider = provider, model = model, effort = effort, path = path,
+            pending = draftParked, queued = "",
         )
-        val history = msgs + ChatMessage("user", "Continue", ChatThreads.now())
-        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+        val history = msgs + ChatMessage(
+            "user",
+            "Continue",
+            ChatThreads.now(),
+            // Carry the interrupted turn's photos: the "Continue" turn keeps
+            // image parts. The LAST photo-carrying user turn, not just the
+            // last user turn (#339): the wire keeps image parts on the
+            // trailing user turn only, so a last text-only user turn would
+            // leave an earlier photo riding as a text marker — the model's
+            // photo context lost exactly when it is needed.
+            attachments = msgs.lastOrNull {
+                it.role == "user" && it.attachments.wiredPhotoCount() > 0
+            }?.attachments?.wiredPhotos().orEmpty(),
+        )
+        // Typed draft survives like retry()/regenerate(): never vaporize a typed draft.
+        _state.value = _state.value.copy(messages = history, streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }
 
     /** Edits a user message and resends from there (#122 Replace): history
      * after [index] is dropped. Callers confirm first when turns are lost. */
     fun replaceAndResend(index: Int, text: String) {
-        if (_state.value.streaming || !_state.value.ready) return
+        // !ready voiced like send()/retry(): an empty composer voices nothing.
+        if (!_state.value.ready) {
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notifyLoading()
+            }
+            return
+        }
+        if (_state.value.streaming) return
         val clean = text.trim()
-        if (clean.isEmpty()) return
         val msgs = _state.value.messages
         if (index !in msgs.indices || msgs[index].role != "user") return
+        // Empty text is allowed only onto photos: that yields the image-only shape send() supports.
+        if (clean.isEmpty() && msgs[index].attachments.wiredPhotoCount() == 0) return
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
+        // Draft AND queue park back, read before the queue is cleared below.
+        val draft = withParkedQueue(_state.value.pending)
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path, queued = "",
         )
-        val history = msgs.take(index) + ChatMessage("user", clean, ChatThreads.now())
-        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+        // The edited turn keeps its photos: resending the new text without them
+        // would silently narrow the turn the user composed. Carry-only by
+        // design (the HintLine + confirm clause say the photos resend).
+        // Staged composer photos are deliberately NOT cleared here (unlike
+        // send(), whose staged photos WERE sent) — wiping the composer's
+        // unrelated staging would destroy user input. The typed draft parks back.
+        val history = msgs.take(index) +
+            ChatMessage(
+                "user",
+                if (clean.isEmpty()) "" else text,
+                ChatThreads.now(),
+                attachments = msgs[index].attachments.wiredPhotos(),
+            )
+        // Staged composer photos sit out like every other resend: voice it via
+        // noteParkedPhotos. Replace/Fork carry the EDITED turn's photos only.
+        noteParkedPhotos("Replaced")
+        _state.value = _state.value.copy(messages = history, pending = draft, streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }
 
     /** Forks a thread at an edited user message (#122): the copy (up to and
      * including the replacement) becomes a new conversation and sends. */
     fun forkAndResend(index: Int, text: String) {
-        if (_state.value.streaming || !_state.value.ready) return
+        // Same gated voice as Replace above.
+        if (!_state.value.ready) {
+            if (_state.value.pendingAttachments.wiredPhotoCount() > 0 ||
+                _state.value.pending.isNotBlank()
+            ) {
+                notifyLoading()
+            }
+            return
+        }
+        if (_state.value.streaming) return
         val clean = text.trim()
-        if (clean.isEmpty()) return
         val msgs = _state.value.messages
         if (index !in msgs.indices || msgs[index].role != "user") return
+        // Same empty-text rule as Replace above, counted wired.
+        if (clean.isEmpty() && msgs[index].attachments.wiredPhotoCount() == 0) return
         val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
-        val forked = msgs.take(index) + ChatMessage("user", clean, ChatThreads.now())
+        // Same photo-carry rule as Replace above: the forked turn is the edited
+        // turn, photos included. Composer staging does NOT survive here — forking
+        // switches to a FRESH thread, and every thread change discards staging.
+        val forked = msgs.take(index) +
+            ChatMessage(
+                "user",
+                if (clean.isEmpty()) "" else text,
+                ChatThreads.now(),
+                attachments = msgs[index].attachments.wiredPhotos(),
+            )
         val fresh = ChatThread(
             id = ChatThreads.newId(),
             updatedAt = ChatThreads.now(),
             messages = ChatThreads.toStored(forked),
         )
+        // Real publish past every no-op return above: the fork outranks init's load.
+        touchThreads()
         threads = listOf(fresh) + threads
+        // Staged thumbs are keyed by the thread they were staged in (#339).
+        val stagedFork = _state.value.pendingAttachments
+        val stagedForkThread = threadId
         threadId = fresh.id
         cancelRecovery()
         runsJob?.cancel()
         stopApprovalWatch()
         retargetApprovals()
         retargetMemory()
+        // Typed draft (and any queued text) parks back like Replace above.
+        // Staged photos do NOT park — they die with the thread being left.
+        val forkDraft = withParkedQueue(_state.value.pending)
+        val hadStagedFork = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
-            error = "", pending = "", streaming = true, queued = "",
+            error = "", pending = forkDraft, streaming = true, queued = "",
+            pendingAttachments = emptyList(),
+            notices = retainedNotices(),
             activeTools = emptyList(), activeToolLabel = "",
             serverTokens = null,
             activeRunId = "", busyRunId = "",
             showRuns = false, runsLoading = false,
         )
+        if (hadStagedFork) {
+            stagedDiscardedNotice()
+        }
+        evictStagedThumbs(stagedFork, stagedForkThread)
         persist()
         doSend(forked, path, provider, model, effort)
     }
@@ -1934,14 +2677,23 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * parked instead of firing into the new turn). */
     private fun flushQueued(doneGen: Int) {
         if (doneGen != sendGen) return
-        val q = _state.value.queued.trim()
-        // A newer turn started mid-flush: keep the queue for its Done
-        // rather than firing into the live request.
-        if (q.isEmpty() || _state.value.streaming) return
+        // Raw queued text, trimmed gate: the fire stores verbatim.
+        val raw = _state.value.queued
+        if (raw.trim().isEmpty() || _state.value.streaming) return
         // Not ready (connectivity flap): no future Done is coming to fire
         // this, so hand it back to the composer instead of stranding it.
+        // Concatenated when occupied: displacing the live draft would drop text.
         if (!_state.value.ready) {
-            _state.value = _state.value.copy(queued = "", pending = q)
+            val live = _state.value.pending
+            val restore = if (raw.trim().isEmpty()) "" else raw
+            _state.value = _state.value.copy(
+                queued = "",
+                pending = when {
+                    live.isBlank() -> restore
+                    restore.isEmpty() -> live
+                    else -> joinPending(live, restore)
+                },
+            )
             return
         }
         _state.value = _state.value.copy(queued = "")
@@ -1950,9 +2702,24 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val effort = api.effortFor(tab, model)
         val path = api.pathFor(tab)
         _state.value = _state.value.copy(provider = provider, model = model, effort = effort, path = path)
+        // Same whitespace normalization as send(): both fire paths must agree.
+        val storedFlush = if (raw.trim().isEmpty()) "" else raw
         val history = _state.value.messages +
-            ChatMessage("user", q, ChatThreads.now())
-        _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
+            ChatMessage("user", storedFlush, ChatThreads.now())
+        // The queued fire is text-only by design (see send()), so staged photos
+        // stay parked — said out loud. Counted wired.
+        val parkedFlushCount = _state.value.pendingAttachments.wiredPhotoCount()
+        if (parkedFlushCount > 0) {
+            notify(
+                "Sent the queued text — " +
+                    attachmentMarker(parkedFlushCount) +
+                    " still staged for your next message.",
+                ToastKind.Info,
+            )
+        }
+        // Composer text typed after queueing survives the flush: the fired
+        // turn carries only the queued text.
+        _state.value = _state.value.copy(messages = history, streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }
 
@@ -2003,15 +2770,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * accident and nobody notices until the two disagree about what happens to a queued
      * message after a half-finished turn.
      *
-     * Queued text never overwrites what the user is already typing — if `pending` is
-     * occupied, the queued text is dropped rather than displacing live input. That
-     * asymmetry is deliberate and is the one thing worth remembering about this function.
+     * Concatenated when occupied: like stop()/New/delete/flush, the queued text
+     * joins the live draft with the trimEnd/trimStart joint instead of dropping.
      */
     private fun parkQueued() {
         val s = _state.value
         if (s.queued.isBlank()) return
         _state.value = s.copy(
-            pending = if (s.pending.isBlank()) s.queued else s.pending,
+            pending = if (s.pending.isBlank()) {
+                s.queued
+            } else {
+                joinPending(s.pending, s.queued)
+            },
             queued = "",
         )
     }

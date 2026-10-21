@@ -20,6 +20,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -64,9 +65,12 @@ import androidx.core.net.toUri
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -464,11 +468,17 @@ internal fun SettingsScreen(
                         NotificationsSection()
                     }
                     SettingSection.Storage -> {
-                        SettingsBackupSection(onImported = {
-                            viewModel.refresh()
-                            settingsRefresh++
-                            toasts.toast(Toasts.SAVED, ToastKind.Success)
-                        })
+                        SettingsBackupSection(
+                            scope = viewModel.viewModelScope,
+                            busy = viewModel.state.value.backupBusy,
+                            onBusy = viewModel::setBackupBusy,
+                            claimBackup = viewModel::claimBackup,
+                            onImported = {
+                                viewModel.refresh()
+                                settingsRefresh++
+                                toasts.toast(Toasts.SAVED, ToastKind.Success)
+                            },
+                        )
                     }
                     SettingSection.Usage -> {
                         UsageSection()
@@ -491,19 +501,22 @@ internal fun SettingsScreen(
 @Composable
 internal fun UsageSection() {
     val context = LocalContext.current
+    // Application context for the IO block below: thread/usage reads may
+    // outlive the screen, so the hop must not hold the Activity.
+    val appContext = context.applicationContext
     var rows by remember { mutableStateOf<List<UsageRow>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val data = withContext(Dispatchers.IO) {
-            UsageStore.clearLegacy(context)
+            UsageStore.clearLegacy(appContext)
             // Single chat tab since #289 (retired god/story/resumes thread
             // files stay on disk, orphaned — only chat is read).
             listOf(
                 "chat" to "Chat",
             ).map { (tab, label) ->
-                val threads = ChatThreads.load(context, tab)
-                val t = UsageStore.load(context, tab)
+                val threads = ChatThreads.load(appContext, tab)
+                val t = UsageStore.load(appContext, tab)
                 // Replies with no usable report (failed/interrupted turns,
                 // or history from before per-message tracking) surface as
                 // explicit gaps instead of silent skips.
@@ -766,41 +779,193 @@ internal fun NotificationsSection() {
     }
 }
 
+/** Backup size past which the export status warns: thread files ride
+ * wholesale (photo payloads included), so restores are slow. */
+private const val BACKUP_LARGE_BYTES = 5_000_000
+
+// The hard cap (BACKUP_HARD_CAP_BYTES) and its floor slack live on
+// SettingsBackup: export() enforces the same wall at the boundary.
+
+/** Names the first few skipped/unreadable files (#339): the count alone
+ * says a conversation was lost, the name says which. */
+private fun namesOf(names: List<String>): String {
+    val shown = names.take(3).joinToString(", ")
+    val more = if (names.size > 3) " (+${names.size - 3} more)" else ""
+    return shown + more
+}
+
 /** Issue #16: manual settings export/import. SAF pickers need no storage
  * permission; the file the user keeps survives any reinstall gap that outlives
  * cloud backup. [onImported] reloads the on-screen fields from prefs. */
 @Composable
-internal fun SettingsBackupSection(onImported: () -> Unit) {
+internal fun SettingsBackupSection(
+    scope: CoroutineScope,
+    busy: Boolean,
+    onBusy: (Boolean) -> Unit,
+    claimBackup: () -> Boolean,
+    onImported: () -> Unit,
+) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // Application context for everything that crosses a suspend boundary: the
+    // IO hops must not hold the Activity. UI-only work (toasts, pickers) does.
+    val appContext = context.applicationContext
+    // The scope is the ViewModel's, NOT the composition's (#339): a rotation
+    // cancelled the export mid-write (a truncated backup file) or the import
+    // mid-restore (half-applied). The ViewModel's scope outlives the
+    // rotation, so the work finishes.
 
     var status by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
+    // `busy` is the CALLER's (the ViewModel's) flag, not a local one
+    // (#339): the export/import work runs in the ViewModel's scope so it
+    // survives a rotation — a composition-scoped gate would reset on
+    // rotation and let a second export start next to the first.
 
     /** Writes the export JSON to the user-picked location. */
     val exportPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        busy = true
+        // The VM owns the gate (#339): the button's enabled state is
+        // UI-only, and two taps before the first recomposition would both
+        // pass it — two exports, each holding the peak.
+        if (!claimBackup()) return@rememberLauncherForActivityResult
         status = ""
         failed = false
-        scope.launch {
+        val job = scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use { out ->
-                        out.write(SettingsBackup.export(context).toString(2).toByteArray())
-                    } ?: throw IllegalStateException("Could not open the selected file for writing")
+                    // Metered BEFORE materializing: export() builds the whole
+                    // compact string (~2x bytes as UTF-16) before the first
+                    // chunk writes, so a huge backup OOMs before any warning
+                    // could display. Lengths only (metadata, no reads).
+                    val upfront = SettingsBackup.backupFilesBytes(appContext.filesDir)
+                    // Hard refuse past the cap: the warning below is
+                    // consent-to-proceed, but consent cannot survive an OOM —
+                    // fail with a named error naming the remedy. Disk×2 +
+                    // slack: the cap is heap peak, the meter is file bytes.
+                    // DISK BYTES: `upfront` is File.length() of the thread
+                    // files. The cap is a HEAP peak, so the meter doubles it
+                    // (the export string runs ~2x as UTF-16) plus the floor
+                    // slack. disk x2 is an UPPER BOUND on the string's UTF-16
+                    // size for every encoding (1 UTF-8 byte is at most 2
+                    // UTF-16 bytes; 3-byte CJK is 2; a 4-byte emoji is a
+                    // 2-char surrogate pair = 4), so this pre-meter can
+                    // refuse early but never lets an over-cap export
+                    // through. The AUTHORITATIVE meter is inside
+                    // SettingsBackup.export, and it measures the built
+                    // string — the two can disagree (JSON escaping), so
+                    // its refusal is what binds. Do not "unify" them into
+                    // one meter.
+                    if (upfront * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                        throw IllegalStateException(SettingsBackup.backupTooLargeMessage(upfront))
+                    }
+                    // The floor counts the THREAD FILES only (#339): the
+                    // prefs snapshot and the JSON framing are not in
+                    // `upfront`, so a prefs-heavy backup reads low here.
+                    // The export's own wall (the built string) is what
+                    // refuses — this is only the "this may take a moment"
+                    // hint, and it may under-warn.
+                    if (upfront > BACKUP_LARGE_BYTES) {
+                        withContext(Dispatchers.Main) {
+                            // Floor, not estimate: the export string runs ~2x
+                            // bytes as UTF-16, so the on-disk size understates
+                            // the peak.
+                            status = "Large backup (${formatBytes(upfront)} on disk; runs larger in memory) — " +
+                                "exporting now, this may take a moment."
+                            failed = false
+                        }
+                    }
+                    // Sized for the photo-thread warning: the export holds
+                    // thread files wholesale, so photo-heavy threads make for
+                    // slow restores. Streamed in chunks, not via toByteArray():
+                    // the string must exist to write at all, but the duplicate
+                    // byte[] copy is avoidable. Compact, not pretty.
+                    val export = SettingsBackup.export(appContext)
+                    val text = export.json.toString()
+                    // Post-build peak check: a concurrent save can grow the
+                    // thread files between the meter and this build. Measured
+                    // on the STRING ITSELF (length × 2 = UTF-16 bytes:
+                    // String.length counts code units, not disk bytes).
+                    if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                        throw IllegalStateException(
+                            "Backup grew past the safe limit during export. " +
+                                "Delete old photo threads in the thread switcher, then try again.",
+                        )
+                    }
+                    var written = 0L
+                    val opened = appContext.contentResolver.openOutputStream(uri)
+                        ?: throw IllegalStateException("Could not open the selected file for writing")
+                    val counting = object : java.io.FilterOutputStream(opened) {
+                        override fun write(b: Int) {
+                            out.write(b)
+                            written++
+                        }
+                        override fun write(b: ByteArray, off: Int, len: Int) {
+                            out.write(b, off, len)
+                            written += len
+                        }
+                        // Pinned explicitly: the 3-arg form is what counts, and
+                        // single-arg write(ByteArray) only counts via delegation.
+                        override fun write(b: ByteArray) {
+                            write(b, 0, b.size)
+                        }
+                    }
+                    try {
+                        java.io.OutputStreamWriter(counting, Charsets.UTF_8).use { w ->
+                            var off = 0
+                            while (off < text.length) {
+                                // Char-index split is safe: the Writer carries an
+                                // unpaired high surrogate across the write()
+                                // boundary, so a split pair never becomes a
+                                // replacement char. Byte-counted chunks would.
+                                val end = minOf(off + 65536, text.length)
+                                w.write(text, off, end - off)
+                                off = end
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        // A cancelled export would leave a HALF-WRITTEN file
+                        // at the user's URI (#339): it looks like a finished
+                        // backup and would fail to import. Delete the partial
+                        // file — the user picked a destination, not a broken
+                        // file. Then let the cancellation through.
+                        runCatching { appContext.contentResolver.delete(uri, null, null) }
+                            .onFailure { Log.w("Agento", "export cleanup failed", it) }
+                        throw e
+                    }
+                    written to export.unreadable
+                }.onFailure { e ->
+                    // Cancellation is NOT a failure (#339): a cancelled
+                    // export (navigated away) must not report an error
+                    // toast — it rethrows, and the write block above already
+                    // deleted the partial file.
+                    if (e is CancellationException) throw e
                 }
             }
             status = result.fold(
-                onSuccess = { Toasts.EXPORTED },
+                onSuccess = { (size, unreadable) ->
+                    val missing = if (unreadable.isEmpty()) {
+                        ""
+                    } else {
+                        " " + unreadable.size + " file(s) could not be read: " + namesOf(unreadable)
+                    }
+                    if (size > BACKUP_LARGE_BYTES) {
+                        Toasts.EXPORTED + " Large backup (${formatBytes(size)}) — " +
+                            "photo threads make restores slow." + missing
+                    } else {
+                        Toasts.EXPORTED + missing
+                    }
+                },
                 onFailure = { e -> e.message ?: e.javaClass.simpleName },
             )
             failed = result.isFailure
-            busy = false
         }
+        // The gate drops with the work (#339): a cancelled export (the
+        // scope dies with the screen) must not leave the buttons disabled
+        // forever — and the flag lives in the ViewModel, so a rotation
+        // keeps it while the export still runs.
+        job.invokeOnCompletion { onBusy(false) }
     }
 
     /** Reads a previously exported file and applies its known keys. */
@@ -808,28 +973,110 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        busy = true
+        // The VM owns the gate (#339): the button's enabled state is
+        // UI-only, and two taps before the first recomposition would both
+        // pass it — two exports, each holding the peak.
+        if (!claimBackup()) return@rememberLauncherForActivityResult
         status = ""
         failed = false
-        scope.launch {
+        val job = scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val text = context.contentResolver.openInputStream(uri)?.use { input ->
-                        input.bufferedReader().readText()
+                    // Metered BEFORE reading: symmetric with the export
+                    // pre-peak warning. SIZE via the provider (metadata, no
+                    // read); unknown (-1) skips the warning, not the import.
+                    val pickedBytes = runCatching {
+                        appContext.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                            val i = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                            if (i >= 0 && c.moveToFirst()) c.getLong(i) else -1L
+                        } ?: -1L
+                    }.getOrDefault(-1L)
+                    if (pickedBytes > BACKUP_LARGE_BYTES) {
+                        withContext(Dispatchers.Main) {
+                            // Same floor caveat as the export meter.
+                            status = "Large backup (${formatBytes(pickedBytes)} on disk; runs larger in memory) — " +
+                                "restoring may take a moment."
+                            failed = false
+                        }
+                    }
+                    // Symmetric hard refuse with the export path: readText() +
+                    // JSONObject() hold ~2x the file bytes, so an unbounded
+                    // import OOMs the same way an unbounded export would.
+                    // DISK BYTES (provider-reported size).
+                    if (pickedBytes >= 0 && pickedBytes * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                        throw IllegalStateException(
+                            "Backup too large to import safely (${formatBytes(pickedBytes)} on disk). " +
+                                "Delete old photo threads in the switcher, export a smaller backup, then try again.",
+                        )
+                    }
+                    val text = appContext.contentResolver.openInputStream(uri)?.use { input ->
+                        // Pinned UTF-8 like the writer side: the SAF stream
+                        // carries no charset, so the platform default must not decide.
+                        // BOUNDED read with early abort: the SIZE pre-read
+                        // trusts provider metadata, which cloud providers may
+                        // omit or understate — readText() would then materialize
+                        // an unbounded string. Chunks abort mid-read on the cap.
+                        // The cap is checked INSIDE the loop, so the string
+                        // never exceeds it by more than one 64 KB chunk: an
+                        // unknown size is bounded by the read, not by the
+                        // pre-read. Refusing an unknown size up front would
+                        // break the providers that do not report SIZE at all.
+                        val sb = StringBuilder()
+                        input.bufferedReader(Charsets.UTF_8).use { r ->
+                            val buf = CharArray(65536)
+                            while (true) {
+                                val n = r.read(buf)
+                                if (n < 0) break
+                                sb.append(buf, 0, n)
+                                // UTF-16 BYTES (StringBuilder length).
+                                if (sb.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                                    throw IllegalStateException(
+                                        "Backup too large to import safely. " +
+                                            "Delete old photo threads in the switcher, export a smaller backup, then try again.",
+                                    )
+                                }
+                            }
+                        }
+                        sb.toString()
                     } ?: throw IllegalStateException("Could not open the selected file for reading")
-                    SettingsBackup.importFrom(context, org.json.JSONObject(text)).getOrThrow()
+                    // Post-read peak gate, mirroring the export post-build
+                    // check: a lying provider would otherwise sail the pre-read
+                    // refuse into an OOM readText() + JSONObject(). UTF-16
+                    // BYTES (String.length counts code units, not bytes).
+                    if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
+                        throw IllegalStateException(
+                            "Backup too large to import safely. " +
+                                "Delete old photo threads in the switcher, export a smaller backup, then try again.",
+                        )
+                    }
+                    SettingsBackup.importFrom(appContext, org.json.JSONObject(text)).getOrThrow()
+                }.onFailure { e ->
+                    // A cancelled import is not a failure (#339): it must
+                    // not report an error toast.
+                    if (e is CancellationException) throw e
                 }
             }
             result.fold(
-                onSuccess = { n ->
-                    status = "Restored $n setting(s)."
+                onSuccess = { outcome ->
+                    // Skipped files are named (#339): a dropped thread file is
+                    // not restored, and "Restored N" alone reads as success.
+                    val skippedNote = if (outcome.skipped.isEmpty()) {
+                        ""
+                    } else {
+                        " " + outcome.skipped.size + " file(s) skipped: " + namesOf(outcome.skipped)
+                    }
+                    status = "Restored ${outcome.applied} setting(s).$skippedNote"
                     onImported()
                 },
                 onFailure = { e -> status = e.message ?: e.javaClass.simpleName },
             )
             failed = result.isFailure
-            busy = false
         }
+        // The gate drops with the work (#339): a cancelled export (the
+        // scope dies with the screen) must not leave the buttons disabled
+        // forever — and the flag lives in the ViewModel, so a rotation
+        // keeps it while the export still runs.
+        job.invokeOnCompletion { onBusy(false) }
     }
 
     SectionCard(
@@ -845,7 +1092,12 @@ internal fun SettingsBackupSection(onImported: () -> Unit) {
                 Text("Export settings")
             }
             OutlinedButton(
-                onClick = { importPicker.launch(arrayOf("application/json")) },
+                onClick = {
+                    // Wide mime list (#339): many file managers report a
+                    // .json backup as text/plain, and a filtered picker
+                    // would then hide the user's only backup file.
+                    importPicker.launch(arrayOf("application/json", "text/plain", "*/*"))
+                },
                 enabled = !busy,
                 modifier = Modifier.weight(1f),
             ) {
@@ -1102,6 +1354,9 @@ internal fun WidgetSettingsSection() {
 @Composable
 internal fun WidgetDiagnosticsCard() {
     val context = LocalContext.current
+    // Application context for the diagnostics reads: they run on IO and may
+    // outlive the screen; the chooser stays on the Activity.
+    val appContext = context.applicationContext
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     var summary by remember { mutableStateOf("") }
@@ -1115,7 +1370,7 @@ internal fun WidgetDiagnosticsCard() {
     var cleared by remember { mutableStateOf("") }
     // Prefs/AppWidgetManager reads stay off Main (same as the log dump).
     LaunchedEffect(Unit) {
-        summary = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
+        summary = withContext(Dispatchers.IO) { TaskWidget.diagnostics(appContext) }
         budget = TaskReminders.budget(context)
     }
     SectionCard(
@@ -1147,7 +1402,7 @@ internal fun WidgetDiagnosticsCard() {
                 copied = false
                 scope.launch {
                     try {
-                        val fresh = withContext(Dispatchers.IO) { TaskWidget.diagnostics(context) }
+                        val fresh = withContext(Dispatchers.IO) { TaskWidget.diagnostics(appContext) }
                         summary = fresh
                         // Re-read with it: the banner above is derived from
                         // the same prefs, and a copy is a refresh.
@@ -1188,15 +1443,14 @@ internal fun WidgetDiagnosticsCard() {
                 saved = ""
                 scope.launch {
                     runCatching {
-                        val report = withContext(Dispatchers.IO) { TaskWidget.buildReport(context) }
+                        val report = withContext(Dispatchers.IO) { TaskWidget.buildReport(appContext) }
                         val file = withContext(Dispatchers.IO) {
-                            saveDiagnosticsFile(context, report)
+                            saveDiagnosticsFile(appContext, report)
                         }
                         val uri = androidx.core.content.FileProvider.getUriForFile(
                             context, "${context.packageName}.fileprovider", file)
-                        // Grant via ClipData on both intents: the flag on
-                        // the inner intent alone isn't reliably forwarded
-                        // by createChooser() on all API levels.
+                        // Grant via ClipData on both intents: the flag on the
+                        // inner intent alone isn't reliably forwarded.
                         val share = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                             type = "text/plain"
                             clipData = android.content.ClipData.newUri(

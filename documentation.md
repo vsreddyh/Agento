@@ -202,7 +202,7 @@ curl http://<host>:8643/p/chat/v1/chat/completions \
 
 - One port, one profile path (`/p/chat`). **Verify live via `GET /p/chat/v1/models`**, the source of truth for which models the profile can actually switch to.
 - Provider + model are picked from the Chat tab's own model sheet (top-bar button) backed by live dropdowns from `GET /p/chat/api/model/options` (the app always selects explicitly; the gateway falls back to the running model when none is sent). The provider key lives ONLY in the git-ignored root `.env` on the VPS — never in git.
-- Chat history is threaded and persisted on-device (survives restarts; the switcher revisits/deletes threads). Tasks, reminders, and threads are included in Settings backup exports.
+- Chat history is threaded and persisted on-device (survives restarts; the switcher revisits/deletes threads). Tasks, reminders, and threads are included in Settings backup exports — large photo backups warn past ~5 MB on disk and refuse past ~12 MB on disk (the cap is a ~25 MB heap peak: the export string runs about twice its size in memory) — delete old photo threads in the switcher to shrink.
 - Config lives in the `pi` service (`docker/docker-compose.yml`): the bearer token is `PASSWORD` and the bind port is `PI_SERVER_PORT` (`8643`), published as `${PI_HOST_PORT:-8643}:8643`. Through the proxy the same `PASSWORD` authenticates, which is why the cutover needed no app change.
 
 ### Resumable runs (#311)

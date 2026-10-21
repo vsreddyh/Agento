@@ -4,13 +4,16 @@ import android.content.Context
 import android.util.Log
 import androidx.core.content.edit
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -26,6 +29,11 @@ data class ChatMessage(
     val content: String,
     /** Epoch millis when the message was created; 0 = unknown (legacy). */
     val ts: Long = 0L,
+    /** Photos attached to this user turn (#318); empty on assistant turns
+     * and on every message written before attachments existed. Stored as
+     * bounded JPEG payloads (see ChatAttachments.kt) and sent as
+     * `image_url` parts on the last user turn only. */
+    val attachments: List<ChatAttachment> = emptyList(),
     /** Tool names the assistant used for this reply (persisted, [] = unknown). */
     val tools: List<String> = emptyList(),
     /** Skill names the assistant used for this reply (heuristic, see ServerApi). */
@@ -357,12 +365,12 @@ class ChatApi(context: Context) {
         val m = model.trim()
         var stored = ""
         if (m.isNotEmpty()) {
-            stored = (prefs.getString("effort_${tab}_$m", "") ?: "").trim().lowercase()
-                .ifEmpty { (prefs.getString("effort_god_$m", "") ?: "").trim().lowercase() }
+            stored = (prefs.getString("effort_${tab}_$m", "") ?: "").trim().lowercase(Locale.ROOT)
+                .ifEmpty { (prefs.getString("effort_god_$m", "") ?: "").trim().lowercase(Locale.ROOT) }
         }
         if (stored.isEmpty()) {
-            stored = (prefs.getString("effort_$tab", "") ?: "").trim().lowercase()
-                .ifEmpty { (prefs.getString("effort_god", "") ?: "").trim().lowercase() }
+            stored = (prefs.getString("effort_$tab", "") ?: "").trim().lowercase(Locale.ROOT)
+                .ifEmpty { (prefs.getString("effort_god", "") ?: "").trim().lowercase(Locale.ROOT) }
         }
         if (stored.isEmpty() || m.isEmpty()) return stored
         return stored.takeIf { it in EffortCatalog.optionsFor(m) } ?: ""
@@ -376,12 +384,11 @@ class ChatApi(context: Context) {
         model: String,
         effort: String = "",
     ) {
-        // Clamp to the model's vocabulary so a stale tab pick can never
-        // be persisted under a model that can't speak it (reads back via
-        // effortFor, which clamps the same way). Computed before the single
-        // commit below: base keys and effort land atomically, so a crash
-        // cannot save one without the other.
-        val e = effort.trim().lowercase()
+        // Clamp to the model's vocabulary so a stale tab pick can never be
+        // persisted under a model that can't speak it (effortFor clamps the
+        // same way). Locale.ROOT keeps the fold locale-independent. Computed
+        // before the single commit, so base keys and effort land atomically.
+        val e = effort.trim().lowercase(Locale.ROOT)
         val valid = if (e.isEmpty()) {
             null
         } else if (model.trim().isEmpty()) {
@@ -517,7 +524,15 @@ class ChatApi(context: Context) {
                                 val marr = o.optJSONArray("models")
                                 if (marr != null) {
                                     for (j in 0 until marr.length()) {
-                                        if (marr.opt(j) is String) models++
+                                        // Same predicate as the picker path
+                                        // above: blank strings are not models.
+                                        // Deliberately `is String`, not
+                                        // optString: optString coerces numbers
+                                        // via toString and would count them —
+                                        // the picker doesn't, so neither does
+                                        // this.
+                                        val s = marr.opt(j)
+                                        if (s is String && s.isNotBlank()) models++
                                     }
                                 }
                             }
@@ -571,27 +586,153 @@ class ChatApi(context: Context) {
             close()
             return@callbackFlow
         }
-        val payload = JSONObject()
-        // An explicit provider/model is always sent; blanks are omitted
-        // (legacy configs predate required selection).
-        if (provider.isNotEmpty()) payload.put("provider", provider)
-        if (model.isNotEmpty()) payload.put("model", model)
-        // Per-request reasoning override: the gateway translates
-        // model_options.reasoning_effort into the agent's reasoning config
-        // (unknown values are ignored server-side; blank = server default).
-        if (effort.trim().isNotEmpty()) {
-            payload.put(
-                "model_options",
-                JSONObject().put("reasoning_effort", effort.trim().lowercase()),
+        // Empty history refuses here, not at the server (#339): wiring
+        // "messages":[] would depend on a remote 400 for something the
+        // client can see, and the fail-closed contract says the client
+        // refuses.
+        if (messages.none { messageHasContent(it) }) {
+            trySend(ChatEvent.Error("Nothing to send."))
+            close()
+            return@callbackFlow
+        }
+        // Built off-main: the JSON build over ~3.5 MB would otherwise run on
+        // the frame thread (the ViewModel collects on Main). Returns body +
+        // measured bytes; preflight and the request stay in producer context.
+        // Strict index, lenient search: only a canonical "user" tail carries
+        // image parts. A hand-edited "User"/"SYSTEM" tail rides as clamped
+        // bare text — visible, unprivileged, no image part and no marker
+        // claim — so index, marker and wire agree nothing was sent.
+        // The index is strict while the ROLE WIRE is clamped (anything not
+        // "assistant" rides as "user"): a case-variant tail therefore
+        // reaches the server as an unprivileged user turn WITHOUT image
+        // parts, which is the point — guessing that an odd-cased role meant
+        // "this turn carries photos" would attach images the user never
+        // staged on that role. The marker split (counts wired, parts need
+        // decodable) is documented on attachmentMarker.
+        // CONSEQUENCE, named: a hand-edited TRAILING "system"/"User" turn
+        // becomes the last wire turn (clamped to user) while the real photo
+        // tail keeps only the history marker — the photos park. Fail-closed
+        // and unreachable for app-written threads (only user/assistant are
+        // ever written).
+        val lastUserIdx = messages.indexOfLast { it.role == "user" }
+        // Named walls throw inside the build: an uncaught throw would escape
+        // this producer with no ChatEvent.Error path, and the turn would
+        // wedge. Catch ONLY the two named classes; anything else must propagate.
+        val (body, rawBytes, hasPhotos) = try {
+            withContext(Dispatchers.IO) {
+            val payload = JSONObject()
+            // An explicit provider/model is always sent; blanks are omitted.
+            if (provider.isNotEmpty()) payload.put("provider", provider)
+            if (model.isNotEmpty()) payload.put("model", model)
+            // Per-request reasoning override: the gateway translates
+            // model_options.reasoning_effort into the agent's reasoning config.
+            if (effort.trim().isNotEmpty()) {
+                payload.put(
+                    "model_options",
+                    JSONObject().put("reasoning_effort", effort.trim().lowercase(Locale.ROOT)),
+                )
+            }
+            val arr = JSONArray()
+            // Only the trailing user turn keeps its photo parts: the server
+            // prompts Pi with the last user turn alone, so earlier photo turns
+            // ride as text and the body stays bounded however long the thread
+            // gets. Exhaustive when: the sealed return forces both shapes
+            // handled — a bare String put would misrender a Multipart.
+            for ((i, m) in messages.withIndex()) {
+                val content = messageContentJson(m.role, m.content, m.attachments, includeImages = i == lastUserIdx)
+                val wire: Any = when (content) {
+                    is WireContent.Text -> content.text
+                    is WireContent.Multipart -> content.parts
+                }
+                // Role whitelisted, not forwarded verbatim: a hand-edited
+                // thread with "role":"system" would otherwise wire as a
+                // privileged turn. Anything else rides as user — visible,
+                // unprivileged.
+                val wireRole = if (m.role == "assistant") "assistant" else "user"
+                arr.put(
+                    JSONObject().put("role", wireRole).put("content", wire),
+                )
+            }
+            payload.put("messages", arr)
+            payload.put("stream", true)
+            // Client-side preflight: refuse an over-cap turn with a named,
+            // actionable error instead of sending it into the gateway's 4 MiB
+            // 413. Phrased for the turn's actual contents: photos when it
+            // carries them, thread-shortening when it doesn't. Sized from the
+            // built body, not a second encode: contentLength() is the bytes
+            // OkHttp will write. -1 (unknown) refuses too.
+            // PEAK SHAPE, named (#339): this block holds the JSONObject
+            // tree, the `raw` string (UTF-16) and the `built` byte copy at
+            // once, and OkHttp's write buffer joins them at send time — so
+            // the worst case is roughly 2x the wire size plus the JSON
+            // tree, all inside this IO block. The cap is checked against
+            // the BUILT length, which is the part that reaches the wire.
+            val raw = payload.toString()
+            val built = raw.toRequestBody(JSON)
+            // The photo scan rides the IO block (#339): it walks every
+            // payload's alphabet, which is up to hundreds of millions of
+            // characters — on the producer's thread outside this block it
+            // would sit on the collector's path.
+            // RAGGED-ONLY TURN, documented (#339): the marker counts WIRE
+            // photos (the thread titles as "[1 photo attached]") while this
+            // advice counts DECODABLE ones (a ragged payload never wires),
+            // so such a turn is advised as "shorten the thread" — the photo
+            // it claims is not one the wire would send.
+            val hasPhotos = messages.any { it.attachments.hasDecodablePhoto() }
+            Triple(built, built.contentLength(), hasPhotos)
+            }
+        } catch (e: NamedAttachError) {
+            trySend(ChatEvent.Error(e.message ?: "Couldn't build that message."))
+            close()
+            return@callbackFlow
+        } catch (e: OversizeAttachError) {
+            // The sibling wall, caught explicitly: OversizeAttachError is an
+            // IllegalStateException (not a NamedAttachError), so a wire edit
+            // throwing it directly would escape the producer and wedge the turn.
+            trySend(ChatEvent.Error(e.message ?: "Couldn't build that message."))
+            close()
+            return@callbackFlow
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Anything else the build throws (a JSONException from a put, an
+            // OOM building a ~3.5 MB string) used to escape the producer:
+            // no Error frame, no close(), and the collector saw a dead
+            // stream — the turn wedged in "streaming" with nothing to show.
+            // The named walls above keep their own wording; this is the
+            // generic net, so the user gets a failed turn instead of a
+            // spinner that never ends.
+            trySend(ChatEvent.Error(e.message ?: "Couldn't build that message."))
+            close()
+            return@callbackFlow
+        }
+        if (wireSizeExceeded(rawBytes)) {
+            // Phrased for what's actually measured: rawBytes is the whole
+            // request JSON, so "this turn" would misname the number on a long
+            // text-only thread — and a photo-less trip must not say "remove a
+            // photo". The second half keys off decodable photos — ANY
+            // decodable photo in the request, not just the trailing turn's
+            // (#339): a hand-edited odd-cased tail parks its photos, and
+            // advising "shorten the thread" when the remedy is the parked
+            // photo would name the wrong fix.
+            trySend(
+                ChatEvent.Error(
+                    (if (rawBytes < 0) {
+                        "Couldn't send: this conversation couldn't be measured. "
+                    } else {
+                        "Couldn't send: this conversation is about ${formatBytes(rawBytes)} " +
+                            "(limit about ${formatBytes(MAX_CHAT_WIRE_BYTES.toLong())}). "
+                    }) +
+                        if (hasPhotos) {
+                            "Remove a photo or start a new conversation."
+                        } else {
+                            "Shorten the thread or start a new conversation."
+                        },
+                ),
             )
+            close()
+            return@callbackFlow
         }
-        val arr = JSONArray()
-        for (m in messages) {
-            arr.put(JSONObject().put("role", m.role).put("content", m.content))
-        }
-        payload.put("messages", arr)
-        payload.put("stream", true)
-        val body = payload.toString().toRequestBody(JSON)
         val reqBuilder = Request.Builder()
             .url("$base$path/v1/chat/completions")
             .header("Authorization", "Bearer ${password()}")
@@ -654,7 +795,17 @@ class ChatApi(context: Context) {
                         is SseEnd.EndOfStream -> trySend(doneFor(end, full.toString(), seenUsage))
                     }
                 }
+            } catch (e: CancellationException) {
+                // Cancel is not a turn failure: awaitClose's job.cancel() must
+                // propagate so structured concurrency stays intact, and no
+                // Error frame may be emitted over the user's own stop.
+                throw e
             } catch (e: Exception) {
+                // Cancel-induced IOException: OkHttp surfaces call.cancel() as
+                // IOException("Canceled"), not a CancellationException, and the
+                // scope is already inactive — an Error frame here would toast
+                // a failure for a turn the user just stopped. Say nothing.
+                if (!isActive) return@launch
                 trySend(ChatEvent.Error(e.message ?: e.javaClass.simpleName))
             } finally {
                 close()

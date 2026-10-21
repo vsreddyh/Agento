@@ -22,6 +22,11 @@ class AgentoApp : Application() {
         // First: a crash later in this method must still be recorded.
         CrashLogs.install(this)
         ForegroundTracker.install(this)
+        // Cached once, read by the IO-thread gate: a debuggable build fails
+        // fast on a Main-thread boundary call (#339), a release build only
+        // logs it.
+        DebugBuild.debuggable =
+            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         scheduleSync(this)
         scheduleTaskSync(this)
         CronSyncWorker.schedule(this)
