@@ -308,20 +308,22 @@ func TestBatchIgnoresEmptyExtras(t *testing.T) {
 	ctx := context.Background()
 	a := mkBatchTask(t, s, "bulk-a", Repeat{})
 	b := mkBatchTask(t, s, "bulk-b", Repeat{})
+	c := mkBatchTask(t, s, "bulk-c", Repeat{})
 	// Empty extras count as absent: an empty fields object on complete and
 	// a blank reason on skip must not trip the misplaced-extra rejection.
 	res, err := s.Batch(ctx, []BatchOp{
 		{Op: "complete", ID: a, Fields: map[string]any{}},
 		{Op: "skip", ID: b, Reason: "   "},
+		{Op: "complete", ID: c, Fields: map[string]any{"due_date": nil}},
 	})
 	if err != nil {
 		t.Fatalf("Batch: %v", err)
 	}
-	if len(res) != 2 {
+	if len(res) != 3 {
 		t.Fatalf("want 2 results, got %d", len(res))
 	}
 	if n := openCount(t, s); n != 0 {
-		t.Fatalf("both must resolve, %d still open", n)
+		t.Fatalf("all three must resolve, %d still open", n)
 	}
 }
 

@@ -907,10 +907,22 @@ internal fun TaskManagerScreen(
         }
         runBulkOps(
             ids.map { id ->
-                // Safe: the fail-closed guard above proved every id is in
-                // the map, so this is a lookup, not a fallback.
+                // Fail-closed like the guard above: a row that left the
+                // fetched page between guard and map degrades to the same
+                // reload-and-retry, never to an unguarded write or a crash.
+                // `return` here leaves doBulkMove (map is inline), not just
+                // the lambda.
+                val rev = byId[id]?.revision ?: run {
+                    silentRefresh = true
+                    refreshTick++
+                    toasts.toast(
+                        "Some selected tasks aren't in view — reloading. Retry once they land.",
+                        ToastKind.Error,
+                    )
+                    return
+                }
                 val fields = JSONObject().put("due_date", dueDate)
-                fields.put("expected_revision", byId.getValue(id).revision)
+                fields.put("expected_revision", rev)
                 BulkOp("update", id, fields = fields)
             },
             "Moved ${ids.size} task${if (ids.size == 1) "" else "s"} to $whenText.",

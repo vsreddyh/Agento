@@ -207,14 +207,14 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// Extras ride only where they are read: a `reason` on anything but
 		// skip, or `fields` on anything but update, would commit while
 		// silently dropping the value — the exact silent-drop shape the
-		// single-task layer rejects at its boundary. Empty extras count as
-		// absent (a blank reason, an empty fields object), like the
-		// single-task layer treats JSON null.
+		// single-task layer rejects at its boundary. Empty counts as absent
+		// (a blank reason, an empty or all-null fields object), the same
+		// "no fields" rule the audit log uses.
 		if op.Op != "skip" && strings.TrimSpace(op.Reason) != "" {
 			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
 				Err: fail("batch op %d (%s) takes no reason; reason rides only on skip", i, op.Op)}
 		}
-		if op.Op != "update" && len(op.Fields) > 0 {
+		if op.Op != "update" && ChangedFieldNames(op.Fields) != "no fields" {
 			return nil, &BatchOpError{Index: i, Op: op.Op, ID: id,
 				Err: fail("batch op %d (%s) takes no fields; fields ride only on update", i, op.Op)}
 		}
@@ -222,7 +222,9 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 	// Normalized once into a copy: the caller's slice is untouched, and
 	// every downstream use (verbs, results, errors) sees the trimmed id, so
 	// a padded id can neither slip the duplicate check above nor come back
-	// padded in a result.
+	// padded in a result. The copy is shallow: per-op Fields maps are
+	// borrowed read-only (Update and ChangedFieldNames never mutate them),
+	// so a future verb that normalizes fields in place must deep-copy first.
 	ops = append([]BatchOp(nil), ops...)
 	for i := range ops {
 		ops[i].ID = strings.TrimSpace(ops[i].ID)
