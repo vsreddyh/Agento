@@ -160,8 +160,8 @@ class ChatAttachmentsTest {
     @Test
     fun blankPayloadsAreNotWired() {
         // Fail-closed: an empty base64 (hand-edited thread, writer bug)
-        // counts as no attachment — never a data:image/jpeg;base64, part.
-        // Ragged payloads (bad length/alphabet) filter the same way.
+        // counts as no attachment — never a data:image/jpeg;base64, part,
+        // and never a marker (blank counts nowhere).
         assertEquals(
             WireContent.Text("hi"),
             messageContentJson(
@@ -171,7 +171,7 @@ class ChatAttachmentsTest {
             ),
         )
         assertEquals(
-            WireContent.Text("hi"),
+            WireContent.Text("hi [1 photo attached]"),
             messageContentJson(
                 "user", "hi",
                 listOf(ChatAttachment(base64 = "!!!not-base64!!!")),
@@ -206,10 +206,12 @@ class ChatAttachmentsTest {
     @Test
     fun raggedPayloadPositionsRejected() {
         // Padding is positional: interior '=' never wires, even with
-        // clean length and alphabet — the corrupt part stays out.
+        // clean length and alphabet — the corrupt part stays out. The
+        // turn still marks what was staged (text + marker, never a bare
+        // part), like stripped history turns.
         for (bad in listOf("=AAA", "A=A=", "AB=C", "A===")) {
             assertEquals(
-                WireContent.Text("hi"),
+                WireContent.Text("hi [1 photo attached]"),
                 messageContentJson("user", "hi", listOf(ChatAttachment(base64 = bad)), includeImages = true),
             )
         }
@@ -348,13 +350,19 @@ class ChatAttachmentsTest {
         // Split-by-design contract (#339): a non-load construction (ragged
         // alphabet here — load would have blanked it) counts as a photo in
         // display/titles/search (blank-only predicate, hot-path cheap) but
-        // the wire filter drops it, so it rides as bare text — never a
-        // corrupt image part. Fail-closed at the wire, not silent.
+        // the wire filter drops the part — never a corrupt image part.
+        // Text+ragged marks what was staged; image-only ragged stays bare
+        // so the server's named blank-turn refusal (not agent confusion)
+        // is what the user gets.
         val ragged = attachment(data = "!!!")
         assertEquals(1, listOf(ragged).wiredPhotoCount())
         assertEquals(
-            WireContent.Text("hi"),
+            WireContent.Text("hi [1 photo attached]"),
             messageContentJson("user", "hi", listOf(ragged), includeImages = true),
+        )
+        assertEquals(
+            WireContent.Text(""),
+            messageContentJson("user", "", listOf(ragged), includeImages = true),
         )
     }
 

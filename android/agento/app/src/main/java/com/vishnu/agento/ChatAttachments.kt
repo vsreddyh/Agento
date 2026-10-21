@@ -512,7 +512,18 @@ fun messageContentJson(
     // the walks are a send tax, not a scroll tax.
     val images = attachments.filter { it.isWired() && isDecodableBase64(it.base64) }
     if (images.isEmpty()) {
-        return WireContent.Text(content)
+        // Marker when text survives, bare when nothing does (#339): a
+        // text+ragged turn marks what was staged (staged-honest, like
+        // history turns), but an image-only ragged turn must NOT gain a
+        // marker-only text — that would sail past the server's named
+        // blank-turn refusal and hand the agent a photo claim with no
+        // image. Bare "" keeps the loud fail-closed for the imageless
+        // case; the marker keeps the honest claim for the text case.
+        return if (markerCount > 0 && content.isNotBlank()) {
+            WireContent.Text(contentWithMarkerVerbatim(content, markerCount))
+        } else {
+            WireContent.Text(content)
+        }
     }
     val arr = JSONArray()
     if (content.isNotBlank()) {

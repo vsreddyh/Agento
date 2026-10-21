@@ -147,15 +147,17 @@ private fun String.sampleKey(half: Int): String =
  * Bounded decoded-thumbnail memory (#339): produceState remembers per
  * composition, so scrolling away disposes the bitmap and scrolling back
  * re-runs Base64.decode + decodeByteArray per photo. Keyed by the full
- * stable identity (id + length pair, never id alone — a same-id length
- * change restarts produceState and must miss the cache). Bounded
- * (32 entries ≈ 8 MB of ~256px thumbs) for low-end
- * devices; eviction does NOT recycle — GC reclaims, because recycling
- * risks pulling pixels from under a late outgoing draw (the same class
- * the no-recycle rule in AttachmentThumb exists for). Stable picks only;
- * legacy (id-less) payloads bypass the cache (slot-keyed entries would
- * alias across removes). LruCache is internally synchronized, so Main
- * gets and IO puts are safe.
+ * stable identity (thread + id + length, never the id alone): same-id
+ * length changes restart produceState, and entries must never serve a
+ * stale bitmap — nor a live bitmap from the WRONG thread after a switch.
+ * Per-thread keys age out via LRU instead of a switch-time wipe (no
+ * re-decode round-trip on switch-back). Legacy (id-less) payloads bypass
+ * the cache (slot-keyed entries would alias across removes). Bounded
+ * (32 entries ≈ 8 MB of ~256px thumbs) for low-end devices; eviction
+ * does NOT recycle — GC reclaims, because recycling risks pulling pixels
+ * from under a late outgoing draw (the same class the no-recycle rule in
+ * AttachmentThumb exists for). LruCache is internally synchronized, so
+ * Main gets and IO puts are safe.
  */
 internal class ThumbCache(maxEntries: Int = 32) {
     private val cache = android.util.LruCache<Any, android.graphics.Bitmap>(maxEntries)
@@ -187,6 +189,10 @@ private fun AttachmentThumb(
     // Scroll-back memory, hoisted by the caller (#339): null disables the
     // cache (previews, single-use). Stable picks only — see ThumbCache.
     cache: ThumbCache? = null,
+    // Thread owning this thumbnail (#339): part of the cache key so a
+    // switch/delete can never serve the old thread's bitmaps. Same
+    // threadId the produce path homes batches to.
+    threadKey: String = "",
 ) {
     // Identity without walking the payload (#339): the per-pick UUID is
     // stable across removes — the stable VALUE ignores slot, so photo 1
@@ -239,14 +245,14 @@ private fun AttachmentThumb(
         // decodeThumbnail must not be reintroduced at its call site.
         // Stable picks consult the hoisted cache first (#339): a scroll-back
         // hit skips decode entirely. Keyed by the full stable identity
-        // (id + length, NOT id alone): same id + different length restarts
-        // produceState, and an id-only cache key would serve the stale
-        // bitmap with no re-decode — the cache must never disagree with
+        // (thread + id + length, NOT the id alone): same id + different
+        // length restarts produceState, a thread switch must never serve
+        // the old thread's bitmaps — and the key must never disagree with
         // the produce key it shadows. Unreachable via the app (picks are
         // immutable, one UUID per pick), storage-edit only. Legacy
         // payloads (null key) always decode — slot-keyed entries would
         // alias across removes.
-        val cacheKey = stableId.takeIf { it.isNotEmpty() }?.let { it to base64.length }
+        val cacheKey = stableId.takeIf { it.isNotEmpty() }?.let { Triple(threadKey, it, base64.length) }
         value = try {
             val hit = cacheKey?.let { key -> cache?.get(key) }
             hit ?: withContext(Dispatchers.IO) {
@@ -317,6 +323,10 @@ internal fun ChatTab(
     val state by vm.state
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Staged-toast episode marker (#339): which staged count the "photo
+    // still staged" notice already voiced for. Declared before first use —
+    // reset by the send/remove wrappers and thread changes below.
+    var liveStagedVoicedCount by remember { mutableStateOf(0) }
     // Scroll-back thumbnail memory (#339): AttachmentThumb's produceState
     // remembers per composition, so scrolling away disposes the bitmap and
     // scrolling back re-decodes. Hoisted here so the cache outlives any
@@ -328,12 +338,13 @@ internal fun ChatTab(
     // until LRU pressure evicts them — unreachable forever, yet evicting
     // the live thread's. Evict eagerly on thread change instead.
     val thumbCache = remember { ThumbCache() }
+    // New thread, new staging episode (#339): the voice slate belongs to
+    // the old thread's staged set. (The cache is NOT evicted here — keys
+    // carry the thread, so old entries age out via LRU instead of forcing
+    // a re-decode round-trip on every switch-back.)
     LaunchedEffect(state.threadId) {
-        thumbCache.evictAll()
+        liveStagedVoicedCount = 0
     }
-    // Staged-toast episode marker, reset by the lambda below (#339): which
-    // staged count the "photo still staged" notice already voiced for.
-    var liveStagedVoicedCount by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) { vm.refreshConfig() }
     // Task-instruction deep-link (#287): open the instructed thread once
     // the ViewModel has loaded. Consumed on confirmed open (not
@@ -594,7 +605,12 @@ internal fun ChatTab(
         val overCap = unique.size > slots
         if (overCap) {
             vm.notify(capRefused(), ToastKind.Info)
-        } else if (unique.size < uris.size) {
+        }
+        // Collapsed duplicates voice even under cap pressure (#339): same
+        // pick 3x with 1 slot free stages 1 copy via dedupe AND hits the
+        // cap — cap-only would hide the dedupe that also fired. Two Info
+        // toasts through the same queue the batch notices already share.
+        if (unique.size < uris.size) {
             vm.notify("Duplicate photos attached once.", ToastKind.Info)
         }
         // Hoisted ABOVE the launch (#339): the resolver is all the batch
@@ -1087,7 +1103,14 @@ internal fun ChatTab(
         onModel = { showModel = true },
         onHistory = { showThreads = true },
         onCheckConnection = vm::checkReachability,
-        onPending = vm::onPending, onSend = vm::send, onStop = vm::stop,
+        onPending = vm::onPending, onSend = {
+            // Staging empties on send (#339): the next live sentence starts
+            // a new voicing episode. Queued-while-streaming keeps staging —
+            // but the slate reset only re-arms a future toast, and a future
+            // sentence with the same photos staged IS a new episode.
+            liveStagedVoicedCount = 0
+            vm.send()
+        }, onStop = vm::stop,
         onSteer = vm::steer, onRuns = vm::openRuns,
         onCloseRuns = vm::closeRuns, onCancelRun = vm::cancelRun,
         onRefreshRuns = vm::refreshRuns, onApprovals = vm::openApprovals,
@@ -1122,7 +1145,12 @@ internal fun ChatTab(
             }
         },
         onTakePhoto = ::requestCamera,
-        onRemovePhoto = vm::removePendingAttachment,
+        onRemovePhoto = {
+            // Staging may empty here (#339): reset the slate when it does
+            // so the next episode voices anew (see onLiveStagedPhotos).
+            vm.removePendingAttachment(it)
+            if (vm.pendingAttachmentCount() == 0) liveStagedVoicedCount = 0
+        },
         // Voiced once per staging episode, not per sentence (#339): rapid
         // multi-sentence speech would otherwise queue identical "photo
         // still staged" notices back to back for one ongoing condition.
@@ -2616,6 +2644,7 @@ internal fun ChatScreen(
                                             legacySlot = i,
                                             stableId = a.id,
                                             cache = thumbCache,
+                                            threadKey = state.threadId,
                                         )
                                         // Standard 48dp target (#339): a scanner
                                         // fails anything smaller, and the
@@ -3079,6 +3108,7 @@ internal fun ChatScreen(
                                                                 legacySlot = ai,
                                                                 stableId = a.id,
                                                                 cache = thumbCache,
+                                                                threadKey = state.threadId,
                                                             )
                                                         }
                                                     }
