@@ -58,6 +58,9 @@ func TestTaskMutationsRejectsBadFilters(t *testing.T) {
 		{"/api/tasks/mutations?task_id=not-an-id", "task_id"},
 		{"/api/tasks/mutations?op=frobnicate", "frobnicate"},
 		{"/api/tasks/mutations?since=yesterday", "since"},
+		// A filter that names no op is a filter the caller sent: answering
+		// it with the whole log is the wrong data, so it is refused.
+		{"/api/tasks/mutations?op=,", "names no operation"},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodGet, tc.target, nil)

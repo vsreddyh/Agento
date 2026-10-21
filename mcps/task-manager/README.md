@@ -267,6 +267,12 @@ the `at` this filter is fed back from carries milliseconds). A malformed
 `since`, `op` or `task_id` is a 422, not a silently widened answer: "the
 whole log" is the wrong data, not merely more of it.
 
+"Inclusive" holds at the precision the log stores: `at` is written in whole
+milliseconds, so a hand-built sub-millisecond `since` (`.123456789Z`) can
+exclude the row stored in that same millisecond. Echoing a returned `at`
+back is exact, because the emitted timestamps carry no more than
+milliseconds.
+
 `limit` is the one lenient filter: unparseable, zero or negative falls back
 to the default (200), and a parseable-but-huge one is clamped to the ceiling
 (500). A limit can only enlarge the page, which is the answer the caller

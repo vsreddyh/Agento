@@ -65,6 +65,13 @@ const auditCollection = "task_mutations"
 
 // RecordMutation appends one entry. Best-effort — see the package comment.
 func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail string) {
+	// A store that was never connected cannot record anything, and the
+	// function is best-effort by contract: it swallows its own failures
+	// rather than failing the mutation they describe. The read side says
+	// "not connected" out loud; here, the log simply has no entry.
+	if s == nil || s.db == nil {
+		return
+	}
 	if op == "" || taskID == "" {
 		return
 	}

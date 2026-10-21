@@ -65,6 +65,26 @@ type MutationFilter struct {
 	Limit int
 }
 
+// normalizeOps lowercases, trims, drops empties and removes repeats.
+//
+// One rule, two callers: the transport parses a comma-separated string
+// through it, and the store seam applies it to the ops a direct caller
+// passed. So "complete, " and "COMPLETE" mean the same filter in both,
+// and neither can end up asking the database about an empty op.
+func normalizeOps(ops []string) []string {
+	out := make([]string, 0, len(ops))
+	seen := map[string]bool{}
+	for _, op := range ops {
+		op = strings.ToLower(strings.TrimSpace(op))
+		if op == "" || seen[op] {
+			continue
+		}
+		seen[op] = true
+		out = append(out, op)
+	}
+	return out
+}
+
 // ParseOps parses a comma-separated op filter ("complete,skip") into the ops
 // it names.
 //
@@ -80,17 +100,7 @@ type MutationFilter struct {
 // Repeats are dropped, so "create,create" is one op and not two.
 func ParseOps(s string) ([]string, error) {
 	raw := strings.TrimSpace(s)
-	parts := strings.Split(raw, ",")
-	ops := make([]string, 0, len(parts))
-	seen := map[string]bool{}
-	for _, p := range parts {
-		p = strings.ToLower(strings.TrimSpace(p))
-		if p == "" || seen[p] {
-			continue
-		}
-		seen[p] = true
-		ops = append(ops, p)
-	}
+	ops := normalizeOps(strings.Split(raw, ","))
 	if len(ops) == 0 && raw != "" {
 		return nil, fail("op %q names no operation; known ops are %s", TruncateBytes(raw, 40), strings.Join(knownOps, ", "))
 	}
@@ -176,14 +186,11 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	// Validated BEFORE any store use, so an unknown op costs no database
 	// round trip to discover — and so this rule is testable without one.
 	//
-	// The ops are lowercased here, on a copy: the stored ops are lowercase,
-	// and a caller that reaches the store directly (bypassing ParseOps)
-	// must not be told "create" is an unknown op — the same id in the wrong
-	// case is the same task, and so is the same op.
-	ops := make([]string, len(f.Ops))
-	for i, op := range f.Ops {
-		ops[i] = strings.ToLower(strings.TrimSpace(op))
-	}
+	// The ops are normalized here, on a copy, by the SAME rule the
+	// transport's parser uses: the stored ops are lowercase, and a caller
+	// that reached the store directly must not be told "create" is an
+	// unknown op, nor asked about an empty one.
+	ops := normalizeOps(f.Ops)
 	if err := ValidateOps(ops); err != nil {
 		return nil, false, err
 	}
