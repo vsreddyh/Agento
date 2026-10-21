@@ -132,6 +132,25 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
     mapIndexedNotNull { i, a -> if (a.isWired()) IndexedValue(i, a) else null }
 
 /**
+ * IO-thread gate for the persistence boundary (#339): the load/save/
+ * export/import/canonicalizeFile contracts all CLAIM Main-never, and a
+ * comment alone never stopped a future Main-thread caller. JVM-safe by
+ * construction: android.os.Looper is stubbed in unit tests, so the lookup
+ * throws there — which reads as "no main thread" and lets logic tests run
+ * without a device. On-device, a Main-thread call fails fast with the
+ * site named instead of freezing the UI. Deliberately NOT on
+ * canonicalizeAttachments/isDecodableBase64: those are pure per-payload
+ * helpers (unit-tested on JVM), and their IO confinement comes from
+ * their boundary callers (load/save/export), which are gated.
+ */
+internal fun requireIoThread(site: String) {
+    val main = runCatching { android.os.Looper.getMainLooper() }.getOrNull()
+    check(main == null || android.os.Looper.myLooper() !== main) {
+        "$site must run on an IO thread, never Main"
+    }
+}
+
+/**
  * Canonical form of persisted attachments (#339): storage is
  * hand-editable, so payloads arrive stripped of framing whitespace — and
  * anything still undecodable blanks out. Applied once at the load
@@ -140,6 +159,11 @@ fun List<ChatAttachment>.wiredPhotosWithIndex(): List<IndexedValue<ChatAttachmen
  * filter asserts decode-validity, because load made them agree. Pure for
  * testability; the next persist writes back the canonical form
  * (self-healing, no notice — corrupt bytes are dropped, never sent).
+ * Heal-silent BY DESIGN (#339): heals log nothing and voice nothing — a
+ * toast per healed payload would storm on every cold start (the hand-edit
+ * persists), and the photo's absence with a zero count IS the signal.
+ * Fail-closed preserved: nothing corrupt ever wires; the named-error
+ * contract covers user actions (pick/stage/send), not storage repair.
  */
 fun canonicalizeAttachments(attachments: List<ChatAttachment>): List<ChatAttachment> =
     attachments.map { a ->
@@ -586,6 +610,19 @@ suspend fun prepareAttachment(context: Context, uri: Uri): Result<ChatAttachment
                         )
                     }
                     out.write(buf, 0, n)
+                }
+                // Gate the copy, not just the read (#339): the loop bounds
+                // the buffer at MAX + one chunk, but toByteArray() copies it
+                // — fail on out.size() first so an over-cap buffer never
+                // doubles before throwing. total tracks the same bytes, but
+                // the gate reads the buffer so it survives a future counter
+                // drift; unreachable today (the loop throws first), kept as
+                // the last unpinned copy's pin.
+                if (out.size() > MAX_SOURCE_BYTES) {
+                    throw OversizeAttachError(
+                        "That file is too large to attach " +
+                            "(over about ${formatBytes(MAX_SOURCE_BYTES.toLong())}).",
+                    )
                 }
                 out.toByteArray()
             } ?: throw NamedAttachError(

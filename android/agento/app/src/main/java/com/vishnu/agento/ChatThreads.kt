@@ -143,7 +143,9 @@ object ChatThreads {
         return base + suffix
     }
 
+    @androidx.annotation.WorkerThread
     fun load(context: Context, tab: String): List<ChatThread> {
+        requireIoThread("ChatThreads.load")
         val f = file(context, tab)
         if (!f.exists()) return emptyList()
         // Call-site audit for the IO-and-scan cost below (#339): the scans
@@ -187,10 +189,18 @@ object ChatThreads {
      * (true today: VM memory comes from load(), staged payloads are
      * throw-validated at stage time). A future direct save() caller
      * bypassing the VM would otherwise persist ragged base64 that load
-     * heals on every cold start. Send-frequency, IO-confined (VM persist()
-     * hops to IO), so the validity walks never touch the hot path.
+     * heals on every cold start. Re-validation is the price, stated (#339):
+     * every load/save re-walks clean payloads to prove them clean — a
+     * version-stamp / already-canonical flag would skip it, but that is a
+     * storage-format change, and old or foreign-written files must validate
+     * anyway, so the flag only pays off after a full rewrite cycle while
+     * the trust-no-caller boundary goes soft in the meantime.
+     * Send-frequency, IO-confined (enforced below): accepted, not
+     * overlooked.
      */
+    @androidx.annotation.WorkerThread
     fun save(context: Context, tab: String, threads: List<ChatThread>) {
+        requireIoThread("ChatThreads.save")
         runCatching {
             val capped = threads.take(MAX_THREADS).map { t ->
                 val msgs = if (t.messages.size > MAX_MESSAGES) {
@@ -216,17 +226,21 @@ object ChatThreads {
      * Returns null when the text isn't a threads list — the caller keeps
      * its skip-invalid behavior. Tasks files never reach here (shape).
      */
-    fun canonicalizeFile(text: String): String? = runCatching {
-        val threads = threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), text)
-        threadJson.encodeToString(
-            ListSerializer(ChatThread.serializer()),
-            threads.map { t ->
-                t.copy(messages = t.messages.map { m ->
-                    m.copy(attachments = canonicalizeAttachments(m.attachments))
-                })
-            },
-        )
-    }.getOrNull()
+    @androidx.annotation.WorkerThread
+    fun canonicalizeFile(text: String): String? {
+        requireIoThread("ChatThreads.canonicalizeFile")
+        return runCatching {
+            val threads = threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), text)
+            threadJson.encodeToString(
+                ListSerializer(ChatThread.serializer()),
+                threads.map { t ->
+                    t.copy(messages = t.messages.map { m ->
+                        m.copy(attachments = canonicalizeAttachments(m.attachments))
+                    })
+                },
+            )
+        }.getOrNull()
+    }
 
     /**
      * Stored string to enum, defensively.
