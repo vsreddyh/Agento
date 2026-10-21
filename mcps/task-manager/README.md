@@ -265,8 +265,12 @@ The two envelopes differ, on purpose:
 `since` is **inclusive** and must be RFC3339 (fractional seconds accepted —
 the `at` this filter is fed back from carries milliseconds). A malformed
 `since`, `op` or `task_id` is a 422, not a silently widened answer: "the
-whole log" is the wrong data, not merely more of it. A malformed `limit`
-falls back to the default, like `?limit=` on the task list.
+whole log" is the wrong data, not merely more of it.
+
+`limit` is the one lenient filter: unparseable, zero or negative falls back
+to the default (200), and a parseable-but-huge one is clamped to the ceiling
+(500). A limit can only enlarge the page, which is the answer the caller
+already had, so it is never worth a 422.
 
 The `task_id` check is shared by both transports (`tasks.NormalizeTaskID`),
 so the agent and the app are told the same thing: a typo'd id is refused

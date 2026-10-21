@@ -92,7 +92,7 @@ func ParseOps(s string) ([]string, error) {
 		ops = append(ops, p)
 	}
 	if len(ops) == 0 && raw != "" {
-		return nil, fail("op %q names no operation; known ops are %s", raw, strings.Join(knownOps, ", "))
+		return nil, fail("op %q names no operation; known ops are %s", TruncateBytes(raw, 40), strings.Join(knownOps, ", "))
 	}
 	if err := ValidateOps(ops); err != nil {
 		return nil, err
@@ -108,7 +108,9 @@ func ParseOps(s string) ([]string, error) {
 func ValidateOps(ops []string) error {
 	for _, op := range ops {
 		if !slices.Contains(knownOps, op) {
-			return fail("unknown op %q; known ops are %s", op, strings.Join(knownOps, ", "))
+			// The offending token is echoed, bounded: a 10KB query
+			// parameter answered with itself is a log line nobody wants.
+			return fail("unknown op %q; known ops are %s", TruncateBytes(op, 40), strings.Join(knownOps, ", "))
 		}
 	}
 	return nil
@@ -215,9 +217,13 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	}
 	lim := mongostore.ClampLimit(f.Limit, DefaultLimit, MaxLimit)
 	// Newest first, with `_id` as the tiebreak: two mutations in the same
-	// millisecond would otherwise come back in an order the database chose,
-	// and a history that reshuffles itself between two reads of the same
-	// window is a history nobody can read.
+	// millisecond would otherwise come back in an order the database
+	// chose, and a history that reshuffles itself between two reads of
+	// the same window is a history nobody can read.
+	//
+	// The tiebreak buys STABILITY, not causality: ObjectID's counter is
+	// per-process, so two writers racing the same millisecond are ordered
+	// by `_id` without that order being the order they happened in.
 	cur, err := s.db.Collection(auditCollection).Find(ctx, filt,
 		options.Find().
 			SetSort(bson.D{{Key: "at", Value: -1}, {Key: "_id", Value: -1}}).

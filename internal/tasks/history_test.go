@@ -269,7 +269,17 @@ func TestListMutationsFiltersByTaskAndOp(t *testing.T) {
 		t.Fatalf("ListMutations: %v", err)
 	}
 	if len(rows) != 1 {
-		t.Fatalf("one task's create rows = %d, want 1", len(rows))
+		t.Fatalf("task-a create rows = %d, want 1", len(rows))
+	}
+
+	// The op is matched case-insensitively all the way down: the stored
+	// ops are lowercase, and the filter lowers its copy before asking.
+	rows, _, err = s.ListMutations(ctx, MutationFilter{Ops: []string{"CREATE"}})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("uppercase create rows = %d, want 2 — the filter must match the stored lowercase op", len(rows))
 	}
 }
 
