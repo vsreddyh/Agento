@@ -81,6 +81,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import java.util.Locale
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 // REQUIRED, do not remove as an unused import: `collect { }` on a Flow with a lambda is
 // the kotlinx.coroutines.flow EXTENSION, not the FlowCollector member. Removing it fails to
 // compile. Flagged as redundant in review twice; it is load-bearing.
@@ -137,6 +138,8 @@ internal fun TaskManagerScreen(
     // never fetched).
     var bulkMode by remember { mutableStateOf(false) }
     var bulkSelected by remember { mutableStateOf(setOf<String>()) }
+    // Bulk move date dialog (#345): one date for the whole selection.
+    var bulkMoveOpen by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     // Bumped after every load/mutation so the loader below reruns.
@@ -532,34 +535,20 @@ internal fun TaskManagerScreen(
     }
 
     /**
-     * Copy a task 1:1 (issue #161): every field carried over verbatim —
-     * name, speak_name, description, due date/time, estimate, the whole repeat block
-     * and the parallel flag — as a new **open** task. Nothing is "smarter"
-     * than the original: a past due date stays a past due date, and a
-     * cadence comes across as the same cadence. A copy is a starting point
-     * to edit, not a rescheduled twin.
+     * Copy a task 1:1 (issue #161) via the canonical server duplicate: every
+     * field carried over verbatim — name, speak_name, description, due
+     * date/time, estimate, the whole repeat block and the parallel flag — as
+     * a new **open** task. Nothing is "smarter" than the original: a past due
+     * date stays a past due date, and a cadence comes across as the same
+     * cadence. A copy is a starting point to edit, not a rescheduled twin.
+     *
+     * The server validates the source (a task with no usable contents is
+     * rejected with the reason), so there is no client-side precheck: the
+     * sheet is already dismissed, and the error toast says what to fix.
      */
     fun doDuplicate(t: ServerTask) {
-        // Everything the client itself enforces is checked here, before the
-        // sheet is dismissed: a refusal that closes the task leaves the user
-        // with a toast and nothing to fix, because the thing they needed
-        // to change is behind a tap they just made.
-        val missing = listOf(
-            "a name" to t.name.isBlank(),
-            "some details" to t.description.isBlank(),
-            "a due date" to !t.dueDate.isIsoDate(),
-            "a due time" to t.dueTime.isBlank(),
-        ).filter { it.second }.map { it.first }
-        if (missing.isNotEmpty()) {
-            toasts.toast(
-                "This task has no ${missing.joinToString(" or ")} yet — add " +
-                    "${if (missing.size == 1) "it" else "them"} before copying it.",
-                ToastKind.Error,
-            )
-            return
-        }
-        // Closed here rather than by the caller, so a task that cannot be
-        // copied stays open to be fixed.
+        // Closed here rather than by the caller, so the toast lands on the
+        // list the copy will appear in.
         selected = null
         // Optimistic placeholder: the copy appears instantly with a temp id
         // and is swapped for the server answer — no full-reload flicker.
@@ -573,29 +562,22 @@ internal fun TaskManagerScreen(
         tasks = if (filter == ServerTaskFilter.Done) prev else listOf(placeholder) + prev
         markBusy(tempId)
         scope.launch {
-            api.create(
-                name = t.name,
-                speakName = t.speakName,
-                description = t.description,
-                dueDate = t.dueDate,
-                dueTime = t.dueTime,
-                estimatedMinutes = t.estimatedMinutes,
-                repeatEvery = t.repeatEvery,
-                repeatUnit = t.repeatUnit,
-                repeatDays = t.repeatDays,
-                repeatCustom = t.repeatCustom,
-                repeatRule = t.repeatRule,
-                parallelable = t.parallelable,
-            ).fold(
-                onSuccess = { copy ->
-                    editing = null
-                    // Only when the placeholder is still there to be replaced:
-                    // if a filter change already dropped it, the server row is
-                    // a genuine arrival and must animate in (#308).
-                    if (tasks.any { it.id == tempId }) noteRowShown(copy.id)
-                    tasks = tasks.map { if (it.id == tempId) copy else it }
-                    pokeWidget()
-                    toasts.toast("Copied \u201c${copy.name}\u201d.", ToastKind.Success)
+            api.batch(listOf(BulkOp("duplicate", t.id))).fold(
+                onSuccess = { items ->
+                    val copy = items.firstOrNull()?.task
+                    if (copy == null) {
+                        tasks = prev
+                        toasts.toast("Duplicate failed.", ToastKind.Error)
+                    } else {
+                        editing = null
+                        // Only when the placeholder is still there to be replaced:
+                        // if a filter change already dropped it, the server row is
+                        // a genuine arrival and must animate in (#308).
+                        if (tasks.any { it.id == tempId }) noteRowShown(copy.id)
+                        tasks = tasks.map { if (it.id == tempId) copy else it }
+                        pokeWidget()
+                        toasts.toast("Copied \u201c${copy.name}\u201d.", ToastKind.Success)
+                    }
                 },
                 onFailure = { e ->
                     tasks = prev
@@ -828,39 +810,21 @@ internal fun TaskManagerScreen(
     }
 
     /**
-     * One atomic bulk run (#345): every selected task finished via [verb] in
-     * a single batch. No per-row exit animation — the set can span what is on
-     * screen, so one background refresh swaps the whole list in, one toast
-     * reports it, and the widget and alarms poke once. Success clears the
-     * selection and leaves bulk mode; failure keeps the selection for retry
-     * after the reload and names the failing item.
+     * Runs one atomic bulk batch (#345): one background refresh in, one
+     * toast out, one widget/alarm poke. Success clears the selection and
+     * leaves bulk mode; failure keeps the selection for retry after the
+     * reload and names the failing item.
      */
-    fun doBulkFinish(verb: String) {
-        val ids = bulkSelected.toList()
-        if (ids.isEmpty()) return
-        val doneWord = if (verb == "skip") "Skipped" else "Completed"
+    fun runBulkOps(ids: List<String>, ops: List<BulkOp>, success: String) {
         ids.forEach(::markBusy)
         scope.launch {
-            api.batch(ids.map { BulkOp(verb, it) }).fold(
+            api.batch(ops).fold(
                 onSuccess = {
-                    // A custom repeat has no next occurrence until somebody
-                    // picks a date: the single-task flow opens a recreate
-                    // draft, which cannot scale to N tasks, so the bulk toast
-                    // says where to recreate them instead.
-                    val customs = tasks.count { it.id in ids && it.repeatCustom }
                     silentRefresh = true
                     refreshTick++
                     pokeWidget()
                     exitBulk()
-                    toasts.toast(
-                        "$doneWord ${ids.size} task${if (ids.size == 1) "" else "s"}." +
-                            (if (verb == "complete" && customs > 0) {
-                                " Recreate custom repeats from Done."
-                            } else {
-                                ""
-                            }),
-                        ToastKind.Success,
-                    )
+                    toasts.toast(success, ToastKind.Success)
                 },
                 onFailure = { e ->
                     // The selection is kept: the batch changed nothing, so
@@ -877,6 +841,51 @@ internal fun TaskManagerScreen(
             )
             ids.forEach(::unmarkBusy)
         }
+    }
+
+    /**
+     * One atomic bulk finish (#345): every selected task completed or
+     * skipped in a single batch. No per-row exit animation — the set can
+     * span what is on screen, so the shared runner swaps the whole list in.
+     */
+    fun doBulkFinish(verb: String) {
+        val ids = bulkSelected.toList()
+        if (ids.isEmpty()) return
+        val doneWord = if (verb == "skip") "Skipped" else "Completed"
+        // A custom repeat has no next occurrence until somebody picks a
+        // date: the single-task flow opens a recreate draft, which cannot
+        // scale to N tasks, so the bulk toast says where to recreate them
+        // instead.
+        val customs = tasks.count { it.id in ids && it.repeatCustom }
+        runBulkOps(
+            ids,
+            ids.map { BulkOp(verb, it) },
+            "$doneWord ${ids.size} task${if (ids.size == 1) "" else "s"}." +
+                (if (verb == "complete" && customs > 0) " Recreate custom repeats from Done." else ""),
+        )
+    }
+
+    /** One atomic bulk move (#345): one date for the whole selection. */
+    fun doBulkMove(dueDate: String) {
+        val ids = bulkSelected.toList()
+        if (ids.isEmpty()) return
+        val whenText = friendlyDue(dueDate, "", java.time.LocalDate.now(IST)).ifEmpty { dueDate }
+        runBulkOps(
+            ids,
+            ids.map { BulkOp("update", it, fields = JSONObject().put("due_date", dueDate)) },
+            "Moved ${ids.size} task${if (ids.size == 1) "" else "s"} to $whenText.",
+        )
+    }
+
+    /** One atomic bulk duplicate (#345): one canonical server copy each. */
+    fun doBulkDuplicate() {
+        val ids = bulkSelected.toList()
+        if (ids.isEmpty()) return
+        runBulkOps(
+            ids,
+            ids.map { BulkOp("duplicate", it) },
+            "Duplicated ${ids.size} task${if (ids.size == 1) "" else "s"}.",
+        )
     }
 
     // The toast card floats top-end over the content (Box overlay, not
@@ -899,6 +908,24 @@ internal fun TaskManagerScreen(
                                 onClick = { doBulkFinish("skip") },
                                 enabled = bulkSelected.isNotEmpty(),
                             ) { Text("Skip") }
+                            IconButton(
+                                onClick = { bulkMoveOpen = true },
+                                enabled = bulkSelected.isNotEmpty(),
+                            ) {
+                                Icon(
+                                    Icons.Filled.DateRange,
+                                    contentDescription = "Move selected to a date",
+                                )
+                            }
+                            IconButton(
+                                onClick = { doBulkDuplicate() },
+                                enabled = bulkSelected.isNotEmpty(),
+                            ) {
+                                Icon(
+                                    Icons.Filled.ContentCopy,
+                                    contentDescription = "Duplicate selected",
+                                )
+                            }
                             TextButton(
                                 onClick = { doBulkFinish("complete") },
                                 enabled = bulkSelected.isNotEmpty(),
@@ -1436,6 +1463,18 @@ internal fun TaskManagerScreen(
             dismissButton = {
                 TextButton(onClick = { deleting = null }) { Text("Cancel") }
             },
+        )
+    }
+
+    // Bulk move (#345): one date picker for the whole selection.
+    if (bulkMoveOpen) {
+        DueDatePickerDialog(
+            initial = "",
+            onConfirm = { date ->
+                bulkMoveOpen = false
+                doBulkMove(date)
+            },
+            onDismiss = { bulkMoveOpen = false },
         )
     }
 
