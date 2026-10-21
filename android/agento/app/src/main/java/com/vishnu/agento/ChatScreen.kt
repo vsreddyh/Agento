@@ -1076,8 +1076,12 @@ internal fun ChatTab(
     val headNotice = state.notices.firstOrNull()
     LaunchedEffect(headNotice) {
         if (headNotice != null) {
-            vm.consumeNotice()
+            // Toast FIRST, consume after (#339): the other order loses the
+            // notice when a rotation lands between the two. A rotation in
+            // between may then show it twice — a duplicate toast is a much
+            // smaller loss than a silent one.
             runCatching { toasts.toast(headNotice.text, headNotice.kind) }
+            vm.consumeNotice()
         }
     }
     // #64: never show raw "not set" — the header shows the model name when
@@ -1831,12 +1835,15 @@ internal fun ChatScreen(
     }
     // Inline user-message editor (#122): message index under edit, its
     // draft, and a pending replace awaiting drop-turns confirmation.
-    var editingIndex by remember(tab) { mutableStateOf<Int?>(null) }
-    var editDraft by remember(tab) { mutableStateOf("") }
-    var confirmReplace by remember(tab) { mutableStateOf<Pair<Int, String>?>(null) }
+    // rememberSaveable, not remember (#339): a rotation mid-edit used to
+    // discard the draft and the drop-turns confirmation silently.
+    var editingIndex by rememberSaveable(tab) { mutableStateOf<Int?>(null) }
+    var editDraft by rememberSaveable(tab) { mutableStateOf("") }
+    var confirmReplace by rememberSaveable(tab) { mutableStateOf<Pair<Int, String>?>(null) }
     // Photo attach menu: gallery vs camera. Plain dialog state — the
     // pickers themselves live in ChatTab (onPickPhotos/onTakePhoto).
-    var showAttachMenu by remember(tab) { mutableStateOf(false) }
+    // Saveable for the same reason as the editor above.
+    var showAttachMenu by rememberSaveable(tab) { mutableStateOf(false) }
     // Edit state belongs to one thread: a switch or a fresh thread closes it.
     // The attach menu closes too: it is keyed on tab, so without this a
     // thread switch leaves it open over the new thread's composer. The draft

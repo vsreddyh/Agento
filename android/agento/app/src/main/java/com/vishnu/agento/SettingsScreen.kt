@@ -470,6 +470,8 @@ internal fun SettingsScreen(
                     SettingSection.Storage -> {
                         SettingsBackupSection(
                             scope = viewModel.viewModelScope,
+                            busy = viewModel.state.value.backupBusy,
+                            onBusy = viewModel::setBackupBusy,
                             onImported = {
                                 viewModel.refresh()
                                 settingsRefresh++
@@ -795,7 +797,12 @@ private fun namesOf(names: List<String>): String {
  * permission; the file the user keeps survives any reinstall gap that outlives
  * cloud backup. [onImported] reloads the on-screen fields from prefs. */
 @Composable
-internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit) {
+internal fun SettingsBackupSection(
+    scope: CoroutineScope,
+    busy: Boolean,
+    onBusy: (Boolean) -> Unit,
+    onImported: () -> Unit,
+) {
     val context = LocalContext.current
     // Application context for everything that crosses a suspend boundary: the
     // IO hops must not hold the Activity. UI-only work (toasts, pickers) does.
@@ -807,17 +814,20 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
 
     var status by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
+    // `busy` is the CALLER's (the ViewModel's) flag, not a local one
+    // (#339): the export/import work runs in the ViewModel's scope so it
+    // survives a rotation — a composition-scoped gate would reset on
+    // rotation and let a second export start next to the first.
 
     /** Writes the export JSON to the user-picked location. */
     val exportPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        busy = true
+        onBusy(true)
         status = ""
         failed = false
-        scope.launch {
+        val job = scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     // Metered BEFORE materializing: export() builds the whole
@@ -945,8 +955,12 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                 onFailure = { e -> e.message ?: e.javaClass.simpleName },
             )
             failed = result.isFailure
-            busy = false
         }
+        // The gate drops with the work (#339): a cancelled export (the
+        // scope dies with the screen) must not leave the buttons disabled
+        // forever — and the flag lives in the ViewModel, so a rotation
+        // keeps it while the export still runs.
+        job.invokeOnCompletion { onBusy(false) }
     }
 
     /** Reads a previously exported file and applies its known keys. */
@@ -954,10 +968,10 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        busy = true
+        onBusy(true)
         status = ""
         failed = false
-        scope.launch {
+        val job = scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     // Metered BEFORE reading: symmetric with the export
@@ -1049,8 +1063,12 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                 onFailure = { e -> status = e.message ?: e.javaClass.simpleName },
             )
             failed = result.isFailure
-            busy = false
         }
+        // The gate drops with the work (#339): a cancelled export (the
+        // scope dies with the screen) must not leave the buttons disabled
+        // forever — and the flag lives in the ViewModel, so a rotation
+        // keeps it while the export still runs.
+        job.invokeOnCompletion { onBusy(false) }
     }
 
     SectionCard(

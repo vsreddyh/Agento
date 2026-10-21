@@ -17,6 +17,12 @@ data class UiState(
     val healthPackageInfo: String = "",
     val permissionsGranted: Boolean = false,
     val syncing: Boolean = false,
+    /** A backup export/import is running (#339): the work lives in this
+     * ViewModel's scope (it must survive a rotation), so the gate that
+     * disables the buttons lives here too — a composition-scoped flag
+     * would reset on rotation and let a second export start next to the
+     * first. */
+    val backupBusy: Boolean = false,
     val lastResult: String = "",
     val lastSyncAt: String = "",
 )
@@ -31,9 +37,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    /** Marks a backup export/import as running (#339): the flag shares the
+     * work's lifetime (both live in this ViewModel), so a rotation cannot
+     * let a second export start next to the first. */
+    fun setBackupBusy(busy: Boolean) {
+        _state.value = _state.value.copy(backupBusy = busy)
+    }
+
     /** Reloads prefs plus Health Connect availability; permission check runs async. */
-    fun refresh() {
-        val prefs = getApplication<Application>().getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+    fun refresh() {        val prefs = getApplication<Application>().getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         // Unified server URL first; legacy per-feature keys as fallback so
         // pre-unification configs and backups migrate silently on next save.
         fun url(key: String): String =

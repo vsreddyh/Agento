@@ -198,6 +198,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (thumbCacheDelegate.isInitialized()) thumbCache.evictAll()
     }
 
+    /** The same guard for the per-key evictions (#339): constructing the
+     * cache touches android.util.LruCache, whose android.jar stub throws
+     * — a plain-JUnit ViewModel test must never build it. */
+    private fun removeThumbKey(key: ThumbKey) {
+        if (thumbCacheDelegate.isInitialized()) thumbCache.remove(key)
+    }
+
+    /** The same guard for a whole thread's thumbs (#339). */
+    private fun removeThreadThumbs(threadKey: String) {
+        if (thumbCacheDelegate.isInitialized()) thumbCache.removeThread(threadKey)
+    }
+
     /** Memory-trim hook (#339): the cache is byte-bounded (~8 MB) but that
      * is still a lot to hold while the app sits in the background on a
      * 1 GB device. The UI-hidden trim is the signal that the process may
@@ -608,7 +620,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * them there until pressure, a trim, or the thread's deletion. */
     private fun evictStagedThumbs(staged: List<ChatAttachment>, thread: String) {
         staged.forEachIndexed { i, a ->
-            thumbCache.remove(thumbCacheKey(a.id, i, a.base64, thread))
+            removeThumbKey(thumbCacheKey(a.id, i, a.base64, thread))
         }
     }
 
@@ -937,7 +949,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         threads = threads.filterNot { it.id == id }
         // The deleted thread's thumbs die with it (#339): every key carries
         // its thread, so this frees them now instead of at LRU pressure.
-        thumbCache.removeThread(id)
+        removeThreadThumbs(id)
         if (threadId == id) {
             // `id` is already filtered out above: the fallback is the newest remaining thread.
             val next = threads.firstOrNull { it.messages.isNotEmpty() }
@@ -1225,6 +1237,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             .filter { messageHasContent(it) }
         if (history.none { it.role == "user" }) return
         noteParkedPhotos("Retried")
+        // The queue parks back into the composer (#339), like every other
+        // resend (regenerate/continue/replace/fork): a retry that cleared
+        // it would strand the queued text (or fire it twice in the narrow
+        // window where the queue is non-empty and nothing is streaming).
+        val retryDraft = withParkedQueue(_state.value.pending)
+        _state.value = _state.value.copy(pending = retryDraft, queued = "")
         doSend(history)
     }
 

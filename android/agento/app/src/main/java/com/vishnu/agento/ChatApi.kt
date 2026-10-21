@@ -582,6 +582,15 @@ class ChatApi(context: Context) {
             close()
             return@callbackFlow
         }
+        // Empty history refuses here, not at the server (#339): wiring
+        // "messages":[] would depend on a remote 400 for something the
+        // client can see, and the fail-closed contract says the client
+        // refuses.
+        if (messages.none { messageHasContent(it) }) {
+            trySend(ChatEvent.Error("Nothing to send."))
+            close()
+            return@callbackFlow
+        }
         // Built off-main: the JSON build over ~3.5 MB would otherwise run on
         // the frame thread (the ViewModel collects on Main). Returns body +
         // measured bytes; preflight and the request stay in producer context.
