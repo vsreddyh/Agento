@@ -53,7 +53,10 @@ type Mutation struct {
 type MutationFilter struct {
 	// TaskID restricts to one task. Empty means every task.
 	TaskID string
-	// Ops restricts to a set of operations. Empty means every op.
+	// Ops restricts to a set of operations. Empty means every op. A
+	// non-empty list that normalizes to nothing ([""]) is REJECTED, like
+	// a filter of nothing is by ParseOps — a filter that was sent and
+	// names no op is a mistake, not a request for the whole log.
 	Ops []string
 	// Since is an INCLUSIVE lower bound on `at`. The zero time means no
 	// bound. Inclusive because a caller that has seen an entry at time T and
@@ -226,6 +229,11 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	if err := ValidateOps(f.Ops); err != nil {
 		return nil, false, err
 	}
+	// Normalized a second time here, on purpose: ValidateOps normalizes
+	// internally, and folding the two passes into one would lose the
+	// distinction it makes — "no filter" (an empty list) from "a filter
+	// that names nothing" (a list of blanks). Two passes over a list of
+	// at most seven ops is not a cost worth that.
 	ops := normalizeOps(f.Ops)
 	// The id is normalized here too, not only in the transports: the store
 	// is the seam, and a caller that reached it directly must not be able to

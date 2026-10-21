@@ -262,6 +262,12 @@ The two envelopes differ, on purpose:
 | HTTP | `{"mutations": [...], "truncated": bool}` — the same shape as the task list |
 | MCP | `{"ok": true, "count": n, "truncated": bool, "mutations": [...]}` — the same shape as every other tool |
 
+`count` is the number of rows in THIS PAGE, not a total: there is no total
+anywhere, and `truncated` is the only signal that more exist. A repeated
+filter parameter reads its FIRST value only (`?op=create&op=delete` filters
+by `create`), which is Go's standard query handling — the same the task list
+already has.
+
 `since` is **inclusive** and must be RFC3339 (fractional seconds accepted —
 the `at` this filter is fed back from carries milliseconds). A malformed
 `since`, `op` or `task_id` is a 422, not a silently widened answer: "the
