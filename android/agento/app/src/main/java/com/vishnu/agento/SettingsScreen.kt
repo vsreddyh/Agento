@@ -830,12 +830,16 @@ internal fun SettingsBackupSection(scope: CoroutineScope, onImported: () -> Unit
                     // DISK BYTES: `upfront` is File.length() of the thread
                     // files. The cap is a HEAP peak, so the meter doubles it
                     // (the export string runs ~2x as UTF-16) plus the floor
-                    // slack. This pre-meter is a FLOOR, not the wall: the
-                    // authoritative meter is inside SettingsBackup.export,
-                    // and it measures the same content as UTF-16 code units
-                    // — the two can disagree (CJK-heavy history is ~2x
-                    // larger in UTF-16), so the export's refusal is what
-                    // actually binds. Do not "unify" them into one meter.
+                    // slack. disk x2 is an UPPER BOUND on the string's UTF-16
+                    // size for every encoding (1 UTF-8 byte is at most 2
+                    // UTF-16 bytes; 3-byte CJK is 2; a 4-byte emoji is a
+                    // 2-char surrogate pair = 4), so this pre-meter can
+                    // refuse early but never lets an over-cap export
+                    // through. The AUTHORITATIVE meter is inside
+                    // SettingsBackup.export, and it measures the built
+                    // string — the two can disagree (JSON escaping), so
+                    // its refusal is what binds. Do not "unify" them into
+                    // one meter.
                     if (upfront * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(SettingsBackup.backupTooLargeMessage(upfront))
                     }

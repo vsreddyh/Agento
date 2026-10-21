@@ -188,8 +188,24 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Decoded-thumbnail memory, VM-held so it survives rotation; evicted on clear. */
     internal val thumbCache = ThumbCache()
 
+    /** Memory-trim hook (#339): the cache is byte-bounded (~8 MB) but that
+     * is still a lot to hold while the app sits in the background on a
+     * 1 GB device. The UI-hidden trim is the signal that the process may
+     * be killed; the bitmaps re-decode on the way back, so dropping them
+     * costs time, not data. */
+    private val trimCallback = android.content.ComponentCallbacks2 { level ->
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            thumbCache.evictAll()
+        }
+    }
+
+    init {
+        appCtx.registerComponentCallbacks(trimCallback)
+    }
+
     override fun onCleared() {
         super.onCleared()
+        appCtx.unregisterComponentCallbacks(trimCallback)
         thumbCache.evictAll()
     }
 
@@ -241,8 +257,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private var threadId: String = ""
     private var threads: List<ChatThread> = emptyList()
     /** Bumped by threads-mutating user ops so init's async publish can tell a
-     * stale load from the live list. Bumped after every no-op return only. */
+     * stale load from the live list. Bumped on the SUCCESS path of such an op
+     * only — an op that returns early (not ready, wrong thread, blocked by a
+     * live turn) changes nothing, so the in-flight load may still publish. */
     private val initGen = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** Marks "the live list is newer than any in-flight load" (#339): every
+     * threads-mutating op calls this on its success path, so a new op cannot
+     * forget the bump. One helper, one place to look. */
+    private fun touchThreads() {
+        initGen.incrementAndGet()
+    }
 
     init {
         // Load on IO, publish on Main; publish applies fully only when nothing outranked it.
@@ -466,7 +491,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Merges a pending rewrite into the in-memory list (#339): the
      * restored file wins for every thread but the live one, whose
-     * just-produced messages would otherwise be lost. */
+     * just-produced messages would otherwise be lost.
+     *
+     * LIVE WINS, ON PURPOSE: the merge only runs when a turn is in flight
+     * (the file predates that turn), so the live thread's messages are the
+     * newest thing the user has. A restored file that no longer holds it
+     * does not delete it — the turn finishes, and the merge keeps it. */
     private fun consumePendingRewrite(): List<ChatThread>? {
         val restored = pendingRestored ?: return null
         pendingRestored = null
@@ -504,12 +534,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * authoritative, and a conversation it no longer holds must not stay
      * on screen (its next persist would put it back). */
     private fun applyRewrite(restored: List<ChatThread>) {
+        // The composer clears like every other thread change (#339): staged
+        // photos belong to the conversation the restore just replaced, and
+        // sending them into the restored one is the mis-send class the
+        // switch/new/delete sites already close.
+        val hadStaged = _state.value.pendingAttachments.wiredPhotoCount() > 0
         val active = restored.firstOrNull { it.id == threadId }
         if (active != null) {
             threads = restored
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(active.messages),
                 threads = summaries(),
+                pendingAttachments = emptyList(),
+                notices = retainedNotices(),
             )
         } else {
             val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
@@ -519,7 +556,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 messages = emptyList(),
                 threads = summaries(),
                 threadId = threadId,
+                pendingAttachments = emptyList(),
+                notices = retainedNotices(),
             )
+        }
+        if (hadStaged) {
+            stagedDiscardedNotice()
         }
     }
 
@@ -553,7 +595,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (id == threadId || _state.value.streaming) return
         val target = threads.firstOrNull { it.id == id } ?: return
         // Past every no-op return: this tap republishes thread state, so it outranks init's load.
-        initGen.incrementAndGet()
+        touchThreads()
         threadId = id
         cancelRecovery()
         runsJob?.cancel()
@@ -650,7 +692,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // retries on the next tap.
             if (_state.value.streaming) return false
             // Real publish past every no-op return, same rule as switchThread.
-            initGen.incrementAndGet()
+            touchThreads()
             threadId = id
             cancelRecovery()
             runsJob?.cancel()
@@ -722,7 +764,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             return
         }
         // Real publish past the not-ready return: only from here may this op outrank init's load.
-        initGen.incrementAndGet()
+        touchThreads()
         // Bump the generation like stop(): a Done/Error already buffered in
         // the callbackFlow channel must go stale, or it lands on the fresh
         // thread and persists the old turn's assistant message there.
@@ -800,7 +842,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             return
         }
         // Real publish past the not-ready return, same rule as newConversation.
-        initGen.incrementAndGet()
+        touchThreads()
         // Bump the generation like stop(): a buffered Done/Error must go
         // stale, or it lands on the fallback thread and persists there.
         sendGen++
@@ -2046,7 +2088,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             messages = ChatThreads.toStored(forked),
         )
         // Real publish past every no-op return above: the fork outranks init's load.
-        initGen.incrementAndGet()
+        touchThreads()
         threads = listOf(fresh) + threads
         threadId = fresh.id
         cancelRecovery()
