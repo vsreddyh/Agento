@@ -78,10 +78,6 @@ func (w *Worker) Tick(ctx context.Context, now time.Time) {
 		w.logf("cron: no fire function configured; skipping tick")
 		return
 	}
-	// History writes ride their own detached context (see recordCtx):
-	// shutdown mid-tick must not orphan the rows.
-	rctx, rcancel := recordCtx()
-	defer rcancel()
 	jobs, err := w.Store.List(ctx)
 	if err != nil {
 		w.logf("cron: list failed: %v", err)
@@ -103,10 +99,15 @@ func (w *Worker) Tick(ctx context.Context, now time.Time) {
 		if now.Sub(fireAt) > catchupWindow {
 			note := fmt.Sprintf("missed fire at %s (gateway down)",
 				fireAt.In(IST).Format("2006-01-02 15:04"))
-			if err := w.Store.RecordRun(rctx, job.ID,
+			// One detached context per write (not one per tick): N jobs
+			// missing the same tick must not share a single 10s budget.
+			rctx, rcancel := recordCtx()
+			err := w.Store.RecordRun(rctx, job.ID,
 				Run{At: now.UnixMilli(), Text: note, Missed: true,
 					Source: RunSourceScheduler, JobName: job.Name},
-				fireAt.UnixMilli()); err != nil {
+				fireAt.UnixMilli())
+			rcancel()
+			if err != nil {
 				w.logf("cron: miss record failed for %s: %v", job.ID, err)
 			} else {
 				w.logf("cron: job %s missed fire at %s", job.ID, note)

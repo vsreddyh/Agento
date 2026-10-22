@@ -156,6 +156,11 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, rest string)
 			// failure is upstream (502), like every other model call.
 			// A failed tap still created a Runs entry, so the 502
 			// names it alongside the error for the same deep-link.
+			//
+			// The 404 branch carries no run_id by invariant, not by
+			// omission: a Get failure never began a turn, so FireNow
+			// returns "" there. If a future Fire ever returns a
+			// StoreError WITH a run id, this branch must name it too.
 			if _, ok := err.(*cronjobs.StoreError); ok {
 				jobsError(w, err)
 			} else if runID != "" {

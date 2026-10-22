@@ -103,6 +103,12 @@ type FireResult struct {
 // (FireForTest) or inline stubs. A busy agent reports ErrBusy, which the
 // worker treats as a skip (no record, no LastFire advance) rather than a
 // failure.
+//
+// Detach contract: implementations must bound the turn themselves and must
+// NOT tie its lifetime to ctx — the worker passes the tick / request
+// context, which can die (shutdown, client disconnect) while the turn
+// legitimately runs on. Callers likewise must not assume cancellation
+// propagates through Fire.
 type FireFunc func(ctx context.Context, job Job) (FireResult, error)
 
 // FireForTest runs one job through the bare model client: one prompt in,

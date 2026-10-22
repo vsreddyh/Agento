@@ -102,8 +102,10 @@ func toDoc(j Job) bson.M {
 	runs := make([]bson.M, 0, len(j.Runs))
 	for _, r := range j.Runs {
 		m := bson.M{"at": r.At, "text": r.Text, "missed": r.Missed}
-		// Provenance keys are omitted when empty, matching the omitempty
-		// tags: legacy rows and miss rows (no run began) carry none.
+		// The provenance keys below are omitted when empty, matching
+		// their omitempty tags. (at/text/missed are always written —
+		// pre-existing behavior kept for legacy compat — so the
+		// parity claim covers the provenance keys only.)
 		if r.Source != "" {
 			m["source"] = r.Source
 		}
