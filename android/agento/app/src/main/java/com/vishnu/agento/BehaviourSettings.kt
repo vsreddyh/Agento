@@ -324,8 +324,12 @@ object BehaviourSettings {
 
     fun hubStatus(ctx: Context): String = hubStatus(customCount(ctx))
 
-    fun hubStatus(custom: Int): String =
-        if (custom == 0) "Defaults" else "$custom custom"
+    fun hubStatus(custom: Int): String {
+        // Total: the counter can never go negative, but the overload is
+        // public alongside the coerced helpers.
+        val n = maxOf(0, custom)
+        return if (n == 0) "Defaults" else "$n custom"
+    }
 
     /**
      * Coerces one imported numeric value to its sane range: the single

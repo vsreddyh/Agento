@@ -338,7 +338,13 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         if (ttsVoice.isNotEmpty() && !listingVoices &&
             (voices.isEmpty() || voices.none { it.first == ttsVoice })
         ) {
-            HintLine("Kept from an import: this engine no longer offers that voice, but the pick is kept.")
+            HintLine(
+                if (voices.isEmpty()) {
+                    "The speech engine isn't answering — the pick is kept, and Reload voices retries it."
+                } else {
+                    "Kept from an import: this engine no longer offers that voice, but the pick is kept."
+                },
+            )
         }
         TextButton(
             onClick = {

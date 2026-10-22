@@ -97,6 +97,12 @@ internal fun reminderPoints(
     nowMillis: Long,
     leadMinutes: Long = TaskReminders.BEFORE_START_MINUTES,
 ): Map<ReminderKind, Long> {
+    // Total like every pure helper here: a negative lead would arm the
+    // "warning" after the start, which then collapses against Start in
+    // ways the zero-lead path never exercises.
+    val lead = BehaviourSettings.coerceImport(
+        BehaviourSettings.KEY_REMINDER_LEAD_MINUTES, leadMinutes,
+    )
     val due = dueMillisOrNull(dueDate, dueTime) ?: return emptyMap()
     val out = LinkedHashMap<ReminderKind, Long>()
     if (due <= nowMillis) {
@@ -117,7 +123,7 @@ internal fun reminderPoints(
         addIfFuture(
             out,
             ReminderKind.BeforeStart,
-            start - leadMinutes * 60_000L,
+            start - lead * 60_000L,
             nowMillis,
         )
         addIfFuture(out, ReminderKind.Start, start, nowMillis)

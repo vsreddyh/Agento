@@ -44,6 +44,14 @@ class BehaviourSettingsTest {
     }
 
     @Test
+    fun `negative lead coerces to zero`() {
+        val now = at(today, 6)
+        val zero = reminderPoints(today.toString(), "09:00", 60, now, leadMinutes = 0L)
+        val neg = reminderPoints(today.toString(), "09:00", 60, now, leadMinutes = -5L)
+        assertEquals(zero, neg)
+    }
+
+    @Test
     fun `default lead is the old constant`() {
         val now = at(today, 6)
         val a = reminderPoints(today.toString(), "09:00", 60, now)
@@ -198,6 +206,8 @@ class BehaviourSettingsTest {
         assertEquals("45 minutes", BehaviourSettings.minutesChoiceLabel(45L))
         assertEquals("15 minutes", BehaviourSettings.minutesChoiceLabel(0L))
         assertEquals("1 hour 30 minutes", BehaviourSettings.minutesChoiceLabel(90L))
+        // The singular branch both phrasings share.
+        assertEquals("1 hour 1 minute", BehaviourSettings.minutesChoiceLabel(61L))
     }
 
     @Test
