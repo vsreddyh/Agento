@@ -282,9 +282,12 @@ func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (
 	// way, so a hung Mongo answers with an error instead of hanging the
 	// tool. The caller's context still wins — a cancelled session ends the
 	// call whatever the timeout says.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	//
+	// Named apart from ctx on purpose: two deadlines in one function, and
+	// a reader has to be able to tell which one a line holds.
+	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	rows, truncated, err := store.ListMutations(ctx, tasks.MutationFilter{
+	rows, truncated, err := store.ListMutations(readCtx, tasks.MutationFilter{
 		TaskID: taskID,
 		Ops:    ops,
 		Since:  since,

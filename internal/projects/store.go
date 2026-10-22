@@ -152,7 +152,7 @@ func (s *Store) List(ctx context.Context, status, search string, limit int) ([]m
 		filt["$or"] = []bson.M{{"name": rx}, {"note": rx}}
 	}
 	cur, err := s.projects.Find(ctx, filt,
-		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}).SetLimit(mongostore.ClampLimit(limit, DefaultLimit, MaxLimit)))
+		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}).SetLimit(int64(mongostore.ClampLimit(limit, DefaultLimit, MaxLimit))))
 	if err != nil {
 		return nil, err
 	}

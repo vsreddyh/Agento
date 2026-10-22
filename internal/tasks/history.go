@@ -210,7 +210,7 @@ func ValidateOps(ops []string) error {
 			// across the filters). Bounded, because a 10KB query parameter
 			// answered with itself is a log line nobody wants.
 			return fail("unknown op %q; known ops are %s",
-				TruncateBytes(strings.TrimSpace(op), 40), strings.Join(KnownOps(), ", "))
+				TruncateBytes(strings.TrimSpace(op), 40), strings.Join(known, ", "))
 		}
 	}
 	return nil
@@ -323,10 +323,9 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	if !f.Since.IsZero() {
 		filt["at"] = bson.M{"$gte": f.Since}
 	}
-	// The limit is an int from here on: ClampLimit answers an int64, and
-	// the one cast that turns it into an int sits here, next to the
-	// constant that bounds it (200–500), rather than at the slice.
-	lim := int(mongostore.ClampLimit(f.Limit, DefaultLimit, MaxLimit))
+	// The limit is an int: ClampLimit answers one, and the one cast that
+	// the driver's int64 limit needs sits at that call.
+	lim := mongostore.ClampLimit(f.Limit, DefaultLimit, MaxLimit)
 	// Newest first, with `_id` as the tiebreak: two mutations in the same
 	// millisecond would otherwise come back in an order the database
 	// chose, and a history that reshuffles itself between two reads of

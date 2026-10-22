@@ -686,7 +686,7 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 		}
 	}
 	lim := mongostore.ClampLimit(limit, DefaultLimit, MaxLimit)
-	cur, err := s.tasks.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "due_date", Value: 1}, {Key: "createdAt", Value: 1}}).SetLimit(lim+1))
+	cur, err := s.tasks.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "due_date", Value: 1}, {Key: "createdAt", Value: 1}}).SetLimit(int64(lim)+1))
 	if err != nil {
 		return nil, false, err
 	}
@@ -702,8 +702,8 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 	if err := cur.Err(); err != nil {
 		return nil, false, err
 	}
-	if int64(len(out)) > lim {
-		return out[:int(lim)], true, nil
+	if len(out) > lim {
+		return out[:lim], true, nil
 	}
 	return out, false, nil
 }
