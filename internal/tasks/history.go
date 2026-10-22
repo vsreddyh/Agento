@@ -154,6 +154,11 @@ func ParseOps(s string) ([]string, error) {
 // normalizes to nothing is refused. A direct caller that splits a blank
 // string into a one-element list therefore gets a 422 where the transport
 // gets a 200 — the list says "here is a filter", and the filter is empty.
+//
+// A list element is ONE op, never a comma-separated group: ParseOps is
+// where a string is split, and a slice that arrives here has already been
+// split. So a slice element that still contains a comma is simply an op
+// the log does not hold.
 func ValidateOps(ops []string) error {
 	if len(normalizeOps(ops)) == 0 && len(ops) > 0 {
 		// The FIRST element, bounded: the list named nothing, so every

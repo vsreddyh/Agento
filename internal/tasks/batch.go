@@ -330,6 +330,15 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 						res.Detail = strings.ToLower(strings.TrimSpace(op.ID))
 					}
 				}
+			default:
+				// Unreachable today: the validation loop above accepts
+				// exactly the ops this switch names. It is here because
+				// the alternative is worse — an op that passes validation
+				// but matches no case would fall through with no error,
+				// mark the batch as written, and report success for a
+				// verb that ran nothing.
+				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
+					Err: fail("batch op %d (%s) is not implemented", i, op.Op)}
 			}
 			if err != nil {
 				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID, Err: err}

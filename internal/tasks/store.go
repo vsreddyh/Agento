@@ -1131,12 +1131,16 @@ func (s *Store) stateOnMiss(ctx context.Context, oid primitive.ObjectID, id stri
 // finds it already resolved. Legacy skipped rows keep their marker, so the
 // skipped branch stays: completing one must still say "already skipped", not
 // report work that never happened as done.
+//
+// The id is trimmed and bounded, like every other echo here: the state
+// error and the lookup error then read alike for the same id.
 func resolvedStateErr(doc bson.M, id string) *StoreError {
+	shown := TruncateBytes(strings.TrimSpace(id), 40)
 	if isSkipped(doc) {
 		return fail("task '%s' is already skipped, not done — reopen_task returns it to "+
-			"the open list if you now mean to do it", id)
+			"the open list if you now mean to do it", shown)
 	}
-	return fail("task '%s' is already completed", id)
+	return fail("task '%s' is already completed", shown)
 }
 
 // TruncateBytes caps a string at max BYTES without splitting a UTF-8 rune, so a
@@ -1192,7 +1196,7 @@ func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); ferr != nil {
 			return nil, unknownTask(id)
 		}
-		return nil, fail("task '%s' is already open", id)
+		return nil, fail("task '%s' is already open", TruncateBytes(strings.TrimSpace(id), 40))
 	}
 	s.bumpChanges(ctx)
 	return s.Get(ctx, id)
