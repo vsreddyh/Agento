@@ -101,7 +101,12 @@ func normalizeOps(ops []string) []string {
 // rather than echoing empty quotes, which would read like a formatting
 // bug rather than a filter with nothing in it.
 func namesNoOperation(shown string) *StoreError {
-	if strings.TrimSpace(shown) == "" {
+	// Trimmed ONCE, here, so the branch cannot depend on who trimmed:
+	// the parser passes an already-trimmed value and the validator passes
+	// a raw element, and the same logical filter must get the same answer
+	// through either door.
+	shown = strings.TrimSpace(shown)
+	if shown == "" {
 		return fail("op filter is blank — it names no operation; known ops are %s",
 			strings.Join(KnownOps(), ", "))
 	}

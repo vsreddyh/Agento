@@ -161,8 +161,11 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 			// A back-link that joins nothing: the detail is not an id, so
 			// it cannot be matched against a task_id lookup — the one
 			// thing it is for. Kept and logged, for the same reason.
+			// Lowercased like every other id-like field on this seam, so
+			// the stored value differs from the caller's only in case.
 			log.Printf("tasks: mutation log entry kept with an unjoinable duplicate detail (%q)",
-				TruncateBytes(strings.TrimSpace(detail), 40))
+				TruncateBytes(strings.ToLower(strings.TrimSpace(detail)), 40))
+			detail = strings.ToLower(strings.TrimSpace(detail))
 		}
 	}
 	entry := bson.M{

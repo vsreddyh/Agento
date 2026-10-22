@@ -277,7 +277,13 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			// already.
 			res := BatchItemResult{Index: i, ID: strings.ToLower(strings.TrimSpace(op.ID)), Op: strings.ToLower(strings.TrimSpace(op.Op))}
 			var err error
-			switch op.Op {
+			// The switch and the write-marker below read res.Op, the
+			// CANONICAL op name — the same value the envelope carries and
+			// the transport switches on. The invariant then lives at
+			// construction, not in the validator: an op that passes
+			// validation and misses a case falls into the default below
+			// rather than quietly doing nothing.
+			switch res.Op {
 			case "complete":
 				var next map[string]any
 				var reason Rollover
@@ -353,7 +359,9 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			}
 			// Complete/skip/duplicate always write; an update whose detail
 			// is "no fields" took the store's no-op path and wrote nothing.
-			if op.Op != "update" || res.Detail != "no fields" {
+			// res.Op, the canonical name — the same value the switch
+			// above matched on.
+			if res.Op != "update" || res.Detail != "no fields" {
 				wrote = true
 			}
 			attempt = append(attempt, res)
