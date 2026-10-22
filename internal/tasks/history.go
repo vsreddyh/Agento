@@ -170,9 +170,13 @@ func ParseOps(s string) ([]string, error) {
 	// caller-controlled text, and `?op=` with a megabyte of commas would
 	// build a megabyte of tokens before anything could refuse it. The
 	// split happens only on a string small enough to split.
-	if len(raw) > maxOpsFilterBytes {
+	//
+	// The bound is on the string that is SPLIT — the one as sent, not
+	// the trimmed copy. The split runs on what was sent, so that is what
+	// has to fit: padding is part of the string the split will walk.
+	if len(s) > maxOpsFilterBytes {
 		return nil, fail("op filter is too long (%d bytes; at most %d)",
-			len(raw), maxOpsFilterBytes)
+			len(s), maxOpsFilterBytes)
 	}
 	// Split the SENT string, padding and all: the validator must echo
 	// the token the caller typed, exactly as it does when it is called
@@ -307,6 +311,11 @@ func ParseSince(s string) (time.Time, error) {
 // an empty history reads like "this task was never touched" — the wrong
 // answer to a typo. Both transports validate through here, so the agent and
 // the app are told the same thing.
+//
+// A BLANK id is no filter at all, at any length: it means the whole log, so
+// there is nothing to echo and nothing to bound — a query string of spaces
+// is one trim, not a fan-out. (The op filter is the one that is SPLIT, and
+// it is the one that bounds its input; see ParseOps.)
 func NormalizeTaskID(id string) (string, error) {
 	trimmed := strings.TrimSpace(id)
 	if trimmed == "" {

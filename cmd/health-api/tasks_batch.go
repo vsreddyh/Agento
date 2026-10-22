@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -174,7 +175,18 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 	// that is not idempotent, so a retry copies the task a second time.
 	// Read the change log (or the changes marker) first and resend only
 	// what did not land.
+	//
+	// The loop is timed, and it says so when it OUTLIVES the request: a
+	// timeout-vs-commit investigation starts at the client's retry, and
+	// this is the server-side anchor for what the server was doing all
+	// that time. A loop that finished inside the request says nothing —
+	// that is the ordinary case and it needs no line in the log.
+	started := time.Now()
 	recordBatchMutations(ctx, store, results, source)
+	if ctx.Err() != nil {
+		log.Printf("tasks: batch audit wrote %d row(s) %s after the request deadline (%s)",
+			len(results), time.Since(started).Round(time.Millisecond), ctx.Err())
+	}
 	out := make([]bson.M, 0, len(results))
 	for _, res := range results {
 		item := bson.M{

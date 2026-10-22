@@ -90,6 +90,12 @@ func TestParseOpsRejectsAFilterTooLongToSplit(t *testing.T) {
 	if _, err := ParseOps(huge); err == nil {
 		t.Fatal("a filter over the cap must be refused, not split")
 	}
+	// PADDING counts: the bound is on the string that is split, not on
+	// the trimmed copy, so a filter that is mostly spaces is refused too.
+	padded := strings.Repeat(" ", maxOpsFilterBytes+1) + ","
+	if _, err := ParseOps(padded); err == nil {
+		t.Fatal("a padded filter over the cap must be refused, not split")
+	}
 	// And a real filter is nowhere near the cap: the whole vocabulary,
 	// joined, still parses.
 	real := strings.Join(KnownOps(), ",")
