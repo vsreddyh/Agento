@@ -111,8 +111,9 @@ object SettingsBackup {
      * old readers ignore the extra numbers.
      *
      * Behaviour (#355) cadence/lead/TTS knobs ride the same list: they are
-     * longs for exactly this reason, and the export's non-negative clamp
-     * matches their coerceIn floors.
+     * longs for exactly this reason, and both sides coerce through
+     * [BehaviourSettings.coerceImport], so a hand-edited import can never
+     * store a value the getters silently disagree with.
      */
     val LONG_KEYS: List<String> = UsageStore.LONG_KEYS + listOf(
         BehaviourSettings.KEY_SYNC_INTERVAL_HOURS,
@@ -330,7 +331,9 @@ object SettingsBackup {
                 }
                 // Real token totals: Long/Int only, mirroring export — opt()
                 // then optLong() would coerce a fractional Double (1.9) into
-                // a wrong-but-plausible 1. Negatives (hand-edited) clamp to 0.
+                // a wrong-but-plausible 1. Negatives (hand-edited) clamp to 0,
+                // except behaviour keys, which coerce to their own floors via
+                // the inventory, so stored and shown can never disagree.
                 for (k in LONG_KEYS) {
                     val n: Long? = when (val v = values.opt(k)) {
                         is Long -> v
@@ -338,7 +341,7 @@ object SettingsBackup {
                         else -> null
                     }
                     if (n != null) {
-                        putLong(k, maxOf(0L, n))
+                        putLong(k, BehaviourSettings.coerceImport(k, n))
                         applied++
                     }
                 }

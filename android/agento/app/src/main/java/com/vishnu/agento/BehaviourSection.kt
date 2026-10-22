@@ -396,8 +396,11 @@ private suspend fun listTtsVoices(appCtx: Context): List<Pair<String, String>> =
             if (!done.compareAndSet(false, true)) return
             val out = if (status == TextToSpeech.SUCCESS) {
                 runCatching {
+                    // Stable sort key (locale tag + name), localized label:
+                    // sorting by displayName would reorder the picker on
+                    // every system-language change.
                     tts.voices.orEmpty()
-                        .sortedWith(compareBy({ it.locale?.displayName.orEmpty() }, { it.name }))
+                        .sortedWith(compareBy({ it.locale?.toString().orEmpty() }, { it.name }))
                         .map { v ->
                             val loc = v.locale?.displayName?.takeIf { it.isNotBlank() }
                             v.name to if (loc != null) "$loc — ${v.name}" else v.name

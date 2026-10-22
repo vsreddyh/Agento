@@ -84,6 +84,44 @@ class BehaviourSettingsTest {
     }
 
     @Test
+    fun `cadence lines never assert a constant`() {
+        assertEquals("Automatic sync is paused.", BehaviourSettings.syncCadenceLine(1L, false, true))
+        assertEquals("Automatic sync runs every hour.", BehaviourSettings.syncCadenceLine(1L, false, false))
+        assertEquals(
+            "Automatic sync runs every 6 hours on unmetered Wi-Fi.",
+            BehaviourSettings.syncCadenceLine(6L, true, false),
+        )
+        assertEquals(
+            "Task and widget refresh runs every hour.",
+            BehaviourSettings.taskSyncCadenceLine(60L),
+        )
+        assertEquals(
+            "Task and widget refresh runs every 2 hours.",
+            BehaviourSettings.taskSyncCadenceLine(120L),
+        )
+        assertEquals(
+            "Task and widget refresh runs every 45 minutes.",
+            BehaviourSettings.taskSyncCadenceLine(45L),
+        )
+    }
+
+    @Test
+    fun `hub status counts deviations`() {
+        assertEquals("Defaults", BehaviourSettings.hubStatus(0))
+        assertEquals("1 custom", BehaviourSettings.hubStatus(1))
+        assertEquals("3 custom", BehaviourSettings.hubStatus(3))
+    }
+
+    @Test
+    fun `import coercion matches live floors`() {
+        assertEquals(1L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_SYNC_INTERVAL_HOURS, 0L))
+        assertEquals(15L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES, 5L))
+        assertEquals(0L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_REMINDER_LEAD_MINUTES, 0L))
+        assertEquals(50L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_TTS_RATE_PCT, 0L))
+        assertEquals(0L, BehaviourSettings.coerceImport("usage_total_chat", -3L))
+    }
+
+    @Test
     fun `lead labels read naturally`() {
         assertEquals("At start time (no heads-up)", BehaviourSettings.leadLabel(0L))
         assertEquals("1 minute before start", BehaviourSettings.leadLabel(1L))

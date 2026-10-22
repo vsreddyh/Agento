@@ -395,15 +395,18 @@ object TaskReminders {
         // so "now" and the arming horizon must read the same zone.
         val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
         val horizon = LocalDate.now(IST).plusDays(HORIZON_DAYS).toString()
-        // The user's lead-time pick, read once per refresh: every task in
-        // this pass arms against the same lead.
-        val leadMinutes = BehaviourSettings.reminderLeadMinutes(appCtx)
         // One critical section from here to the final write. Everything
         // below is CPU-only plus the arm/cancel calls, and the point is
         // that an alarm firing on another thread cannot edit PREF_ARMED
         // between this read and that write. The network fetch above is
         // deliberately outside it — nothing else may be held up for it.
         synchronized(this@TaskReminders) {
+        // The lead-time pick reads INSIDE the critical section, not above
+        // it: two rapid refreshes (two picker taps) each fetch over the
+        // network, and the pass that arms last must see the newest pick —
+        // reading before the fetch lets a slow first pass overwrite a fast
+        // second one with a stale lead until the next tick.
+        val leadMinutes = BehaviourSettings.reminderLeadMinutes(appCtx)
         val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
         // Nags the receiver already owns. They are not re-armed here —
         // that would fire an extra alert on every refresh, which happens

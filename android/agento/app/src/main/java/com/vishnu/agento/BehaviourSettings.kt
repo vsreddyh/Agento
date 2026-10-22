@@ -40,8 +40,8 @@ object BehaviourSettings {
     const val KEY_SYNC_PAUSED = "sync_paused"
 
     fun syncIntervalHours(ctx: Context): Long =
-        prefs(ctx).getLong(KEY_SYNC_INTERVAL_HOURS, DEFAULT_SYNC_INTERVAL_HOURS)
-            .coerceIn(1L, 24L)
+        coerceImport(KEY_SYNC_INTERVAL_HOURS,
+            prefs(ctx).getLong(KEY_SYNC_INTERVAL_HOURS, DEFAULT_SYNC_INTERVAL_HOURS))
 
     fun syncWifiOnly(ctx: Context): Boolean =
         prefs(ctx).getBoolean(KEY_SYNC_WIFI_ONLY, false)
@@ -65,12 +65,14 @@ object BehaviourSettings {
     }
 
     /** User-facing cadence line; never asserts a constant (#355). */
-    fun syncCadenceLine(ctx: Context): String = when {
-        syncPaused(ctx) -> "Automatic sync is paused."
+    fun syncCadenceLine(ctx: Context): String =
+        syncCadenceLine(syncIntervalHours(ctx), syncWifiOnly(ctx), syncPaused(ctx))
+
+    fun syncCadenceLine(hours: Long, wifiOnly: Boolean, paused: Boolean): String = when {
+        paused -> "Automatic sync is paused."
         else -> {
-            val h = syncIntervalHours(ctx)
-            val every = if (h == 1L) "every hour" else "every $h hours"
-            val net = if (syncWifiOnly(ctx)) " on unmetered Wi-Fi" else ""
+            val every = if (hours == 1L) "every hour" else "every $hours hours"
+            val net = if (wifiOnly) " on unmetered Wi-Fi" else ""
             "Automatic sync runs $every$net."
         }
     }
@@ -81,20 +83,22 @@ object BehaviourSettings {
     val TASK_SYNC_INTERVAL_OPTIONS_MINUTES = listOf(15L, 30L, 60L, 120L)
 
     fun taskSyncIntervalMinutes(ctx: Context): Long =
-        prefs(ctx).getLong(KEY_TASK_SYNC_INTERVAL_MINUTES, DEFAULT_TASK_SYNC_INTERVAL_MINUTES)
-            .coerceIn(15L, 24L * 60L)
+        coerceImport(KEY_TASK_SYNC_INTERVAL_MINUTES,
+            prefs(ctx).getLong(KEY_TASK_SYNC_INTERVAL_MINUTES, DEFAULT_TASK_SYNC_INTERVAL_MINUTES))
 
     fun setTaskSyncIntervalMinutes(ctx: Context, minutes: Long) {
         prefs(ctx).edit { putLong(KEY_TASK_SYNC_INTERVAL_MINUTES, minutes.coerceIn(15L, 24L * 60L)) }
         AgentoApp.scheduleTaskSync(ctx)
     }
 
-    fun taskSyncCadenceLine(ctx: Context): String {
-        val m = taskSyncIntervalMinutes(ctx)
+    fun taskSyncCadenceLine(ctx: Context): String =
+        taskSyncCadenceLine(taskSyncIntervalMinutes(ctx))
+
+    fun taskSyncCadenceLine(minutes: Long): String {
         return when {
-            m == 60L -> "Task and widget refresh runs every hour."
-            m % 60L == 0L -> "Task and widget refresh runs every ${m / 60L} hours."
-            else -> "Task and widget refresh runs every $m minutes."
+            minutes == 60L -> "Task and widget refresh runs every hour."
+            minutes % 60L == 0L -> "Task and widget refresh runs every ${minutes / 60L} hours."
+            else -> "Task and widget refresh runs every $minutes minutes."
         }
     }
 
@@ -104,8 +108,8 @@ object BehaviourSettings {
 
     /** Default stays [TaskReminders.BEFORE_START_MINUTES]: one source. */
     fun reminderLeadMinutes(ctx: Context): Long =
-        prefs(ctx).getLong(KEY_REMINDER_LEAD_MINUTES, TaskReminders.BEFORE_START_MINUTES)
-            .coerceIn(0L, 24L * 60L)
+        coerceImport(KEY_REMINDER_LEAD_MINUTES,
+            prefs(ctx).getLong(KEY_REMINDER_LEAD_MINUTES, TaskReminders.BEFORE_START_MINUTES))
 
     fun setReminderLeadMinutes(ctx: Context, minutes: Long) {
         prefs(ctx).edit { putLong(KEY_REMINDER_LEAD_MINUTES, minutes.coerceIn(0L, 24L * 60L)) }
@@ -139,10 +143,10 @@ object BehaviourSettings {
         ttsPitchPct(ctx) / 100f
 
     fun ttsRatePct(ctx: Context): Long =
-        prefs(ctx).getLong(KEY_TTS_RATE_PCT, DEFAULT_TTS_PCT).coerceIn(50L, 200L)
+        coerceImport(KEY_TTS_RATE_PCT, prefs(ctx).getLong(KEY_TTS_RATE_PCT, DEFAULT_TTS_PCT))
 
     fun ttsPitchPct(ctx: Context): Long =
-        prefs(ctx).getLong(KEY_TTS_PITCH_PCT, DEFAULT_TTS_PCT).coerceIn(50L, 200L)
+        coerceImport(KEY_TTS_PITCH_PCT, prefs(ctx).getLong(KEY_TTS_PITCH_PCT, DEFAULT_TTS_PCT))
 
     fun setTtsVoice(ctx: Context, name: String) {
         prefs(ctx).edit { putString(KEY_TTS_VOICE, name.trim()) }
@@ -228,9 +232,25 @@ object BehaviourSettings {
         return n
     }
 
-    fun hubStatus(ctx: Context): String {
-        val n = customCount(ctx)
-        return if (n == 0) "Defaults" else "$n custom"
+    fun hubStatus(ctx: Context): String = hubStatus(customCount(ctx))
+
+    fun hubStatus(custom: Int): String =
+        if (custom == 0) "Defaults" else "$custom custom"
+
+    /**
+     * Coerces one imported numeric value to its sane range: the single
+     * source for floors/ceilings, shared by the live getters above and the
+     * backup import below. A hand-edited backup importing sync=0 stores a
+     * value the getter would otherwise silently disagree with (stored 0,
+     * read 1) — coercing at both ends keeps stored and shown identical.
+     * Unknown keys keep the legacy non-negative clamp.
+     */
+    fun coerceImport(key: String, value: Long): Long = when (key) {
+        KEY_SYNC_INTERVAL_HOURS -> value.coerceIn(1L, 24L)
+        KEY_TASK_SYNC_INTERVAL_MINUTES -> value.coerceIn(15L, 24L * 60L)
+        KEY_REMINDER_LEAD_MINUTES -> value.coerceIn(0L, 24L * 60L)
+        KEY_TTS_RATE_PCT, KEY_TTS_PITCH_PCT -> value.coerceIn(50L, 200L)
+        else -> maxOf(0L, value)
     }
 
     private fun prefs(ctx: Context) =

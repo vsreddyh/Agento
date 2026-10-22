@@ -85,8 +85,14 @@ internal object CronCheck {
                 p.edit { putLong(seenKey(job.id), maxAt) }
                 continue
             }
-            if (snippet.isNotEmpty() &&
-                ChatNotifications.notifyCron(appCtx, job.id, job.name, snippet, more)
+            // An empty-text run has nothing to show and would stall the
+            // cursor forever (every check retries it, hiding later runs
+            // behind it): advance past it without counting a post.
+            if (snippet.isEmpty()) {
+                p.edit { putLong(seenKey(job.id), maxAt) }
+                continue
+            }
+            if (ChatNotifications.notifyCron(appCtx, job.id, job.name, snippet, more)
             ) {
                 posted++
                 p.edit { putLong(seenKey(job.id), maxAt) }
