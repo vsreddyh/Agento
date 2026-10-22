@@ -168,6 +168,10 @@ fun friendlyError(raw: String): FriendlyError {
             "Server rejected the password",
             "Check the password in Settings → Server, save, and retry.",
         )
+        has("folder not found") -> FriendlyError(
+            "That folder no longer exists",
+            "Go Up and pick the destination again, then retry.",
+        )
         has("http 404", "not found") -> FriendlyError(
             "Server didn't recognise that request",
             "The app may be outdated — check Settings → App updates, then retry.",

@@ -97,7 +97,11 @@ func listFiles(w http.ResponseWriter, r *http.Request) {
 		// Staging files from an in-flight upload (CreateTemp ".upload-*"
 		// in this same dir, required for an atomic rename) never list: a
 		// concurrent list in the upload window would otherwise show a
-		// partial file that vanishes or renames a moment later.
+		// partial file that vanishes or renames a moment later. The
+		// filter is broader than in-flight by construction — a
+		// pre-existing .upload-* file (SSH-planted before #340 reserved
+		// the prefix) hides too — and that is accepted: the prefix is
+		// reserved, so no such file can be created anymore.
 		if strings.HasPrefix(e.Name(), uploadTempPrefix) {
 			continue
 		}
@@ -139,8 +143,31 @@ func downloadFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
 		return
 	}
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+info.Name()+"\"")
+	// Defense in depth at the sink: stored names predate cleanFileName
+	// (SSH-planted, browser evidence) and may carry quotes or controls.
+	// The header below interpolates the name, so sanitize here too rather
+	// than trusting the store.
+	name := sanitizeHeaderName(info.Name())
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
 	http.ServeFile(w, r, full)
+}
+
+// sanitizeHeaderName strips what cleanFileName rejects (quotes, ASCII
+// controls), so a pre-existing stored name cannot break or inject the
+// Content-Disposition header. A name that sanitizes to nothing falls back
+// to a fixed filename rather than an empty quoted string.
+func sanitizeHeaderName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if r == '"' || r < 0x20 || r == 0x7F {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	if b.Len() == 0 {
+		return "download"
+	}
+	return b.String()
 }
 
 // registerFiles wires this domain's routes. One function per file so main stays a

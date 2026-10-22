@@ -6,8 +6,10 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -317,5 +319,32 @@ func TestListHidesUploadStaging(t *testing.T) {
 	}
 	if !contains(w.Body.String(), "real.txt") {
 		t.Fatalf("real file missing: %s", w.Body.String())
+	}
+}
+
+func TestDownloadSanitizesStoredName(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("EXPORTS_DIR", root)
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	// Planted outside the upload path (uploads reject these now): the
+	// download must still serve a safe header.
+	evil := "evil\".txt"
+	if err := os.WriteFile(filepath.Join(root, evil), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files/download?path="+url.QueryEscape(evil), nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	downloadFile(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("download: %d %s", w.Code, w.Body.String())
+	}
+	cd := w.Header().Get("Content-Disposition")
+	if strings.Contains(cd, "\"evil\"\".txt\"") || strings.Contains(cd, "evil\".txt") {
+		t.Fatalf("header carries the quote: %q", cd)
+	}
+	if !strings.Contains(cd, "evil.txt") {
+		t.Fatalf("sanitized name missing: %q", cd)
 	}
 }

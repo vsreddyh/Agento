@@ -32,7 +32,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 /** VPS files shelf with breadcrumbs + mobile downloads + uploads (#26, #340). */
 @Composable
 internal fun StorageScreen(onMenu: () -> Unit = {}) {
@@ -74,46 +76,55 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         // navigation mid-upload must not retarget the refresh.
         val target = path
         scope.launch {
-            val result = runCatching {
-                val cr = context.contentResolver
-                var displayName = "upload"
-                var size = -1L
-                cr.query(uri, null, null, null, null)?.use { c ->
-                    val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    val si = c.getColumnIndex(OpenableColumns.SIZE)
-                    if (c.moveToFirst()) {
-                        if (ni >= 0) {
-                            c.getString(ni)?.trim()?.takeIf { it.isNotEmpty() }?.let {
-                                displayName = it
+            // Metadata reads ride IO: SAF queries can block on a slow
+            // provider, and this launcher runs on Main. The toasts and the
+            // refresh below stay on Main.
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val cr = context.contentResolver
+                    var displayName = "upload"
+                    var size = -1L
+                    cr.query(uri, null, null, null, null)?.use { c ->
+                        val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        val si = c.getColumnIndex(OpenableColumns.SIZE)
+                        if (c.moveToFirst()) {
+                            if (ni >= 0) {
+                                c.getString(ni)?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                                    displayName = it
+                                }
                             }
+                            if (si >= 0) size = c.getLong(si)
                         }
-                        if (si >= 0) size = c.getLong(si)
                     }
+                    // Separators cannot survive the server's name check; fold them
+                    // here so a trivially fixable name never fails the upload.
+                    displayName = displayName.replace('/', '_').replace('\\', '_')
+                    if (size > FILES_UPLOAD_LIMIT_BYTES) {
+                        throw IllegalStateException(
+                            "file_too_large: this file is over the 25 MiB upload limit")
+                    }
+                    val mime = cr.getType(uri) ?: "application/octet-stream"
+                    Triple(displayName, mime, size)
                 }
-                // Separators cannot survive the server's name check; fold them
-                // here so a trivially fixable name never fails the upload.
-                displayName = displayName.replace('/', '_').replace('\\', '_')
-                if (size > FILES_UPLOAD_LIMIT_BYTES) {
-                    throw IllegalStateException(
-                        "file_too_large: this file is over the 25 MiB upload limit")
-                }
-                val mime = cr.getType(uri) ?: "application/octet-stream"
-                StorageApi(context).upload(target, displayName, mime, size) {
-                    cr.openInputStream(uri)
-                }.getOrThrow()
             }
-            result.fold(
-                onSuccess = {
-                    toasts.toast("Uploaded ${it.name}", ToastKind.Success)
-                    load(target)
+            val uploaded = result.fold(
+                onSuccess = { (displayName, mime, size) ->
+                    StorageApi(context).upload(target, displayName, mime, size) {
+                        context.contentResolver.openInputStream(uri)
+                    }.getOrNull()
                 },
-                onFailure = { e ->
-                    toasts.toast(
-                        friendlyError(e.message ?: "").title,
-                        ToastKind.Error,
-                    )
-                },
+                onFailure = { null },
             )
+            if (uploaded != null) {
+                toasts.toast("Uploaded ${uploaded.name}", ToastKind.Success)
+                load(target)
+            } else {
+                // Refusals are the expected path here, not an edge case:
+                // the toast carries the guidance (rename? shrink?), not
+                // just the headline.
+                val fe = friendlyError(result.exceptionOrNull()?.message ?: "")
+                toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+            }
             uploading = false
         }
     }

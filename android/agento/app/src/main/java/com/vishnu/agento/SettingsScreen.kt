@@ -41,7 +41,7 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
@@ -679,7 +679,7 @@ internal fun SettingSection.hubIcon() = when (this) {
     SettingSection.Appearance -> Icons.Filled.DarkMode
     SettingSection.Widget -> Icons.Filled.Dashboard
     SettingSection.Notifications -> Icons.Filled.Notifications
-    SettingSection.Storage -> Icons.Filled.Folder
+    SettingSection.Storage -> Icons.Filled.Backup
     SettingSection.Usage -> Icons.Filled.DataUsage
     SettingSection.About -> Icons.Filled.Info
 }
