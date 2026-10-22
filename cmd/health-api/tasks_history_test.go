@@ -68,6 +68,9 @@ func TestTaskMutationsRejectsBadFilters(t *testing.T) {
 		// comes from the ENCODING, not from the timestamp grammar — the
 		// fix is %2B, which is what the README says.
 		{"/api/tasks/mutations?since=2026-10-21T00:00:00+02:00", "since"},
+		// A filter long enough to be a mistake is refused before it is
+		// split: the query string is caller-controlled text.
+		{"/api/tasks/mutations?op=" + strings.Repeat(",", 300), "op"},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodGet, tc.target, nil)

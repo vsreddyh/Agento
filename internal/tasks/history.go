@@ -37,10 +37,16 @@ import (
 // — and a domain with two spellings of one budget is a domain whose
 // budgets drift.
 //
-// The MCP tools take it for the CHANGE LOG, the read the HTTP route
-// bounds the same way; the MCP write tools keep the caller's context,
-// because a write cut short mid-flight is a different failure from a
-// read that hangs.
+// The MCP change-log tool takes it for the CHANGE LOG, the read the
+// HTTP route bounds the same way; the MCP write tools keep the
+// caller's context, because a write cut short mid-flight is a
+// different failure from a read that hangs.
+//
+// It bounds the QUERY, not the whole handler: releasing the cursor
+// afterwards has its own budget (closeCursor, 5s), so a handler whose
+// read timed out can still take that long to let go of the cursor. The
+// extra wait delays only a response the client has already given up
+// on.
 const RequestBudget = 30 * time.Second
 
 // Mutation is one row of the change log.
@@ -159,6 +165,15 @@ func ParseOps(s string) ([]string, error) {
 		// blank is a filter that names nothing, which is a 422.
 		return nil, nil
 	}
+	// The INPUT is bounded before it is split. Every echo in this file is
+	// bounded, but the echo is the small end of it: a filter is
+	// caller-controlled text, and `?op=` with a megabyte of commas would
+	// build a megabyte of tokens before anything could refuse it. The
+	// split happens only on a string small enough to split.
+	if len(raw) > maxOpsFilterBytes {
+		return nil, fail("op filter is too long (%d bytes; at most %d)",
+			len(raw), maxOpsFilterBytes)
+	}
 	// Split the SENT string, padding and all: the validator must echo
 	// the token the caller typed, exactly as it does when it is called
 	// directly. The trimmed copy is only used to decide whether there is
@@ -179,6 +194,15 @@ func ParseOps(s string) ([]string, error) {
 	}
 	return ops, nil
 }
+
+// maxOpsFilterBytes bounds the op filter BEFORE it is split.
+//
+// The filter names a set drawn from seven known ops, so a real one is
+// well under a hundred bytes and no legitimate filter meets this cap.
+// It exists because the input is caller-controlled text: a query string
+// of a million commas must not become a million tokens before the
+// filter can be refused.
+const maxOpsFilterBytes = 256
 
 // ValidateOps checks op names against the ones the log can hold.
 //

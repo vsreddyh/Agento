@@ -365,11 +365,18 @@ that is worth knowing before diffing two rows:
 | op | `detail` |
 |---|---|
 | `create` | the door that created it (`http POST /api/tasks`, `mcp create_task`) |
-| `update` | the changed field names, sorted (`name,due_date`) |
+| `update` | the changed field names, sorted (`name,due_date`) — and an update that changed nothing earns NO row, so `no fields` never appears in the log |
 | `complete`, `skip` | the rollover outcome (`created`, `none`, `custom`, …) |
 | `reopen` | empty over HTTP, `mcp reopen_task` over MCP |
 | `delete` | the door that deleted it (`http DELETE`, `mcp delete_task`) |
-| `duplicate` | the id of the task this was duplicated from, when the writer passed a hex id (the batch path always does) — the row itself is about the COPY, whose id it carries |
+| `duplicate` | the id of the task this was duplicated from, when the writer passed a hex id (the batch path always does) — the row itself is about the COPY, whose id it carries. An EMPTY detail on a `duplicate` row means the writer passed no back-link: the row is kept (the copy happened) and the server log says so, so an empty detail on this op means "no source", never "no change" |
+
+Two of those rows are about a MISSING value rather than a stored one, so
+they are worth spelling out: an empty `detail` is the honest answer for a
+`reopen` over HTTP and for a `duplicate` with no back-link, while a
+`create`/`delete` names its door and an `update` names its fields. A row
+with an empty detail is never a claim that nothing happened — it is a
+claim that this op had nothing extra to say.
 
 The copy→source direction is the joinable one: the row carries the copy's
 `task_id` and the source in its `detail`. The other direction — "what did

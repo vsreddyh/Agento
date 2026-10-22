@@ -82,6 +82,22 @@ func TestParseOpsRejectsAFilterThatNamesNoOp(t *testing.T) {
 	}
 }
 
+// The filter is bounded BEFORE it is split: a caller-controlled string
+// must not become a list of a million tokens before anything can
+// refuse it.
+func TestParseOpsRejectsAFilterTooLongToSplit(t *testing.T) {
+	huge := strings.Repeat(",", maxOpsFilterBytes+1)
+	if _, err := ParseOps(huge); err == nil {
+		t.Fatal("a filter over the cap must be refused, not split")
+	}
+	// And a real filter is nowhere near the cap: the whole vocabulary,
+	// joined, still parses.
+	real := strings.Join(KnownOps(), ",")
+	if _, err := ParseOps(real); err != nil {
+		t.Fatalf("the whole vocabulary must parse: %v", err)
+	}
+}
+
 // The op set is the validation rule, so a caller must not be able to edit it
 // for everyone else by accident.
 func TestKnownOpsHandsOutACopy(t *testing.T) {
