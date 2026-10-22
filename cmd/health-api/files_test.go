@@ -197,6 +197,11 @@ func TestUploadRejectsEscapes(t *testing.T) {
 		"/api/files/upload?path=&name=../evil.txt",
 		"/api/files/upload?path=&name=a/b.txt",
 		"/api/files/upload?path=&name=",
+		// Header injection through the download's Content-Disposition:
+		// quotes and controls never become stored names.
+		"/api/files/upload?path=&name=evil%22.txt",
+		"/api/files/upload?path=&name=evil%0D%0A.txt",
+		"/api/files/upload?path=&name=evil%7F.txt",
 	} {
 		req := uploadRequest(t, url, "file", "evil.txt", []byte("x"))
 		w := httptest.NewRecorder()
@@ -247,5 +252,67 @@ func TestUploadAuthAndMethod(t *testing.T) {
 	uploadFile(w, req)
 	if w.Code != http.StatusBadRequest || !contains(w.Body.String(), "file_missing") {
 		t.Fatalf("no part: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUploadBodyCapRefusesNamed(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("EXPORTS_DIR", root)
+	t.Setenv("PASSWORD", "test-secret-12345678")
+
+	// A small file buried behind megabytes of padding: the whole-request
+	// cap fires during multipart parsing, before the file bytes are ever
+	// staged — answered 413, not 400, with the named detail.
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("pad", string(bytes.Repeat([]byte("p"), maxUploadBytes+(1<<20)))); err != nil {
+		t.Fatal(err)
+	}
+	part, err := mw.CreateFormFile("file", "tiny.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("tiny")); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/files/upload?path=&name=tiny.txt", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	uploadFile(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge || !contains(w.Body.String(), "file_too_large") {
+		t.Fatalf("body cap: %d %s, want named 413", w.Code, w.Body.String())
+	}
+	if _, err := os.Lstat(filepath.Join(root, "tiny.txt")); !os.IsNotExist(err) {
+		t.Fatal("capped upload left a file behind")
+	}
+}
+
+func TestListHidesUploadStaging(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("EXPORTS_DIR", root)
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	if err := os.WriteFile(filepath.Join(root, ".upload-12345"), []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "real.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files?path=", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	listFiles(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+	if contains(w.Body.String(), ".upload-12345") {
+		t.Fatalf("staging file listed: %s", w.Body.String())
+	}
+	if !contains(w.Body.String(), "real.txt") {
+		t.Fatalf("real file missing: %s", w.Body.String())
 	}
 }

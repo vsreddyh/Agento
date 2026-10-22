@@ -188,6 +188,10 @@ fun friendlyError(raw: String): FriendlyError {
             "A file with that name is already there",
             "Rename the file on your device and upload again — uploads never replace existing files.",
         )
+        has("invalid_name", "file_missing") -> FriendlyError(
+            "That file can't be uploaded as named",
+            "Pick a plain file name without folders or special characters and try again.",
+        )
         has("http 4") && has("http") -> FriendlyError(
             "Request failed",
             "Check your settings and try again.",

@@ -70,6 +70,9 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
     fun uploadFrom(uri: Uri) {
         uploading = true
         error = ""
+        // The target folder is captured now, not read at completion: a
+        // navigation mid-upload must not retarget the refresh.
+        val target = path
         scope.launch {
             val result = runCatching {
                 val cr = context.contentResolver
@@ -94,19 +97,15 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     throw IllegalStateException(
                         "file_too_large: this file is over the 25 MiB upload limit")
                 }
-                val bytes = cr.openInputStream(uri)?.use { it.readBytes() }
-                    ?: throw IllegalStateException("Could not read that file")
-                if (bytes.size > FILES_UPLOAD_LIMIT_BYTES) {
-                    throw IllegalStateException(
-                        "file_too_large: this file is over the 25 MiB upload limit")
-                }
                 val mime = cr.getType(uri) ?: "application/octet-stream"
-                StorageApi(context).upload(path, displayName, bytes, mime).getOrThrow()
+                StorageApi(context).upload(target, displayName, mime, size) {
+                    cr.openInputStream(uri)
+                }.getOrThrow()
             }
             result.fold(
                 onSuccess = {
                     toasts.toast("Uploaded ${it.name}", ToastKind.Success)
-                    load(path)
+                    load(target)
                 },
                 onFailure = { e ->
                     toasts.toast(
