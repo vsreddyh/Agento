@@ -96,6 +96,11 @@ class BehaviourSettingsTest {
     }
 
     @Test
+    fun `lead copy ceilings like the getters`() {
+        assertEquals("24 hours", leadCopy(2000L))
+    }
+
+    @Test
     fun `cadence lines never assert a constant`() {
         assertEquals("Automatic sync is paused.", BehaviourSettings.syncCadenceLine(1L, false, true))
         assertEquals("Automatic sync runs every hour.", BehaviourSettings.syncCadenceLine(1L, false, false))

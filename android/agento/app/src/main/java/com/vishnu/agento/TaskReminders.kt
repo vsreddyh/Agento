@@ -167,17 +167,20 @@ internal fun reminderPoints(
  * untouched installs read identically; hand-imported out-of-option values
  * (lead=1440) read "24 hours" instead of "1440 minutes".
  */
-internal fun leadCopy(minutes: Long): String = when {
-    // Precondition: callers guard lead <= 0 first (the "Starting now"
-    // branch). "0 minutes" here keeps the helper total rather than lying.
-    minutes <= 0L -> "0 minutes"
-    minutes == 1L -> "1 minute"
-    minutes < 60L -> "$minutes minutes"
-    else -> {
-        val h = minutes / 60L
-        val m = minutes % 60L
-        val hs = if (h == 1L) "1 hour" else "$h hours"
-        if (m == 0L) hs else "$hs ${if (m == 1L) "1 minute" else "$m minutes"}"
+internal fun leadCopy(minutes: Long): String {
+    // Total like every neighbour: coerce, so a hand-passed 2000 renders
+    // the ceiling ("24 hours"), never "33 hours 20 minutes".
+    val m = BehaviourSettings.coerceImport(BehaviourSettings.KEY_REMINDER_LEAD_MINUTES, minutes)
+    return when {
+        m <= 0L -> "0 minutes"
+        m == 1L -> "1 minute"
+        m < 60L -> "$m minutes"
+        else -> {
+            val h = m / 60L
+            val r = m % 60L
+            val hs = if (h == 1L) "1 hour" else "$h hours"
+            if (r == 0L) hs else "$hs ${if (r == 1L) "1 minute" else "$r minutes"}"
+        }
     }
 }
 
