@@ -186,16 +186,26 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // Bounded: a broken engine answers empty, never hangs the section.
     var voices by remember(refreshTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     // Listed on import-driven refresh plus the explicit reload below — no
-    // resume polling. `listingVoices` disables the button mid-list so a
-    // double-tap can't spin two engines concurrently.
+    // resume polling. An import landing mid-listing restarts it (cancellation
+    // shuts the first engine down; last-writer-wins), except when the
+    // current list already answers: a non-empty list containing the stored
+    // voice survives the import untouched, so the common import pays no
+    // second binder spin for an answer it already has.
     var listingVoices by remember { mutableStateOf(false) }
     var voiceGen by remember { mutableIntStateOf(0) }
+    var listedGen by remember { mutableStateOf(-1) }
     LaunchedEffect(refreshTick, voiceGen) {
-        listingVoices = true
-        try {
-            voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
-        } finally {
-            listingVoices = false
+        val cur = voices
+        val settled = cur.isNotEmpty() && listedGen == voiceGen &&
+            (ttsVoice.isEmpty() || cur.any { it.first == ttsVoice })
+        if (!settled) {
+            listingVoices = true
+            try {
+                voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
+            } finally {
+                listingVoices = false
+            }
+            listedGen = voiceGen
         }
     }
 

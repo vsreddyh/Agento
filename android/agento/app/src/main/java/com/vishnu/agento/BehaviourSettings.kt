@@ -291,11 +291,14 @@ object BehaviourSettings {
         val rp = coerceImport(KEY_TTS_RATE_PCT, ratePct)
         val pp = coerceImport(KEY_TTS_PITCH_PCT, pitchPct)
         var n = 0
-        if (sh != DEFAULT_SYNC_INTERVAL_HOURS) n++
-        // wifiOnly is moot while paused (no sync runs at all): count it
-        // only when it has an effect, or pausing then unpausing reads as
-        // two changes for one knob.
-        if (wifiOnly && !paused) n++
+        // Paused suspends the whole cadence card: interval and wifiOnly
+        // are both moot while no sync runs, so neither counts then — or
+        // pausing with a custom cadence reads as two changes for zero
+        // effective behaviour change.
+        if (!paused) {
+            if (sh != DEFAULT_SYNC_INTERVAL_HOURS) n++
+            if (wifiOnly) n++
+        }
         if (paused) n++
         if (tm != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
         if (lm != TaskReminders.BEFORE_START_MINUTES) n++
@@ -324,6 +327,12 @@ object BehaviourSettings {
      * value the getter would otherwise silently disagree with (stored 0,
      * read 1) — coercing at both ends keeps stored and shown identical.
      * Unknown keys keep the legacy non-negative clamp.
+     *
+     * Ceilings can coincide with offered picker values (sync 48h → 24h,
+     * rate 500 → 200): such an import renders as a normal pick with no
+     * hint. That is accepted — ceilings must exist, and the alternative
+     * (preserving an un-runnable 48h cadence) is worse than clamping to
+     * the nearest runnable one.
      */
     fun coerceImport(key: String, value: Long): Long = when (key) {
         KEY_SYNC_INTERVAL_HOURS -> value.coerceIn(1L, 24L)
