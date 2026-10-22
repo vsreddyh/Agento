@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -222,7 +223,15 @@ func recordBatchMutations(ctx context.Context, store *tasks.Store, results []tas
 			// such a result (batch.go), so this is the second line — the
 			// row is written only when it can name the copy AND the
 			// source.
+			//
+			// And the case is OURS to log, not the seam's: the seam logs
+			// the row it KEEPS with a missing back-link, so the transport
+			// that DROPS one has to say so too — otherwise the loud
+			// signal the seam was given to emit is silenced by the door
+			// in front of it.
 			if res.Detail == "" {
+				log.Printf("tasks: batch duplicate row skipped (the result names no source) task_id=%q",
+					tasks.TruncateBytes(strings.TrimSpace(res.ID), 40))
 				continue
 			}
 			store.RecordMutation(ctx, tasks.OpDuplicate, res.ID, source, res.Detail)

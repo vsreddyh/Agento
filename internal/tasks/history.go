@@ -116,6 +116,15 @@ func normalizeOps(ops []string) []string {
 // The COUNT is echoed, though: a filter of one blank and a filter of ten
 // thousand blanks are the same mistake at very different scales, and the
 // count is the one bounded diagnostic that tells them apart.
+//
+// The count is per ENTRY POINT, and cannot be otherwise: the parser
+// counts the blank tokens a comma-separated string split into, while the
+// validator counts the blank elements of the slice it was handed — and a
+// slice element is ONE op, never a group (see ValidateOps). So the same
+// filter sent to each door in its own shape reports its own count: " , "
+// is two blank tokens to the parser and one blank element to the
+// validator. Both are the same mistake, told at the scale the caller
+// sent it.
 func namesNoOperation(count int) *StoreError {
 	return fail("op filter names no operation (%d blank element%s); known ops are %s",
 		count, plural(count), strings.Join(KnownOps(), ", "))
