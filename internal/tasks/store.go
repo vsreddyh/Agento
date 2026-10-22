@@ -188,15 +188,16 @@ func (s *Store) Close(ctx context.Context) error {
 //
 // The id is bounded: a 404 that answers a 10KB path segment with itself is
 // a response nobody wants, and every other echo in this package is bounded
-// the same way.
+// the same way. Trimmed for the same reason the filters are: "  abc  " and
+// "abc" are one mistake, and two spellings of it should read alike.
 func unknownTask(id string) *StoreError {
-	return fail("unknown task '%s'", TruncateBytes(id, 40))
+	return fail("unknown task '%s'", TruncateBytes(strings.TrimSpace(id), 40))
 }
 
 // badID names the id that could not be read as one. Bounded, like
 // unknownTask: same rule, same reason.
 func badID(id string) *StoreError {
-	return fail("bad id '%s'", TruncateBytes(id, 40))
+	return fail("bad id '%s'", TruncateBytes(strings.TrimSpace(id), 40))
 }
 
 // checkDue validates the due date/time pair.

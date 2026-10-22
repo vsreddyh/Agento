@@ -126,6 +126,16 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		log.Printf("tasks: mutation log entry dropped (op=%q is not a known op)", TruncateBytes(op, 40))
 		return
 	}
+	// The duplicate's detail is an id — the task the copy came from — so
+	// it is canonicalised HERE, on the write seam, like the task_id. The
+	// batch path already lowercases it, but the seam is where every
+	// writer's id passes, and a detail that kept the caller's spelling
+	// would not join against a task_id lookup.
+	if op == OpDuplicate {
+		if src, nerr := NormalizeTaskID(detail); nerr == nil {
+			detail = src
+		}
+	}
 	entry := bson.M{
 		"op":      op,
 		"task_id": taskID,

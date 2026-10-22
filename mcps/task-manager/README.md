@@ -322,7 +322,9 @@ an `op` filter that names nothing.
 `op=duplicate` is accepted but only the **batch** path records it (#341): a
 single duplicate is a store operation with no verb of its own, so the filter
 vocabulary is wider than the current set of writers. Rows come back only for
-duplicates made through a batch.
+duplicates made through a batch. Batch op names are lowercase-exact
+(`"Complete"` is a 422), while these filters are case-insensitive — the two
+are different surfaces, and the difference is deliberate.
 
 There is **no cursor**. `truncated` says "more rows exist than this page
 holds" and nothing more: the filters are the way to narrow, so read one

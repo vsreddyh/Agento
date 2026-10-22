@@ -201,7 +201,12 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("batch op %d (%s) has no id", i, opName)}
 		}
-		if seen[id] {
+		// The seen-key is lowercased: a hex id is case-INSENSITIVE
+		// (ObjectIDFromHex accepts upper case, and the log's task_id is
+		// lowercased), so "abc…" and "ABC…" name the SAME task. A guard
+		// that stops two verbs on one task has to see them as one.
+		key := strings.ToLower(id)
+		if seen[key] {
 			// The same id twice would self-conflict inside one transaction:
 			// the second verb reads the first's uncommitted write. Reject
 			// up front rather than aborting on our own write. Unreachable
@@ -210,7 +215,7 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("batch op %d (%s %s) duplicates an earlier op; one op per task", i, opName, id)}
 		}
-		seen[id] = true
+		seen[key] = true
 		// Extras ride only where they are read: a `reason` on anything but
 		// skip, or `fields` on anything but update, would commit while
 		// silently dropping the value — the exact silent-drop shape the
