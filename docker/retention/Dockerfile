@@ -32,6 +32,8 @@
 # reproducibility, not the shipped runtime surface.
 ARG GO_IMAGE=golang@sha256:d530cf60723abf1ffae0cd16bb546b379ec0550d2f3815e5b16ed69dbc00fba4
 ARG RUNTIME_IMAGE=alpine@sha256:b3413572228e34bd1c9245f5565e6cd127005655e8a7899aef33d8e83255c9e6
+# The digests above were resolved from golang:1.27-alpine and
+# alpine:3.24.3 (2026-10-22).
 
 FROM ${GO_IMAGE} AS build
 WORKDIR /src

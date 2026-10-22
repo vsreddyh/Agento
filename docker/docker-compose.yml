@@ -74,7 +74,7 @@ services:
   # documentation still referred to it.
   # ──────────────────────────────────────────────────────
   proxy:
-    # Pinned by VERSION, not by digest, and deliberately so: this image is
+    # Pinned by tag, not by digest, and deliberately so: this image is
     # PULLED and run, not built from this repo, so there is no Dockerfile
     # here to keep the ARG and the digest in step. The tag names an exact
     # patch release, and the config it serves is ours (mounted below), so
