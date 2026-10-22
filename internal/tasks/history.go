@@ -186,6 +186,10 @@ func ParseOps(s string) ([]string, error) {
 // split. So a slice element that still contains a comma is simply an op
 // the log does not hold.
 func ValidateOps(ops []string) error {
+	// The copy, not the package var: the check and the messages read the
+	// same set, so nothing here can see a different list than the one the
+	// error names.
+	known := KnownOps()
 	if len(normalizeOps(ops)) == 0 && len(ops) > 0 {
 		// The FIRST element, bounded: the list named nothing, so every
 		// element is blank, and the first is the one a caller would look
@@ -198,7 +202,7 @@ func ValidateOps(ops []string) error {
 		if norm == "" {
 			continue
 		}
-		if !slices.Contains(knownOps, norm) {
+		if !slices.Contains(known, norm) {
 			// The offending token is echoed, bounded and trimmed: the CASE
 			// is kept (it is what the caller typed, and the fix is in the
 			// case), the padding is not (it is not what the mistake is,
@@ -319,7 +323,10 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	if !f.Since.IsZero() {
 		filt["at"] = bson.M{"$gte": f.Since}
 	}
-	lim := mongostore.ClampLimit(f.Limit, DefaultLimit, MaxLimit)
+	// The limit is an int from here on: ClampLimit answers an int64, and
+	// the one cast that turns it into an int sits here, next to the
+	// constant that bounds it (200–500), rather than at the slice.
+	lim := int(mongostore.ClampLimit(f.Limit, DefaultLimit, MaxLimit))
 	// Newest first, with `_id` as the tiebreak: two mutations in the same
 	// millisecond would otherwise come back in an order the database
 	// chose, and a history that reshuffles itself between two reads of
@@ -331,7 +338,7 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	cur, err := s.db.Collection(auditCollection).Find(ctx, filt,
 		options.Find().
 			SetSort(bson.D{{Key: "at", Value: -1}, {Key: "_id", Value: -1}}).
-			SetLimit(lim+1))
+			SetLimit(int64(lim)+1))
 	if err != nil {
 		return nil, false, err
 	}
@@ -346,16 +353,8 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	if rows == nil {
 		rows = []Mutation{}
 	}
-	if int64(len(rows)) > lim {
-		// The cut is bounded by the rows themselves, not by the cast:
-		// ClampLimit returns an int64, and the slice wants an int, so
-		// the assumption that the limit fits an int is checked here
-		// rather than made.
-		cut := int(lim)
-		if cut > len(rows) {
-			cut = len(rows)
-		}
-		return rows[:cut], true, nil
+	if len(rows) > lim {
+		return rows[:lim], true, nil
 	}
 	return rows, false, nil
 }

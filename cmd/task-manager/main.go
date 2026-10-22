@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"agento/internal/mongostore"
 	"agento/internal/tasks"
@@ -277,6 +278,12 @@ func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (
 	if err != nil {
 		return nil, err
 	}
+	// The HTTP route bounds its read at 30s; this one bounds it the same
+	// way, so a hung Mongo answers with an error instead of hanging the
+	// tool. The caller's context still wins — a cancelled session ends the
+	// call whatever the timeout says.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	rows, truncated, err := store.ListMutations(ctx, tasks.MutationFilter{
 		TaskID: taskID,
 		Ops:    ops,
