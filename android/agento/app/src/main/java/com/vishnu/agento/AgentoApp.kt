@@ -58,20 +58,19 @@ class AgentoApp : Application() {
         /** Unique periodic work with UPDATE policy so reinstalls never duplicate. */
         fun scheduleSync(context: Context) {
             val appCtx = context.applicationContext
-            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val wm = WorkManager.getInstance(appCtx)
             // Paused means no job at all (#355): cancelling (not merely
             // skipping) keeps the process from waking hourly for nothing.
             // Re-enabling re-enqueues below with UPDATE, so resume is one call.
-            if (prefs.getBoolean(BehaviourSettings.KEY_SYNC_PAUSED, false)) {
+            // Keys and ranges come from the single inventory — never re-spelled
+            // here, so a default change cannot drift between the two.
+            if (BehaviourSettings.syncPaused(appCtx)) {
                 wm.cancelUniqueWork(SYNC_WORK_NAME)
                 return
             }
-            val hours = prefs.getLong(
-                BehaviourSettings.KEY_SYNC_INTERVAL_HOURS, SYNC_INTERVAL_HOURS,
-            ).coerceIn(1L, 24L)
+            val hours = BehaviourSettings.syncIntervalHours(appCtx)
             val builder = PeriodicWorkRequestBuilder<SyncWorker>(hours, TimeUnit.HOURS)
-            if (prefs.getBoolean(BehaviourSettings.KEY_SYNC_WIFI_ONLY, false)) {
+            if (BehaviourSettings.syncWifiOnly(appCtx)) {
                 builder.setConstraints(
                     Constraints.Builder()
                         .setRequiredNetworkType(NetworkType.UNMETERED)
@@ -92,10 +91,8 @@ class AgentoApp : Application() {
          */
         fun scheduleTaskSync(context: Context) {
             val appCtx = context.applicationContext
-            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val minutes = prefs.getLong(
-                BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES, TASK_SYNC_INTERVAL_MINUTES,
-            ).coerceIn(15L, 24L * 60L)
+            // Range and default from the single inventory, like above.
+            val minutes = BehaviourSettings.taskSyncIntervalMinutes(appCtx)
             val request = PeriodicWorkRequestBuilder<TaskSyncWorker>(
                 minutes, TimeUnit.MINUTES
             ).setConstraints(

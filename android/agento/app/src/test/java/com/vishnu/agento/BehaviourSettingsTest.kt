@@ -86,7 +86,7 @@ class BehaviourSettingsTest {
     }
 
     @Test
-    fun `tts pct labels carry the sign`() {
+    fun `tts pct labels carry the percent suffix`() {
         assertEquals("100%", BehaviourSettings.ttsPctLabel(100L))
         assertEquals("150%", BehaviourSettings.ttsPctLabel(150L))
     }

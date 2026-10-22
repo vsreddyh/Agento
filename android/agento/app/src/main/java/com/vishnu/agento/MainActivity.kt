@@ -241,10 +241,11 @@ class MainActivity : ComponentActivity() {
                     // shut down with the activity. Auto-read is a single
                     // global toggle (prefs `tts_auto`) in each chat's bar,
                     // also surfaced in Settings → Behaviour: keyed on the
-                    // destination so a flip there re-reads on return here.
+                    // destination AND the settings section, so a flip in
+                    // Behaviour (same dest, subsection change) re-reads here.
                     val tts = remember { ChatTts(context) }
                     DisposableEffect(Unit) { onDispose { tts.shutdown() } }
-                    var autoSpeak by remember(dest) {
+                    var autoSpeak by remember(dest, section) {
                         mutableStateOf(prefs.getBoolean("tts_auto", false))
                     }
                     // Bumped whenever a model/effort pick saves, so the

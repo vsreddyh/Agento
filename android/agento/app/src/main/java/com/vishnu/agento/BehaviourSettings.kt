@@ -23,7 +23,10 @@ object BehaviourSettings {
 
     // ── Health sync cadence ──────────────────────────────────────────────
     const val KEY_SYNC_INTERVAL_HOURS = "sync_interval_hours"
-    const val DEFAULT_SYNC_INTERVAL_HOURS = 1L
+    // Defaults live on AgentoApp (the scheduler's home) and are re-exported
+    // here, never re-spelled: one source, so a default change cannot drift
+    // between the section and the scheduler.
+    const val DEFAULT_SYNC_INTERVAL_HOURS = AgentoApp.SYNC_INTERVAL_HOURS
     /** Displayed choices; WorkManager periodic work floors at 15 minutes. */
     val SYNC_INTERVAL_OPTIONS_HOURS = listOf(1L, 2L, 4L, 6L, 12L, 24L)
 
@@ -68,7 +71,7 @@ object BehaviourSettings {
 
     // ── Task / widget / reminder refresh ─────────────────────────────────
     const val KEY_TASK_SYNC_INTERVAL_MINUTES = "task_sync_interval_minutes"
-    const val DEFAULT_TASK_SYNC_INTERVAL_MINUTES = 30L
+    const val DEFAULT_TASK_SYNC_INTERVAL_MINUTES = AgentoApp.TASK_SYNC_INTERVAL_MINUTES
     val TASK_SYNC_INTERVAL_OPTIONS_MINUTES = listOf(15L, 30L, 60L, 120L)
 
     fun taskSyncIntervalMinutes(ctx: Context): Long =
@@ -124,10 +127,16 @@ object BehaviourSettings {
         prefs(ctx).getString(KEY_TTS_VOICE, "").orEmpty()
 
     fun ttsRate(ctx: Context): Float =
-        prefs(ctx).getLong(KEY_TTS_RATE_PCT, DEFAULT_TTS_PCT).coerceIn(50L, 200L) / 100f
+        ttsRatePct(ctx) / 100f
 
     fun ttsPitch(ctx: Context): Float =
-        prefs(ctx).getLong(KEY_TTS_PITCH_PCT, DEFAULT_TTS_PCT).coerceIn(50L, 200L) / 100f
+        ttsPitchPct(ctx) / 100f
+
+    fun ttsRatePct(ctx: Context): Long =
+        prefs(ctx).getLong(KEY_TTS_RATE_PCT, DEFAULT_TTS_PCT).coerceIn(50L, 200L)
+
+    fun ttsPitchPct(ctx: Context): Long =
+        prefs(ctx).getLong(KEY_TTS_PITCH_PCT, DEFAULT_TTS_PCT).coerceIn(50L, 200L)
 
     fun setTtsVoice(ctx: Context, name: String) {
         prefs(ctx).edit { putString(KEY_TTS_VOICE, name.trim()) }
@@ -201,8 +210,11 @@ object BehaviourSettings {
         if (taskSyncIntervalMinutes(ctx) != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
         if (reminderLeadMinutes(ctx) != TaskReminders.BEFORE_START_MINUTES) n++
         if (ttsVoice(ctx).isNotEmpty()) n++
-        if (ttsRate(ctx) != 1f || ttsPitch(ctx) != 1f) n++
-        if (!notifyFailedRaw(ctx) || !notifyInstructRaw(ctx) || !notifyCronRaw(ctx)) n++
+        if (ttsRate(ctx) != 1f) n++
+        if (ttsPitch(ctx) != 1f) n++
+        if (!notifyFailedRaw(ctx)) n++
+        if (!notifyInstructRaw(ctx)) n++
+        if (!notifyCronRaw(ctx)) n++
         // Surfaced-but-pre-existing keys count too: enabling either is a
         // deliberate behaviour change made in this section.
         if (TaskReminders.isEnabled(ctx)) n++

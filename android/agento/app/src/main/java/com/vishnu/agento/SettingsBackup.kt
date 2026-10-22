@@ -89,6 +89,11 @@ object SettingsBackup {
         // armed set and the budget snapshot are excluded on purpose; see the
         // note under [isWidgetDisplayKey].
         "task_reminders_enabled",
+        // Auto-read (#355): a user setting like the reminders switch above,
+        // previously omitted by oversight — without it an export silently
+        // lost the pick while reminders survived. Additive like everything
+        // else: old backups (without it) restore to off, old readers skip it.
+        BehaviourSettings.KEY_TTS_AUTO,
         // Behaviour (#355): per-kind notification gates plus the health-sync
         // pause/Wi-Fi-only switches. All default to today's behaviour, so
         // old backups (without them) restore identically.
