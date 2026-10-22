@@ -208,8 +208,13 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		// that passes a raw label and splits a log line with it. The SENT
 		// spelling, like the drops and the 422s — one mistake, one
 		// spelling.
+		//
+		// The driver's own message is bounded too: a Mongo error can
+		// embed the rejected document, and one bad insert should not
+		// write kilobytes to the log.
 		log.Printf("tasks: mutation log write failed (op=%q task_id=%q): %v",
-			TruncateBytes(sentOp, 40), TruncateBytes(sentID, 40), err)
+			TruncateBytes(sentOp, 40), TruncateBytes(sentID, 40),
+			TruncateBytes(err.Error(), 300))
 	}
 }
 
