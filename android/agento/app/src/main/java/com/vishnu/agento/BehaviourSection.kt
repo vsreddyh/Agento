@@ -184,13 +184,11 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // Engine voices for the picker: a short-lived engine lists, then dies.
     // Matched by name at speak time (Voice objects are engine-specific).
     // Bounded: a broken engine answers empty, never hangs the section.
-    var voices by remember(refreshTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    // Listed on import-driven refresh plus the explicit reload below — no
-    // resume polling. An import landing mid-listing restarts it (cancellation
-    // shuts the first engine down; last-writer-wins), except when the
-    // current list already answers: a non-empty list containing the stored
-    // voice survives the import untouched, so the common import pays no
-    // second binder spin for an answer it already has.
+    var voices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    // Unkeyed on purpose: keying on refreshTick would clear the list on
+    // every import before the effect below runs, so the settled-skip could
+    // never hit and every import would pay the binder spin unconditionally.
+    // `listedGen`/`voiceGen` drive freshness instead.
     var listingVoices by remember { mutableStateOf(false) }
     var voiceGen by remember { mutableIntStateOf(0) }
     var listedGen by remember { mutableStateOf(-1) }
@@ -337,12 +335,20 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 ttsVoice = BehaviourSettings.ttsVoice(context)
             },
         )
-        if (ttsVoice.isNotEmpty() && voices.isNotEmpty() &&
-            voices.none { it.first == ttsVoice }
+        if (ttsVoice.isNotEmpty() && !listingVoices &&
+            (voices.isEmpty() || voices.none { it.first == ttsVoice })
         ) {
             HintLine("Kept from an import: this engine no longer offers that voice, but the pick is kept.")
         }
-        TextButton(onClick = { voiceGen++ }, enabled = !listingVoices) {
+        TextButton(
+            onClick = {
+                // Eager: two rapid taps must not spin two engines before
+                // the effect flips the flag itself.
+                listingVoices = true
+                voiceGen++
+            },
+            enabled = !listingVoices,
+        ) {
             Text(if (listingVoices) "Loading…" else "Reload voices")
         }
         OptionMenu(
