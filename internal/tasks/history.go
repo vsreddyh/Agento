@@ -93,6 +93,26 @@ func normalizeOps(ops []string) []string {
 	return out
 }
 
+// opFilterEcho renders the filter that named nothing, for the error.
+//
+// The first few elements, each bounded, joined and bounded again: a filter
+// that names nothing is all blanks, and showing one of them is enough to
+// say what the server saw. Bounded at every step, so a 10KB list is not
+// answered with itself.
+//
+// The parser and the validator both go through here, so the SAME logical
+// filter reads the same through either door.
+func opFilterEcho(ops []string) string {
+	parts := make([]string, 0, 3)
+	for _, op := range ops {
+		if len(parts) == 3 {
+			break
+		}
+		parts = append(parts, TruncateBytes(strings.TrimSpace(op), 40))
+	}
+	return TruncateBytes(strings.Join(parts, ","), 40)
+}
+
 // namesNoOperation is the ONE message for a filter that named nothing,
 // shared by the parser and the validator: the same filter, read through
 // either door, gets the same answer.
@@ -101,10 +121,6 @@ func normalizeOps(ops []string) []string {
 // rather than echoing empty quotes, which would read like a formatting
 // bug rather than a filter with nothing in it.
 func namesNoOperation(shown string) *StoreError {
-	// Trimmed ONCE, here, so the branch cannot depend on who trimmed:
-	// the parser passes an already-trimmed value and the validator passes
-	// a raw element, and the same logical filter must get the same answer
-	// through either door.
 	shown = strings.TrimSpace(shown)
 	known := strings.Join(KnownOps(), ", ")
 	if shown == "" {
@@ -148,7 +164,7 @@ func ParseOps(s string) ([]string, error) {
 	tokens := strings.Split(s, ",")
 	ops := normalizeOps(tokens)
 	if len(ops) == 0 {
-		return nil, namesNoOperation(raw)
+		return nil, namesNoOperation(opFilterEcho(tokens))
 	}
 	if err := ValidateOps(tokens); err != nil {
 		return nil, err
@@ -195,7 +211,7 @@ func ValidateOps(ops []string) error {
 		// element is blank, and the first is the one a caller would look
 		// at. Joined, it would build the whole list first — the
 		// "never answer a huge input with itself" rule, one layer up.
-		return namesNoOperation(ops[0])
+		return namesNoOperation(opFilterEcho(ops))
 	}
 	for _, op := range ops {
 		norm := normalizeOp(op)
@@ -317,7 +333,12 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	if taskID != "" {
 		filt["task_id"] = taskID
 	}
-	if len(ops) > 0 {
+	if len(ops) == 1 {
+		// One op is an equality, not a set: it reads clearer in a query
+		// log and plans the same. The common narrowed read — one task,
+		// one kind of change — lands here.
+		filt["op"] = ops[0]
+	} else if len(ops) > 1 {
 		filt["op"] = bson.M{"$in": ops}
 	}
 	if !f.Since.IsZero() {

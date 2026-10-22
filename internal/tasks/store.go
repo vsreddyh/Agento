@@ -1068,7 +1068,10 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 		// tells the caller — and now the reconciler — that the repeat has
 		// stopped. Logged too, because the reconciler runs nightly and the
 		// user may act sooner.
-		log.Printf("task %s completed but rollover failed: %v", id, rerr)
+		// The id is trimmed and bounded, like every other echo here: the
+		// row this failure produces stores the CANONICAL id, and a log
+		// line that spells it differently is one grep away from missing.
+		log.Printf("task %s completed but rollover failed: %v", TruncateBytes(strings.TrimSpace(id), 40), rerr)
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reason, "", nil
@@ -1119,7 +1122,8 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 	s.bumpChanges(ctx)
 	next, reasonOut, rerr := s.rollOver(ctx, done)
 	if rerr != nil {
-		log.Printf("task %s skipped but rollover failed: %v", id, rerr)
+		// Trimmed and bounded, like the completion path above.
+		log.Printf("task %s skipped but rollover failed: %v", TruncateBytes(strings.TrimSpace(id), 40), rerr)
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reasonOut, "", nil
