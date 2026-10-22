@@ -87,8 +87,9 @@ object SettingsBackup {
         // Reminders on/off — the one task_reminder_* key that is a user
         // setting rather than device-local alarm bookkeeping (#169). The
         // armed set and the budget snapshot are excluded on purpose; see the
-        // note under [isWidgetDisplayKey].
-        "task_reminders_enabled",
+        // note under [isWidgetDisplayKey]. By reference like every other
+        // entry: no re-spelled keys anywhere in this list.
+        TaskReminders.PREF_ENABLED,
         // Auto-read (#355): a user setting like the reminders switch above,
         // previously omitted by oversight — without it an export silently
         // lost the pick while reminders survived. Additive like everything
