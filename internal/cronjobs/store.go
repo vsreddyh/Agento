@@ -26,10 +26,21 @@ const (
 
 // Run is one firing: when it ran, what the model said (or the miss note),
 // and whether the scheduled instant was missed while down.
+//
+// Source/JobName/RunID are the provenance (#331): which scheduler job fired
+// this run and which agent run answered it, so Scheduler history and the Runs
+// list correlate both ways. Empty on rows written before the field existed.
 type Run struct {
 	At     int64  `bson:"at" json:"at"`
 	Text   string `bson:"text" json:"text"`
 	Missed bool   `bson:"missed,omitempty" json:"missed,omitempty"`
+	Source string `bson:"source,omitempty" json:"source,omitempty"`
+	// JobName denormalizes the job's name at fire time: the history reads
+	// without joining the job doc.
+	JobName string `bson:"jobName,omitempty" json:"job_name,omitempty"`
+	// RunID is the agent_runs id of the chat turn that answered, empty when
+	// the fire never became a turn (bare client, failure before begin).
+	RunID string `bson:"runId,omitempty" json:"run_id,omitempty"`
 }
 
 // Job is one scheduled prompt.
@@ -90,7 +101,10 @@ func FromEnv() (*Store, error) {
 func toDoc(j Job) bson.M {
 	runs := make([]bson.M, 0, len(j.Runs))
 	for _, r := range j.Runs {
-		runs = append(runs, bson.M{"at": r.At, "text": r.Text, "missed": r.Missed})
+		runs = append(runs, bson.M{
+			"at": r.At, "text": r.Text, "missed": r.Missed,
+			"source": r.Source, "jobName": r.JobName, "runId": r.RunID,
+		})
 	}
 	return bson.M{
 		"name": j.Name, "prompt": j.Prompt, "schedule": j.Schedule,
@@ -149,6 +163,9 @@ func fromDoc(m bson.M) Job {
 			if mb, ok := rm["missed"].(bool); ok {
 				r.Missed = mb
 			}
+			r.Source = strVal(rm, "source")
+			r.JobName = strVal(rm, "jobName")
+			r.RunID = strVal(rm, "runId")
 			j.Runs = append(j.Runs, r)
 		}
 	}
@@ -310,7 +327,10 @@ func (s *Store) RecordRun(ctx context.Context, id string, run Run, fireInstant i
 	}
 	res, err := s.jobs.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{
 		"$push": bson.M{"runs": bson.M{
-			"$each":  []bson.M{{"at": run.At, "text": run.Text, "missed": run.Missed}},
+			"$each": []bson.M{{
+				"at": run.At, "text": run.Text, "missed": run.Missed,
+				"source": run.Source, "jobName": run.JobName, "runId": run.RunID,
+			}},
 			"$slice": -RunHistoryCap,
 		}},
 		"$set": bson.M{"lastFire": fireInstant, "updatedAt": time.Now().UnixMilli()},

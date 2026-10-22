@@ -63,7 +63,8 @@ func TestTickFiresDueJob(t *testing.T) {
 		"a": {ID: "a", Prompt: "p", Schedule: "* * * * *"},
 		"b": {ID: "b", Prompt: "p", Schedule: "* * * * *", Paused: true},
 	}}
-	w := &Worker{Store: be, Runner: &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}}
+	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
+	w := &Worker{Store: be, Fire: bare.Fire}
 	w.Tick(context.Background(), time.Now())
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -96,7 +97,8 @@ func TestTickRecordsMiss(t *testing.T) {
 	be := &fakeBackend{jobs: map[string]*Job{
 		"a": {ID: "a", Prompt: "p", Schedule: "0 11 * * *"},
 	}}
-	w := &Worker{Store: be, Runner: &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}}
+	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
+	w := &Worker{Store: be, Fire: bare.Fire}
 	now := time.Date(2026, time.October, 14, 11, 7, 0, 0, IST)
 	w.Tick(context.Background(), now)
 	be.mu.Lock()
@@ -117,7 +119,8 @@ func TestFireNowManual(t *testing.T) {
 	be := &fakeBackend{jobs: map[string]*Job{
 		"a": {ID: "a", Prompt: "p", Schedule: "0 0 1 1 *", Paused: true},
 	}}
-	w := &Worker{Store: be, Runner: &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}}
+	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
+	w := &Worker{Store: be, Fire: bare.Fire}
 	text, err := w.FireNow(context.Background(), "a")
 	if err != nil || text != "manual back" {
 		t.Fatalf("FireNow = %q, %v", text, err)

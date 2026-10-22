@@ -276,34 +276,25 @@ func run() error {
 	// Cron jobs live in Mongo next to the other domain collections. A
 	// store failure must not take chat down: without it the jobs routes
 	// answer 404 and the Scheduler stays idle, loudly logged.
+	//
+	// Only the store opens here. Fires run as chat-agent turns (#331), so
+	// the worker's Fire function is wired after the gateway server exists
+	// below; the tick loop starts there too.
 	var cronStore gateway.JobStore
-	var cronFire gateway.CronFire
+	var cronWorker *cronjobs.Worker
 	if store, err := cronjobs.FromEnv(); err != nil {
 		logger.Printf("cron jobs disabled: %v", err)
 	} else {
-		runner := &cronjobs.BareClient{
-			APIKey: os.Getenv("OPENCODE_API_KEY"),
-			Model:  envOr("PI_CRON_MODEL", "mimo-v2.6-flash"),
-		}
-		worker := &cronjobs.Worker{Store: store, Runner: runner, Logf: logger.Printf}
 		cronStore = store
-		cronFire = worker.FireNow
-		// One tick a minute plus one immediate pass: the immediate pass
-		// accounts fires missed while down (skip-and-note) instead of
-		// leaving LastFire stale until the next minute.
-		go func() {
-			worker.Tick(ctx, time.Now())
-			tick := time.NewTicker(time.Minute)
-			defer tick.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case now := <-tick.C:
-					worker.Tick(ctx, now)
-				}
-			}
-		}()
+		cronWorker = &cronjobs.Worker{Store: store, Logf: logger.Printf}
+	}
+	var cronFire gateway.CronFire
+	if cronWorker != nil {
+		// Bound to the worker, not to its Fire field: Fire is assigned
+		// after the server exists, and the method value reads it at call
+		// time. Manual /run shares the tick path, so a hand tap and a
+		// scheduled fire can never overlap a job.
+		cronFire = cronWorker.FireNow
 	}
 
 	// Conversation-attached runs (#311). Same Mongo database as the rest of
@@ -388,9 +379,11 @@ func run() error {
 		cancelIndex()
 	}
 
-	// The test-fire runner is the cron runner's sibling, not its child: it
-	// needs the same key and model but no job store, so a Mongo-less stack
-	// still answers "no runner" honestly instead of failing open.
+	// The test-fire runner is a bare model client: it needs the same key and
+	// model but no job store, so a Mongo-less stack still answers "no runner"
+	// honestly instead of failing open. Scheduler fires do NOT use this path:
+	// they run as chat-agent turns (wired above), so they can read notes and
+	// fetch live pages at fire time.
 	var teachRunner gateway.TeachRunner
 	if key := strings.TrimSpace(os.Getenv("OPENCODE_API_KEY")); key != "" {
 		runner := &cronjobs.BareClient{
@@ -421,6 +414,35 @@ func run() error {
 	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, memoryStore, teachStore, teachRunner, logger.Printf), agents)
 	if err != nil {
 		return err
+	}
+
+	// Scheduler fires run as chat-agent turns on this server (#331), so the
+	// worker is wired — and its tick loop started — only now that the server
+	// exists. One tick a minute plus one immediate pass: the immediate pass
+	// accounts fires missed while down (skip-and-note) instead of leaving
+	// LastFire stale until the next minute.
+	if cronWorker != nil {
+		cronWorker.Fire = func(ctx context.Context, job cronjobs.Job) (cronjobs.FireResult, error) {
+			text, runID, err := srv.FireSchedulerJob(ctx, job)
+			if err != nil {
+				return cronjobs.FireResult{}, err
+			}
+			return cronjobs.FireResult{Text: text, RunID: runID}, nil
+		}
+		worker := cronWorker
+		go func() {
+			worker.Tick(ctx, time.Now())
+			tick := time.NewTicker(time.Minute)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case now := <-tick.C:
+					worker.Tick(ctx, now)
+				}
+			}
+		}()
 	}
 
 	// PI_GATEWAY_ADDR wins outright, and PI_SERVER_PORT is then not consulted at

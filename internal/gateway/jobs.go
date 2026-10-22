@@ -36,6 +36,10 @@ func jobJSON(j cronjobs.Job, now time.Time) map[string]any {
 	for _, r := range j.Runs {
 		runs = append(runs, map[string]any{
 			"at": r.At, "text": r.Text, "missed": r.Missed,
+			// Provenance (#331): which scheduler fire produced this run
+			// and which agent run answered it. Empty on rows written
+			// before the field existed; the app parses leniently.
+			"source": r.Source, "job_name": r.JobName, "run_id": r.RunID,
 		})
 	}
 	var lastRun string
