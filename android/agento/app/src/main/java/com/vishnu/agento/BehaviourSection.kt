@@ -127,12 +127,15 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             if (!mgr.canScheduleExactAlarms()) {
-                // Best-effort, like the old bell: fire the redirect (once
-                // per tap) but enable anyway — armAlarm falls back to
-                // inexact per alarm. Making exact a hard requirement would
-                // strand users who decline it with no reminders at all.
+                // Best-effort, like the old bell: the first pass fires the
+                // redirect and returns so the notification step below never
+                // launches underneath system settings; the resume re-drive
+                // then enables anyway (inexact fallback) when the grant is
+                // still missing — never strand the toggle off for declining
+                // exact. `exactAsked` keeps the redirect to once per tap.
                 if (!exactAsked) {
                     exactAsked = true
+                    pendingReminders = true
                     runCatching {
                         context.startActivity(
                             Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
@@ -141,6 +144,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                         )
                     }
+                    return
                 }
             }
         }
