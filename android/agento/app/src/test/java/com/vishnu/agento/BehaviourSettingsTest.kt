@@ -149,6 +149,9 @@ class BehaviourSettingsTest {
         assertEquals(1, all(remindersOn = true))
         assertEquals(1, all(autoRead = true))
         assertEquals(3, all(syncHours = 2L, kindFailed = false, autoRead = true))
+        // wifiOnly is moot while paused: one effective change, not two.
+        assertEquals(1, all(wifiOnly = true, paused = true))
+        assertEquals(1, all(wifiOnly = true))
         // Pure overload coerces like the getters: out-of-floor inputs read
         // as their defaults, so both overloads agree on effective state.
         // (Coerced-to-floor need not be default: 5min reads as 15, custom.)

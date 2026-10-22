@@ -292,7 +292,10 @@ object BehaviourSettings {
         val pp = coerceImport(KEY_TTS_PITCH_PCT, pitchPct)
         var n = 0
         if (sh != DEFAULT_SYNC_INTERVAL_HOURS) n++
-        if (wifiOnly) n++
+        // wifiOnly is moot while paused (no sync runs at all): count it
+        // only when it has an effect, or pausing then unpausing reads as
+        // two changes for one knob.
+        if (wifiOnly && !paused) n++
         if (paused) n++
         if (tm != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
         if (lm != TaskReminders.BEFORE_START_MINUTES) n++

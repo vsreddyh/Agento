@@ -35,6 +35,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.core.content.edit
 import java.util.Locale
 import kotlinx.coroutines.launch
@@ -233,6 +235,10 @@ class MainActivity : ComponentActivity() {
                     var settingsOpen by remember { mutableStateOf(false) }
                     val drawerState = rememberDrawerState(DrawerValue.Closed)
                     val scope = rememberCoroutineScope()
+                    // Resume tick for cross-screen freshness: a flip in
+                    // Settings → Behaviour must re-read on return here.
+                    var mainResume by remember { mutableIntStateOf(0) }
+                    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { mainResume++ }
                     // Per-assistant model subtitles for the drawer: refreshed
                     // on every navigation so model picks show up immediately.
                     val prefs = context.getSharedPreferences(
@@ -241,11 +247,11 @@ class MainActivity : ComponentActivity() {
                     // shut down with the activity. Auto-read is a single
                     // global toggle (prefs `tts_auto`) in each chat's bar,
                     // also surfaced in Settings → Behaviour: keyed on the
-                    // destination AND the settings section, so a flip in
-                    // Behaviour (same dest, subsection change) re-reads here.
+                    // destination, the settings section AND resume, so a
+                    // flip in either direction re-reads on return.
                     val tts = remember { ChatTts(context) }
                     DisposableEffect(Unit) { onDispose { tts.shutdown() } }
-                    var autoSpeak by remember(dest, section) {
+                    var autoSpeak by remember(dest, section, mainResume) {
                         mutableStateOf(BehaviourSettings.ttsAuto(context))
                     }
                     // Bumped whenever a model/effort pick saves, so the

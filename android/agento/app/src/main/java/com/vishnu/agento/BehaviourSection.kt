@@ -170,21 +170,12 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // Matched by name at speak time (Voice objects are engine-specific).
     // Bounded: a broken engine answers empty, never hangs the section.
     var voices by remember(refreshTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    // Re-list on resume only when it could matter: a stored-but-missing
-    // voice (the engine may have gained voices), never a blind re-spin —
-    // and a broken engine (empty list) retries only on import-driven
-    // refresh, so every return doesn't pay the binder spin for an engine
-    // that keeps failing.
-    var listedFor by remember { mutableStateOf(-1) }
-    LaunchedEffect(refreshTick, resumeTick) {
-        val cur = voices
-        val missingVoice = ttsVoice.isNotEmpty() && cur.isNotEmpty() &&
-            cur.none { it.first == ttsVoice }
-        val brokenRetry = cur.isEmpty() && listedFor != refreshTick
-        if (missingVoice || brokenRetry) {
-            voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
-            listedFor = refreshTick
-        }
+    // Listed on import-driven refresh only: the missing-voice case rechecks
+    // then too (an engine switch outside the app is rare, and the next
+    // import picks it up). No resume re-spin — a permanently-missing voice
+    // must not pay the binder spin on every return.
+    LaunchedEffect(refreshTick) {
+        voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
     }
 
     // Exact-alarm grant, re-read on the same resume tick as the switches
