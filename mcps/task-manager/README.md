@@ -274,9 +274,10 @@ answers `{"deleted": "<canonical id>"}` while the HTTP route answers
 so it is the one a caller can compare against a history row.
 
 `since` is **inclusive** and must be RFC3339 (fractional seconds accepted —
-the `at` this filter is fed back from carries milliseconds). A malformed
-`since`, `op` or `task_id` is a 422, not a silently widened answer: "the
-whole log" is the wrong data, not merely more of it.
+the `at` this filter is fed back from carries milliseconds). It must carry an
+offset — `Z` or `±hh:mm`; a naive local time has no offset and is a 422. A
+malformed `since`, `op` or `task_id` is a 422, not a silently widened
+answer: "the whole log" is the wrong data, not merely more of it.
 
 That is the opposite of the revision poll next door
 (`GET /api/tasks/changes?since=`), which never 422s on a mangled cursor —
@@ -349,7 +350,7 @@ that is worth knowing before diffing two rows:
 | `complete`, `skip` | the rollover outcome (`created`, `none`, `custom`, …) |
 | `reopen` | empty over HTTP, `mcp reopen_task` over MCP |
 | `delete` | the door that deleted it (`http DELETE`, `mcp delete_task`) |
-| `duplicate` | the id of the task this was duplicated from — the row itself is about the COPY, whose id it carries |
+| `duplicate` | the id of the task this was duplicated from, when the writer passed a hex id (the batch path always does) — the row itself is about the COPY, whose id it carries |
 
 `detail` is capped at 300 bytes, so a longer one is stored truncated with
 no marker — the op-specific extras are short by nature (a field list, a

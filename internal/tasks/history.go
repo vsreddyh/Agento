@@ -110,7 +110,9 @@ func ParseOps(s string) ([]string, error) {
 	raw := strings.TrimSpace(s)
 	ops := normalizeOps(strings.Split(raw, ","))
 	if len(ops) == 0 && raw != "" {
-		return nil, fail("op %q names no operation; known ops are %s", TruncateBytes(raw, 40), strings.Join(knownOps, ", "))
+		// The SENT string, like ValidateOps echoes — the same typo
+		// produces the same spelling whichever entry point caught it.
+		return nil, fail("op %q names no operation; known ops are %s", TruncateBytes(s, 40), strings.Join(knownOps, ", "))
 	}
 	if err := ValidateOps(ops); err != nil {
 		return nil, err
@@ -196,17 +198,19 @@ func ParseSince(s string) (time.Time, error) {
 // answer to a typo. Both transports validate through here, so the agent and
 // the app are told the same thing.
 func NormalizeTaskID(id string) (string, error) {
-	id = strings.ToLower(strings.TrimSpace(id))
-	if id == "" {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
 		return "", nil
 	}
-	if _, err := primitive.ObjectIDFromHex(id); err != nil {
-		// The offending value is echoed, bounded: the caller sent a string
-		// where a hex id belonged, and saying which string saves a round
-		// trip to find out.
-		return "", fail("task_id must be a 24-character hex id (got %q)", TruncateBytes(id, 40))
+	lower := strings.ToLower(trimmed)
+	if _, err := primitive.ObjectIDFromHex(lower); err != nil {
+		// The SENT token, trimmed: the same spelling the lookup path's
+		// "bad id" answer uses, so one bad call reads alike wherever it
+		// is caught. The lowercased form would have the caller hunting for
+		// the wrong string.
+		return "", fail("task_id must be a 24-character hex id (got %q)", TruncateBytes(trimmed, 40))
 	}
-	return id, nil
+	return lower, nil
 }
 
 // ListMutations returns change-log entries, newest first.

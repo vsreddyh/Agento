@@ -83,8 +83,12 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	// same reason: a direct caller passing "CREATE" would otherwise store
 	// a row the filter misses.
 	//
-	// Normalized FIRST, so every drop path below logs the same spelling
-	// of the same bad call — two greps for one mistake should match.
+	// No BACKFILL, and none is needed: every row written before this
+	// normalisation came from a transport, and the transports' ids came
+	// from `ObjectID.Hex()` (always lower case) and their ops from the
+	// constants (always lower case). A row that a direct caller wrote
+	// with an upper-case id before this change is unreachable — it was
+	// unreachable then too, because the read side has always lowercased.
 	taskID = strings.ToLower(strings.TrimSpace(taskID))
 	op = strings.ToLower(strings.TrimSpace(op))
 	// A store that was never connected cannot record anything, and the
