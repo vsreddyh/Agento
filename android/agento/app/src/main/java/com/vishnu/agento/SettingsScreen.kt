@@ -200,7 +200,7 @@ internal fun SettingsScreen(
                                 else -> "System"
                             },
                             notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
-                            behaviourStatus = remember(context, settingsRefresh) {
+                            behaviourStatus = remember(context, settingsRefresh, resumeTick) {
                                 BehaviourSettings.hubStatus(context)
                             },
                             // Re-read on resume, keyed above.

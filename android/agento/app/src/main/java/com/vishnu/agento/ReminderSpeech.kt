@@ -25,7 +25,7 @@ internal fun reminderSpeech(
     return when (kind) {
         ReminderKind.BeforeStart ->
             if (leadMinutes <= 0L) "You need to start \"$name\" now"
-            else "In $leadMinutes minutes you need to start \"$name\""
+            else "In ${leadCopy(leadMinutes)} you need to start \"$name\""
         ReminderKind.Start ->
             "You need to start \"$name\""
         ReminderKind.Due ->

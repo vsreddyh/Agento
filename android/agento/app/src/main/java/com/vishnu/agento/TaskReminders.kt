@@ -156,6 +156,23 @@ internal fun reminderPoints(
 }
 
 /**
+ * Human lead for copy: minutes under the hour, hours past it. Defaults
+ * render exactly like the old constant interpolation ("5 minutes"), so
+ * untouched installs read identically; hand-imported out-of-option values
+ * (lead=1440) read "24 hours" instead of "1440 minutes".
+ */
+internal fun leadCopy(minutes: Long): String = when {
+    minutes <= 1L -> "1 minute"
+    minutes < 60L -> "$minutes minutes"
+    else -> {
+        val h = minutes / 60L
+        val m = minutes % 60L
+        val hs = if (h == 1L) "1 hour" else "$h hours"
+        if (m == 0L) hs else "$hs $m minutes"
+    }
+}
+
+/**
  * The one line each reminder says (issues #160, #287).
  *
  * A lock-screen line has one job: say what just happened. The collapsed
@@ -178,7 +195,7 @@ internal fun reminderMessage(
 ): String = when (kind) {
     ReminderKind.BeforeStart ->
         if (leadMinutes <= 0L) "Starting now"
-        else "Starting in $leadMinutes minutes"
+        else "Starting in ${leadCopy(leadMinutes)}"
     ReminderKind.Start ->
         "Start now"
     // No suffix on purpose: at the due moment the time *is* now, so the

@@ -86,6 +86,18 @@ class BehaviourSettingsTest {
     }
 
     @Test
+    fun `out-of-option leads humanize in copy`() {
+        assertEquals(
+            "Starting in 24 hours",
+            reminderMessage(ReminderKind.BeforeStart, "d", "s", null, 1440L),
+        )
+        assertEquals(
+            "In 1 hour 30 minutes you need to start \"x\"",
+            reminderSpeech(ReminderKind.BeforeStart, "x", leadMinutes = 90L),
+        )
+    }
+
+    @Test
     fun `tts pct labels carry the percent suffix`() {
         assertEquals("100%", BehaviourSettings.ttsPctLabel(100L))
         assertEquals("150%", BehaviourSettings.ttsPctLabel(150L))

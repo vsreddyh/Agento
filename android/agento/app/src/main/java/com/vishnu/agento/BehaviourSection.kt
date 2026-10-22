@@ -173,7 +173,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         )
         SwitchRow(
             text = "Pause sync",
-            sub = "Stops the periodic job entirely until resumed.",
+            sub = "Stops health sync entirely until resumed (task refresh keeps running).",
             checked = paused,
             onChange = {
                 BehaviourSettings.setSyncPaused(context, it)
@@ -244,7 +244,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             options = listOf("" to "Engine default") + voices,
             onPick = {
                 BehaviourSettings.setTtsVoice(context, it)
-                ttsVoice = it
+                ttsVoice = BehaviourSettings.ttsVoice(context)
             },
         )
         OptionMenu(
