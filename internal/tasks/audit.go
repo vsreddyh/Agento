@@ -226,8 +226,21 @@ const auditWriteBudget = 5 * time.Second
 
 // ChangedFieldNames names which fields an update touched, for the audit log's `detail`.
 //
-// It lives here, in the package that owns the log, because BOTH callers had their own
-// copy — cmd/health-api had `changedKeys` and cmd/task-manager had
+// It names EVERY supplied key (except `expected_revision` and nulls), so it
+// answers "what did the caller send?". That is the right question for
+// VALIDATION — an unknown key has to be caught there, not ignored.
+//
+// For "what did the write actually change?", the answer is
+// UpdateFieldNames, which names only the fields the update path knows.
+// The two deliberately disagree about an unknown key, and each is used
+// where its own question is the right one: the transports' audit guard
+// and the batch's detail use UpdateFieldNames, the batch's extras
+// rejection uses this one. Unifying them would reopen either the
+// silent-drop (an unknown update key logged as a change) or the
+// silent-allow (an unknown field on a non-update op slipping past).
+//
+// It lives here, in the package that owns the log, because BOTH callers
+// had their own copy — cmd/health-api had `changedKeys` and cmd/task-manager had
 // `changedFieldNames`, identical apart from a comment and the order of two lines. Two
 // copies of one rule is the defect shape this stack has produced repeatedly, and it
 // matters more here than usual: the two callers are the HTTP API and the agent, so a

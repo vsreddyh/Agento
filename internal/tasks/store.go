@@ -765,6 +765,13 @@ var updateFields = []string{
 //
 // `expected_revision` is absent from the list on purpose: it is the
 // optimistic-concurrency guard, not a field of the task.
+//
+// The OTHER helper, ChangedFieldNames, names every supplied key, because
+// validation has to CATCH an unknown one rather than ignore it. The two
+// deliberately disagree about unknown keys, and each answers its own
+// question: "what did the caller send" (validation) and "what did the
+// write change" (the audit guard and the batch's detail). Unifying them
+// would reopen either the silent-drop or the silent-allow.
 func UpdateFieldNames(fields map[string]any) string {
 	keys := make([]string, 0, len(fields))
 	for _, k := range updateFields {
