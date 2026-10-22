@@ -254,6 +254,12 @@ const mcpSource = "mcp"
 // identity: "mcp" is this server, the app labels its own calls, and either
 // could claim either. It answers "which client made this change" well enough
 // to explain an accident, and badly enough to be evidence against anyone.
+//
+// The filters are parsed BEFORE the store is touched, so a malformed filter
+// is a 422 even when the store is unreachable — the same precedence the HTTP
+// route and the store itself use, and the same reason: the filter is the
+// caller's mistake, and naming it is more useful than a 500 that says
+// nothing about the request.
 func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (map[string]any, error) {
 	ops, err := tasks.ParseOps(in.Op)
 	if err != nil {

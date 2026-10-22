@@ -156,15 +156,21 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 			// dropping it would lose the record of a copy that really
 			// happened — and logged, so an operator looking for join
 			// failures is not sent after a value that was never there.
-			log.Printf("tasks: mutation log entry kept with a MISSING duplicate detail (no back-link)")
+			//
+			// The copy's id is echoed, like every other line in this
+			// file: a log line that cannot be joined back to a task_id is
+			// the one kind that cannot be acted on.
+			log.Printf("tasks: mutation log entry kept with a MISSING duplicate detail (no back-link) task_id=%q",
+				TruncateBytes(sentID, 40))
 		} else {
 			// A back-link that joins nothing: the detail is not an id, so
 			// it cannot be matched against a task_id lookup — the one
 			// thing it is for. Kept and logged, for the same reason.
 			// Lowercased like every other id-like field on this seam, so
 			// the stored value differs from the caller's only in case.
-			log.Printf("tasks: mutation log entry kept with an unjoinable duplicate detail (%q)",
-				TruncateBytes(strings.ToLower(strings.TrimSpace(detail)), 40))
+			log.Printf("tasks: mutation log entry kept with an unjoinable duplicate detail (%q) task_id=%q",
+				TruncateBytes(strings.ToLower(strings.TrimSpace(detail)), 40),
+				TruncateBytes(sentID, 40))
 			detail = strings.ToLower(strings.TrimSpace(detail))
 		}
 	}

@@ -266,7 +266,9 @@ The two envelopes differ, on purpose:
 anywhere, and `truncated` is the only signal that more exist. A repeated
 parameter reads its FIRST value only (`?op=create&op=delete` filters by
 `create`, `?limit=5&limit=500` returns 5), which is Go's standard query
-handling — the same the task list already has.
+handling — the same the task list already has. Note the one shape where
+"first wins" and "blank means no filter" compose: `?task_id=&task_id=<hex>`
+reads the BLANK first value, so it answers the whole log.
 
 The delete envelopes differ too, and predates this reader: the MCP tool
 answers `{"deleted": "<canonical id>"}` while the HTTP route answers
