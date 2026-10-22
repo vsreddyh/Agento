@@ -247,13 +247,15 @@ object BehaviourSettings {
  * breakage is a warning, like the callers already treat it).
  */
 fun applyStoredTtsSettings(tts: TextToSpeech, appCtx: Context) {
+    // Compared as stored Long pcts, never as floats: exact, and skipped at
+    // defaults so untouched installs speak exactly like 5.12.0.
     runCatching {
-        val rate = BehaviourSettings.ttsRate(appCtx)
-        if (rate != 1f) tts.setSpeechRate(rate)
+        val pct = BehaviourSettings.ttsRatePct(appCtx)
+        if (pct != BehaviourSettings.DEFAULT_TTS_PCT) tts.setSpeechRate(pct / 100f)
     }
     runCatching {
-        val pitch = BehaviourSettings.ttsPitch(appCtx)
-        if (pitch != 1f) tts.setPitch(pitch)
+        val pct = BehaviourSettings.ttsPitchPct(appCtx)
+        if (pct != BehaviourSettings.DEFAULT_TTS_PCT) tts.setPitch(pct / 100f)
     }
     val want = BehaviourSettings.ttsVoice(appCtx)
     if (want.isNotEmpty()) {

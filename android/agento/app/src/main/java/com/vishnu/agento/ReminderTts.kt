@@ -30,8 +30,9 @@ object ReminderTts {
     private var ready = false
     private var inited = false
     /** Application context for reading stored TTS prefs in pump(). Set on
-     * every speak(); the object never holds an Activity. */
-    private var appCtxRef: Context? = null
+     * every speak(); the object never holds an Activity. Volatile like the
+     * engine: written on the caller thread, read off the TTS callback. */
+    @Volatile private var appCtxRef: Context? = null
     private var speaking = false
     private var speakStartedAt = 0L
     /** Engine generation: a late callback from a dead engine must not clear the new one's state. */
