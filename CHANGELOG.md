@@ -8,6 +8,22 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.13.0]
+- **Settings → Behaviour: the device owns its behaviour (#355).** A new
+  Behaviour section gathers every device-local knob that used to be a
+  constant, an env var or a buried toggle: health-sync cadence (1–24h) with
+  Wi-Fi-only and pause, task/widget refresh (15–120 min), reminder lead
+  time (0–60 min, default 5), TTS voice/rate/pitch for chat read-aloud and
+  reminder speech (engine defaults until picked), per-kind notification
+  gates (reply failed, instruction saved, scheduler responses — each under
+  the existing master reply-alerts switch, all default on), plus the two
+  settings that lived outside Settings (due-time reminders, moved from the
+  Task Manager bell; auto-read, shared with the chat-bar toggle). Defaults
+  are byte-identical to 5.12.0, everything is additive (old backups import,
+  new keys round-trip, no backup format change), and the user-facing copy
+  no longer asserts a constant. Retention windows, gateway timeouts and the
+  profile prompt stay operator-set by design (see documentation.md).
+
 ## [5.12.0]
 - **Files tab: uploads + rename (#340).** The Storage tab is now the Files
   tab: a two-way file shelf over the VPS `exports/` folder. An Upload action

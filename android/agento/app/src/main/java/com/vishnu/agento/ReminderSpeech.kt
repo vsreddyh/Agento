@@ -13,6 +13,7 @@ internal fun reminderSpeech(
     taskName: String,
     speakName: String = "",
     overdueElapsed: Long? = null,
+    leadMinutes: Long = TaskReminders.BEFORE_START_MINUTES,
 ): String {
     // Capped like speak_name: the list name has no server-side cap, so the
     // fallback path most tasks actually speak gets the same 120-byte budget.
@@ -23,7 +24,8 @@ internal fun reminderSpeech(
     )
     return when (kind) {
         ReminderKind.BeforeStart ->
-            "In ${TaskReminders.BEFORE_START_MINUTES} minutes you need to start \"$name\""
+            if (leadMinutes <= 0L) "You need to start \"$name\" now"
+            else "In $leadMinutes minutes you need to start \"$name\""
         ReminderKind.Start ->
             "You need to start \"$name\""
         ReminderKind.Due ->

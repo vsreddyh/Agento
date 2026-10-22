@@ -163,6 +163,16 @@ Run manual dry-runs via:
 ./scripts/retention.sh --dry-run
 ```
 
+### Operator-set, not app settings (#355)
+
+The retention windows above, the gateway timeouts (`PI_TURN_TIMEOUT`,
+`PI_INVENTORY_TIMEOUT` in `docker/docker-compose.yml`) and the agent's
+personality and instructions (`pi/profiles/<name>/AGENTS.md`) are
+operator-set by design: they live in the repo / deployment, not in the app.
+The app's Settings → Behaviour section owns the device-local knobs (sync
+cadence, reminder lead time, TTS, notifications) — everything with an
+obvious default that the device can apply itself.
+
 ---
 
 ## Health Connect Pipeline

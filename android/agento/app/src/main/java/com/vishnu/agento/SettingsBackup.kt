@@ -76,6 +76,8 @@ object SettingsBackup {
         add("auth_token")
         add("theme_mode")
         add("last_sync_at")
+        // Behaviour (#355): stored TTS voice name, "" for engine default.
+        add(BehaviourSettings.KEY_TTS_VOICE)
     }
 
     /** Boolean prefs the app reads. */
@@ -87,6 +89,14 @@ object SettingsBackup {
         // armed set and the budget snapshot are excluded on purpose; see the
         // note under [isWidgetDisplayKey].
         "task_reminders_enabled",
+        // Behaviour (#355): per-kind notification gates plus the health-sync
+        // pause/Wi-Fi-only switches. All default to today's behaviour, so
+        // old backups (without them) restore identically.
+        BehaviourSettings.KEY_NOTIFY_FAILED,
+        BehaviourSettings.KEY_NOTIFY_INSTRUCT,
+        BehaviourSettings.KEY_NOTIFY_CRON,
+        BehaviourSettings.KEY_SYNC_WIFI_ONLY,
+        BehaviourSettings.KEY_SYNC_PAUSED,
     )
 
     /**
@@ -94,8 +104,18 @@ object SettingsBackup {
      * exported/imported like the string/boolean allowlists above — additive
      * and optional, so old backups (without these keys) still restore and
      * old readers ignore the extra numbers.
+     *
+     * Behaviour (#355) cadence/lead/TTS knobs ride the same list: they are
+     * longs for exactly this reason, and the export's non-negative clamp
+     * matches their coerceIn floors.
      */
-    val LONG_KEYS: List<String> = UsageStore.LONG_KEYS
+    val LONG_KEYS: List<String> = UsageStore.LONG_KEYS + listOf(
+        BehaviourSettings.KEY_SYNC_INTERVAL_HOURS,
+        BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES,
+        BehaviourSettings.KEY_REMINDER_LEAD_MINUTES,
+        BehaviourSettings.KEY_TTS_RATE_PCT,
+        BehaviourSettings.KEY_TTS_PITCH_PCT,
+    )
 
     /**
      * True for per-model effort memory keys (`effort_<tab>_<model>` with tab

@@ -11,8 +11,9 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 /**
- * Application entry point; ensures the hourly health sync and the
- * half-hourly task refresh both survive process death.
+ * Application entry point; ensures the health sync and the task refresh
+ * both survive process death. Cadences come from [BehaviourSettings]
+ * (defaults: hourly sync, half-hourly refresh); see the Behaviour section.
  */
 class AgentoApp : Application() {
 
@@ -56,13 +57,31 @@ class AgentoApp : Application() {
 
         /** Unique periodic work with UPDATE policy so reinstalls never duplicate. */
         fun scheduleSync(context: Context) {
-            val request = PeriodicWorkRequestBuilder<SyncWorker>(
-                SYNC_INTERVAL_HOURS, TimeUnit.HOURS
-            ).build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            val appCtx = context.applicationContext
+            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val wm = WorkManager.getInstance(appCtx)
+            // Paused means no job at all (#355): cancelling (not merely
+            // skipping) keeps the process from waking hourly for nothing.
+            // Re-enabling re-enqueues below with UPDATE, so resume is one call.
+            if (prefs.getBoolean(BehaviourSettings.KEY_SYNC_PAUSED, false)) {
+                wm.cancelUniqueWork(SYNC_WORK_NAME)
+                return
+            }
+            val hours = prefs.getLong(
+                BehaviourSettings.KEY_SYNC_INTERVAL_HOURS, SYNC_INTERVAL_HOURS,
+            ).coerceIn(1L, 24L)
+            val builder = PeriodicWorkRequestBuilder<SyncWorker>(hours, TimeUnit.HOURS)
+            if (prefs.getBoolean(BehaviourSettings.KEY_SYNC_WIFI_ONLY, false)) {
+                builder.setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.UNMETERED)
+                        .build(),
+                )
+            }
+            wm.enqueueUniquePeriodicWork(
                 SYNC_WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
-                request,
+                builder.build(),
             )
         }
 
@@ -72,8 +91,13 @@ class AgentoApp : Application() {
          * so a cold start, a reboot and a reinstall all land on the same one.
          */
         fun scheduleTaskSync(context: Context) {
+            val appCtx = context.applicationContext
+            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val minutes = prefs.getLong(
+                BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES, TASK_SYNC_INTERVAL_MINUTES,
+            ).coerceIn(15L, 24L * 60L)
             val request = PeriodicWorkRequestBuilder<TaskSyncWorker>(
-                TASK_SYNC_INTERVAL_MINUTES, TimeUnit.MINUTES
+                minutes, TimeUnit.MINUTES
             ).setConstraints(
                 // Offline, there is nothing to fetch and nothing to report:
                 // without this every tick wakes the process, fails all the
@@ -84,7 +108,7 @@ class AgentoApp : Application() {
                     .setRequiredNetworkType(NetworkType.CONNECTED)
                     .build(),
             ).build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            WorkManager.getInstance(appCtx).enqueueUniquePeriodicWork(
                 TASK_SYNC_WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
                 request,
