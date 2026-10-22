@@ -106,12 +106,12 @@ func namesNoOperation(shown string) *StoreError {
 	// a raw element, and the same logical filter must get the same answer
 	// through either door.
 	shown = strings.TrimSpace(shown)
+	known := strings.Join(KnownOps(), ", ")
 	if shown == "" {
-		return fail("op filter is blank — it names no operation; known ops are %s",
-			strings.Join(KnownOps(), ", "))
+		return fail("op filter is blank — it names no operation; known ops are %s", known)
 	}
 	return fail("op filter %q names no operation; known ops are %s",
-		TruncateBytes(shown, 40), strings.Join(KnownOps(), ", "))
+		TruncateBytes(shown, 40), known)
 }
 
 // ParseOps parses a comma-separated op filter ("complete,skip") into the ops
@@ -139,6 +139,12 @@ func ParseOps(s string) ([]string, error) {
 	// the token the caller typed, exactly as it does when it is called
 	// directly. The trimmed copy is only used to decide whether there is
 	// a filter at all.
+	//
+	// Three passes over a list of at most a few elements, deliberately:
+	// this one for the emptiness check, the validator's own for the
+	// names it knows, and the return value's. Folding them into one
+	// would lose the distinction between "no filter" and "a filter that
+	// names nothing" — the branch the strict rule exists for.
 	tokens := strings.Split(s, ",")
 	ops := normalizeOps(tokens)
 	if len(ops) == 0 {
