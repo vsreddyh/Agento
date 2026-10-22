@@ -148,6 +148,15 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	source := requestSource(r)
+	// The audit writes are DETACHED from the request (each carries its own
+	// 5s budget), so the 30s request timeout does not bound this loop: on
+	// a slow Mongo the acknowledgement waits for up to N×5s of durability
+	// work — 50 ops is ~250s.
+	//
+	// That is the trade this feature makes on purpose: the log is
+	// best-effort but durable-by-default, and a change the log does not
+	// record is a change nobody can explain later. The fix, if batch
+	// sizes ever grow, is one bulk insert for the batch's rows.
 	for _, res := range results {
 		switch res.Op {
 		case "complete":
