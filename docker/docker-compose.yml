@@ -74,6 +74,11 @@ services:
   # documentation still referred to it.
   # ──────────────────────────────────────────────────────
   proxy:
+    # Pinned by VERSION, not by digest, and deliberately so: this image is
+    # PULLED and run, not built from this repo, so there is no Dockerfile
+    # here to keep the ARG and the digest in step. The tag names an exact
+    # patch release, and the config it serves is ours (mounted below), so
+    # what moves under us is the binary, not the routing.
     image: docker.io/nginx:1.31.8-alpine3.24
     ports:
       - "${APP_PORT:-8080}:80"

@@ -23,6 +23,8 @@
 # docker/pi/pi-deps.lock" — which is the build doing its job.
 ARG GO_IMAGE=golang@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
 ARG NODE_IMAGE=node@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
+# The digests above were resolved from golang:1.27-bookworm and
+# node:24-bookworm-slim (2026-10-21).
 
 # ──────────────────────────────────────────────────────
 # Pi runtime — the agent host that replaces the Hermes gateway.
