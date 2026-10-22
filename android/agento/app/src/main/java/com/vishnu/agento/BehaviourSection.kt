@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 /**
@@ -56,10 +57,10 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         mutableStateOf(BehaviourSettings.ttsVoice(context))
     }
     var ttsRate by remember(refreshTick) {
-        mutableStateOf(BehaviourSettings.ttsRate(context) * 100f)
+        mutableStateOf(BehaviourSettings.ttsRatePct(context))
     }
     var ttsPitch by remember(refreshTick) {
-        mutableStateOf(BehaviourSettings.ttsPitch(context) * 100f)
+        mutableStateOf(BehaviourSettings.ttsPitchPct(context))
     }
     var autoRead by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.ttsAuto(context))
@@ -77,12 +78,18 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
 
     // Reminder enable flow (moved from the Task Manager bell): exact alarms
     // need a settings redirect on S+, notifications a runtime grant on 33+.
+    var remindersDenied by remember(refreshTick) { mutableStateOf(false) }
     val notifPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
             TaskReminders.setEnabled(context, true)
             remindersOn = true
+            remindersDenied = false
+        } else {
+            // The switch stays off with an explanation, like the old bell's
+            // denial toast — silence would read as a broken toggle.
+            remindersDenied = true
         }
     }
 
@@ -90,6 +97,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         if (!on) {
             TaskReminders.setEnabled(context, false)
             remindersOn = false
+            remindersDenied = false
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -112,13 +120,15 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         }
         TaskReminders.setEnabled(context, true)
         remindersOn = true
+        remindersDenied = false
     }
 
     // Engine voices for the picker: a short-lived engine lists, then dies.
     // Matched by name at speak time (Voice objects are engine-specific).
+    // Bounded: a broken engine answers empty, never hangs the section.
     var voices by remember(refreshTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     LaunchedEffect(refreshTick) {
-        voices = listTtsVoices(appCtx)
+        voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
     }
 
     SectionCard(
@@ -189,6 +199,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             checked = remindersOn,
             onChange = ::setReminders,
         )
+        if (remindersDenied) {
+            HintLine("Notifications are blocked — reminders stay off until allowed.")
+        }
         OptionMenu(
             label = "Warn me",
             shown = BehaviourSettings.leadLabel(leadMinutes),
@@ -219,27 +232,27 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         )
         OptionMenu(
             label = "Rate",
-            shown = BehaviourSettings.ttsPctLabel(ttsRate.toLong()),
+            shown = BehaviourSettings.ttsPctLabel(ttsRate),
             options = BehaviourSettings.TTS_PCT_OPTIONS.map {
                 it.toString() to BehaviourSettings.ttsPctLabel(it)
             },
             onPick = {
                 it.toLongOrNull()?.let { p ->
                     BehaviourSettings.setTtsRatePct(context, p)
-                    ttsRate = BehaviourSettings.ttsRate(context) * 100f
+                    ttsRate = BehaviourSettings.ttsRatePct(context)
                 }
             },
         )
         OptionMenu(
             label = "Pitch",
-            shown = BehaviourSettings.ttsPctLabel(ttsPitch.toLong()),
+            shown = BehaviourSettings.ttsPctLabel(ttsPitch),
             options = BehaviourSettings.TTS_PCT_OPTIONS.map {
                 it.toString() to BehaviourSettings.ttsPctLabel(it)
             },
             onPick = {
                 it.toLongOrNull()?.let { p ->
                     BehaviourSettings.setTtsPitchPct(context, p)
-                    ttsPitch = BehaviourSettings.ttsPitch(context) * 100f
+                    ttsPitch = BehaviourSettings.ttsPitchPct(context)
                 }
             },
         )
@@ -332,7 +345,10 @@ private fun voiceShown(saved: String, voices: List<Pair<String, String>>): Strin
     return voices.firstOrNull { it.first == saved }?.second ?: saved
 }
 
-/** Lists engine voices as (name to display) pairs, then shuts down. */
+/** Lists engine voices as (name to display) pairs, then shuts down.
+ * Never throws and never hangs the caller: a constructor failure answers
+ * empty (pair with the timeout in the caller, which cancels and resumes
+ * empty via invokeOnCancellation's shutdown). */
 private suspend fun listTtsVoices(appCtx: Context): List<Pair<String, String>> =
     suspendCancellableCoroutine { cont ->
         val ref = java.util.concurrent.atomic.AtomicReference<TextToSpeech?>(null)
@@ -359,12 +375,21 @@ private suspend fun listTtsVoices(appCtx: Context): List<Pair<String, String>> =
         // before `ref` is assigned (see ReminderTts): the callback then only
         // stashes its status, and the tail below finishes explicitly. The
         // CAS keeps a racing async callback from finishing twice.
-        ref.set(TextToSpeech(appCtx) { status ->
-            statusRef.set(status)
-            ref.get()?.let { finish(it, status) }
-        })
-        val e = ref.get()
+        //
+        // A constructor that throws (missing/broken engine) answers empty
+        // instead of escaping the LaunchedEffect with `cont` unresumed.
+        val tts = runCatching {
+            TextToSpeech(appCtx) { status ->
+                statusRef.set(status)
+                ref.get()?.let { finish(it, status) }
+            }
+        }.getOrNull()
+        if (tts == null) {
+            if (done.compareAndSet(false, true) && cont.isActive) cont.resume(emptyList())
+            return@suspendCancellableCoroutine
+        }
+        ref.set(tts)
         val s = statusRef.get()
-        if (e != null && s != Int.MIN_VALUE) finish(e, s)
+        if (s != Int.MIN_VALUE) finish(tts, s)
         cont.invokeOnCancellation { runCatching { ref.get()?.shutdown() } }
     }
