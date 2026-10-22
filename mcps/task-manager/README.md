@@ -348,13 +348,13 @@ field in the envelope, not a correction of one. Polling with an echoed
 a full-row match (`task_id`, `op`, `source`, `detail`, `at`) rather than the
 timestamp alone.
 
-That dedup inherits the same missing key: two DISTINCT events in the same
-millisecond whose visible fields agree (two `update`s naming the same
-fields, say) match each other, because the row's `_id` is the only thing
-that tells them apart and it is not in the envelope. Collapsing them is
-wrong at the cost of one row, and the collision needs the same millisecond
-AND the same visible fields — a personal-log rarity. The fix is the same
-cursor key, not a better match rule.
+That dedup inherits the same missing key (the paragraph above): two DISTINCT
+events in the same millisecond whose visible fields agree (two `update`s
+naming the same fields, say) match each other, because the row's `_id` is
+the only thing that tells them apart and it is not in the envelope.
+Collapsing them is wrong at the cost of one row, and the collision needs
+the same millisecond AND the same visible fields — a personal-log rarity.
+The fix is the same cursor key, not a better match rule.
 
 ### What `detail` holds, per op
 

@@ -15,7 +15,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"agento/internal/mongostore"
 	"agento/internal/tasks"
@@ -286,10 +285,10 @@ func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (
 	if err != nil {
 		return nil, err
 	}
-	// The HTTP route bounds its read at 30s; this one bounds it the same
-	// way, so a hung Mongo answers with an error instead of hanging the
-	// tool. The caller's context still wins — a cancelled session ends the
-	// call whatever the timeout says.
+	// The HTTP route bounds its read at the same budget (one constant,
+	// both doors — tasks.HistoryReadBudget), so a hung Mongo answers with
+	// an error instead of hanging the tool. The caller's context still
+	// wins — a cancelled session ends the call whatever the timeout says.
 	//
 	// This is the ONLY MCP tool in this file with a deadline of its own,
 	// and that is deliberate: it is the only one that mirrors a bounded
@@ -301,7 +300,7 @@ func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (
 	//
 	// Named apart from ctx on purpose: two deadlines in one function, and
 	// a reader has to be able to tell which one a line holds.
-	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, tasks.HistoryReadBudget)
 	defer cancel()
 	rows, truncated, err := store.ListMutations(readCtx, tasks.MutationFilter{
 		TaskID: taskID,

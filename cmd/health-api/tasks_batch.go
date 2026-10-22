@@ -164,6 +164,13 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 	// best-effort but durable-by-default, and a change the log does not
 	// record is a change nobody can explain later. The fix, if batch
 	// sizes ever grow, is one bulk insert for the batch's rows.
+	//
+	// And the consequence for a caller: a timed-out batch has an UNKNOWN
+	// outcome, because the commit happened before the timeout did. The
+	// answer is never a blind resend — `duplicate` is the one verb here
+	// that is not idempotent, so a retry copies the task a second time.
+	// Read the change log (or the changes marker) first and resend only
+	// what did not land.
 	for _, res := range results {
 		switch res.Op {
 		case "complete":

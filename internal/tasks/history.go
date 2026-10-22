@@ -29,6 +29,15 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// HistoryReadBudget bounds one change-log read, at either door.
+//
+// The HTTP route and the MCP tool ask the same question of the same
+// collection, so they answer it on the same budget — and it is ONE
+// constant, so a change to one cannot quietly leave the other behind.
+// A read that outlives its budget is a hung Mongo, and a hung Mongo
+// must answer with an error rather than hold the caller.
+const HistoryReadBudget = 30 * time.Second
+
 // Mutation is one row of the change log.
 //
 // The four fields are the whole contract, and each answers one of the
