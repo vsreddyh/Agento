@@ -91,6 +91,8 @@ class BehaviourSettingsTest {
             "Automatic sync runs every 6 hours on unmetered Wi-Fi.",
             BehaviourSettings.syncCadenceLine(6L, true, false),
         )
+        // Pure overloads coerce: no caller renders "every 0 hours".
+        assertEquals("Automatic sync runs every hour.", BehaviourSettings.syncCadenceLine(0L, false, false))
         assertEquals(
             "Task and widget refresh runs every hour.",
             BehaviourSettings.taskSyncCadenceLine(60L),
@@ -102,6 +104,10 @@ class BehaviourSettingsTest {
         assertEquals(
             "Task and widget refresh runs every 45 minutes.",
             BehaviourSettings.taskSyncCadenceLine(45L),
+        )
+        assertEquals(
+            "Task and widget refresh runs every 15 minutes.",
+            BehaviourSettings.taskSyncCadenceLine(0L),
         )
     }
 

@@ -68,12 +68,17 @@ object BehaviourSettings {
     fun syncCadenceLine(ctx: Context): String =
         syncCadenceLine(syncIntervalHours(ctx), syncWifiOnly(ctx), syncPaused(ctx))
 
-    fun syncCadenceLine(hours: Long, wifiOnly: Boolean, paused: Boolean): String = when {
-        paused -> "Automatic sync is paused."
-        else -> {
-            val every = if (hours == 1L) "every hour" else "every $hours hours"
-            val net = if (wifiOnly) " on unmetered Wi-Fi" else ""
-            "Automatic sync runs $every$net."
+    fun syncCadenceLine(hours: Long, wifiOnly: Boolean, paused: Boolean): String {
+        // Total like every pure helper here: coerce, so a direct caller
+        // can never render "every 0 hours".
+        val h = coerceImport(KEY_SYNC_INTERVAL_HOURS, hours)
+        return when {
+            paused -> "Automatic sync is paused."
+            else -> {
+                val every = if (h == 1L) "every hour" else "every $h hours"
+                val net = if (wifiOnly) " on unmetered Wi-Fi" else ""
+                "Automatic sync runs $every$net."
+            }
         }
     }
 
@@ -95,10 +100,11 @@ object BehaviourSettings {
         taskSyncCadenceLine(taskSyncIntervalMinutes(ctx))
 
     fun taskSyncCadenceLine(minutes: Long): String {
+        val m = coerceImport(KEY_TASK_SYNC_INTERVAL_MINUTES, minutes)
         return when {
-            minutes == 60L -> "Task and widget refresh runs every hour."
-            minutes % 60L == 0L -> "Task and widget refresh runs every ${minutes / 60L} hours."
-            else -> "Task and widget refresh runs every $minutes minutes."
+            m == 60L -> "Task and widget refresh runs every hour."
+            m % 60L == 0L -> "Task and widget refresh runs every ${m / 60L} hours."
+            else -> "Task and widget refresh runs every $m minutes."
         }
     }
 

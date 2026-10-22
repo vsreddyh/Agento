@@ -82,10 +82,11 @@ internal object CronCheck {
             // runs, never a catch-up blast. System denial still queues and
             // retries below: the user didn't opt out, the OS refused.
             //
-            // notifyCron re-checks the same gate before posting: a toggle
-            // flipping mid-loop can only disagree in the safe direction
-            // (check saw on, post sees off → no post, cursor stays, retry
-            // next tick; the reverse drops one run that re-fires anyway).
+            // notifyCron re-checks the same gate before posting: a flip
+            // mid-loop only disagrees safely (check saw on, post sees off
+            // → no post, cursor stays, retry next tick). The reverse needs
+            // no handling: check-saw-off advances and continues before the
+            // post is ever reached.
             if (!BehaviourSettings.notifyCron(appCtx)) {
                 p.edit { putLong(seenKey(job.id), maxAt) }
                 continue

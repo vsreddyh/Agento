@@ -37,6 +37,12 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     val context = LocalContext.current
     val appCtx = context.applicationContext
 
+    // Re-read on every resume (declared first: state below keys on it).
+    // Covers flips made outside this section — the chat-bar auto-read
+    // toggle, the exact-alarm grant — without waiting for an import.
+    var resumeTick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
+
     var syncHours by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.syncIntervalHours(context))
     }
@@ -52,7 +58,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     var leadMinutes by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.reminderLeadMinutes(context))
     }
-    var remindersOn by remember(refreshTick) {
+    var remindersOn by remember(refreshTick, resumeTick) {
         mutableStateOf(TaskReminders.isEnabled(context))
     }
     var ttsVoice by remember(refreshTick) {
@@ -64,7 +70,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     var ttsPitch by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.ttsPitchPct(context))
     }
-    var autoRead by remember(refreshTick) {
+    var autoRead by remember(refreshTick, resumeTick) {
         mutableStateOf(BehaviourSettings.ttsAuto(context))
     }
     var kindFailed by remember(refreshTick) {
@@ -136,10 +142,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
     }
 
-    // Exact-alarm grant, re-read on every resume: enabling without it falls
-    // back to inexact alarms, and the copy must not promise otherwise.
-    var resumeTick by remember { mutableIntStateOf(0) }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
+    // Exact-alarm grant, re-read on the same resume tick as the switches
+    // above: enabling without it falls back to inexact alarms, and the
+    // copy must not promise otherwise.
     val exactAlarms = remember(resumeTick) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) true
         else runCatching {
