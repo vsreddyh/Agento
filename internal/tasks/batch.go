@@ -194,8 +194,12 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		switch opName {
 		case "complete", "skip", "update", "duplicate":
 		default:
+			// Bounded, like every other caller-controlled echo in this
+			// stack: a 10KB op name is not answered with itself, and one
+			// mistake reads the same however it was spelled.
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
-				Err: fail("unknown batch op %q: want complete, skip, update, or duplicate", op.Op)}
+				Err: fail("unknown batch op %q: want complete, skip, update, or duplicate",
+					TruncateBytes(opName, 40))}
 		}
 		if id == "" {
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
@@ -256,7 +260,12 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// bump for the whole batch lands below, inside the transaction.
 		nb := noBump(sc)
 		for i, op := range ops {
-			res := BatchItemResult{Index: i, ID: op.ID, Op: op.Op}
+			// The id in the envelope is the CANONICAL one (lower case), the
+			// same spelling the change log stores — so a caller diffing
+			// the batch answer against a history row does not miss on
+			// case. The duplicate branch below replaces it with the copy's
+			// own id, which is canonical already.
+			res := BatchItemResult{Index: i, ID: strings.ToLower(strings.TrimSpace(op.ID)), Op: op.Op}
 			var err error
 			switch op.Op {
 			case "complete":

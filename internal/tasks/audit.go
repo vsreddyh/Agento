@@ -145,13 +145,17 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	if op == OpDuplicate {
 		if src, nerr := NormalizeTaskID(detail); nerr == nil && src != "" {
 			detail = src
+		} else if strings.TrimSpace(detail) == "" {
+			// No back-link at all: a copy row that says what it was
+			// copied from nowhere. Kept — the row itself is findable, and
+			// dropping it would lose the record of a copy that really
+			// happened — and logged, so an operator looking for join
+			// failures is not sent after a value that was never there.
+			log.Printf("tasks: mutation log entry kept with a MISSING duplicate detail (no back-link)")
 		} else {
-			// KEPT, not dropped: the row itself is findable (its task_id
-			// is valid), and dropping it would lose the record of a copy
-			// that really happened. Logged, because the detail will not
-			// join against a task_id lookup — the one thing the detail is
-			// for. An EMPTY detail is the same case: a copy row with no
-			// back-link at all.
+			// A back-link that joins nothing: the detail is not an id, so
+			// it cannot be matched against a task_id lookup — the one
+			// thing it is for. Kept and logged, for the same reason.
 			log.Printf("tasks: mutation log entry kept with an unjoinable duplicate detail (%q)",
 				TruncateBytes(strings.TrimSpace(detail), 40))
 		}
