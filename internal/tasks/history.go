@@ -341,7 +341,15 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 		rows = []Mutation{}
 	}
 	if int64(len(rows)) > lim {
-		return rows[:int(lim)], true, nil
+		// The cut is bounded by the rows themselves, not by the cast:
+		// ClampLimit returns an int64, and the slice wants an int, so
+		// the assumption that the limit fits an int is checked here
+		// rather than made.
+		cut := int(lim)
+		if cut > len(rows) {
+			cut = len(rows)
+		}
+		return rows[:cut], true, nil
 	}
 	return rows, false, nil
 }

@@ -335,7 +335,10 @@ not, the fix is a cursor — `(at, _id)` — not a bigger `limit`.
 
 The entries carry no cursor key today: `at` alone does not disambiguate
 two rows written in the same millisecond, so a future cursor would be a NEW
-field in the envelope, not a correction of one.
+field in the envelope, not a correction of one. Polling with an echoed
+`at` therefore re-receives the last row by design, and the way to dedup is
+a full-row match (`task_id`, `op`, `source`, `detail`, `at`) rather than the
+timestamp alone.
 
 ### What `detail` holds, per op
 
