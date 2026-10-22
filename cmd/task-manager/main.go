@@ -174,6 +174,10 @@ type taskHistoryInput struct {
 	// `?task_id=` filter on the HTTP route). A blank id means every task; a
 	// non-blank one that is not a hex id is refused rather than answered
 	// with an empty history.
+	//
+	// An array or null is an argument type error, not a filter — the same
+	// rule the other three fields state, and rejected by the SDK's schema
+	// validation before this handler runs.
 	TaskID string `json:"task_id,omitempty"`
 	// Op restricts to a set of ops, ONE comma-separated string (not an
 	// array — an array is an argument type error, not a filter; the HTTP

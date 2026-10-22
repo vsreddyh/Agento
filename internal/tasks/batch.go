@@ -255,10 +255,18 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 	// id. The copy is shallow: per-op Fields maps are borrowed read-only
 	// (Update and ChangedFieldNames never mutate them), so a future verb
 	// that normalizes fields in place must deep-copy first.
+	//
+	// The reason is trimmed here too, for the same reason: the copy is what
+	// the verbs are handed, so the value that reaches the skip record is the
+	// canonical one whatever the caller sent. The store trims it again on
+	// the way to `skipReason` (SkipDetail), so this is belt and braces —
+	// but the rule now lives where the rest of the canonicalisation lives,
+	// instead of only at the transport that happens to trim first.
 	ops = append([]BatchOp(nil), ops...)
 	for i := range ops {
 		ops[i].ID = strings.TrimSpace(ops[i].ID)
 		ops[i].Op = strings.TrimSpace(ops[i].Op)
+		ops[i].Reason = strings.TrimSpace(ops[i].Reason)
 	}
 	if !s.useTransactions(ctx) {
 		return nil, ErrNoTransactions

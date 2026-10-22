@@ -359,3 +359,23 @@ func mustOid(t *testing.T, hex string) primitive.ObjectID {
 	}
 	return oid
 }
+
+// The reason is trimmed at the SEAM, not only at the transport: the HTTP
+// parser trims before it hands the op over, so a padded reason never used
+// to reach the store — but the rule now lives with the op/id trim, and a
+// direct store caller must land the same value the transport would.
+func TestBatchNormalizesTheReasonAtTheSeam(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	id := mkBatchTask(t, s, "bulk-a", Repeat{})
+	if _, err := s.Batch(ctx, []BatchOp{{Op: "skip", ID: id, Reason: "  travelling  "}}); err != nil {
+		t.Fatalf("Batch: %v", err)
+	}
+	var doc bson.M
+	if err := s.tasks.FindOne(ctx, bson.M{"_id": mustOid(t, id)}).Decode(&doc); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got, _ := doc["skipReason"].(string); got != "travelling" {
+		t.Fatalf("skipReason = %q, want %q", got, "travelling")
+	}
+}
