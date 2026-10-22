@@ -260,12 +260,14 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// bump for the whole batch lands below, inside the transaction.
 		nb := noBump(sc)
 		for i, op := range ops {
-			// The id in the envelope is the CANONICAL one (lower case), the
-			// same spelling the change log stores — so a caller diffing
-			// the batch answer against a history row does not miss on
-			// case. The duplicate branch below replaces it with the copy's
-			// own id, which is canonical already.
-			res := BatchItemResult{Index: i, ID: strings.ToLower(strings.TrimSpace(op.ID)), Op: op.Op}
+			// The id and the op in the envelope are the CANONICAL ones (lower
+			// case), the same spelling the change log stores — so a caller
+			// diffing the batch answer against a history row does not miss
+			// on case, and the transport's switch on res.Op cannot drift
+			// from the validator that accepted it. The duplicate branch
+			// below replaces the id with the copy's own, which is canonical
+			// already.
+			res := BatchItemResult{Index: i, ID: strings.ToLower(strings.TrimSpace(op.ID)), Op: strings.ToLower(strings.TrimSpace(op.Op))}
 			var err error
 			switch op.Op {
 			case "complete":

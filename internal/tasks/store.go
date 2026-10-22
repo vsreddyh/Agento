@@ -194,6 +194,13 @@ func unknownTask(id string) *StoreError {
 	return fail("unknown task '%s'", TruncateBytes(strings.TrimSpace(id), 40))
 }
 
+// UnknownTaskMessage is the body a transport answers with for a task that
+// does not exist. Exported so every transport renders ONE spelling of it:
+// a second copy of the format string is a second string to drift.
+func UnknownTaskMessage(id string) string {
+	return unknownTask(id).Error()
+}
+
 // badID names the id that could not be read as one. Bounded, like
 // unknownTask: same rule, same reason.
 func badID(id string) *StoreError {

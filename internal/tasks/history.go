@@ -108,13 +108,22 @@ func normalizeOps(ops []string) []string {
 // Repeats are dropped, so "create,create" is one op and not two.
 func ParseOps(s string) ([]string, error) {
 	raw := strings.TrimSpace(s)
-	ops := normalizeOps(strings.Split(raw, ","))
-	if len(ops) == 0 && raw != "" {
-		// The SENT string, like ValidateOps echoes — the same typo
-		// produces the same spelling whichever entry point caught it.
-		return nil, fail("op %q names no operation; known ops are %s", TruncateBytes(s, 40), strings.Join(knownOps, ", "))
+	if raw == "" {
+		// No filter at all. Checked BEFORE the split, because splitting
+		// an empty string yields one empty token — and a list of one
+		// blank is a filter that names nothing, which is a 422.
+		return nil, nil
 	}
-	if err := ValidateOps(ops); err != nil {
+	tokens := strings.Split(raw, ",")
+	ops := normalizeOps(tokens)
+	if len(ops) == 0 {
+		return nil, fail("op %q names no operation; known ops are %s",
+			TruncateBytes(strings.TrimSpace(s), 40), strings.Join(knownOps, ", "))
+	}
+	// The SENT tokens are validated, not the normalized ones: the error
+	// must echo what the caller can go and fix, and "FROBNICATE" is not
+	// what they typed.
+	if err := ValidateOps(tokens); err != nil {
 		return nil, err
 	}
 	return ops, nil

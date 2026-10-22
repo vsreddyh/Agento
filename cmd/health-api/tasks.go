@@ -669,10 +669,10 @@ func deleteTask(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if !found {
-		// Bounded and trimmed, like every other echo in this package: the
-		// id came off the path, and two spellings of one mistake should
-		// read alike.
-		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown task '" + tasks.TruncateBytes(strings.TrimSpace(id), 40) + "'"})
+		// One spelling of this body, owned by the store: the transports
+		// render it, and a second copy of the format string is a second
+		// string to drift.
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": tasks.UnknownTaskMessage(id)})
 		return
 	}
 	// Logged AFTER the delete, so there is no window where the log claims a delete

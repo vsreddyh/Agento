@@ -485,10 +485,8 @@ func main() {
 				store.RecordMutation(ctx, tasks.OpDelete, in.ID, mcpSource, "mcp delete_task")
 			}
 			if !done {
-				// Bounded and trimmed, like every other echo: the id came
-				// from the caller, and two spellings of one mistake should
-				// read alike.
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown task '%s'", tasks.TruncateBytes(strings.TrimSpace(in.ID), 40))})
+				// One spelling of this body, owned by the store.
+				return result(map[string]any{"ok": false, "error": tasks.UnknownTaskMessage(in.ID)})
 			}
 			// The CANONICAL id, not the caller's spelling: the change log
 			// stores the normalized id, so a caller comparing this answer
