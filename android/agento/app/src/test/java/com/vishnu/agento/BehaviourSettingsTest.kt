@@ -167,7 +167,10 @@ class BehaviourSettingsTest {
             // restore exactly like the reminders switch it sits beside —
             // dropping either silently is the regression this pins.
             BehaviourSettings.KEY_TTS_AUTO,
-            "task_reminders_enabled",
+            // The pre-existing switch this section surfaces: pinned by
+            // reference (PREF_ENABLED is internal for exactly this), so a
+            // rename cannot silently drop it from restores.
+            TaskReminders.PREF_ENABLED,
         )) {
             assertTrue("BOOLEAN_KEYS lacks $k", SettingsBackup.BOOLEAN_KEYS.contains(k))
         }

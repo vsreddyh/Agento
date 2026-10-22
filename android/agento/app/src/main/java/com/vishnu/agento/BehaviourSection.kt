@@ -107,7 +107,10 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             if (!mgr.canScheduleExactAlarms()) {
                 runCatching {
                     context.startActivity(
-                        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM),
+                        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                            // No-op from this Activity today; crash-proof if
+                            // the composition context ever isn't one.
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                     )
                 }
             }

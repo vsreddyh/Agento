@@ -312,7 +312,10 @@ object TaskReminders {
 
     private const val PREF_ARMED = "task_reminder_armed"
     private const val PREF_BUDGET = "task_reminder_budget"
-    private const val PREF_ENABLED = "task_reminders_enabled"
+    /** Backed up (see SettingsBackup.BOOLEAN_KEYS): internal so the backup
+     * test pins the key by reference, not by a string literal that could
+     * drift silently on rename. */
+    internal const val PREF_ENABLED = "task_reminders_enabled"
     const val CHANNEL_ID = "task_reminders"
     private const val HORIZON_DAYS = 7L
     // An overdue point's own time is in the past by definition, so every nag

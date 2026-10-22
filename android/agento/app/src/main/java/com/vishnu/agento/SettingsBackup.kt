@@ -262,12 +262,15 @@ object SettingsBackup {
             // Long-or-Int only: a hand-set Int still carries the count
             // (widened), but a fractional Double/Float is corruption —
             // truncating 1.9 to 1 would persist a wrong-but-plausible count.
+            // Behaviour keys coerce through the inventory (see the import
+            // twin below): export must never emit a value the getters
+            // disagree with, or export→import stops being idempotent.
             val n: Long? = when (val v = all[k]) {
                 is Long -> v
                 is Int -> v.toLong()
                 else -> null
             }
-            n?.let { values.put(k, maxOf(0L, it)) }
+            n?.let { values.put(k, BehaviourSettings.coerceImport(k, it)) }
         }
         val files = JSONObject()
         // Unreadable files are named, not swallowed (#339): the backup
