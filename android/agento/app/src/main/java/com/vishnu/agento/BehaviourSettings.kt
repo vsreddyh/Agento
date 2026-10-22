@@ -124,11 +124,16 @@ object BehaviourSettings {
         TaskReminders.refresh(ctx)
     }
 
-    fun leadLabel(minutes: Long): String = when (minutes) {
-        0L -> "At start time (no heads-up)"
-        // Shared with the notification copy (leadCopy): the picker and the
-        // lock screen must agree, including on hand-imported values.
-        else -> "${leadCopy(minutes)} before start"
+    fun leadLabel(minutes: Long): String {
+        // Total via the import coercion: negatives read as the default
+        // branch, never "0 minutes before start".
+        val m = coerceImport(KEY_REMINDER_LEAD_MINUTES, minutes)
+        return when (m) {
+            0L -> "At start time (no heads-up)"
+            // Shared with the notification copy (leadCopy): the picker and
+            // the lock screen must agree, including on hand-imported values.
+            else -> "${leadCopy(m)} before start"
+        }
     }
 
     /** Picker choice labels; pinned — the section renders these verbatim. */
@@ -229,23 +234,57 @@ object BehaviourSettings {
     }
 
     /** Hub one-liner: how many knobs differ from their defaults. */
-    fun customCount(ctx: Context): Int {
+    fun customCount(ctx: Context): Int = customCount(
+        syncHours = syncIntervalHours(ctx),
+        wifiOnly = syncWifiOnly(ctx),
+        paused = syncPaused(ctx),
+        taskMinutes = taskSyncIntervalMinutes(ctx),
+        leadMinutes = reminderLeadMinutes(ctx),
+        voice = ttsVoice(ctx),
+        ratePct = ttsRatePct(ctx),
+        pitchPct = ttsPitchPct(ctx),
+        kindFailed = notifyFailedRaw(ctx),
+        kindInstruct = notifyInstructRaw(ctx),
+        kindCron = notifyCronRaw(ctx),
+        remindersOn = TaskReminders.isEnabled(ctx),
+        autoRead = ttsAuto(ctx),
+    )
+
+    /** Pure deviation count, JVM-pinned: every knob that differs from its
+     * default, including the surfaced-but-pre-existing switches (enabling
+     * reminders or auto-read elsewhere still counts — deliberate, and the
+     * hub copy says "custom", not "changed here"). */
+    fun customCount(
+        syncHours: Long,
+        wifiOnly: Boolean,
+        paused: Boolean,
+        taskMinutes: Long,
+        leadMinutes: Long,
+        voice: String,
+        ratePct: Long,
+        pitchPct: Long,
+        kindFailed: Boolean,
+        kindInstruct: Boolean,
+        kindCron: Boolean,
+        remindersOn: Boolean,
+        autoRead: Boolean,
+    ): Int {
         var n = 0
-        if (syncIntervalHours(ctx) != DEFAULT_SYNC_INTERVAL_HOURS) n++
-        if (syncWifiOnly(ctx)) n++
-        if (syncPaused(ctx)) n++
-        if (taskSyncIntervalMinutes(ctx) != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
-        if (reminderLeadMinutes(ctx) != TaskReminders.BEFORE_START_MINUTES) n++
-        if (ttsVoice(ctx).isNotEmpty()) n++
-        if (ttsRatePct(ctx) != DEFAULT_TTS_PCT) n++
-        if (ttsPitchPct(ctx) != DEFAULT_TTS_PCT) n++
-        if (!notifyFailedRaw(ctx)) n++
-        if (!notifyInstructRaw(ctx)) n++
-        if (!notifyCronRaw(ctx)) n++
+        if (syncHours != DEFAULT_SYNC_INTERVAL_HOURS) n++
+        if (wifiOnly) n++
+        if (paused) n++
+        if (taskMinutes != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
+        if (leadMinutes != TaskReminders.BEFORE_START_MINUTES) n++
+        if (voice.isNotEmpty()) n++
+        if (ratePct != DEFAULT_TTS_PCT) n++
+        if (pitchPct != DEFAULT_TTS_PCT) n++
+        if (!kindFailed) n++
+        if (!kindInstruct) n++
+        if (!kindCron) n++
         // Surfaced-but-pre-existing keys count too: enabling either is a
         // deliberate behaviour change made in this section.
-        if (TaskReminders.isEnabled(ctx)) n++
-        if (ttsAuto(ctx)) n++
+        if (remindersOn) n++
+        if (autoRead) n++
         return n
     }
 

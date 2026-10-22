@@ -137,8 +137,8 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // Engine voices for the picker: a short-lived engine lists, then dies.
     // Matched by name at speak time (Voice objects are engine-specific).
     // Bounded: a broken engine answers empty, never hangs the section.
-    var voices by remember(refreshTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    LaunchedEffect(refreshTick) {
+    var voices by remember(refreshTick, resumeTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    LaunchedEffect(refreshTick, resumeTick) {
         voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
     }
 
@@ -270,6 +270,11 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 ttsVoice = BehaviourSettings.ttsVoice(context)
             },
         )
+        if (ttsVoice.isNotEmpty() && voices.isNotEmpty() &&
+            voices.none { it.first == ttsVoice }
+        ) {
+            HintLine("Kept from an import: this engine no longer offers that voice, but the pick is kept.")
+        }
         OptionMenu(
             label = "Rate",
             shown = BehaviourSettings.ttsPctLabel(ttsRate),

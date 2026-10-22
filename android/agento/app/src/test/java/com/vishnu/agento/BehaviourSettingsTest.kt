@@ -119,6 +119,39 @@ class BehaviourSettingsTest {
     }
 
     @Test
+    fun `custom count pins every knob`() {
+        fun all(
+            syncHours: Long = 1L,
+            wifiOnly: Boolean = false,
+            paused: Boolean = false,
+            taskMinutes: Long = 30L,
+            leadMinutes: Long = 5L,
+            voice: String = "",
+            ratePct: Long = 100L,
+            pitchPct: Long = 100L,
+            kindFailed: Boolean = true,
+            kindInstruct: Boolean = true,
+            kindCron: Boolean = true,
+            remindersOn: Boolean = false,
+            autoRead: Boolean = false,
+        ) = BehaviourSettings.customCount(
+            syncHours, wifiOnly, paused, taskMinutes, leadMinutes, voice,
+            ratePct, pitchPct, kindFailed, kindInstruct, kindCron,
+            remindersOn, autoRead,
+        )
+        assertEquals(0, all())
+        assertEquals(1, all(syncHours = 2L))
+        assertEquals(1, all(paused = true))
+        assertEquals(1, all(leadMinutes = 15L))
+        assertEquals(1, all(voice = "en-x"))
+        assertEquals(1, all(ratePct = 150L))
+        assertEquals(1, all(kindCron = false))
+        assertEquals(1, all(remindersOn = true))
+        assertEquals(1, all(autoRead = true))
+        assertEquals(3, all(syncHours = 2L, kindFailed = false, autoRead = true))
+    }
+
+    @Test
     fun `import coercion matches live floors`() {
         assertEquals(1L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_SYNC_INTERVAL_HOURS, 0L))
         assertEquals(15L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES, 5L))
