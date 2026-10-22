@@ -138,6 +138,14 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	if op == OpDuplicate {
 		if src, nerr := NormalizeTaskID(detail); nerr == nil {
 			detail = src
+		} else if strings.TrimSpace(detail) != "" {
+			// KEPT, not dropped: the row itself is findable (its task_id
+			// is valid), and dropping it would lose the record of a copy
+			// that really happened. Logged, because the detail will not
+			// join against a task_id lookup — the one thing the detail is
+			// for.
+			log.Printf("tasks: mutation log entry kept with an unjoinable duplicate detail (%q)",
+				TruncateBytes(strings.TrimSpace(detail), 40))
 		}
 	}
 	entry := bson.M{

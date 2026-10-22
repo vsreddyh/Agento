@@ -187,8 +187,8 @@ type taskHistoryInput struct {
 	Since string `json:"since,omitempty"`
 	// Limit caps the rows returned (default 200, max 500). Zero or
 	// negative gives the default, a huge one is clamped to the max. A
-	// non-integer number is an argument type error, not a value that gets
-	// rounded.
+	// non-integer number — or null — is an argument type error, not a
+	// value that gets rounded.
 	Limit int `json:"limit,omitempty"`
 }
 
@@ -485,9 +485,10 @@ func main() {
 				store.RecordMutation(ctx, tasks.OpDelete, in.ID, mcpSource, "mcp delete_task")
 			}
 			if !done {
-				// Bounded, like every other echo: the id came from the
-				// caller and is not worth answering at length.
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown task '%s'", tasks.TruncateBytes(in.ID, 40))})
+				// Bounded and trimmed, like every other echo: the id came
+				// from the caller, and two spellings of one mistake should
+				// read alike.
+				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown task '%s'", tasks.TruncateBytes(strings.TrimSpace(in.ID), 40))})
 			}
 			// The CANONICAL id, not the caller's spelling: the change log
 			// stores the normalized id, so a caller comparing this answer

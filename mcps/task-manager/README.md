@@ -368,8 +368,10 @@ note above. It is stored **as the caller sent it** (trimmed, capped at 40
 bytes): unlike the op and the task id, it is not canonicalised, so `App` and
 `app` are two labels for what may be one caller. Grouping them is a choice
 the app makes, not the server's. A direct store caller may leave it empty —
-the transports never do — so an app should read an empty `source` as
-"unknown", not as a third caller.
+the transports never do (HTTP defaults a missing header to `http`, MCP uses
+`mcp`, and that default lives in the HTTP transport, not on the write seam)
+— so an app should read an empty `source` as "unknown", not as a third
+caller.
 
 ## Run
 

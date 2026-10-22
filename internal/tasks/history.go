@@ -140,11 +140,12 @@ func ParseOps(s string) ([]string, error) {
 // answer differently about the same input.
 func ValidateOps(ops []string) error {
 	if len(normalizeOps(ops)) == 0 && len(ops) > 0 {
-		// The joined input is echoed, bounded, so a caller can see what the
-		// server judged empty — the same rule the unknown-op branch and
-		// the transport's parser follow.
+		// The FIRST element, bounded: the list named nothing, so every
+		// element is blank, and the first is the one a caller would look
+		// at. Joined, it would build the whole list first — the
+		// "never answer a huge input with itself" rule, one layer up.
 		return fail("op filter %q names no operation; known ops are %s",
-			TruncateBytes(strings.Join(ops, ","), 40), strings.Join(knownOps, ", "))
+			TruncateBytes(ops[0], 40), strings.Join(knownOps, ", "))
 	}
 	for _, op := range ops {
 		norm := normalizeOp(op)
