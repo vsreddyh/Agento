@@ -344,17 +344,20 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				// but matches no case would fall through with no error,
 				// mark the batch as written, and report success for a
 				// verb that ran nothing.
-				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
-					Err: fail("batch op %d (%s) is not implemented", i, op.Op)}
+				return &BatchOpError{Index: i, Op: res.Op, ID: op.ID,
+					Err: fail("batch op %d (%s) is not implemented", i, res.Op)}
 			}
 			if err != nil {
-				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID, Err: err}
+				// The op name is lowercased, like the success envelope's
+				// res.Op: one spelling of the op in both envelopes, so
+				// they cannot drift if the accepted set ever loosens.
+				return &BatchOpError{Index: i, Op: res.Op, ID: op.ID, Err: err}
 			}
 			// A failed rollover aborts: unlike a single verb, nothing has
 			// committed yet, so the parent must not be left done without
 			// its successor. The field detail names what to fix.
 			if res.Rollover == RolloverFailed {
-				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
+				return &BatchOpError{Index: i, Op: res.Op, ID: op.ID,
 					Err: fail("rollover failed: %s", res.Detail)}
 			}
 			// Complete/skip/duplicate always write; an update whose detail

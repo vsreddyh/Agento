@@ -73,8 +73,9 @@ task — the 24-character hex id `create_task` returned), `op`
 (comma-separated: create, update, delete, complete, skip, reopen,
 duplicate — `duplicate` appears only for duplicates made through a batch),
 `since` (INCLUSIVE RFC3339 timestamp, fractional seconds
-accepted, e.g. `2026-10-21T00:00:00Z`; a `+02:00` offset needs
-percent-encoding as `%2B`), `limit` (default 200, max 500; zero or
+accepted, e.g. `2026-10-21T00:00:00Z`; a `+02:00` offset is fine as it
+is, because this is a tool argument and not a query string), `limit`
+(default 200, max 500; zero or
 negative gives the default, a huge one is clamped). Newest first. A
 malformed `task_id`, `op` or `since` is refused, not answered with an
 empty history.
