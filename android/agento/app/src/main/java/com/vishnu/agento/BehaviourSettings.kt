@@ -9,9 +9,15 @@ import androidx.core.content.edit
  * settings, so "preconfigured and unreachable" cannot quietly come back.
  *
  * Everything here is adjustable in-app with an obvious default, and an
- * install that never opens the section behaves exactly like 5.11.0. All
+ * install that never opens the section behaves exactly like 5.12.0. All
  * keys are additive ([SettingsBackup] skips unknown keys, so old backups
  * keep importing and new keys round-trip).
+ *
+ * Out-of-option values (a hand-edited backup importing lead=1440, say) are
+ * preserved, not clamped to the picker: getters coerce only to hard
+ * sanity floors/ceilings, and the copy renders them literally. The pickers
+ * offer the sane choices; anything else is unpickable-but-kept, which beats
+ * silently rewriting a value the user deliberately set.
  *
  * Deliberately NOT here (operator-set by design, see documentation.md):
  * money/health retention windows, gateway turn/inventory timeouts, and the
@@ -156,7 +162,7 @@ object BehaviourSettings {
     // The master switch (notify_reply_done, default on) keeps its exact
     // meaning: off silences everything, as today. Each kind below defaults
     // on and applies only while the master is on, so an install that never
-    // opens the section — and an opted-out one — behaves exactly like 5.11.0.
+    // opens the section — and an opted-out one — behaves exactly like 5.12.0.
     const val KEY_NOTIFY_FAILED = "notify_reply_failed"
     const val KEY_NOTIFY_INSTRUCT = "notify_instruct_saved"
     const val KEY_NOTIFY_CRON = "notify_cron"
@@ -210,8 +216,8 @@ object BehaviourSettings {
         if (taskSyncIntervalMinutes(ctx) != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
         if (reminderLeadMinutes(ctx) != TaskReminders.BEFORE_START_MINUTES) n++
         if (ttsVoice(ctx).isNotEmpty()) n++
-        if (ttsRate(ctx) != 1f) n++
-        if (ttsPitch(ctx) != 1f) n++
+        if (ttsRatePct(ctx) != DEFAULT_TTS_PCT) n++
+        if (ttsPitchPct(ctx) != DEFAULT_TTS_PCT) n++
         if (!notifyFailedRaw(ctx)) n++
         if (!notifyInstructRaw(ctx)) n++
         if (!notifyCronRaw(ctx)) n++
@@ -234,7 +240,7 @@ object BehaviourSettings {
 /**
  * Applies the stored TTS voice/rate/pitch to a live engine. Each knob is
  * skipped at its default, so an install that never opens the section speaks
- * exactly like 5.11.0 — engine defaults, no setVoice/setSpeechRate/setPitch.
+ * exactly like 5.12.0 — engine defaults, no setVoice/setSpeechRate/setPitch.
  * The voice is matched by name against THIS engine's voices (Voice objects
  * are engine-specific); a stored name the engine no longer offers is left
  * alone rather than failing the utterance. Never throws (OEM binder

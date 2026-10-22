@@ -17,6 +17,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -131,6 +133,18 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
     }
 
+    // Exact-alarm grant, re-read on every resume: enabling without it falls
+    // back to inexact alarms, and the copy must not promise otherwise.
+    var resumeTick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
+    val exactAlarms = remember(resumeTick) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) true
+        else runCatching {
+            (appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager)
+                .canScheduleExactAlarms()
+        }.getOrDefault(true)
+    }
+
     SectionCard(
         title = "Health sync cadence",
         subtitle = "How often health data pushes while the app is idle.",
@@ -201,6 +215,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         )
         if (remindersDenied) {
             HintLine("Notifications are blocked — reminders stay off until allowed.")
+        }
+        if (remindersOn && !exactAlarms) {
+            HintLine("Exact alarms aren't allowed — reminders still fire, but may be inexact until allowed in system settings.")
         }
         OptionMenu(
             label = "Warn me",
