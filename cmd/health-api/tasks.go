@@ -69,7 +69,7 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	limit := parseLimitParam(r.URL.Query())
 	rows, truncated, err := store.List(ctx, state, false, "", limit)
@@ -306,7 +306,7 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parallelable, _ := fields["parallelable"].(bool)
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	// Idempotency (#176). The header is the contract: the same key plus the same
 	// body returns the SAME task, not a second one. Absent means the old
@@ -610,7 +610,7 @@ func getTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	doc, err := store.Get(ctx, id)
 	if err != nil {
@@ -639,7 +639,7 @@ func updateTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	doc, err := store.Update(ctx, id, fields)
 	if err != nil {
@@ -670,7 +670,7 @@ func deleteTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	found, err := store.Delete(ctx, id)
 	if err != nil {
@@ -696,7 +696,7 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	doc, next, rollover, rolloverDetail, err := store.CompleteDetail(ctx, id)
 	if err != nil {
@@ -763,7 +763,7 @@ func skipTask(w http.ResponseWriter, r *http.Request, id string) {
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, id, reason)
 	if err != nil {
@@ -792,7 +792,7 @@ func reopenTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	doc, err := store.Reopen(ctx, id)
 	if err != nil {
@@ -865,7 +865,7 @@ func changesSince(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	revision, at, err := store.ChangeRevision(ctx)
 	if err != nil {

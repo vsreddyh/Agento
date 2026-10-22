@@ -285,8 +285,8 @@ func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (
 	if err != nil {
 		return nil, err
 	}
-	// The HTTP route bounds its read at the same budget (one constant,
-	// both doors — tasks.HistoryReadBudget), so a hung Mongo answers with
+	// The HTTP route bounds its read at the same budget (one constant for
+	// the task domain — tasks.RequestBudget), so a hung Mongo answers with
 	// an error instead of hanging the tool. The caller's context still
 	// wins — a cancelled session ends the call whatever the timeout says.
 	//
@@ -300,7 +300,7 @@ func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (
 	//
 	// Named apart from ctx on purpose: two deadlines in one function, and
 	// a reader has to be able to tell which one a line holds.
-	readCtx, cancel := context.WithTimeout(ctx, tasks.HistoryReadBudget)
+	readCtx, cancel := context.WithTimeout(ctx, tasks.RequestBudget)
 	defer cancel()
 	rows, truncated, err := store.ListMutations(readCtx, tasks.MutationFilter{
 		TaskID: taskID,

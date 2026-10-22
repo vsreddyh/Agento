@@ -382,6 +382,11 @@ no marker — the op-specific extras are short by nature (a field list, a
 rollover outcome, an id), and a cap that rewrote the value would change
 what the log says.
 
+The cut can land INSIDE a name, so a capped `detail` is a prefix of the
+list, not a complete one: `due_da` is a cut `due_date`, not a field that
+does not exist. Read a capped field list as "at least these" — the tail
+is unknown, not absent.
+
 `at` is RFC3339 **with milliseconds** — unlike the task documents, whose
 `completedAt`/`createdAt` are RFC3339 to the second. The fractional digits
 vary (`100ms` emits as `.1Z`, not `.100Z`), so parse it with one lenient

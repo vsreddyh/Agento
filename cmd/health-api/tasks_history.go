@@ -94,11 +94,11 @@ func taskMutations(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The same budget the MCP tool uses for the same read (one constant,
-	// both doors): a hung Mongo must answer with an error rather than hold
-	// the caller, and the two doors must not drift apart on how long they
-	// are willing to wait.
-	ctx, cancel := context.WithTimeout(r.Context(), tasks.HistoryReadBudget)
+	// The same budget every task route uses, and the one the MCP tool uses
+	// for the same read (tasks.RequestBudget): a hung Mongo must answer
+	// with an error rather than hold the caller, and the two doors must
+	// not drift apart on how long they are willing to wait.
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	rows, truncated, err := store.ListMutations(ctx, tasks.MutationFilter{
 		TaskID: taskID,

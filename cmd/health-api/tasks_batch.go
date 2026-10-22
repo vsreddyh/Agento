@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -140,7 +139,10 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	// The domain's one request budget (tasks.RequestBudget), the same one
+	// the read routes and the MCP change log use — one number for the task
+	// domain, so a timeout bump cannot leave one route behind.
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	results, err := store.Batch(ctx, ops)
 	if err != nil {
@@ -171,6 +173,31 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 	// that is not idempotent, so a retry copies the task a second time.
 	// Read the change log (or the changes marker) first and resend only
 	// what did not land.
+	recordBatchMutations(ctx, store, results, source)
+	out := make([]bson.M, 0, len(results))
+	for _, res := range results {
+		item := bson.M{
+			"index": res.Index, "id": res.ID, "op": res.Op,
+			"task": res.Task, "rollover": string(res.Rollover),
+		}
+		if res.Next != nil {
+			item["next"] = res.Next
+		}
+		if res.Rollover.NeedsAttention() {
+			item["needs_attention"] = res.Rollover.Attention(res.Detail)
+		}
+		out = append(out, item)
+	}
+	writeJSON(w, http.StatusOK, bson.M{"results": out})
+}
+
+// recordBatchMutations writes one audit row per op the batch actually
+// applied.
+//
+// It is a function of its own so the rules are testable without a
+// request: which ops earn a row, and what each row must be able to
+// name.
+func recordBatchMutations(ctx context.Context, store *tasks.Store, results []tasks.BatchItemResult, source string) {
 	for _, res := range results {
 		switch res.Op {
 		case "complete":
@@ -188,24 +215,19 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 			// detail names the SOURCE it was duplicated from — carried in
 			// the result by the store, so the transport does not have to
 			// match the result back to its op to know what it was about.
+			//
+			// BOTH ids must be known: a row that names the source as
+			// the copy is a duplicate that never happened, and it reads
+			// exactly like one that did. The store refuses to produce
+			// such a result (batch.go), so this is the second line — the
+			// row is written only when it can name the copy AND the
+			// source.
+			if res.Detail == "" {
+				continue
+			}
 			store.RecordMutation(ctx, tasks.OpDuplicate, res.ID, source, res.Detail)
 		}
 	}
-	out := make([]bson.M, 0, len(results))
-	for _, res := range results {
-		item := bson.M{
-			"index": res.Index, "id": res.ID, "op": res.Op,
-			"task": res.Task, "rollover": string(res.Rollover),
-		}
-		if res.Next != nil {
-			item["next"] = res.Next
-		}
-		if res.Rollover.NeedsAttention() {
-			item["needs_attention"] = res.Rollover.Attention(res.Detail)
-		}
-		out = append(out, item)
-	}
-	writeJSON(w, http.StatusOK, bson.M{"results": out})
 }
 
 // writeBatchErr maps a batch failure like its single-verb equivalent (404

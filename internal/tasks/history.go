@@ -29,14 +29,19 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// HistoryReadBudget bounds one change-log read, at either door.
+// RequestBudget bounds one task request, at either door.
 //
-// The HTTP route and the MCP tool ask the same question of the same
-// collection, so they answer it on the same budget — and it is ONE
-// constant, so a change to one cannot quietly leave the other behind.
-// A read that outlives its budget is a hung Mongo, and a hung Mongo
-// must answer with an error rather than hold the caller.
-const HistoryReadBudget = 30 * time.Second
+// One number for the task domain: the list, the change log, the single
+// verbs, the batch. They share it because they share a failure — a
+// request that outlives its budget is a caller waiting on a hung Mongo
+// — and a domain with two spellings of one budget is a domain whose
+// budgets drift.
+//
+// The MCP tools take it for the CHANGE LOG, the read the HTTP route
+// bounds the same way; the MCP write tools keep the caller's context,
+// because a write cut short mid-flight is a different failure from a
+// read that hangs.
+const RequestBudget = 30 * time.Second
 
 // Mutation is one row of the change log.
 //

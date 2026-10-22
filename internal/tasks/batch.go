@@ -360,11 +360,22 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				// The source id is set ONLY on success: a failed copy
 				// leaves res.ID as the source, and a row that claims a
 				// task was duplicated from ITSELF is worse than no row.
+				//
+				// A copy that produced NO id is refused here rather than
+				// passed on: the row would name the source as if it were
+				// the copy, with no back-link to say where it came from —
+				// a duplicate in the log that never happened, and the one
+				// shape of row a reader cannot tell from a real one. The
+				// error aborts the batch inside the transaction, so
+				// nothing commits and the caller is told.
 				if err == nil {
-					if newID, _ := res.Task["id"].(string); newID != "" {
-						res.ID = newID
-						res.Detail = srcID
+					newID, _ := res.Task["id"].(string)
+					if newID == "" {
+						return &BatchOpError{Index: i, Op: res.Op, ID: op.ID,
+							Err: fail("duplicate produced no task")}
 					}
+					res.ID = newID
+					res.Detail = srcID
 				}
 			default:
 				// Unreachable today: the validation loop above accepts
