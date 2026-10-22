@@ -218,8 +218,15 @@ func writeBatchErr(w http.ResponseWriter, err error) {
 		// a path segment, and it is not worth answering at length. The
 		// trim is done HERE, not inherited from the parser — the echo
 		// site owns the spelling, the same as every other echo.
-		body["id"] = tasks.TruncateBytes(strings.TrimSpace(bop.ID), 40)
-		body["op"] = tasks.TruncateBytes(strings.TrimSpace(bop.Op), 40)
+		//
+		// An ENVELOPE-level rejection (index -1: an empty batch, one over
+		// the cap) names no op and no id, so the keys are omitted rather
+		// than sent empty: a key that promises a culprit the error does
+		// not have is worse than no key.
+		if bop.Index >= 0 {
+			body["id"] = tasks.TruncateBytes(strings.TrimSpace(bop.ID), 40)
+			body["op"] = tasks.TruncateBytes(strings.TrimSpace(bop.Op), 40)
+		}
 		writeJSON(w, code, body)
 		return
 	}

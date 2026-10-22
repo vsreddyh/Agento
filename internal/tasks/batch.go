@@ -369,9 +369,13 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 					Err: fail("batch op %d (%s) is not implemented", i, res.Op)}
 			}
 			if err != nil {
-				// The op name is lowercased, like the success envelope's
-				// res.Op: one spelling of the op in both envelopes, so
-				// they cannot drift if the accepted set ever loosens.
+				// The op name is the CANONICAL one, like the success
+				// envelope's res.Op: one spelling of the op in both
+				// envelopes, so they cannot drift if the accepted set ever
+				// loosens. A VALIDATION error, further up, carries the
+				// SENT spelling instead — the caller has to be able to
+				// fix what they sent. The two answer different questions
+				// and the split is deliberate.
 				return &BatchOpError{Index: i, Op: res.Op, ID: op.ID, Err: err}
 			}
 			// A failed rollover aborts: unlike a single verb, nothing has
