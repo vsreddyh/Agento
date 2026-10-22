@@ -44,7 +44,7 @@ private enum class Destination(val title: String) {
     Chat("Chat"),
     Tasks("Projects"),
     TaskManager("Task Manager"),
-    Storage("Storage"),
+    Storage("Files"),
     Scheduler("Scheduler"),
     Skills("Skills"),
     Tools("Tools"),
@@ -64,7 +64,7 @@ private fun Destination.icon() = when (this) {
 
 /** Settings subsections; each gets its own drawer entry + screen (#60).
  * Taxonomy follows Android conventions (General/Notifications/Data & sync,
- * Storage, About): connection setup first, feature areas next, device data
+ * Backup, About): connection setup first, feature areas next, device data
  * and app info last. */
 object ThemeStore {
     const val KEY = "theme_mode"

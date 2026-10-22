@@ -180,6 +180,14 @@ fun friendlyError(raw: String): FriendlyError {
             "Server had a problem",
             "The request reached the server but it failed. Wait a bit and retry.",
         )
+        has("file_too_large") -> FriendlyError(
+            "That file is too big to upload",
+            "Uploads are capped at 25 MiB — shrink the file and try again.",
+        )
+        has("file_exists") -> FriendlyError(
+            "A file with that name is already there",
+            "Rename the file on your device and upload again — uploads never replace existing files.",
+        )
         has("http 4") && has("http") -> FriendlyError(
             "Request failed",
             "Check your settings and try again.",

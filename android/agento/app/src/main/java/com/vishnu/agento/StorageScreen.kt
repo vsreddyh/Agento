@@ -9,6 +9,10 @@ package com.vishnu.agento
  * visibility (`private` to `internal`, same package) and the import
  * list, which carries exactly what this file uses.
  */
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,6 +25,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,7 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
-/** VPS exports browser with breadcrumbs + mobile downloads (#26). */
+/** VPS files shelf with breadcrumbs + mobile downloads + uploads (#26, #340). */
 @Composable
 internal fun StorageScreen(onMenu: () -> Unit = {}) {
     val context = LocalContext.current
@@ -39,6 +44,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
     var files by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var uploading by remember { mutableStateOf(false) }
 
     fun load(p: String) {
         busy = true
@@ -56,6 +62,69 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         }
     }
 
+    // Uploads go through the system picker (OpenDocument: no storage
+    // permission needed, same SAF shape as Settings import) into the current
+    // folder. The server confines, caps (25 MiB) and never replaces; every
+    // refusal is a named error the toast shows verbatim-shaped via
+    // friendlyError.
+    fun uploadFrom(uri: Uri) {
+        uploading = true
+        error = ""
+        scope.launch {
+            val result = runCatching {
+                val cr = context.contentResolver
+                var displayName = "upload"
+                var size = -1L
+                cr.query(uri, null, null, null, null)?.use { c ->
+                    val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val si = c.getColumnIndex(OpenableColumns.SIZE)
+                    if (c.moveToFirst()) {
+                        if (ni >= 0) {
+                            c.getString(ni)?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                                displayName = it
+                            }
+                        }
+                        if (si >= 0) size = c.getLong(si)
+                    }
+                }
+                // Separators cannot survive the server's name check; fold them
+                // here so a trivially fixable name never fails the upload.
+                displayName = displayName.replace('/', '_').replace('\\', '_')
+                if (size > FILES_UPLOAD_LIMIT_BYTES) {
+                    throw IllegalStateException(
+                        "file_too_large: this file is over the 25 MiB upload limit")
+                }
+                val bytes = cr.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("Could not read that file")
+                if (bytes.size > FILES_UPLOAD_LIMIT_BYTES) {
+                    throw IllegalStateException(
+                        "file_too_large: this file is over the 25 MiB upload limit")
+                }
+                val mime = cr.getType(uri) ?: "application/octet-stream"
+                StorageApi(context).upload(path, displayName, bytes, mime).getOrThrow()
+            }
+            result.fold(
+                onSuccess = {
+                    toasts.toast("Uploaded ${it.name}", ToastKind.Success)
+                    load(path)
+                },
+                onFailure = { e ->
+                    toasts.toast(
+                        friendlyError(e.message ?: "").title,
+                        ToastKind.Error,
+                    )
+                },
+            )
+            uploading = false
+        }
+    }
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri != null) uploadFrom(uri)
+    }
+
     LaunchedEffect(Unit) { load("") }
 
     val crumbs = remember(path) {
@@ -71,7 +140,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Storage", maxLines = 1) },
+                title = { Text("Files", maxLines = 1) },
                 navigationIcon = {
                     IconButton(onClick = onMenu) {
                         Icon(Icons.Filled.Menu, contentDescription = "Menu")
@@ -83,6 +152,12 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                             val parent = if ("/" in path) path.substringBeforeLast("/") else ""
                             load(parent)
                         }) { Text("Up") }
+                    }
+                    IconButton(
+                        onClick = { picker.launch(arrayOf("*/*")) },
+                        enabled = !uploading,
+                    ) {
+                        Icon(Icons.Filled.Upload, contentDescription = "Upload")
                     }
                     IconButton(onClick = { load(path) }, enabled = !busy) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
@@ -112,18 +187,18 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                         }
                     }
                 }
-                if (busy) {
+                if (busy || uploading) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 if (error.isNotEmpty()) {
                     ErrorCard(raw = error, onRetry = { load(path) },
                         modifier = Modifier.padding(12.dp))
                 }
-                if (!busy && dirs.isEmpty() && files.isEmpty() && error.isEmpty()) {
+                if (!busy && !uploading && dirs.isEmpty() && files.isEmpty() && error.isEmpty()) {
                     EmptyState(
                         icon = Icons.Filled.Folder,
                         title = "This folder is empty",
-                        subtitle = "Drop files into the VPS exports folder to see them here.",
+                        subtitle = "Use Upload to park a file here, or drop files into the VPS exports folder to see them.",
                         actionLabel = "Refresh",
                         onAction = { load(path) },
                     )

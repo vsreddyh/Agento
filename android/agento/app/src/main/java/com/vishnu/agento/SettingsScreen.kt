@@ -80,7 +80,7 @@ internal enum class SettingSection(val title: String) {
     Appearance("Appearance"),
     Widget("Home-screen widget"),
     Notifications("Notifications"),
-    Storage("Storage"),
+    Storage("Backup"),
     Usage("Usage"),
     About("About"),
 }
@@ -629,7 +629,7 @@ internal fun SettingsHub(
             HubRow(SettingSection.Appearance, themeStatus),
             HubRow(SettingSection.Widget, widgetStatus),
             HubRow(SettingSection.Notifications, notificationsStatus),
-            HubRow(SettingSection.Storage, "Backup"),
+            HubRow(SettingSection.Storage, "Export & import"),
             HubRow(SettingSection.Usage, usageStatus),
             HubRow(SettingSection.About, appVersion),
         )

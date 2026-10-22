@@ -50,7 +50,7 @@ Batch with `Promise.allSettled()`.
   `browser_save_evidence`. Read-only web tasks with cited evidence: goto
   holds for approval with the URL shown (every domain is an explicit human
   decision), then read, screenshot and save run free. Save evidence bundles
-  PNG + markdown + sources into `exports/browser/` for the Storage tab —
+  PNG + markdown + sources into `exports/browser/` for the Files tab —
   cite those paths and URLs in the answer. No forms, no logins, no passwords
   ever: a login wall stops the task with a report, not a workaround.
 

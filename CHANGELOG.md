@@ -8,6 +8,21 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.12.0]
+- **Files tab: uploads + rename (#340).** The Storage tab is now the Files
+  tab: a two-way file shelf over the VPS `exports/` folder. An Upload action
+  picks any file on device (system picker, no storage permission needed) and
+  parks it in the current folder; downloading it back matches byte-for-byte.
+  Server adds `POST /api/files/upload` (multipart, confined to the exports
+  root): uploads refuse past 25 MiB with a named, actionable error
+  (`file_too_large`) and never replace an existing file — a name collision
+  answers 409 (`file_exists`), rename on device and retry. `../` escapes and
+  absolute paths are rejected server-side.
+- **Settings backup section renamed.** The Settings subsection formerly
+  titled "Storage" (backup export/import) is now titled "Backup", so the old
+  name is gone everywhere the user sees it. Code identifiers (`StorageScreen`,
+  `StorageApi`, `/api/files`) are unchanged.
+
 ## [5.11.0]
 - **Task Manager change log (#350).** Every task change is now readable: a
   new `GET /api/tasks/mutations` endpoint and a `task_history` agent tool

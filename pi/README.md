@@ -249,7 +249,7 @@ proposes one, scoped by the `AGENTO_PROFILE` the gateway passes to Pi. See
 Browser (#312) is the read-only web task surface: a headless-Chromium MCP
 server (`browser_goto` gated per domain, `browser_read`, `browser_screenshot`,
 `browser_save_evidence` free) with one persistent profile per agent profile.
-Evidence bundles land in `exports/browser/` for the Storage tab. There are no
+Evidence bundles land in `exports/browser/` for the Files tab. There are no
 click/type tools by design, so logins are impossible and passwords never
 travel. See `docs/adr/0005-browser.md`.
 

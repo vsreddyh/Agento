@@ -131,10 +131,10 @@ All services read the same root `.env`, so a dev checkout just points `MONGODB_U
 
 ## Android App Screens (2.x)
 
-- **Sidebar**: Chat + Tasks + Storage + Reminders + Settings (drawer replaced the bottom bar).
+- **Sidebar**: Chat + Tasks + Files + Reminders + Settings (drawer replaced the bottom bar).
 - **Chat tab**: threaded conversations persisted on-device (survive restarts; New starts a thread, switcher revisits/deletes old ones), sender labels + timestamps, copy button, retry on failure. Attach up to 2 photos per turn (gallery or camera, shrunk before sending) with or without text. Provider/model picked from its own model sheet (top-bar button), saved instantly. Live session (#317): hands-free talk-listen-talk with barge-in (talking cuts the turn), tool milestones spoken mid-task, thread keeps the full record.
 - **Tasks**: name/status/note table; tap status cycles todo → doing → done; add/edit dialog; persisted locally.
-- **Storage**: browses the VPS `exports/` folder (subfolders supported), downloads to mobile Downloads.
+- **Files**: two-way file shelf over the VPS `exports/` folder (subfolders supported) — upload from the device picker, download to mobile Downloads; uploads never replace an existing file and refuse past 25 MiB with a named error.
 - **Reminders**: exact-alarm local notifications (falls back to inexact without the system grant); survives reboot.
 - **Settings sections**: Server / Chat backend pointer / Appearance (System/Light/Dark theme) / App updates / Health sync / Settings backup (now includes threads, tasks, reminders files).
 
