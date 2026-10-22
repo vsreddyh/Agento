@@ -708,7 +708,12 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 	if err != nil {
 		return nil, false, err
 	}
-	defer cur.Close(ctx)
+	// The cursor is closed WITHOUT the request's deadline: a read that
+	// timed out must still release the server-side cursor, and a Close
+	// that inherits the expired context would leave it to the driver's
+	// own expiry instead. The same reason the audit write detaches its
+	// context (audit.go).
+	defer cur.Close(context.WithoutCancel(ctx))
 	out := []map[string]any{}
 	for cur.Next(ctx) {
 		var doc bson.M

@@ -104,9 +104,21 @@ func normalizeOps(ops []string) []string {
 // depends on how MANY blanks arrived — and the answer must not depend on
 // that. The value is not echoed either: it is blanks, and there is
 // nothing there to show.
-func namesNoOperation() *StoreError {
-	return fail("op filter is blank — it names no operation; known ops are %s",
-		strings.Join(KnownOps(), ", "))
+//
+// The COUNT is echoed, though: a filter of one blank and a filter of ten
+// thousand blanks are the same mistake at very different scales, and the
+// count is the one bounded diagnostic that tells them apart.
+func namesNoOperation(count int) *StoreError {
+	return fail("op filter names no operation (%d blank element%s); known ops are %s",
+		count, plural(count), strings.Join(KnownOps(), ", "))
+}
+
+// plural is the "s" of a count, kept beside the one message that uses it.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // ParseOps parses a comma-separated op filter ("complete,skip") into the ops
@@ -143,7 +155,7 @@ func ParseOps(s string) ([]string, error) {
 	tokens := strings.Split(s, ",")
 	ops := normalizeOps(tokens)
 	if len(ops) == 0 {
-		return nil, namesNoOperation()
+		return nil, namesNoOperation(len(tokens))
 	}
 	if err := ValidateOps(tokens); err != nil {
 		return nil, err
@@ -190,7 +202,7 @@ func ValidateOps(ops []string) error {
 		// element is blank, and the first is the one a caller would look
 		// at. Joined, it would build the whole list first — the
 		// "never answer a huge input with itself" rule, one layer up.
-		return namesNoOperation()
+		return namesNoOperation(len(ops))
 	}
 	for _, op := range ops {
 		norm := normalizeOp(op)
