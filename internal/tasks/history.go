@@ -199,9 +199,15 @@ func ParseOps(s string) ([]string, error) {
 //
 // The filter names a set drawn from seven known ops, so a real one is
 // well under a hundred bytes and no legitimate filter meets this cap.
-// It exists because the input is caller-controlled text: a query string
-// of a million commas must not become a million tokens before the
-// filter can be refused.
+//
+// It exists because this filter is SPLIT. The other two are handled in
+// one piece — a timestamp is parsed, a hex id is checked — and neither
+// builds a list out of what it is given, so neither has a split to
+// bound. This one would build a token per comma: a megabyte of commas
+// is a megabyte of tokens, built before anything could refuse it.
+//
+// The bound is on the INPUT, not only on the echo: every echo in this
+// file was already bounded, and the echo is the small end of it.
 const maxOpsFilterBytes = 256
 
 // ValidateOps checks op names against the ones the log can hold.

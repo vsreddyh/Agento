@@ -76,6 +76,14 @@ func KnownOps() []string {
 const auditCollection = "task_mutations"
 
 // RecordMutation appends one entry. Best-effort — see the package comment.
+//
+// The write is DETACHED from the caller's context, so it costs the CALLER
+// up to its own 5s budget on the response path: every verb records its row
+// before answering, so a slow Mongo delays an acknowledgement for a change
+// that has already committed. The batch pays that once per op; a single
+// verb pays it once. The trade is the same in both — the log is durable by
+// default, and a change the log does not record is a change nobody can
+// explain later.
 func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail string) {
 	// The SENT spelling — trimmed, not lowercased — is what the drop
 	// paths below echo, and it is what the transports' 422 echoes: one

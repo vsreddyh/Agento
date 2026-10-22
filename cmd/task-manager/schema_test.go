@@ -129,10 +129,15 @@ func schemaFor(t *testing.T, input any) *jsonschema.Schema {
 	return schema
 }
 
-// A null is an argument TYPE error, not a value the tool rounds or defaults.
-// The SDK validates the arguments against the published schema before the
-// handler runs, and the schema says integer — so `limit: null` is rejected
-// there, while `limit: 0` reaches the handler and takes the default.
+// A mistyped filter is an argument TYPE error, not a value the tool rounds
+// or defaults. The SDK validates the arguments against the published schema
+// before the handler runs, and the schema says string — so `op: 123` is
+// rejected there, while `limit: 0` reaches the handler and takes the
+// default.
+//
+// Every shape the tool description and the field docs name is pinned here,
+// one row each: the docs are the contract the agent reads, and this test is
+// what keeps them honest.
 //
 // Checked against the SDK's own validator rather than asserted from the
 // doc, because the doc is what this test is meant to keep honest.
@@ -151,13 +156,23 @@ func TestNullIsAnArgumentTypeError(t *testing.T) {
 		{"op": []any{"create"}},
 		{"since": []any{"2026-10-21T00:00:00Z"}},
 		{"task_id": []any{"0123456789abcdef01234567"}},
+		// A number where a string belongs. The epoch number is the one
+		// the docs warn about — a caller who means "since midnight" and
+		// sends a number gets an error, not a date.
+		{"since": 1760000000},
+		{"op": 123},
+		{"task_id": 123},
+		// A string where the number belongs.
+		{"limit": "200"},
+		// A number with a fraction where the number belongs.
+		{"limit": 200.5},
 	} {
 		v := map[string]any{}
 		for k, val := range args {
 			v[k] = val
 		}
 		if err := resolved.Validate(&v); err == nil {
-			t.Errorf("%v: null must be rejected, not defaulted", args)
+			t.Errorf("%v: a mistyped filter must be rejected, not coerced", args)
 		}
 	}
 	// And a value the tool CAN round is accepted: zero is a limit, not a
@@ -165,5 +180,13 @@ func TestNullIsAnArgumentTypeError(t *testing.T) {
 	v := map[string]any{"limit": 0}
 	if err := resolved.Validate(&v); err != nil {
 		t.Errorf("limit 0 must be accepted: %v", err)
+	}
+	// A WHOLE-number float is an integer as far as JSON goes — 200.0 is
+	// not a fraction, and the schema says integer — so it passes and
+	// lands as 200. Pinned here so nobody "fixes" it into an error the
+	// docs do not promise.
+	w := map[string]any{"limit": 200.0}
+	if err := resolved.Validate(&w); err != nil {
+		t.Errorf("limit 200.0 must be accepted: %v", err)
 	}
 }
