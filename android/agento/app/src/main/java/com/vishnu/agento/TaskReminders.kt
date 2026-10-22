@@ -162,7 +162,10 @@ internal fun reminderPoints(
  * (lead=1440) read "24 hours" instead of "1440 minutes".
  */
 internal fun leadCopy(minutes: Long): String = when {
-    minutes <= 1L -> "1 minute"
+    // Precondition: callers guard lead <= 0 first (the "Starting now"
+    // branch). "0 minutes" here keeps the helper total rather than lying.
+    minutes <= 0L -> "0 minutes"
+    minutes == 1L -> "1 minute"
     minutes < 60L -> "$minutes minutes"
     else -> {
         val h = minutes / 60L
@@ -281,7 +284,7 @@ private fun addIfFuture(
 }
 
 /**
- * Due-time reminders for server tasks. Opt-in via the Task Manager bell
+ * Due-time reminders for server tasks. Opt-in via Settings → Behaviour
  * (default off: alarms must never surprise a fresh install). [refresh]
  * (re)computes the alarm set from **open** tasks that have a due time and
  * arms them; [TaskAlarmReceiver] posts the notification on fire,
@@ -290,8 +293,8 @@ private fun addIfFuture(
  * periodically, so a quiet list costs nothing.
  *
  * A task gets up to three armed reminder points (see [reminderPoints]) —
- * five minutes before the start, at the start, and at the due time — plus,
- * once the due time has passed, a nag that repeats every
+ * a lead-time warning before the start, at the start, and at the due
+ * time — plus, once the due time has passed, a nag that repeats every
  * [OVERDUE_EVERY_MINUTES] minutes until the task is dealt with.
  *
  * Scope guardrails: only open tasks with a due date + time inside

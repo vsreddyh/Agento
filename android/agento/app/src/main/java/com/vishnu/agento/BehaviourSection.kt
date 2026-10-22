@@ -181,6 +181,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             },
         )
         HintLine(BehaviourSettings.syncCadenceLine(context))
+        if (syncHours !in BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS) {
+            HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
+        }
     }
 
     SectionCard(
@@ -201,6 +204,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             },
         )
         HintLine(BehaviourSettings.taskSyncCadenceLine(context))
+        if (taskMinutes !in BehaviourSettings.TASK_SYNC_INTERVAL_OPTIONS_MINUTES) {
+            HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
+        }
         if (taskMinutes > (BehaviourSettings.TASK_SYNC_INTERVAL_OPTIONS_MINUTES.maxOrNull() ?: 120L)) {
             HintLine("Above the offered range (kept from an import): refresh may lag up to a day behind task changes.")
         }
@@ -235,6 +241,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 }
             },
         )
+        if (leadMinutes !in BehaviourSettings.REMINDER_LEAD_OPTIONS_MINUTES) {
+            HintLine("Kept from an import: this lead time isn't offered above, but it still applies.")
+        }
         if (leadMinutes > (BehaviourSettings.REMINDER_LEAD_OPTIONS_MINUTES.maxOrNull() ?: 60L)) {
             HintLine("Above the offered range (kept from an import): the warning reads in hours.")
         }
@@ -279,6 +288,12 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 }
             },
         )
+        if (ttsRate !in BehaviourSettings.TTS_PCT_OPTIONS) {
+            HintLine("Kept from an import: this rate isn't offered above, but it still applies.")
+        }
+        if (ttsPitch !in BehaviourSettings.TTS_PCT_OPTIONS) {
+            HintLine("Kept from an import: this pitch isn't offered above, but it still applies.")
+        }
         SwitchRow(
             text = "Auto-read replies",
             sub = "Same switch as the chat bar toggle — both write one key.",

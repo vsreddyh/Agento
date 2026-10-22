@@ -79,6 +79,11 @@ class BehaviourSettingsTest {
     }
 
     @Test
+    fun `zero lead is total, not singular`() {
+        assertEquals("0 minutes", leadCopy(0L))
+    }
+
+    @Test
     fun `lead labels read naturally`() {
         assertEquals("At start time (no heads-up)", BehaviourSettings.leadLabel(0L))
         assertEquals("1 minute before start", BehaviourSettings.leadLabel(1L))
