@@ -69,8 +69,10 @@ type MutationFilter struct {
 }
 
 // normalizeOp is the per-op half of the normalisation: lowercase and trim.
+// lowerTrim owns the rule, so the id and the op are canonicalized the same
+// way by one function.
 func normalizeOp(op string) string {
-	return strings.ToLower(strings.TrimSpace(op))
+	return lowerTrim(op)
 }
 
 // normalizeOps lowercases, trims, drops empties and removes repeats.
@@ -251,7 +253,7 @@ func NormalizeTaskID(id string) (string, error) {
 	if trimmed == "" {
 		return "", nil
 	}
-	lower := strings.ToLower(trimmed)
+	lower := canonicalID(id)
 	if _, err := primitive.ObjectIDFromHex(lower); err != nil {
 		// The SENT token, trimmed: the same spelling the lookup path's
 		// "bad id" answer uses, so one bad call reads alike wherever it

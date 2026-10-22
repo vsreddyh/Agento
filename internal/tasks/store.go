@@ -216,6 +216,13 @@ func badID(id string) *StoreError {
 	return fail("bad id '%s'", TruncateBytes(strings.TrimSpace(id), 40))
 }
 
+// lowerTrim is the ONE spelling of "trim, then lower case" in this
+// package: a hex id and an op name are both case-insensitive to what the
+// store keeps, and three copies of the rule are three rules.
+func lowerTrim(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
 // canonicalID is the id as the store keeps it: lower case, trimmed.
 //
 // A hex id is CASE-INSENSITIVE to Mongo, so the caller's spelling must
@@ -223,7 +230,7 @@ func badID(id string) *StoreError {
 // read-back. The verbs canonicalize at the door so every one of those
 // spells the id the same way, whichever path wrote it.
 func canonicalID(id string) string {
-	return strings.ToLower(strings.TrimSpace(id))
+	return lowerTrim(id)
 }
 
 // checkDue validates the due date/time pair.
@@ -1081,7 +1088,7 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 		// The id is trimmed and bounded, like every other echo here: the
 		// row this failure produces stores the CANONICAL id, and a log
 		// line that spells it differently is one grep away from missing.
-		log.Printf("task %s completed but rollover failed: %v", canonicalID(id), rerr)
+		log.Printf("task %s completed but rollover failed: %v", TruncateBytes(canonicalID(id), 40), rerr)
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reason, "", nil
@@ -1125,7 +1132,7 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 		}
 		return nil, nil, "", "", resolvedStateErr(doc, id)
 	}
-	done, err := s.Get(ctx, id)
+	done, err := s.Get(ctx, canonicalID(id))
 	if err != nil {
 		return nil, nil, "", "", err
 	}
@@ -1133,7 +1140,7 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 	next, reasonOut, rerr := s.rollOver(ctx, done)
 	if rerr != nil {
 		// Trimmed and bounded, like the completion path above.
-		log.Printf("task %s skipped but rollover failed: %v", canonicalID(id), rerr)
+		log.Printf("task %s skipped but rollover failed: %v", TruncateBytes(canonicalID(id), 40), rerr)
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reasonOut, "", nil

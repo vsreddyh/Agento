@@ -100,8 +100,8 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	// constants (always lower case). A row that a direct caller wrote
 	// with an upper-case id before this change is unreachable — it was
 	// unreachable then too, because the read side has always lowercased.
-	taskID = strings.ToLower(sentID)
-	op = strings.ToLower(sentOp)
+	taskID = canonicalID(sentID)
+	op = lowerTrim(sentOp)
 	// A store that was never connected cannot record anything, and the
 	// function is best-effort by contract: it swallows its own failures
 	// rather than failing the mutation they describe. The read side says
