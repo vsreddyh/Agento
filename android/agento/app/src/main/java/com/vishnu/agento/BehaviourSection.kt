@@ -86,17 +86,26 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
 
     // Reminder enable flow (moved from the Task Manager bell): exact alarms
     // need a settings redirect on S+, notifications a runtime grant on 33+.
-    var remindersDenied by remember(refreshTick) { mutableStateOf(false) }
+    var remindersDenied by remember(refreshTick, resumeTick) { mutableStateOf(false) }
+    // A tap that couldn't finish for permissions re-drives on resume: the
+    // exact-alarm redirect returns no result, so coming back re-runs the
+    // checks instead of stranding the toggle halfway on.
+    var pendingReminders by remember(refreshTick) { mutableStateOf(false) }
+    // The settings redirect fires at most once per tap: without this every
+    // resume without a grant would throw system settings open again.
+    var exactAsked by remember(refreshTick) { mutableStateOf(false) }
     val notifPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
+        pendingReminders = false
         if (granted) {
             TaskReminders.setEnabled(context, true)
             remindersOn = true
             remindersDenied = false
         } else {
-            // The switch stays off with an explanation, like the old bell's
-            // denial toast — silence would read as a broken toggle.
+            // Explicit deny: stay off with an explanation. Do NOT re-drive
+            // on resume — re-prompting a decided user is the dark pattern
+            // the permission model exists to prevent.
             remindersDenied = true
         }
     }
@@ -106,19 +115,26 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             TaskReminders.setEnabled(context, false)
             remindersOn = false
             remindersDenied = false
+            pendingReminders = false
+            exactAsked = false
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             if (!mgr.canScheduleExactAlarms()) {
-                runCatching {
-                    context.startActivity(
-                        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-                            // No-op from this Activity today; crash-proof if
-                            // the composition context ever isn't one.
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                    )
+                pendingReminders = true
+                if (!exactAsked) {
+                    exactAsked = true
+                    runCatching {
+                        context.startActivity(
+                            Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                                // No-op from this Activity today; crash-proof
+                                // if the composition context ever isn't one.
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
                 }
+                return
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -126,12 +142,19 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 appCtx, Manifest.permission.POST_NOTIFICATIONS,
             ) != PackageManager.PERMISSION_GRANTED
         ) {
+            pendingReminders = true
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
         TaskReminders.setEnabled(context, true)
         remindersOn = true
         remindersDenied = false
+        pendingReminders = false
+    }
+
+    // Re-drive a tap the permission flow interrupted once the user returns.
+    LaunchedEffect(resumeTick) {
+        if (pendingReminders) setReminders(true)
     }
 
     // Engine voices for the picker: a short-lived engine lists, then dies.

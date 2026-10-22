@@ -70,13 +70,20 @@ class AgentoApp : Application() {
             }
             val hours = BehaviourSettings.syncIntervalHours(appCtx)
             val builder = PeriodicWorkRequestBuilder<SyncWorker>(hours, TimeUnit.HOURS)
-            if (BehaviourSettings.syncWifiOnly(appCtx)) {
-                builder.setConstraints(
-                    Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.UNMETERED)
-                        .build(),
-                )
+            // Baseline CONNECTED like the task sync: offline there is
+            // nothing to push, and an unconstrained tick just wakes, fails
+            // and backs off. Wi-Fi-only upgrades the constraint instead of
+            // replacing it.
+            val netType = if (BehaviourSettings.syncWifiOnly(appCtx)) {
+                NetworkType.UNMETERED
+            } else {
+                NetworkType.CONNECTED
             }
+            builder.setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(netType)
+                    .build(),
+            )
             wm.enqueueUniquePeriodicWork(
                 SYNC_WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,

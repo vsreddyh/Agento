@@ -161,9 +161,11 @@ object BehaviourSettings {
     /** Engine range is roughly half to double speed; the picker offers steps. */
     val TTS_PCT_OPTIONS = listOf(50L, 75L, 100L, 125L, 150L, 200L)
 
-    /** Voice name, or "" for the engine default (today's behaviour). */
+    /** Voice name, or "" for the engine default (today's behaviour).
+     * Trimmed like the setter, so a hand-imported padded name still
+     * matches the engine's voice instead of missing silently. */
     fun ttsVoice(ctx: Context): String =
-        prefs(ctx).getString(KEY_TTS_VOICE, "").orEmpty()
+        prefs(ctx).getString(KEY_TTS_VOICE, "").orEmpty().trim()
 
     fun ttsRate(ctx: Context): Float =
         ttsRatePct(ctx) / 100f
