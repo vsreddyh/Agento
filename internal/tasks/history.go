@@ -103,10 +103,10 @@ func normalizeOps(ops []string) []string {
 func namesNoOperation(shown string) *StoreError {
 	if strings.TrimSpace(shown) == "" {
 		return fail("op filter is blank — it names no operation; known ops are %s",
-			strings.Join(knownOps, ", "))
+			strings.Join(KnownOps(), ", "))
 	}
 	return fail("op filter %q names no operation; known ops are %s",
-		TruncateBytes(shown, 40), strings.Join(knownOps, ", "))
+		TruncateBytes(shown, 40), strings.Join(KnownOps(), ", "))
 }
 
 // ParseOps parses a comma-separated op filter ("complete,skip") into the ops
@@ -195,7 +195,7 @@ func ValidateOps(ops []string) error {
 			// across the filters). Bounded, because a 10KB query parameter
 			// answered with itself is a log line nobody wants.
 			return fail("unknown op %q; known ops are %s",
-				TruncateBytes(strings.TrimSpace(op), 40), strings.Join(knownOps, ", "))
+				TruncateBytes(strings.TrimSpace(op), 40), strings.Join(KnownOps(), ", "))
 		}
 	}
 	return nil

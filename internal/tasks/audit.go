@@ -56,6 +56,11 @@ const (
 // Unexported, and handed out as a copy: an exported slice is a slice any
 // caller can append to, and one that changes the validation set process-wide
 // by accident is a bug with no trace.
+//
+// READ-ONLY after init. The messages above build their "known ops" list from
+// the copy (KnownOps), so nothing here can hand out the list itself — and
+// an in-package edit that appended to it "temporarily" would change what
+// every caller may ask for, silently.
 var knownOps = []string{OpCreate, OpUpdate, OpDelete, OpComplete, OpSkip, OpReopen, OpDuplicate}
 
 // KnownOps returns every op the log can hold.

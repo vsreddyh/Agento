@@ -128,3 +128,37 @@ func schemaFor(t *testing.T, input any) *jsonschema.Schema {
 	}
 	return schema
 }
+
+// A null is an argument TYPE error, not a value the tool rounds or defaults.
+// The SDK validates the arguments against the published schema before the
+// handler runs, and the schema says integer — so `limit: null` is rejected
+// there, while `limit: 0` reaches the handler and takes the default.
+//
+// Checked against the SDK's own validator rather than asserted from the
+// doc, because the doc is what this test is meant to keep honest.
+func TestNullIsAnArgumentTypeError(t *testing.T) {
+	schema := schemaFor(t, taskHistoryInput{})
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		t.Fatalf("resolving schema: %v", err)
+	}
+	for _, args := range []map[string]any{
+		{"limit": nil},
+		{"op": nil},
+		{"since": nil},
+	} {
+		v := map[string]any{}
+		for k, val := range args {
+			v[k] = val
+		}
+		if err := resolved.Validate(&v); err == nil {
+			t.Errorf("%v: null must be rejected, not defaulted", args)
+		}
+	}
+	// And a value the tool CAN round is accepted: zero is a limit, not a
+	// null.
+	v := map[string]any{"limit": 0}
+	if err := resolved.Validate(&v); err != nil {
+		t.Errorf("limit 0 must be accepted: %v", err)
+	}
+}
