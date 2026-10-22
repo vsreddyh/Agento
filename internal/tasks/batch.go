@@ -189,6 +189,13 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// here as it will in the verb switch — otherwise the transport
 		// (which trims) and a direct store caller would disagree on what a
 		// padded op means.
+		//
+		// The ENVELOPE and the ERROR body spell the id two ways on
+		// purpose: a success carries the CANONICAL id (lower case, the
+		// spelling the change log stores, so a caller can join the two),
+		// while an error carries the SENT id (trimmed only, the spelling
+		// the caller can go and fix). Both are said out loud here so the
+		// difference reads as a decision rather than a drift.
 		opName := strings.TrimSpace(op.Op)
 		id := strings.TrimSpace(op.ID)
 		switch opName {

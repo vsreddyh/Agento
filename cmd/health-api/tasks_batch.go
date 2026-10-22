@@ -204,11 +204,13 @@ func writeBatchErr(w http.ResponseWriter, err error) {
 		// additions cannot alias anything shared.
 		code, body := taskErrBody(bop.Err)
 		body["index"] = bop.Index
-		// Bounded, like every other caller-controlled echo: a batch id
-		// comes from a JSON body, so it is naturally longer than a path
-		// segment, and it is not worth answering at length.
-		body["id"] = tasks.TruncateBytes(bop.ID, 40)
-		body["op"] = tasks.TruncateBytes(bop.Op, 40)
+		// Bounded and trimmed, like every other caller-controlled echo: a
+		// batch id comes from a JSON body, so it is naturally longer than
+		// a path segment, and it is not worth answering at length. The
+		// trim is done HERE, not inherited from the parser — the echo
+		// site owns the spelling, the same as every other echo.
+		body["id"] = tasks.TruncateBytes(strings.TrimSpace(bop.ID), 40)
+		body["op"] = tasks.TruncateBytes(strings.TrimSpace(bop.Op), 40)
 		writeJSON(w, code, body)
 		return
 	}

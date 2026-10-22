@@ -114,15 +114,16 @@ func ParseOps(s string) ([]string, error) {
 		// blank is a filter that names nothing, which is a 422.
 		return nil, nil
 	}
-	tokens := strings.Split(raw, ",")
+	// Split the SENT string, padding and all: the validator must echo
+	// the token the caller typed, exactly as it does when it is called
+	// directly. The trimmed copy is only used to decide whether there is
+	// a filter at all.
+	tokens := strings.Split(s, ",")
 	ops := normalizeOps(tokens)
 	if len(ops) == 0 {
 		return nil, fail("op %q names no operation; known ops are %s",
-			TruncateBytes(strings.TrimSpace(s), 40), strings.Join(knownOps, ", "))
+			TruncateBytes(raw, 40), strings.Join(knownOps, ", "))
 	}
-	// The SENT tokens are validated, not the normalized ones: the error
-	// must echo what the caller can go and fix, and "FROBNICATE" is not
-	// what they typed.
 	if err := ValidateOps(tokens); err != nil {
 		return nil, err
 	}
