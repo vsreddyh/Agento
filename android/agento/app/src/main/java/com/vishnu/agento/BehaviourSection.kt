@@ -137,9 +137,15 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // Engine voices for the picker: a short-lived engine lists, then dies.
     // Matched by name at speak time (Voice objects are engine-specific).
     // Bounded: a broken engine answers empty, never hangs the section.
-    var voices by remember(refreshTick, resumeTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var voices by remember(refreshTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    // Re-list on resume only when it could matter (empty list, or the
+    // stored voice missing from it): a blind re-spin on every resume pays
+    // a binder init + enumeration on the resume path for nothing.
     LaunchedEffect(refreshTick, resumeTick) {
-        voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
+        val cur = voices
+        if (cur.isEmpty() || (ttsVoice.isNotEmpty() && cur.none { it.first == ttsVoice })) {
+            voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
+        }
     }
 
     // Exact-alarm grant, re-read on the same resume tick as the switches

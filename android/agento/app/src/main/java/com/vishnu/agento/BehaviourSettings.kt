@@ -136,14 +136,21 @@ object BehaviourSettings {
         }
     }
 
-    /** Picker choice labels; pinned — the section renders these verbatim. */
-    fun intervalChoiceLabel(hours: Long): String =
-        if (hours == 1L) "1 hour" else "$hours hours"
+    /** Picker choice labels; pinned — the section renders these verbatim.
+     * Total (coerced): unreachable via state, but public like the cadence
+     * lines, so they never render "0 hours" to a direct caller. */
+    fun intervalChoiceLabel(hours: Long): String {
+        val h = coerceImport(KEY_SYNC_INTERVAL_HOURS, hours)
+        return if (h == 1L) "1 hour" else "$h hours"
+    }
 
-    fun minutesChoiceLabel(minutes: Long): String = when {
-        minutes == 60L -> "1 hour"
-        minutes % 60L == 0L -> "${minutes / 60L} hours"
-        else -> "$minutes minutes"
+    fun minutesChoiceLabel(minutes: Long): String {
+        val m = coerceImport(KEY_TASK_SYNC_INTERVAL_MINUTES, minutes)
+        return when {
+            m == 60L -> "1 hour"
+            m % 60L == 0L -> "${m / 60L} hours"
+            else -> "$m minutes"
+        }
     }
 
     // ── TTS voice / rate / pitch ─────────────────────────────────────────
@@ -182,7 +189,7 @@ object BehaviourSettings {
         prefs(ctx).edit { putLong(KEY_TTS_PITCH_PCT, pct.coerceIn(50L, 200L)) }
     }
 
-    fun ttsPctLabel(pct: Long): String = "$pct%"
+    fun ttsPctLabel(pct: Long): String = "${coerceImport(KEY_TTS_RATE_PCT, pct)}%"
 
     // ── Notification kinds ───────────────────────────────────────────────
     // The master switch (notify_reply_done, default on) keeps its exact
@@ -269,15 +276,22 @@ object BehaviourSettings {
         remindersOn: Boolean,
         autoRead: Boolean,
     ): Int {
+        // Total like the cadence lines: coerce, so both overloads agree on
+        // the same effective state (a stored 0 reads back as its floor).
+        val sh = coerceImport(KEY_SYNC_INTERVAL_HOURS, syncHours)
+        val tm = coerceImport(KEY_TASK_SYNC_INTERVAL_MINUTES, taskMinutes)
+        val lm = coerceImport(KEY_REMINDER_LEAD_MINUTES, leadMinutes)
+        val rp = coerceImport(KEY_TTS_RATE_PCT, ratePct)
+        val pp = coerceImport(KEY_TTS_PITCH_PCT, pitchPct)
         var n = 0
-        if (syncHours != DEFAULT_SYNC_INTERVAL_HOURS) n++
+        if (sh != DEFAULT_SYNC_INTERVAL_HOURS) n++
         if (wifiOnly) n++
         if (paused) n++
-        if (taskMinutes != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
-        if (leadMinutes != TaskReminders.BEFORE_START_MINUTES) n++
+        if (tm != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
+        if (lm != TaskReminders.BEFORE_START_MINUTES) n++
         if (voice.isNotEmpty()) n++
-        if (ratePct != DEFAULT_TTS_PCT) n++
-        if (pitchPct != DEFAULT_TTS_PCT) n++
+        if (rp != DEFAULT_TTS_PCT) n++
+        if (pp != DEFAULT_TTS_PCT) n++
         if (!kindFailed) n++
         if (!kindInstruct) n++
         if (!kindCron) n++

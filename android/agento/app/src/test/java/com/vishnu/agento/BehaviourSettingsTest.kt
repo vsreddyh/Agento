@@ -149,6 +149,11 @@ class BehaviourSettingsTest {
         assertEquals(1, all(remindersOn = true))
         assertEquals(1, all(autoRead = true))
         assertEquals(3, all(syncHours = 2L, kindFailed = false, autoRead = true))
+        // Pure overload coerces like the getters: out-of-floor inputs read
+        // as their defaults, so both overloads agree on effective state.
+        assertEquals(0, all(syncHours = 0L))
+        assertEquals(0, all(taskMinutes = 5L))
+        assertEquals(0, all(ratePct = 0L))
     }
 
     @Test
@@ -173,9 +178,11 @@ class BehaviourSettingsTest {
     fun `choice labels are pinned`() {
         assertEquals("1 hour", BehaviourSettings.intervalChoiceLabel(1L))
         assertEquals("6 hours", BehaviourSettings.intervalChoiceLabel(6L))
+        assertEquals("1 hour", BehaviourSettings.intervalChoiceLabel(0L))
         assertEquals("1 hour", BehaviourSettings.minutesChoiceLabel(60L))
         assertEquals("2 hours", BehaviourSettings.minutesChoiceLabel(120L))
         assertEquals("45 minutes", BehaviourSettings.minutesChoiceLabel(45L))
+        assertEquals("15 minutes", BehaviourSettings.minutesChoiceLabel(0L))
     }
 
     @Test
