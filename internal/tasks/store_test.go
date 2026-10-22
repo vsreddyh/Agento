@@ -32,6 +32,19 @@ func testStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// Both clients are closed when the test ends.
+	//
+	// Each test opens TWO connections — one here, one inside New — and a
+	// client that is never disconnected keeps its pool open for the life of
+	// the process. A package with dozens of database tests therefore holds
+	// dozens of live Atlas connections by the time it finishes, and the
+	// cluster starts refusing new ones: the failure shows up as a server
+	// selection timeout in a test that has nothing to do with connections,
+	// which is a long way from the cause.
+	t.Cleanup(func() {
+		_ = c.Disconnect(context.Background())
+		_ = s.Close(context.Background())
+	})
 	return s
 }
 

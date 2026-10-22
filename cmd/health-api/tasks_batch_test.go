@@ -2,9 +2,11 @@ package main
 
 import (
 	"agento/internal/tasks"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -139,10 +141,11 @@ func TestWriteBatchErrNamesTheFailingOp(t *testing.T) {
 			t.Fatalf("body missing %s: %s", want, body)
 		}
 	}
-	// Unknown id keeps its 404.
+	// Unknown id keeps its 404. The flag is what decides it, not the
+	// message text.
 	w2 := httptest.NewRecorder()
 	writeBatchErr(w2, &tasks.BatchOpError{Index: 0, Op: "complete", ID: "missing",
-		Err: &tasks.StoreError{Msg: "unknown task 'missing'"}})
+		Err: &tasks.StoreError{Msg: "unknown task 'missing'", NotFound: true}})
 	if w2.Code != http.StatusNotFound {
 		t.Fatalf("unknown task: got %d", w2.Code)
 	}
@@ -160,5 +163,44 @@ func TestWriteBatchErrNamesTheFailingOp(t *testing.T) {
 	writeBatchErr(w4, tasks.ErrNoTransactions)
 	if w4.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no transactions: got %d", w4.Code)
+	}
+}
+
+// A duplicate row must be able to name the copy AND the source it came
+// from. A result that cannot is not written at all: a row naming the
+// source as the copy is a duplicate in the log that never happened, and
+// nothing in it says so.
+func TestBatchAuditSkipsADuplicateThatNamesNoCopy(t *testing.T) {
+	uri := os.Getenv("MONGODB_URI")
+	if uri == "" {
+		t.Skip("MONGODB_URI not set")
+	}
+	const dbName = "task_batch_audit_test"
+	store, err := tasks.New(uri, dbName)
+	if err != nil {
+		t.Skipf("mongo unreachable: %v", err)
+	}
+	defer store.Close(context.Background())
+	ctx := context.Background()
+	minutes, parallelable := 5, false
+	doc, err := store.Create(ctx, "audit probe", "d", "2026-10-09", "08:00",
+		&minutes, tasks.Repeat{}, &parallelable, "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	id, _ := doc["id"].(string)
+
+	// A duplicate result with no source in its detail: the copy never
+	// happened, so there is nothing to record.
+	recordBatchMutations(ctx, store, []tasks.BatchItemResult{
+		{Index: 0, ID: id, Op: "duplicate", Detail: ""},
+	}, "http")
+
+	rows, _, err := store.ListMutations(ctx, tasks.MutationFilter{TaskID: id})
+	if err != nil {
+		t.Fatalf("ListMutations: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows = %d, want none: %+v", len(rows), rows)
 	}
 }

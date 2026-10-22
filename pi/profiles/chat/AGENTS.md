@@ -32,8 +32,11 @@ Batch with `Promise.allSettled()`.
   for whatever is missing. `log_weight` (never pruned), `log_sleep`,
   `log_workout`, `daily_summary`, `query_meals`, `fix_last_meal`,
   `delete_meals`, `prune_old`.
-- **task-manager** (8): `create_task`, `list_tasks`, `get_task`,
-  `update_task`, `complete_task`, `skip_task`, `reopen_task`, `delete_task`.
+- **task-manager** (9): `create_task`, `list_tasks`, `get_task`,
+  `update_task`, `complete_task`, `skip_task`, `reopen_task`, `delete_task`,
+  `task_history` (the change log: what changed, who changed it, when — it
+  outlives the 3-day task TTL, so it is the only record left of a completed
+  task).
 - **project-manager** (5): `create_project`, `list_projects`, `get_project`,
   `update_project`, `delete_project`.
 - **notes** (6): `create_note`, `get_note`, `list_notes`, `search_notes`,

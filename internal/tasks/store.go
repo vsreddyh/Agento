@@ -19,6 +19,7 @@ import (
 	"log"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -50,6 +51,12 @@ type StoreError struct {
 	// able to distinguish "your key is wrong" from "your fields are wrong", and
 	// only one of those is fixed by changing the request.
 	Mismatch bool
+	// NotFound means the task does not exist. Structural, like Conflict
+	// and Mismatch, so the HTTP layer maps it to 404 by READING the error
+	// rather than by matching the message text: a prefix match would 404
+	// any future message that happens to start with the same words (a
+	// filter error mentioning "unknown task_id", say).
+	NotFound bool
 }
 
 func (e *StoreError) Error() string { return e.Msg }
@@ -132,13 +139,109 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	// collection scans against a collection that only grows. A second function is a
 	// second place to forget the call, so there is now one place to add an index and
 	// one place that runs.
+	// The four index definitions below are CREATEd on every connect, with
+	// FIXED names. Changing what one of them covers (adding a field, say)
+	// does not redefine it: MongoDB keeps the old definition and the
+	// CreateMany fails, which fails New(), which stops the server from
+	// starting against a database its own previous version created. So an
+	// index change here is a MIGRATION — drop the old index out of band
+	// (db.collection.dropIndex) before the new definition ships, or use a
+	// new name. It is written down because the failure it causes looks
+	// like a startup regression, and nothing about it points at an index.
 	_, err = s.db.Collection(auditCollection).Indexes().CreateMany(ctx, []mongoDrv.IndexModel{
+		// The two singles predate the change log's read path (#176) and are
+		// kept: they are prefixes of the compounds below, so a reader may
+		// find them redundant — but REMOVING an index is a migration
+		// against every deployed database, not a code edit. `at_1` serves
+		// the retention prune; `task_id_1` serves no query of its own, and
+		// is kept only because removing it is a migration. It is written
+		// down here so the next reader does not invent a caller for it.
 		{Keys: bson.D{{Key: "at", Value: 1}}, Options: options.Index().SetName("at_1")},
 		{Keys: bson.D{{Key: "task_id", Value: 1}}, Options: options.Index().SetName("task_id_1")},
+		// One task's history, newest first — the query the change log is
+		// mostly read for (#350). The single-field indexes above serve the
+		// retention prune and serve as the prefixes of these compounds;
+		// this one serves the filter AND the `at` order in one pass, so a
+		// per-task history does not sort a collection that only grows. It
+		// does not carry the `_id` tiebreak, so same-millisecond rows in
+		// one task's history are still sorted in memory — a handful of
+		// rows, and only for the ties.
+		{Keys: bson.D{{Key: "task_id", Value: 1}, {Key: "at", Value: -1}}, Options: options.Index().SetName("task_id_at")},
+		// The whole log, newest first, in a stable order: {at, _id}. The
+		// `at_1` index above serves the retention prune and can be scanned
+		// backwards for `at` alone, but it does not carry the `_id`
+		// tiebreak the read sorts on — so without this one the whole-log
+		// read sorts every matching row in memory, on a collection that
+		// only grows. `_id` is a legal field in a compound index.
+		{Keys: bson.D{{Key: "at", Value: -1}, {Key: "_id", Value: -1}}, Options: options.Index().SetName("at_id")},
 	})
 	return err
 }
 
+// Close disconnects the store's client.
+//
+// The store owns its connection, so it is the only thing that can close it:
+// a caller that opened a store and kept it alive forever leaks a connection
+// pool per instance, which is how a test suite ends up exhausting the
+// database's connection budget.
+func (s *Store) Close(ctx context.Context) error {
+	if s == nil || s.client == nil {
+		return nil
+	}
+	return s.client.Disconnect(ctx)
+}
+
+// unknownTask names the task that was not found.
+//
+// The id is bounded: a 404 that answers a 10KB path segment with itself is
+// a response nobody wants, and every other echo in this package is bounded
+// the same way. Trimmed for the same reason the filters are: "  abc  " and
+// "abc" are one mistake, and two spellings of it should read alike.
+func unknownTask(id string) *StoreError {
+	return &StoreError{
+		Msg:      fmt.Sprintf("unknown task '%s'", TruncateBytes(strings.TrimSpace(id), 40)),
+		NotFound: true,
+	}
+}
+
+// UnknownTaskMessage is the body a transport answers with for a task that
+// does not exist. Exported so every transport renders ONE spelling of it:
+// a second copy of the format string is a second string to drift.
+func UnknownTaskMessage(id string) string {
+	return unknownTask(id).Error()
+}
+
+// badID names the id that could not be read as one. Bounded, like
+// unknownTask: same rule, same reason.
+//
+// The phrasing differs from the history filter's on purpose: this path
+// is a LOOKUP, so the caller plainly meant an id and got the characters
+// wrong, and the message names the value. The filter has to teach what
+// an id looks like, so it names the shape. One mistake, two doors, and
+// each says the thing its caller needs — a cross-path grep for one
+// string will not find both, and is not meant to.
+func badID(id string) *StoreError {
+	return fail("bad id '%s'", TruncateBytes(strings.TrimSpace(id), 40))
+}
+
+// lowerTrim is the ONE spelling of "trim, then lower case" in this
+// package: a hex id and an op name are both case-insensitive to what the
+// store keeps, and three copies of the rule are three rules.
+func lowerTrim(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// canonicalID is the id as the store keeps it: lower case, trimmed.
+//
+// A hex id is CASE-INSENSITIVE to Mongo, so the caller's spelling must
+// not leak into anything the server produces — a row, a log line, a
+// read-back. The verbs canonicalize at the door so every one of those
+// spells the id the same way, whichever path wrote it.
+func canonicalID(id string) string {
+	return lowerTrim(id)
+}
+
+// checkDue validates the due date/time pair.
 func checkDue(dueDate, dueTime string) error {
 	if dueDate != "" {
 		if _, err := validate.CheckDay(dueDate); err != nil {
@@ -608,11 +711,16 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 		}
 	}
 	lim := mongostore.ClampLimit(limit, DefaultLimit, MaxLimit)
-	cur, err := s.tasks.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "due_date", Value: 1}, {Key: "createdAt", Value: 1}}).SetLimit(lim+1))
+	cur, err := s.tasks.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "due_date", Value: 1}, {Key: "createdAt", Value: 1}}).SetLimit(int64(lim)+1))
 	if err != nil {
 		return nil, false, err
 	}
-	defer cur.Close(ctx)
+	// The cursor is closed WITHOUT the request's deadline: a read that
+	// timed out must still release the server-side cursor, and a Close
+	// that inherits the expired context would leave it to the driver's
+	// own expiry instead. The same reason the audit write detaches its
+	// context (audit.go).
+	defer closeCursor(ctx, cur)
 	out := []map[string]any{}
 	for cur.Next(ctx) {
 		var doc bson.M
@@ -624,8 +732,8 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 	if err := cur.Err(); err != nil {
 		return nil, false, err
 	}
-	if int64(len(out)) > lim {
-		return out[:int(lim)], true, nil
+	if len(out) > lim {
+		return out[:lim], true, nil
 	}
 	return out, false, nil
 }
@@ -634,16 +742,60 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, fail("bad id '%s'", id)
+		return nil, badID(id)
 	}
 	var doc bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); err != nil {
 		if err == mongoDrv.ErrNoDocuments {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		return nil, err
 	}
 	return toDoc(doc), nil
+}
+
+// updateFields is every field the update path READS, and therefore every
+// field it can write.
+//
+// The list exists because the update path IGNORES an unknown key: a
+// caller that sends one changes nothing, and the audit log and the change
+// marker must say so. Naming the supplied keys instead would claim a
+// change that never happened — the same defect as logging a create for a
+// replayed one.
+var updateFields = []string{
+	"name", "speak_name", "description", "due_date", "due_time",
+	"estimated_minutes", "parallelable",
+	"repeat_rule", "repeat_every", "repeat_unit", "repeat_days", "repeat_custom",
+}
+
+// UpdateFieldNames names the fields an update would WRITE: the known
+// fields the caller supplied, sorted, or "no fields" when there are none.
+//
+// It mirrors the store's own no-op condition, which is what the transports
+// use to decide whether a change happened at all. An unknown key is not a
+// change, and neither the audit log nor the change marker may claim one.
+//
+// `expected_revision` is absent from the list on purpose: it is the
+// optimistic-concurrency guard, not a field of the task.
+//
+// The OTHER helper, ChangedFieldNames, names every supplied key, because
+// validation has to CATCH an unknown one rather than ignore it. The two
+// deliberately disagree about unknown keys, and each answers its own
+// question: "what did the caller send" (validation) and "what did the
+// write change" (the audit guard and the batch's detail). Unifying them
+// would reopen either the silent-drop or the silent-allow.
+func UpdateFieldNames(fields map[string]any) string {
+	keys := make([]string, 0, len(fields))
+	for _, k := range updateFields {
+		if v, ok := fields[k]; ok && v != nil {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return "no fields"
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
 }
 
 // Update edits mutable fields of any task (open or done). Supplied values
@@ -661,12 +813,12 @@ func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, fail("bad id '%s'", id)
+		return nil, badID(id)
 	}
 	var cur bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&cur); err != nil {
 		if err == mongoDrv.ErrNoDocuments {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		return nil, err
 	}
@@ -799,7 +951,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		}
 		var latest bson.M
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&latest); ferr != nil {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		if now, _ := mongostore.ToInt(latest["revision"]); now != want {
 			return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, now)
@@ -828,13 +980,13 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		// (Unguarded cannot miss: the id was just read above.)
 		var latest bson.M
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&latest); ferr != nil {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		now, _ := mongostore.ToInt(latest["revision"])
 		return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, now)
 	}
 	s.bumpChanges(ctx)
-	return s.Get(ctx, id)
+	return s.Get(ctx, canonicalID(id))
 }
 
 // mergeRepeat folds the supplied recurrence fields onto the task's stored
@@ -951,7 +1103,7 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, string, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, nil, "", "", fail("bad id '%s'", id)
+		return nil, nil, "", "", badID(id)
 	}
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
@@ -977,7 +1129,7 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 		}
 		return nil, nil, "", "", resolvedStateErr(doc, id)
 	}
-	done, err := s.Get(ctx, id)
+	done, err := s.Get(ctx, canonicalID(id))
 	if err != nil {
 		return nil, nil, "", "", err
 	}
@@ -990,7 +1142,10 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 		// tells the caller — and now the reconciler — that the repeat has
 		// stopped. Logged too, because the reconciler runs nightly and the
 		// user may act sooner.
-		log.Printf("task %s completed but rollover failed: %v", id, rerr)
+		// The id is trimmed and bounded, like every other echo here: the
+		// row this failure produces stores the CANONICAL id, and a log
+		// line that spells it differently is one grep away from missing.
+		log.Printf("task %s completed but rollover failed: %v", TruncateBytes(canonicalID(id), 40), rerr)
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reason, "", nil
@@ -1010,7 +1165,7 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, string, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, nil, "", "", fail("bad id '%s'", id)
+		return nil, nil, "", "", badID(id)
 	}
 	now := time.Now().UTC()
 	res, err := s.tasks.UpdateOne(ctx,
@@ -1034,14 +1189,15 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 		}
 		return nil, nil, "", "", resolvedStateErr(doc, id)
 	}
-	done, err := s.Get(ctx, id)
+	done, err := s.Get(ctx, canonicalID(id))
 	if err != nil {
 		return nil, nil, "", "", err
 	}
 	s.bumpChanges(ctx)
 	next, reasonOut, rerr := s.rollOver(ctx, done)
 	if rerr != nil {
-		log.Printf("task %s skipped but rollover failed: %v", id, rerr)
+		// Trimmed and bounded, like the completion path above.
+		log.Printf("task %s skipped but rollover failed: %v", TruncateBytes(canonicalID(id), 40), rerr)
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reasonOut, "", nil
@@ -1053,7 +1209,7 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 func (s *Store) stateOnMiss(ctx context.Context, oid primitive.ObjectID, id string) (bson.M, *StoreError) {
 	var doc bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); err != nil {
-		return nil, fail("unknown task '%s'", id)
+		return nil, unknownTask(id)
 	}
 	return doc, nil
 }
@@ -1062,12 +1218,16 @@ func (s *Store) stateOnMiss(ctx context.Context, oid primitive.ObjectID, id stri
 // finds it already resolved. Legacy skipped rows keep their marker, so the
 // skipped branch stays: completing one must still say "already skipped", not
 // report work that never happened as done.
+//
+// The id is trimmed and bounded, like every other echo here: the state
+// error and the lookup error then read alike for the same id.
 func resolvedStateErr(doc bson.M, id string) *StoreError {
+	shown := TruncateBytes(strings.TrimSpace(id), 40)
 	if isSkipped(doc) {
 		return fail("task '%s' is already skipped, not done — reopen_task returns it to "+
-			"the open list if you now mean to do it", id)
+			"the open list if you now mean to do it", shown)
 	}
-	return fail("task '%s' is already completed", id)
+	return fail("task '%s' is already completed", shown)
 }
 
 // TruncateBytes caps a string at max BYTES without splitting a UTF-8 rune, so a
@@ -1104,7 +1264,7 @@ func TruncateBytes(s string, max int) string {
 func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, fail("bad id '%s'", id)
+		return nil, badID(id)
 	}
 	res, err := s.tasks.UpdateOne(ctx,
 		bson.M{"_id": oid, "completedAt": bson.M{"$ne": nil, "$exists": true}},
@@ -1121,19 +1281,19 @@ func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 	if res.MatchedCount == 0 {
 		var doc bson.M
 		if ferr := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); ferr != nil {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
-		return nil, fail("task '%s' is already open", id)
+		return nil, fail("task '%s' is already open", TruncateBytes(strings.TrimSpace(id), 40))
 	}
 	s.bumpChanges(ctx)
-	return s.Get(ctx, id)
+	return s.Get(ctx, canonicalID(id))
 }
 
 // Delete removes a task regardless of completion.
 func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return false, fail("bad id '%s'", id)
+		return false, badID(id)
 	}
 	res, err := s.tasks.DeleteOne(ctx, bson.M{"_id": oid})
 	if err != nil {

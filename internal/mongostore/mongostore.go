@@ -72,12 +72,16 @@ func ToBool(v any) (bool, bool) {
 // ClampLimit applies the list cap policy: limit <= 0 means the domain
 // default, anything above the ceiling clamps (never rejected, so a stale
 // caller gets fewer rows rather than an error).
-func ClampLimit(limit, def, max int) int64 {
+//
+// An int, so the domain layer works in one type: the driver's limit is an
+// int64, and the cast belongs at THAT call — not in the middle of a store's
+// own arithmetic, where a reader has to wonder whether the number fits.
+func ClampLimit(limit, def, max int) int {
 	if limit <= 0 {
-		return int64(def)
+		return def
 	}
 	if limit > max {
-		return int64(max)
+		return max
 	}
-	return int64(limit)
+	return limit
 }

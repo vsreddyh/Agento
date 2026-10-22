@@ -16,11 +16,34 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	syncpkg "sync"
 	"time"
 )
+
+// parseLimitParam reads the `limit` query parameter, falling back to the
+// store default (0 = "use the default") when it is missing, blank, or
+// unparseable. A value that PARSES is returned as it is, zero and negative
+// included: the default for those is applied further down, in the store's
+// ClampLimit, which also clamps a limit above the ceiling.
+//
+// Lenient on purpose: a limit can only enlarge the page, which is the answer
+// the caller already had, so a stray query param must never nuke the answer.
+// One helper, because two copies of this rule are two rules — and the next
+// edit to one of them would drift from the other.
+func parseLimitParam(q url.Values) int {
+	raw := strings.TrimSpace(q.Get("limit"))
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0
+	}
+	return n
+}
 
 // listTasks serves the app's Task Manager screen: the user's own tasks from
 // the shared `tasks` collection (the same rows the agent manages over MCP).
@@ -42,16 +65,9 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
-	limit := 0
-	// Non-numeric ?limit= falls back to the store default (200) on
-	// purpose: a stray query param should never nuke the task list.
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
-			limit = n
-		}
-	}
+	limit := parseLimitParam(r.URL.Query())
 	rows, truncated, err := store.List(ctx, state, false, "", limit)
 	if err != nil {
 		writeTaskErr(w, err)
@@ -100,7 +116,10 @@ func writeTaskErr(w http.ResponseWriter, err error) {
 func taskErrBody(err error) (int, bson.M) {
 	var se *tasks.StoreError
 	if errors.As(err, &se) {
-		if strings.HasPrefix(se.Msg, "unknown task") {
+		// A missing task, by the error's OWN flag: the rule used to be a
+		// prefix match on the message, which would 404 any future
+		// message that happened to start with the same words.
+		if se.NotFound {
 			return http.StatusNotFound, bson.M{"detail": se.Msg}
 		}
 		// A lost revision race is neither missing nor invalid: 409, with
@@ -283,7 +302,7 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parallelable, _ := fields["parallelable"].(bool)
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	// Idempotency (#176). The header is the contract: the same key plus the same
 	// body returns the SAME task, not a second one. Absent means the old
@@ -333,12 +352,15 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, doc)
 }
 
-// changedKeys names which fields a PATCH touched, for the audit log. "PATCH
-// /api/tasks" alone does not say whether the user moved a due date or fixed a
-// typo, and that is the whole reason the log exists.
-func changedKeys(fields map[string]any) string {
-	return tasks.ChangedFieldNames(fields)
-}
+// The audit log names which fields a PATCH touched — "PATCH /api/tasks"
+// alone does not say whether the user moved a due date or fixed a typo, and
+// that is the whole reason the log exists.
+//
+// The STORE's list, not the supplied keys: an unknown key is ignored by the
+// update, so it is not a change, and the log must not claim one. The store's
+// helper is called directly: a wrapper around it is a second name for one
+// rule, and the wrapper is how the two copies this package once had came
+// back.
 
 // zeroLike returns the zero value of whatever type this field takes elsewhere, so an
 // absent key and an explicit zero hash the same. Type is taken from the OTHER keys
@@ -523,6 +545,18 @@ func taskFingerprint(fields map[string]any) string {
 // requestSource names the caller for the audit log (#176). The app sends
 // X-Agento-Source; the header is trusted only as a LABEL — it decides what the log
 // says, never what the caller may do, which authorize() already settled.
+//
+// The value is trimmed here and CAPPED at 40 bytes on the write seam (the
+// store does the capping, for every writer). A 200-byte header is accepted
+// and silently shortened — so a grouping break over a long label starts at
+// the seam, not at the header.
+//
+// The DEFAULT is the canonical lower case ("http", like the agent's "mcp"),
+// but an explicit header is stored AS SENT: a client that sends "HTTP" gets
+// "HTTP" in the log. A label is the caller's own claim about who it is, and
+// rewriting it would change what the log says about them. The one rule
+// worth knowing before grouping by this field: the default is lower case
+// and an explicit value is not, so group on the value, not on a guess.
 func requestSource(r *http.Request) string {
 	if v := strings.TrimSpace(r.Header.Get("X-Agento-Source")); v != "" {
 		return v
@@ -579,7 +613,7 @@ func getTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	doc, err := store.Get(ctx, id)
 	if err != nil {
@@ -608,7 +642,7 @@ func updateTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	doc, err := store.Update(ctx, id, fields)
 	if err != nil {
@@ -622,12 +656,13 @@ func updateTask(w http.ResponseWriter, r *http.Request, id string) {
 	// create for a replayed one: the log stops being a record of what happened and
 	// becomes a record of what was asked for.
 	//
-	// `changedKeys(fields) == "no fields"` is exactly the store's condition, because
-	// `set` only ever gains an entry for a field that was actually supplied. Checking it
-	// here rather than widening Update's signature keeps the knowledge where the data is
-	// though: the store is still the only thing that decides whether a write happened,
-	// and this merely mirrors the one case where it provably did not.
-	if names := changedKeys(fields); names != "no fields" {
+	// `UpdateFieldNames(fields) == "no fields"` is exactly the store's condition, because
+	// `set` only ever gains an entry for a field the store KNOWS and the caller
+	// supplied. Checking it here rather than widening Update's signature keeps the
+	// knowledge where the data is though: the store is still the only thing that
+	// decides whether a write happened, and this merely mirrors the one case where
+	// it provably did not.
+	if names := tasks.UpdateFieldNames(fields); names != "no fields" {
 		store.RecordMutation(ctx, tasks.OpUpdate, id, requestSource(r), names)
 	}
 	writeJSON(w, http.StatusOK, doc)
@@ -638,7 +673,7 @@ func deleteTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	found, err := store.Delete(ctx, id)
 	if err != nil {
@@ -646,7 +681,10 @@ func deleteTask(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if !found {
-		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown task '" + id + "'"})
+		// One spelling of this body, owned by the store: the transports
+		// render it, and a second copy of the format string is a second
+		// string to drift.
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": tasks.UnknownTaskMessage(id)})
 		return
 	}
 	// Logged AFTER the delete, so there is no window where the log claims a delete
@@ -661,7 +699,7 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	doc, next, rollover, rolloverDetail, err := store.CompleteDetail(ctx, id)
 	if err != nil {
@@ -728,7 +766,7 @@ func skipTask(w http.ResponseWriter, r *http.Request, id string) {
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, id, reason)
 	if err != nil {
@@ -757,7 +795,7 @@ func reopenTask(w http.ResponseWriter, r *http.Request, id string) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	doc, err := store.Reopen(ctx, id)
 	if err != nil {
@@ -830,7 +868,7 @@ func changesSince(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	revision, at, err := store.ChangeRevision(ctx)
 	if err != nil {
@@ -858,5 +896,9 @@ func registerTasks(mux *http.ServeMux) {
 	// through to the taskItem catch-all below and 404s as "unknown task".
 	mux.HandleFunc("/api/tasks/batch", batchTasks)
 	mux.HandleFunc("/api/tasks/batch/", batchTasks)
+	// The change log (#350), registered the same way: /api/tasks/mutations
+	// must resolve here and not be read as a task id by the catch-all below.
+	mux.HandleFunc("/api/tasks/mutations", taskMutations)
+	mux.HandleFunc("/api/tasks/mutations/", taskMutations)
 	mux.HandleFunc("/api/tasks/", taskItem)
 }

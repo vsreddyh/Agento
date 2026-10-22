@@ -189,19 +189,45 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// here as it will in the verb switch — otherwise the transport
 		// (which trims) and a direct store caller would disagree on what a
 		// padded op means.
+		//
+		// The copy of the ops this loop works on is TRIMMED IN PLACE, so
+		// from here on the op name and the id in the copy are the
+		// canonical spelling: the switch below and the `op.Op != "update"`
+		// test both read the trimmed value, and they agree with the
+		// validation above. Nothing downstream needs to re-trim, and
+		// nothing should "fix" validation to lowercase — the op names are
+		// lowercase-EXACT by contract.
 		opName := strings.TrimSpace(op.Op)
 		id := strings.TrimSpace(op.ID)
 		switch opName {
 		case "complete", "skip", "update", "duplicate":
 		default:
+			// Bounded, like every other caller-controlled echo in this
+			// stack: a 10KB op name is not answered with itself, and one
+			// mistake reads the same however it was spelled.
+			//
+			// The op name here is the SENT one ("Complete"), because this
+			// is a validation error and the caller has to be able to fix
+			// it. An EXECUTION error below carries the canonical name
+			// instead, because the log joins on that one. The two cannot
+			// meet — validation runs first — and they answer two
+			// different questions: "what did you send" and "what ran".
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
-				Err: fail("unknown batch op %q: want complete, skip, update, or duplicate", op.Op)}
+				Err: fail("unknown batch op %q: want complete, skip, update, or duplicate",
+					TruncateBytes(opName, 40))}
 		}
 		if id == "" {
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("batch op %d (%s) has no id", i, opName)}
 		}
-		if seen[id] {
+		// The seen-key is the CANONICAL id: a hex id is case-INSENSITIVE
+		// (ObjectIDFromHex accepts upper case, and the log's task_id is
+		// lowercased), so "abc…" and "ABC…" name the SAME task. A guard
+		// that stops two verbs on one task has to see them as one — and
+		// the canonical spelling belongs to the seam, so the guard reads
+		// it there rather than deriving a second one.
+		key := canonicalID(id)
+		if seen[key] {
 			// The same id twice would self-conflict inside one transaction:
 			// the second verb reads the first's uncommitted write. Reject
 			// up front rather than aborting on our own write. Unreachable
@@ -210,18 +236,25 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("batch op %d (%s %s) duplicates an earlier op; one op per task", i, opName, id)}
 		}
-		seen[id] = true
+		seen[key] = true
 		// Extras ride only where they are read: a `reason` on anything but
 		// skip, or `fields` on anything but update, would commit while
 		// silently dropping the value — the exact silent-drop shape the
 		// single-task layer rejects at its boundary. Empty counts as absent
 		// (a blank reason, an empty or all-null fields object), the same
 		// "no fields" rule the audit log uses.
+		//
+		// The guard asks whether the object carries ANY value, not whether
+		// it names a change: on a verb that never reads fields, a lone
+		// expected_revision is still something the caller sent and the
+		// server would drop — and a dropped concurrency guard is a silent
+		// drop. (ChangedFieldNames skips it, because for the AUDIT it is
+		// not a change; the two questions have two answers.)
 		if opName != "skip" && strings.TrimSpace(op.Reason) != "" {
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("batch op %d (%s) takes no reason; reason rides only on skip", i, opName)}
 		}
-		if opName != "update" && ChangedFieldNames(op.Fields) != "no fields" {
+		if opName != "update" && HasAnyField(op.Fields) {
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("batch op %d (%s) takes no fields; fields ride only on update", i, opName)}
 		}
@@ -231,10 +264,18 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 	// id. The copy is shallow: per-op Fields maps are borrowed read-only
 	// (Update and ChangedFieldNames never mutate them), so a future verb
 	// that normalizes fields in place must deep-copy first.
+	//
+	// The reason is trimmed here too, for the same reason: the copy is what
+	// the verbs are handed, so the value that reaches the skip record is the
+	// canonical one whatever the caller sent. The store trims it again on
+	// the way to `skipReason` (SkipDetail), so this is belt and braces —
+	// but the rule now lives where the rest of the canonicalisation lives,
+	// instead of only at the transport that happens to trim first.
 	ops = append([]BatchOp(nil), ops...)
 	for i := range ops {
 		ops[i].ID = strings.TrimSpace(ops[i].ID)
 		ops[i].Op = strings.TrimSpace(ops[i].Op)
+		ops[i].Reason = strings.TrimSpace(ops[i].Reason)
 	}
 	if !s.useTransactions(ctx) {
 		return nil, ErrNoTransactions
@@ -251,23 +292,51 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// bump for the whole batch lands below, inside the transaction.
 		nb := noBump(sc)
 		for i, op := range ops {
-			res := BatchItemResult{Index: i, ID: op.ID, Op: op.Op}
+			// The id and the op in the envelope are the CANONICAL ones (lower
+			// case), the same spelling the change log stores — so a caller
+			// diffing the batch answer against a history row does not miss
+			// on case, and the transport's switch on res.Op cannot drift
+			// from the validator that accepted it. The duplicate branch
+			// below replaces the id with the copy's own, which is canonical
+			// already.
+			//
+			// The canonical spellings come from the seam's helpers, not
+			// from a second derivation of them: canonicalID and lowerTrim
+			// own that rule, and a copy of it here would be a rule that
+			// can drift from the one every other id and op name uses.
+			res := BatchItemResult{Index: i, ID: canonicalID(op.ID), Op: lowerTrim(op.Op)}
+			// The verbs are handed the CANONICAL id, not the caller's
+			// spelling: the envelope and the log carry the lower-case
+			// form, and a verb that echoes the id it was given (the
+			// rollover-failure log does) must not spell it differently.
+			//
+			// An ERROR carries the SENT id instead, like its op name: the
+			// caller has to be able to fix what they sent. So the same
+			// task reads two ways across two attempts — canonical in the
+			// success, sent in the failure — which is the point of each.
+			srcID := res.ID
 			var err error
-			switch op.Op {
+			// The switch and the write-marker below read res.Op, the
+			// CANONICAL op name — the same value the envelope carries and
+			// the transport switches on. The invariant then lives at
+			// construction, not in the validator: an op that passes
+			// validation and misses a case falls into the default below
+			// rather than quietly doing nothing.
+			switch res.Op {
 			case "complete":
 				var next map[string]any
 				var reason Rollover
 				var detail string
-				res.Task, next, reason, detail, err = s.CompleteDetail(nb, op.ID)
+				res.Task, next, reason, detail, err = s.CompleteDetail(nb, srcID)
 				res.Next, res.Rollover, res.Detail = next, reason, detail
 			case "skip":
 				var next map[string]any
 				var reason Rollover
 				var detail string
-				res.Task, next, reason, detail, err = s.SkipDetail(nb, op.ID, op.Reason)
+				res.Task, next, reason, detail, err = s.SkipDetail(nb, srcID, op.Reason)
 				res.Next, res.Rollover, res.Detail = next, reason, detail
 			case "update":
-				res.Task, err = s.Update(nb, op.ID, op.Fields)
+				res.Task, err = s.Update(nb, srcID, op.Fields)
 				res.Rollover = RolloverNone
 				// The audit detail travels with the result rather than
 				// being re-derived from op order by the caller.
@@ -275,32 +344,85 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				if fields == nil {
 					fields = map[string]any{}
 				}
-				res.Detail = ChangedFieldNames(fields)
+				// The store's own list, not the supplied keys: an
+				// unknown key is ignored by Update, so it is not a
+				// change, and the log must not claim one.
+				res.Detail = UpdateFieldNames(fields)
 			case "duplicate":
-				res.Task, err = s.Duplicate(nb, op.ID)
+				res.Task, err = s.Duplicate(nb, srcID)
 				res.Rollover = RolloverNone
+				// The audit detail names the SOURCE the copy came from.
+				// The row the log gets is about the copy (its id is the
+				// copy's), and without the source the history could say a
+				// task appeared without saying what it came from — while
+				// the source's own row says nothing about the copy.
+				//
+				// Carried here rather than re-derived by the transport from
+				// the op list, for the same reason the update's detail is
+				// carried here: the result should not have to be matched
+				// back to its op to know what it was about.
+				//
+				// srcID, the canonical source id the verb was handed
+				// — not a second derivation of it. The SEAM is still the
+				// authority: RecordMutation canonicalises the detail
+				// itself, so this copy is belt and braces, not the rule.
+				//
 				// Name the row produced, not the row asked about: the
 				// copy is a different id, and the response envelope and
 				// the audit log both read ID.
+				//
+				// The source id is set ONLY on success: a failed copy
+				// leaves res.ID as the source, and a row that claims a
+				// task was duplicated from ITSELF is worse than no row.
+				//
+				// A copy that produced NO id is refused here rather than
+				// passed on: the row would name the source as if it were
+				// the copy, with no back-link to say where it came from —
+				// a duplicate in the log that never happened, and the one
+				// shape of row a reader cannot tell from a real one. The
+				// error aborts the batch inside the transaction, so
+				// nothing commits and the caller is told.
 				if err == nil {
-					if newID, _ := res.Task["id"].(string); newID != "" {
-						res.ID = newID
+					newID, _ := res.Task["id"].(string)
+					if newID == "" {
+						return &BatchOpError{Index: i, Op: res.Op, ID: op.ID,
+							Err: fail("duplicate produced no task")}
 					}
+					res.ID = newID
+					res.Detail = srcID
 				}
+			default:
+				// Unreachable today: the validation loop above accepts
+				// exactly the ops this switch names. It is here because
+				// the alternative is worse — an op that passes validation
+				// but matches no case would fall through with no error,
+				// mark the batch as written, and report success for a
+				// verb that ran nothing.
+				return &BatchOpError{Index: i, Op: res.Op, ID: op.ID,
+					Err: fail("batch op %d (%s) is not implemented", i, res.Op)}
 			}
 			if err != nil {
-				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID, Err: err}
+				// The op name is the CANONICAL one, like the success
+				// envelope's res.Op: one spelling of the op in both
+				// envelopes, so they cannot drift if the accepted set ever
+				// loosens. A VALIDATION error, further up, carries the
+				// SENT spelling instead — the caller has to be able to
+				// fix what they sent. The two answer different questions
+				// and the split is deliberate.
+				return &BatchOpError{Index: i, Op: res.Op, ID: op.ID, Err: err}
 			}
 			// A failed rollover aborts: unlike a single verb, nothing has
 			// committed yet, so the parent must not be left done without
 			// its successor. The field detail names what to fix.
 			if res.Rollover == RolloverFailed {
-				return &BatchOpError{Index: i, Op: op.Op, ID: op.ID,
+				return &BatchOpError{Index: i, Op: res.Op, ID: op.ID,
 					Err: fail("rollover failed: %s", res.Detail)}
 			}
 			// Complete/skip/duplicate always write; an update whose detail
 			// is "no fields" took the store's no-op path and wrote nothing.
-			if op.Op != "update" || res.Detail != "no fields" {
+			// res.Op, the canonical name — the same value the switch
+			// above matched on.
+			if res.Op != "update" || res.Detail != "no fields" {
 				wrote = true
 			}
 			attempt = append(attempt, res)

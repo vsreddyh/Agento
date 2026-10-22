@@ -174,6 +174,10 @@ var gatedTools = map[string]map[string]bool{
 		"create_task": false, "list_tasks": false, "get_task": false,
 		"update_task": false, "complete_task": false, "skip_task": false,
 		"reopen_task": false, "delete_task": true,
+		// A read of the change log. It cannot change anything, and it is
+		// exactly the tool the agent needs to explain a change it did not
+		// make — so it must never hold for approval.
+		"task_history": false,
 	},
 	"project-manager": {
 		"create_project": false, "list_projects": false, "get_project": false,

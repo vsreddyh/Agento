@@ -17,6 +17,7 @@ store, same validation — see `cmd/health-api/main.go`).
 | `skip_task` | Skip the occurrence without claiming the work was done (retained 3 days like a completion; `reopen_task` restores it); structured repeats roll over server-side like `complete_task` |
 | `reopen_task` | Reopen a completed or skipped task (cancels expiry) |
 | `delete_task` | Permanently delete |
+| `task_history` | Read the change log (#350): every create/update/complete/skip/reopen/delete, with op, task_id, source and at. Filters: `task_id`, `op` (comma-separated), `since` (inclusive RFC3339, fractional seconds accepted), `limit` |
 
 ## Schema (MongoDB `hermes` DB)
 
@@ -235,6 +236,180 @@ that is the failure this caveat is here to prevent. Writes are best-effort: a fa
   (Legacy skipped rows from before the skip verb was removed expire the same
   way — a skip set `expiresAt` exactly as `complete_task` does.)
   Open tasks never expire. `reopen_task` clears the expiry.
+
+## Reading the change log (#350)
+
+The log (`task_mutations`) has been written since #176 and had no read path:
+no route, no tool. It matters more than it used to, because the task rows
+themselves are **deleted 3 days** after completion — the log is the only
+record left of what happened to a completed task, and it is kept 90 days.
+
+- HTTP: `GET /api/tasks/mutations?task_id=&op=&since=&limit=`
+- MCP: `task_history` with the same filters
+- Store: `tasks.Store.ListMutations` (both transports read through it, so
+  there is one history rather than two)
+
+Every entry carries the four facts the log exists for — `op` (what), `task_id`
+(which), `source` (who) and `at` (when) — plus a `detail` (the changed field
+names for an update, the rollover outcome for a completion). Newest first,
+`at` then `_id` as the tiebreak, so two mutations in the same millisecond do
+not reshuffle between two reads of the same window.
+
+The two envelopes differ, on purpose:
+
+| Transport | Response |
+|---|---|
+| HTTP | `{"mutations": [...], "truncated": bool}` — the same shape as the task list |
+| MCP | `{"ok": true, "count": n, "truncated": bool, "mutations": [...]}` — the same shape as every other tool |
+
+`count` is the number of rows in THIS PAGE, not a total: there is no total
+anywhere, and `truncated` is the only signal that more exist. A repeated
+parameter reads its FIRST value only (`?op=create&op=delete` filters by
+`create`, `?limit=5&limit=500` returns 5), which is Go's standard query
+handling — the same the task list already has. Note the three shapes where
+"first wins" and the blank/lenient rules compose: `?task_id=&task_id=<hex>`
+reads the BLANK first value, so it answers the whole log;
+`?limit=&limit=5` reads the blank first value, so it answers the default
+page of 200 rather than 5; and `?limit=5&limit=garbage` reads the FIRST
+value, so it answers 5 — the second is ignored, valid or not.
+
+The delete envelopes differ too, and predates this reader: the MCP tool
+answers `{"deleted": "<canonical id>"}` while the HTTP route answers
+`{"deleted": true}` with no id. The canonical id is the one the log stores,
+so it is the one a caller can compare against a history row.
+
+`since` is **inclusive** and must be RFC3339 (fractional seconds accepted —
+the `at` this filter is fed back from carries milliseconds). It must carry an
+offset — `Z` or `±hh:mm`; a naive local time has no offset and is a 422. A
+malformed `since`, `op` or `task_id` is a 422, not a silently widened
+answer: "the whole log" is the wrong data, not merely more of it.
+
+That is the opposite of the revision poll next door
+(`GET /api/tasks/changes?since=`), which never 422s on a mangled cursor —
+it falls back to `0`, because a poll that 422s on a mangled cursor 422s
+forever. The two are right for their own jobs, and they are not the same
+rule.
+
+An UNKNOWN parameter is ignored, so a misspelled filter name reads the
+whole log — `?taskid=<hex>` filters nothing and answers with everything.
+The strict 422s are about a bad VALUE; a bad NAME cannot be told apart from
+a parameter meant for someone else, so it is ignored (the same the task list
+does). Check the spelling.
+
+"Inclusive" holds at every precision, because both sides go through the
+same BSON datetime: `at` is written in whole milliseconds, and the filter
+value is truncated to milliseconds the same way, so a hand-built
+sub-millisecond `since` (`.123456789Z`) still matches the row stored in that
+millisecond. Echoing a returned `at` back is exact.
+
+`limit` is the one lenient filter: unparseable, zero or negative falls back
+to the default (200), and a parseable-but-huge one is clamped to the ceiling
+(500). A limit can only enlarge the page, which is the answer the caller
+already had, so it is never worth a 422. A blank limit — empty, or only
+whitespace — is the same as no limit at all. Over MCP the TYPE is checked
+before the value: a limit of the wrong *type* (`"200"` instead of `200`, or
+a null) is an argument error, not a value the tool quietly rounds — types
+and values are different layers, and only the value layer is lenient. The
+same holds for `op` and `since`: an array where a string belongs, a number
+where a timestamp belongs, or a null, is an argument error rather than a
+filter that means something else.
+
+`since` is a URL parameter on the HTTP route, so an offset with a `+` in it
+(`2026-10-21T00:00:00+02:00`) must be percent-encoded as `%2B` — `+` in a
+query string means a space. `Z` needs no encoding, and is what the examples
+use. The zone is UPPER case: RFC3339 spells it `Z07:00`, so
+`2026-10-21T00:00:00z` is a 422, not a timestamp.
+
+The `task_id` check is shared by both transports (`tasks.NormalizeTaskID`),
+so the agent and the app are told the same thing: a typo'd id is refused
+rather than answered with an empty history that reads like "this task was
+never touched". Ids are lowercased — the same id in either case is the same
+task. A blank `task_id` — empty, or only whitespace — means no filter (the
+whole log), exactly as a blank `op` means every op; a non-blank one that is
+not a hex id (including one made of spaces and commas) is a 422, exactly like
+an `op` filter that names nothing.
+
+`op=duplicate` is accepted but only the **batch** path records it (#341): a
+single duplicate is a store operation with no verb of its own, so the filter
+vocabulary is wider than the current set of writers. Rows come back only for
+duplicates made through a batch. Batch op names are lowercase-exact
+(`"Complete"` is a 422), while these filters are case-insensitive — the two
+are different surfaces, and the difference is deliberate.
+
+There is **no cursor**. `truncated` says "more rows exist than this page
+holds" and nothing more: the filters are the way to narrow, so read one
+task's history (`task_id`) or one kind of change (`op`) rather than paging
+through the whole log. A 90-day personal log fits a page; if it ever does
+not, the fix is a cursor — `(at, _id)` — not a bigger `limit`.
+
+The entries carry no cursor key today: `at` alone does not disambiguate
+two rows written in the same millisecond, so a future cursor would be a NEW
+field in the envelope, not a correction of one. Polling with an echoed
+`at` therefore re-receives the last row by design, and the way to dedup is
+a full-row match (`task_id`, `op`, `source`, `detail`, `at`) rather than the
+timestamp alone.
+
+That dedup inherits the same missing key (the paragraph above): two DISTINCT
+events in the same millisecond whose visible fields agree (two `update`s
+naming the same fields, say) match each other, because the row's `_id` is
+the only thing that tells them apart and it is not in the envelope.
+Collapsing them is wrong at the cost of one row, and the collision needs
+the same millisecond AND the same visible fields — a personal-log rarity.
+The fix is the same cursor key, not a better match rule.
+
+### What `detail` holds, per op
+
+`detail` is the op-specific extra, and the two transports do not always
+write the same one — the log records what each caller chose to say, and
+that is worth knowing before diffing two rows:
+
+| op | `detail` |
+|---|---|
+| `create` | the door that created it (`http POST /api/tasks`, `mcp create_task`) |
+| `update` | the changed field names, sorted (`name,due_date`) — and an update that changed nothing earns NO row, so `no fields` never appears in the log |
+| `complete`, `skip` | the rollover outcome (`created`, `none`, `custom`, …) |
+| `reopen` | empty over HTTP, `mcp reopen_task` over MCP |
+| `delete` | the door that deleted it (`http DELETE`, `mcp delete_task`) |
+| `duplicate` | the id of the task this was duplicated from, when the writer passed a hex id (the batch path always does) — the row itself is about the COPY, whose id it carries. An EMPTY detail on a `duplicate` row means the writer passed no back-link: the row is kept (the copy happened) and the server log says so, so an empty detail on this op means "no source", never "no change" |
+
+Two of those rows are about a MISSING value rather than a stored one, so
+they are worth spelling out: an empty `detail` is the honest answer for a
+`reopen` over HTTP and for a `duplicate` with no back-link, while a
+`create`/`delete` names its door and an `update` names its fields. A row
+with an empty detail is never a claim that nothing happened — it is a
+claim that this op had nothing extra to say.
+
+The copy→source direction is the joinable one: the row carries the copy's
+`task_id` and the source in its `detail`. The other direction — "what did
+this task produce?" — has no read path today, because `detail` is not
+indexed; at a 90-day personal log that is a scan, and it would be an index
+if the app ever needs it.
+
+`detail` is capped at 300 bytes, so a longer one is stored truncated with
+no marker — the op-specific extras are short by nature (a field list, a
+rollover outcome, an id), and a cap that rewrote the value would change
+what the log says.
+
+The cut can land INSIDE a name, so a capped `detail` is a prefix of the
+list, not a complete one: `due_da` is a cut `due_date`, not a field that
+does not exist. Read a capped field list as "at least these" — the tail
+is unknown, not absent.
+
+`at` is RFC3339 **with milliseconds** — unlike the task documents, whose
+`completedAt`/`createdAt` are RFC3339 to the second. The fractional digits
+vary (`100ms` emits as `.1Z`, not `.100Z`), so parse it with one lenient
+parser rather than a fixed-width one; both are valid timestamps.
+
+`source` is a self-attested LABEL (`mcp` for the agent, the app's own
+`X-Agento-Source` otherwise), not an authenticated identity — see the tamper
+note above. It is stored **as the caller sent it** (trimmed, capped at 40
+bytes): unlike the op and the task id, it is not canonicalised, so `App` and
+`app` are two labels for what may be one caller. Grouping them is a choice
+the app makes, not the server's. A direct store caller may leave it empty —
+the transports never do (HTTP defaults a missing **or blank** header to
+`http`, MCP uses `mcp`, and that default lives in the HTTP transport, not
+on the write seam) — so an app should read an empty `source` as "unknown",
+not as a third caller.
 
 ## Run
 

@@ -13,7 +13,8 @@ Projects tab (see `project-manager` skill).
 `name`, `description`, `due_date` (YYYY-MM-DD), `due_time` (HH:MM),
 `estimated_minutes`, `parallelable` — ALL required on `create_task`. Repeat is
 the only optional part (all repeat keys zero/empty = one-shot). No status
-field; completed tasks vanish after 3 days.
+field; completed tasks vanish after 3 days — but `task_history` keeps the
+record of what changed for 90 days.
 
 ## Repeat contract
 
@@ -58,6 +59,34 @@ rejects it.
   completed rows vanish after 3 days, so a false one is erased, not
   corrected). A structured repeat rolls over server-side like a completion;
   a custom repeat is yours to recreate from the response's `follow_up`.
+
+## Change log
+
+`task_history` reads the change log: every create, update, complete, skip,
+reopen and delete, with `op`, `task_id`, `source` and `at`. It is kept 90
+days, so it still answers for a task that was completed and auto-deleted
+after 3 days.
+
+Use it when the user asks what happened to a task, or when a task changed
+without the agent doing it. Every argument is optional: `task_id` (one
+task — the 24-character hex id `create_task` returned), `op`
+(comma-separated: create, update, delete, complete, skip, reopen,
+duplicate — `duplicate` appears only for duplicates made through a batch),
+`since` (INCLUSIVE RFC3339 timestamp, fractional seconds
+accepted, e.g. `2026-10-21T00:00:00Z`; a `+02:00` offset is fine as it
+is, because this is a tool argument and not a query string), `limit`
+(default 200, max 500; zero or
+negative gives the default, a huge one is clamped). Newest first. A
+malformed `task_id`, `op` or `since` is refused, not answered with an
+empty history.
+
+A mistyped filter is an argument type error, not a value the tool rounds
+or defaults: an array or a number for `task_id`, `op` or `since`, a string
+or a fractional number for `limit`, and a null for any of the four.
+
+`source` is a self-attested LABEL — `mcp` for the agent, the app's own label
+otherwise — not an authenticated identity. Say "the app changed it", not
+"the user did".
 
 ## Mistake
 

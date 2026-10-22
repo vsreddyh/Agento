@@ -165,6 +165,53 @@ type deleteTaskInput struct {
 	ID string `json:"id"`
 }
 
+// taskHistoryInput filters the change log. Every field is optional: the whole
+// log is the default reading of the question, and a caller that wants one
+// task's history sends task_id.
+type taskHistoryInput struct {
+	// TaskID restricts to one task (the hex id from create_task — the
+	// `?task_id=` filter on the HTTP route). A blank id means every task; a
+	// non-blank one that is not a hex id is refused rather than answered
+	// with an empty history.
+	//
+	// A mistyped value — an array, a number, a null — is an argument
+	// type error, not a filter: the SDK's schema validation rejects it
+	// before this handler runs, so it never reaches the id check.
+	TaskID string `json:"task_id,omitempty"`
+	// Op restricts to a set of ops, ONE comma-separated string (not an
+	// array — an array is an argument type error, not a filter; the HTTP
+	// route spells it `?op=`): create, update, delete, complete, skip,
+	// reopen, duplicate. A filter that names no op (only commas and
+	// spaces) is refused rather than read as the whole log. `duplicate`
+	// appears only for duplicates made through a batch.
+	//
+	// A mistyped value — an array, a number, a null — is an argument
+	// type error, not a filter: the SDK's schema validation rejects it
+	// before this handler runs.
+	Op string `json:"op,omitempty"`
+	// Since is an INCLUSIVE RFC3339 lower bound on when the change
+	// happened — a string, not an epoch number (a number is an argument
+	// type error, not a filter; a null is too). Fractional seconds are
+	// accepted.
+	//
+	// A mistyped value — an array, a number, a null — is an argument
+	// type error, not a filter: the SDK's schema validation rejects it
+	// before this handler runs.
+	Since string `json:"since,omitempty"`
+	// Limit caps the rows returned (default 200, max 500). Zero or
+	// negative gives the default, a huge one is clamped to the max.
+	//
+	// A mistyped value — a string, a number with a fraction, a null — is
+	// an argument type error, not a value that gets rounded: the SDK's
+	// schema validation rejects it before this handler runs (pinned by
+	// TestNullIsAnArgumentTypeError), so the error comes from the layer
+	// below, not from here. A WHOLE-number float (200.0) is an integer
+	// as far as JSON goes, and lands as that integer — pinned end to end
+	// through a real tool call by
+	// TestWholeNumberFloatReachesTheHandlerAsItsInteger.
+	Limit int `json:"limit,omitempty"`
+}
+
 // createTask is the create_task handler's body, named so it can be called directly.
 //
 // It is extracted for testability, not style: a handler closed over `mcp.AddTool` cannot
@@ -214,6 +261,79 @@ func createTask(ctx context.Context, store *tasks.Store, in createTaskInput) (ma
 // actively misleading, which is worse than not having it.
 const mcpSource = "mcp"
 
+// taskHistory reads the change log (#350).
+//
+// It is the same reader the HTTP endpoint uses, so the agent and the app see
+// one history rather than two — and the agent's own writes are the ones it
+// most often needs to explain ("what did you do with that task?").
+//
+// Every entry carries op, task_id, source and at. `source` is a LABEL, not an
+// identity: "mcp" is this server, the app labels its own calls, and either
+// could claim either. It answers "which client made this change" well enough
+// to explain an accident, and badly enough to be evidence against anyone.
+//
+// The filters are parsed BEFORE the store is touched, so a malformed filter
+// is a 422 even when the store is unreachable — the same precedence the HTTP
+// route and the store itself use, and the same reason: the filter is the
+// caller's mistake, and naming it is more useful than a 500 that says
+// nothing about the request.
+func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (map[string]any, error) {
+	ops, err := tasks.ParseOps(in.Op)
+	if err != nil {
+		return nil, err
+	}
+	since, err := tasks.ParseSince(in.Since)
+	if err != nil {
+		return nil, err
+	}
+	// The same validation the HTTP route applies: a typo'd id would match
+	// nothing, and an empty history reads like "this task was never
+	// touched" — the wrong answer, and the same wrong answer the app would
+	// get. One helper, so the two transports cannot disagree.
+	taskID, err := tasks.NormalizeTaskID(in.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	// The HTTP route bounds its read at the same budget (one constant for
+	// the task domain — tasks.RequestBudget), so a hung Mongo answers with
+	// an error instead of hanging the tool. The caller's context still
+	// wins — a cancelled session ends the call whatever the timeout says.
+	//
+	// This is the ONLY MCP tool in this file with a deadline of its own,
+	// and that is deliberate: it is the only one that mirrors a bounded
+	// HTTP read (the change-log route), so the same question asked of
+	// the two doors behaves the same way. The write tools keep the
+	// caller's context alone — a write cut short mid-flight is a
+	// different failure from a read that hangs, and bounding it here
+	// would trade a slow write for a lost one.
+	//
+	// Named apart from ctx on purpose: two deadlines in one function, and
+	// a reader has to be able to tell which one a line holds.
+	readCtx, cancel := context.WithTimeout(ctx, tasks.RequestBudget)
+	defer cancel()
+	rows, truncated, err := store.ListMutations(readCtx, tasks.MutationFilter{
+		TaskID: taskID,
+		Ops:    ops,
+		Since:  since,
+		Limit:  in.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		// Belt and braces: the store returns an empty list, never a nil
+		// slice, so this never fires today. It is here so the tool's
+		// `mutations` is `[]` and not `null` whatever the seam does next.
+		rows = []tasks.Mutation{}
+	}
+	return map[string]any{
+		"ok":        true,
+		"count":     len(rows),
+		"truncated": truncated,
+		"mutations": rows,
+	}, nil
+}
+
 func main() {
 	var err error
 	store, err = tasks.FromEnv()
@@ -233,7 +353,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_tasks",
-		Description: "List tasks. state open (default) | done | all; overdue=true keeps open tasks due before today (requires state=open); search matches name/description; limit caps rows (default 200, max 500) and truncated says whether more exist."},
+		Description: "List tasks. state open (default) | done | all; overdue=true keeps open tasks due before today (requires state=open); search matches name/description; limit caps rows (default 200, max 500) and truncated says whether more exist. A limit of zero or negative gives the default, a huge one is clamped to the max, and a mistyped limit is an argument error."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listTasksInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, truncated, err := store.List(ctx, in.State, in.Overdue, in.Search, in.Limit)
 			if err != nil {
@@ -306,7 +426,7 @@ func main() {
 			// health-api's updateTask: a PATCH carrying no field the store will set takes
 			// the no-op path, and an audit entry for it would claim a change that did not
 			// happen.
-			if names := tasks.ChangedFieldNames(fields); names != "no fields" {
+			if names := tasks.UpdateFieldNames(fields); names != "no fields" {
 				store.RecordMutation(ctx, tasks.OpUpdate, in.ID, mcpSource, names)
 			}
 			return result(map[string]any{"ok": true, "task": doc})
@@ -408,9 +528,33 @@ func main() {
 				store.RecordMutation(ctx, tasks.OpDelete, in.ID, mcpSource, "mcp delete_task")
 			}
 			if !done {
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown task '%s'", in.ID)})
+				// One spelling of this body, owned by the store.
+				return result(map[string]any{"ok": false, "error": tasks.UnknownTaskMessage(in.ID)})
 			}
-			return result(map[string]any{"ok": true, "deleted": in.ID})
+			// The CANONICAL id, not the caller's spelling: the change log
+			// stores the normalized id, so a caller comparing this answer
+			// with a history row must not miss on case.
+			//
+			// The fallback is dead by construction: store.Delete has
+			// already hex-validated the id (and a malformed one errored
+			// there), and both validators accept the same hex grammar. It
+			// stays so a future divergence between them answers with the
+			// caller's id rather than an empty one.
+			deleted := in.ID
+			if id, nerr := tasks.NormalizeTaskID(in.ID); nerr == nil {
+				deleted = id
+			}
+			return result(map[string]any{"ok": true, "deleted": deleted})
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "task_history",
+		Description: "Read the change log: every create, update, complete, skip, reopen and delete, with the op, the task id, who made it (source) and when (at). The log is kept 90 days, so it still answers for a task that was completed and auto-deleted after 3 days — use it when the user asks what happened to a task, or when a task changed without the agent doing it. Filters: task_id (one task — the 24-character hex id create_task returned), op (a single comma-separated string, not an array: create, update, delete, complete, skip, reopen, duplicate — duplicate appears only for duplicates made through a batch), since (an INCLUSIVE RFC3339 timestamp string, fractional seconds accepted, e.g. 2026-10-21T00:00:00Z), limit (default 200, max 500; zero or negative gives the default, a huge one is clamped). A mistyped or null filter — an array or a number for task_id, op or since, a string or a fractional number for limit, a null anywhere — is an argument type error, not omitted. Newest first. A malformed task_id, op or since is refused rather than answered with an empty history. `source` is a self-attested LABEL ('mcp' for this server, the app's own label otherwise), not an authenticated identity."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in taskHistoryInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := taskHistory(ctx, store, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
 		})
 
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

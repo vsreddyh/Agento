@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // The published input schema is what an agent reads before calling, so a field the
@@ -44,6 +48,10 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		{"skip_task", skipTaskInput{}, []string{"id"}},
 		{"reopen_task", reopenTaskInput{}, []string{"id"}},
 		{"delete_task", deleteTaskInput{}, []string{"id"}},
+		// Every filter is optional: the whole log is the default reading of
+		// the question, and a tool that made the agent invent a filter to
+		// ask "what happened?" would be a tool nobody calls.
+		{"task_history", taskHistoryInput{}, nil},
 	}
 
 	for _, c := range cases {
@@ -88,12 +96,14 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"update_task": {"name", "description", "due_date", "due_time",
 			"estimated_minutes", "repeat_every", "repeat_unit", "repeat_custom",
 			"repeat_rule", "expected_revision", "parallelable"},
+		"task_history": {"task_id", "op", "since", "limit"},
 	}
 
 	inputs := map[string]any{
-		"create_task": createTaskInput{},
-		"list_tasks":  listTasksInput{},
-		"update_task": updateTaskInput{},
+		"create_task":  createTaskInput{},
+		"list_tasks":   listTasksInput{},
+		"update_task":  updateTaskInput{},
+		"task_history": taskHistoryInput{},
 	}
 
 	for tool, names := range optional {
@@ -121,4 +131,111 @@ func schemaFor(t *testing.T, input any) *jsonschema.Schema {
 		t.Fatalf("inferring schema: %v", err)
 	}
 	return schema
+}
+
+// A mistyped filter is an argument TYPE error, not a value the tool rounds
+// or defaults. The SDK validates the arguments against the published schema
+// before the handler runs, and the schema says string — so `op: 123` is
+// rejected there, while `limit: 0` reaches the handler and takes the
+// default.
+//
+// Every shape the tool description and the field docs name is pinned here,
+// one row each: the docs are the contract the agent reads, and this test is
+// what keeps them honest.
+//
+// Checked against the SDK's own validator rather than asserted from the
+// doc, because the doc is what this test is meant to keep honest.
+func TestNullIsAnArgumentTypeError(t *testing.T) {
+	schema := schemaFor(t, taskHistoryInput{})
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		t.Fatalf("resolving schema: %v", err)
+	}
+	for _, args := range []map[string]any{
+		{"limit": nil},
+		{"op": nil},
+		{"since": nil},
+		{"task_id": nil},
+		// An array where a string belongs, for the string filters.
+		{"op": []any{"create"}},
+		{"since": []any{"2026-10-21T00:00:00Z"}},
+		{"task_id": []any{"0123456789abcdef01234567"}},
+		// A number where a string belongs. The epoch number is the one
+		// the docs warn about — a caller who means "since midnight" and
+		// sends a number gets an error, not a date.
+		{"since": 1760000000},
+		{"op": 123},
+		{"task_id": 123},
+		// A string where the number belongs.
+		{"limit": "200"},
+		// A number with a fraction where the number belongs.
+		{"limit": 200.5},
+	} {
+		v := map[string]any{}
+		for k, val := range args {
+			v[k] = val
+		}
+		if err := resolved.Validate(&v); err == nil {
+			t.Errorf("%v: a mistyped filter must be rejected, not coerced", args)
+		}
+	}
+	// And a value the tool CAN round is accepted: zero is a limit, not a
+	// null.
+	v := map[string]any{"limit": 0}
+	if err := resolved.Validate(&v); err != nil {
+		t.Errorf("limit 0 must be accepted: %v", err)
+	}
+	// A WHOLE-number float is an integer as far as JSON goes — 200.0 is
+	// not a fraction, and the schema says integer — so it passes
+	// validation. What the HANDLER then receives is the other half of
+	// the claim, and it is pinned by the end-to-end test below.
+	w := map[string]any{"limit": 200.0}
+	if err := resolved.Validate(&w); err != nil {
+		t.Errorf("limit 200.0 must pass validation: %v", err)
+	}
+}
+
+// The whole tool call, end to end: a whole-number float (200.0) passes
+// the schema's validation AND reaches the handler as the integer it
+// means.
+//
+// The validation test above proves only the first half. The SDK
+// validates and then decodes, and the two are different steps — so the
+// field doc's claim ("lands as that integer") belongs to the whole
+// path, and this is what pins it: the wire carries 200.0 as sent, not
+// as Go would re-marshal it.
+func TestWholeNumberFloatReachesTheHandlerAsItsInteger(t *testing.T) {
+	ctx := context.Background()
+	s := mcp.NewServer(&mcp.Implementation{Name: "probe", Version: "0.0.1"}, nil)
+	limits := make(chan int, 1)
+	mcp.AddTool(s, &mcp.Tool{Name: "probe"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in taskHistoryInput) (*mcp.CallToolResult, map[string]any, error) {
+			limits <- in.Limit
+			return &mcp.CallToolResult{}, map[string]any{}, nil
+		})
+	t1, t2 := mcp.NewInMemoryTransports()
+	server, err := s.Connect(ctx, t1, nil)
+	if err != nil {
+		t.Fatalf("connect server: %v", err)
+	}
+	defer server.Close()
+	client, err := mcp.NewClient(&mcp.Implementation{Name: "probe-client", Version: "0.0.1"}, nil).Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("connect client: %v", err)
+	}
+	defer client.Close()
+	if _, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "probe",
+		Arguments: json.RawMessage(`{"limit":200.0}`),
+	}); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	select {
+	case got := <-limits:
+		if got != 200 {
+			t.Fatalf("limit = %d, want 200", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the handler was never called")
+	}
 }

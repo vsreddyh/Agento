@@ -35,3 +35,9 @@ _Avoid_: multi-select action
 **Batch**:
 A single server request carrying one bulk run; it commits atomically or not at all.
 _Avoid_: bulk request
+
+**Change log**:
+The record of every task mutation — what changed, which task, which caller, when — kept 90 days and outliving the task it describes, since a completed task is deleted after 3 days.
+_Avoid_: transaction (that means a money record here), activity log
+
+Its surfaces are named after it: the `task_history` agent tool and `GET /api/tasks/mutations`. "A task's history" is a fine way to say the change log for one task in prose — the word to avoid is "transaction", which means a money record in this repo.

@@ -87,7 +87,8 @@ func TestPolicyTableIsComplete(t *testing.T) {
 			"delete_meals", "log_weight", "log_sleep", "log_workout",
 			"daily_summary", "prune_old"},
 		"task-manager": {"create_task", "list_tasks", "get_task", "update_task",
-			"complete_task", "skip_task", "reopen_task", "delete_task"},
+			"complete_task", "skip_task", "reopen_task", "delete_task",
+			"task_history"},
 		"project-manager": {"create_project", "list_projects", "get_project",
 			"update_project", "delete_project"},
 		"notes": {"create_note", "get_note", "list_notes", "search_notes",
@@ -112,8 +113,8 @@ func TestPolicyTableIsComplete(t *testing.T) {
 			t.Errorf("server %s table has %d rules for %d tools", server, len(rules), len(tools))
 		}
 	}
-	if n != 56 {
-		t.Errorf("pinned %d tools, want the 56 inventoried", n)
+	if n != 57 {
+		t.Errorf("pinned %d tools, want the 57 inventoried", n)
 	}
 }
 

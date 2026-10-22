@@ -25,15 +25,23 @@ import (
 
 // Duplicate makes a new open task from any existing one — open, done, or
 // skipped.
+//
+// It does NOT record the change in the log: the transports do that, because
+// the transports know who the caller is (`mcp` vs the app's own label). The
+// batch path records `OpDuplicate` for the copy it makes — the only writer
+// of that op today, since there is no single-duplicate verb. A future verb
+// that calls this directly MUST record the mutation itself, or the copy
+// will exist with no row in the change log: the "changed without a record"
+// the log exists to prevent.
 func (s *Store) Duplicate(ctx context.Context, id string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
-		return nil, fail("bad id '%s'", id)
+		return nil, badID(id)
 	}
 	var cur bson.M
 	if err := s.tasks.FindOne(ctx, bson.M{"_id": oid}).Decode(&cur); err != nil {
 		if err == mongoDrv.ErrNoDocuments {
-			return nil, fail("unknown task '%s'", id)
+			return nil, unknownTask(id)
 		}
 		return nil, err
 	}

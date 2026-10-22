@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -140,7 +141,10 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	// The domain's one request budget (tasks.RequestBudget), the same one
+	// the read routes and the MCP change log use — one number for the task
+	// domain, so a timeout bump cannot leave one route behind.
+	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
 	results, err := store.Batch(ctx, ops)
 	if err != nil {
@@ -148,21 +152,44 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	source := requestSource(r)
-	for _, res := range results {
-		switch res.Op {
-		case "complete":
-			store.RecordMutation(ctx, tasks.OpComplete, res.ID, source, string(res.Rollover))
-		case "skip":
-			store.RecordMutation(ctx, tasks.OpSkip, res.ID, source, string(res.Rollover))
-		case "update":
-			// A no-op update wrote nothing: like the single verb, it
-			// earns no audit row, so the log stays a record of change.
-			if res.Detail != "no fields" {
-				store.RecordMutation(ctx, tasks.OpUpdate, res.ID, source, res.Detail)
-			}
-		case "duplicate":
-			store.RecordMutation(ctx, tasks.OpDuplicate, res.ID, source, "")
-		}
+	// The audit writes are DETACHED from the request (each carries its own
+	// 5s budget), so the 30s request timeout does not bound this loop: on
+	// a slow Mongo the acknowledgement waits for up to N×5s of durability
+	// work — 50 ops is ~250s.
+	//
+	// The wait is the SERVER's, and it outlives the client: the request
+	// context expires at 30s, so a caller that has already been told
+	// "timed out" is still waiting on rows being written here. That
+	// asymmetry is what the detached write buys — a client that gave up
+	// must not take the log with it — and it is why the response can be
+	// lost while the rows are not.
+	//
+	// That is the trade this feature makes on purpose: the log is
+	// best-effort but durable-by-default, and a change the log does not
+	// record is a change nobody can explain later. The fix, if batch
+	// sizes ever grow, is one bulk insert for the batch's rows.
+	//
+	// And the consequence for a caller: a timed-out batch has an UNKNOWN
+	// outcome, because the commit happened before the timeout did. The
+	// answer is never a blind resend — `duplicate` is the one verb here
+	// that is not idempotent, so a retry copies the task a second time.
+	// Read the change log (or the changes marker) first and resend only
+	// what did not land.
+	//
+	// The loop is timed, and it says so when it OUTLIVES the request: a
+	// timeout-vs-commit investigation starts at the client's retry, and
+	// this is the server-side anchor for what the server was doing all
+	// that time. A loop that finished inside the request says nothing —
+	// that is the ordinary case and it needs no line in the log.
+	//
+	// ATTEMPTED, not "wrote": RecordMutation is best-effort by contract
+	// and returns nothing, so a dropped insert still counts here. The
+	// line is an anchor for the timeline, not a claim about the log.
+	started := time.Now()
+	recordBatchMutations(ctx, store, results, source)
+	if ctx.Err() != nil {
+		log.Printf("tasks: batch audit ATTEMPTED %d row(s) (%s during audit writes; the request deadline was exceeded)",
+			len(results), time.Since(started).Round(time.Millisecond))
 	}
 	out := make([]bson.M, 0, len(results))
 	for _, res := range results {
@@ -179,6 +206,53 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, bson.M{"results": out})
+}
+
+// recordBatchMutations writes one audit row per op the batch actually
+// applied.
+//
+// It is a function of its own so the rules are testable without a
+// request: which ops earn a row, and what each row must be able to
+// name.
+func recordBatchMutations(ctx context.Context, store *tasks.Store, results []tasks.BatchItemResult, source string) {
+	for _, res := range results {
+		switch res.Op {
+		case "complete":
+			store.RecordMutation(ctx, tasks.OpComplete, res.ID, source, string(res.Rollover))
+		case "skip":
+			store.RecordMutation(ctx, tasks.OpSkip, res.ID, source, string(res.Rollover))
+		case "update":
+			// A no-op update wrote nothing: like the single verb, it
+			// earns no audit row, so the log stays a record of change.
+			if res.Detail != "no fields" {
+				store.RecordMutation(ctx, tasks.OpUpdate, res.ID, source, res.Detail)
+			}
+		case "duplicate":
+			// The row is about the COPY (its id is the copy's), and the
+			// detail names the SOURCE it was duplicated from — carried in
+			// the result by the store, so the transport does not have to
+			// match the result back to its op to know what it was about.
+			//
+			// BOTH ids must be known: a row that names the source as
+			// the copy is a duplicate that never happened, and it reads
+			// exactly like one that did. The store refuses to produce
+			// such a result (batch.go), so this is the second line — the
+			// row is written only when it can name the copy AND the
+			// source.
+			//
+			// And the case is OURS to log, not the seam's: the seam logs
+			// the row it KEEPS with a missing back-link, so the transport
+			// that DROPS one has to say so too — otherwise the loud
+			// signal the seam was given to emit is silenced by the door
+			// in front of it.
+			if res.Detail == "" {
+				log.Printf("tasks: batch duplicate row skipped (the result names no source) task_id=%q",
+					tasks.TruncateBytes(strings.TrimSpace(res.ID), 40))
+				continue
+			}
+			store.RecordMutation(ctx, tasks.OpDuplicate, res.ID, source, res.Detail)
+		}
+	}
 }
 
 // writeBatchErr maps a batch failure like its single-verb equivalent (404
@@ -200,8 +274,20 @@ func writeBatchErr(w http.ResponseWriter, err error) {
 		// additions cannot alias anything shared.
 		code, body := taskErrBody(bop.Err)
 		body["index"] = bop.Index
-		body["id"] = bop.ID
-		body["op"] = bop.Op
+		// Bounded and trimmed, like every other caller-controlled echo: a
+		// batch id comes from a JSON body, so it is naturally longer than
+		// a path segment, and it is not worth answering at length. The
+		// trim is done HERE, not inherited from the parser — the echo
+		// site owns the spelling, the same as every other echo.
+		//
+		// An ENVELOPE-level rejection (index -1: an empty batch, one over
+		// the cap) names no op and no id, so the keys are omitted rather
+		// than sent empty: a key that promises a culprit the error does
+		// not have is worse than no key.
+		if bop.Index >= 0 {
+			body["id"] = tasks.TruncateBytes(strings.TrimSpace(bop.ID), 40)
+			body["op"] = tasks.TruncateBytes(strings.TrimSpace(bop.Op), 40)
+		}
 		writeJSON(w, code, body)
 		return
 	}

@@ -430,10 +430,18 @@ func TestNoOpUpdateFieldsAreRecognisedAsNoOp(t *testing.T) {
 		"guard only":                {"expected_revision": 0},
 		"guard and a null":          {"expected_revision": 3, "name": nil},
 		"guard with a null pointer": {"expected_revision": 1},
+		// An UNKNOWN key: the update path ignores it, so nothing is
+		// written, and a log row for it would claim a change that never
+		// happened.
+		"unknown key only": {"bogus": 1},
 	}
 	for name, fields := range noOps {
-		if got := tasks.ChangedFieldNames(fields); got != "no fields" {
-			t.Errorf("%s: ChangedFieldNames = %q, so the handler would log an update "+
+		// The helper the HANDLERS call — the store's own list of the
+		// fields an update writes. Pinned here rather than through
+		// ChangedFieldNames, which is the other helper and deliberately
+		// disagrees about unknown keys.
+		if got := tasks.UpdateFieldNames(fields); got != "no fields" {
+			t.Errorf("%s: UpdateFieldNames = %q, so the handler would log an update "+
 				"for a write the store never makes", name, got)
 		}
 	}
@@ -445,14 +453,14 @@ func TestNoOpUpdateFieldsAreRecognisedAsNoOp(t *testing.T) {
 		"name": "renamed", "due_date": "2026-11-11", "repeat_rule": "3rd Friday",
 		"estimated_minutes": 30, "parallelable": true, "repeat_custom": true,
 	}
-	if got := tasks.ChangedFieldNames(real); got == "no fields" {
+	if got := tasks.UpdateFieldNames(real); got == "no fields" {
 		t.Error("a real change reads as a no-op — the guard is too broad and would " +
 			"silently drop genuine edits from the audit log")
 	}
 	// expected_revision alongside a real field must not hide it.
 	mixed := map[string]any{"expected_revision": 2, "name": "renamed"}
-	if got := tasks.ChangedFieldNames(mixed); got != "name" {
-		t.Errorf("ChangedFieldNames(%v) = %q, want \"name\" — the guard is "+
+	if got := tasks.UpdateFieldNames(mixed); got != "name" {
+		t.Errorf("UpdateFieldNames(%v) = %q, want \"name\" — the guard is "+
 			"concurrency plumbing and must not mask a real edit", mixed, got)
 	}
 }
