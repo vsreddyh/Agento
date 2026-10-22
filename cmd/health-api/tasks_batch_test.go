@@ -139,10 +139,11 @@ func TestWriteBatchErrNamesTheFailingOp(t *testing.T) {
 			t.Fatalf("body missing %s: %s", want, body)
 		}
 	}
-	// Unknown id keeps its 404.
+	// Unknown id keeps its 404. The flag is what decides it, not the
+	// message text.
 	w2 := httptest.NewRecorder()
 	writeBatchErr(w2, &tasks.BatchOpError{Index: 0, Op: "complete", ID: "missing",
-		Err: &tasks.StoreError{Msg: "unknown task 'missing'"}})
+		Err: &tasks.StoreError{Msg: "unknown task 'missing'", NotFound: true}})
 	if w2.Code != http.StatusNotFound {
 		t.Fatalf("unknown task: got %d", w2.Code)
 	}

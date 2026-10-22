@@ -50,6 +50,12 @@ type StoreError struct {
 	// able to distinguish "your key is wrong" from "your fields are wrong", and
 	// only one of those is fixed by changing the request.
 	Mismatch bool
+	// NotFound means the task does not exist. Structural, like Conflict
+	// and Mismatch, so the HTTP layer maps it to 404 by READING the error
+	// rather than by matching the message text: a prefix match would 404
+	// any future message that happens to start with the same words (a
+	// filter error mentioning "unknown task_id", say).
+	NotFound bool
 }
 
 func (e *StoreError) Error() string { return e.Msg }
@@ -191,7 +197,10 @@ func (s *Store) Close(ctx context.Context) error {
 // the same way. Trimmed for the same reason the filters are: "  abc  " and
 // "abc" are one mistake, and two spellings of it should read alike.
 func unknownTask(id string) *StoreError {
-	return fail("unknown task '%s'", TruncateBytes(strings.TrimSpace(id), 40))
+	return &StoreError{
+		Msg:      fmt.Sprintf("unknown task '%s'", TruncateBytes(strings.TrimSpace(id), 40)),
+		NotFound: true,
+	}
 }
 
 // UnknownTaskMessage is the body a transport answers with for a task that

@@ -120,7 +120,10 @@ func writeTaskErr(w http.ResponseWriter, err error) {
 func taskErrBody(err error) (int, bson.M) {
 	var se *tasks.StoreError
 	if errors.As(err, &se) {
-		if strings.HasPrefix(se.Msg, "unknown task") {
+		// A missing task, by the error's OWN flag: the rule used to be a
+		// prefix match on the message, which would 404 any future
+		// message that happened to start with the same words.
+		if se.NotFound {
 			return http.StatusNotFound, bson.M{"detail": se.Msg}
 		}
 		// A lost revision race is neither missing nor invalid: 409, with
