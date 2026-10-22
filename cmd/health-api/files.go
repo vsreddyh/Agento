@@ -189,6 +189,12 @@ func cleanFileName(name string) (string, error) {
 			return "", errBadName
 		}
 	}
+	// The staging prefix is reserved: a file literally named .upload-*
+	// would store fine but never list (listFiles filters the prefix), with
+	// no delete endpoint to reclaim it.
+	if strings.HasPrefix(name, uploadTempPrefix) {
+		return "", errBadName
+	}
 	if len(name) > maxNameBytes {
 		return "", errBadName
 	}

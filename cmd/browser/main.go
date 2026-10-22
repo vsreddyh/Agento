@@ -657,7 +657,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "browser_screenshot",
-		Description: "Capture the current page as PNG into the session dir. Working file, not evidence: use browser_save_evidence for the exports bundle the Storage tab shows."},
+		Description: "Capture the current page as PNG into the session dir. Working file, not evidence: use browser_save_evidence for the exports bundle the Files tab shows."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in shotInput) (*mcp.CallToolResult, map[string]any, error) {
 			sess, err := store.get(profile)
 			if err != nil {
@@ -691,7 +691,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "browser_save_evidence",
-		Description: "Bundle the current page into exports: PNG screenshot + markdown + meta.json (URL, title, time, note) in a timestamped dir the Storage tab shows. Cite the returned paths and URLs in the answer."},
+		Description: "Bundle the current page into exports: PNG screenshot + markdown + meta.json (URL, title, time, note) in a timestamped dir the Files tab shows. Cite the returned paths and URLs in the answer."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in evidenceInput) (*mcp.CallToolResult, map[string]any, error) {
 			sess, err := store.get(profile)
 			if err != nil {

@@ -158,7 +158,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     ) {
                         Icon(Icons.Filled.Upload, contentDescription = "Upload")
                     }
-                    IconButton(onClick = { load(path) }, enabled = !busy) {
+                    IconButton(onClick = { load(path) }, enabled = !busy && !uploading) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }
                 },

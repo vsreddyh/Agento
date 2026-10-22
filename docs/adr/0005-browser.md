@@ -10,7 +10,8 @@ ships no browser: its built-ins are read, bash, edit and write. Saying
 the deployed agent, and no user-visible job has ever finished a real web
 task. #312 v1 closes that gap server-side: chat-driven browsing
 ("open this site, find X, save the evidence") with cited URLs and files in
-`exports/`, which the Storage tab already browses. No app changes: the turn
+`exports/`, which the Files tab already browses (renamed from Storage in
+#340). No app changes: the turn
 carries the paths, the tab shows the files.
 
 ## Decision
