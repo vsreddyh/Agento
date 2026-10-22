@@ -293,8 +293,12 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				// Carried here rather than re-derived by the transport from
 				// the op list, for the same reason the update's detail is
 				// carried here: the result should not have to be matched
-				// back to its op to know what it was about. Lowercased,
-				// because the log's task_id is.
+				// back to its op to know what it was about.
+				//
+				// Lowercased for convenience, but the SEAM is the
+				// authority: RecordMutation canonicalises the detail
+				// itself, so this copy is belt and braces, not the rule.
+				//
 				// Name the row produced, not the row asked about: the
 				// copy is a different id, and the response envelope and
 				// the audit log both read ID.

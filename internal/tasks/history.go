@@ -138,6 +138,12 @@ func ParseOps(s string) ([]string, error) {
 // A filter that was sent and names NOTHING is refused too — the same rule
 // the transport's parser applies, so this validator and the seam cannot
 // answer differently about the same input.
+//
+// One asymmetry, stated here: a BLANK STRING is no filter at all (that is
+// ParseOps's rule — "?op=" means every op), while a non-empty LIST that
+// normalizes to nothing is refused. A direct caller that splits a blank
+// string into a one-element list therefore gets a 422 where the transport
+// gets a 200 — the list says "here is a filter", and the filter is empty.
 func ValidateOps(ops []string) error {
 	if len(normalizeOps(ops)) == 0 && len(ops) > 0 {
 		// The FIRST element, bounded: the list named nothing, so every

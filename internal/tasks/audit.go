@@ -143,7 +143,7 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	// writer's id passes, and a detail that kept the caller's spelling
 	// would not join against a task_id lookup.
 	if op == OpDuplicate {
-		if src, nerr := NormalizeTaskID(detail); nerr == nil {
+		if src, nerr := NormalizeTaskID(detail); nerr == nil && src != "" {
 			detail = src
 		} else {
 			// KEPT, not dropped: the row itself is findable (its task_id
@@ -187,8 +187,11 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		// is indistinguishable from "nothing happened".
 		// Quoted, like the two drop paths above: op and task_id are
 		// constants and hex today, so this is only about a future caller
-		// that passes a raw label and splits a log line with it.
-		log.Printf("tasks: mutation log write failed (op=%q task_id=%q): %v", op, taskID, err)
+		// that passes a raw label and splits a log line with it. The SENT
+		// spelling, like the drops and the 422s — one mistake, one
+		// spelling.
+		log.Printf("tasks: mutation log write failed (op=%q task_id=%q): %v",
+			TruncateBytes(sentOp, 40), TruncateBytes(sentID, 40), err)
 	}
 }
 
