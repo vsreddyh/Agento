@@ -229,6 +229,11 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 
 // auditWriteBudget bounds one audit insert, independently of the request that
 // triggered it. See RecordMutation.
+//
+// The same value as the tasks package's cursorCloseBudget, and NOT shared
+// with it: that one bounds a detached CLOSE, this one a detached INSERT.
+// Coupling them would mean tuning a write's durability against a read's
+// cleanup.
 const auditWriteBudget = 5 * time.Second
 
 // ChangedFieldNames names which fields an update touched, for the audit log's `detail`.

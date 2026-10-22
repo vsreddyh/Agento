@@ -69,13 +69,6 @@ type MutationFilter struct {
 	Limit int
 }
 
-// normalizeOp is the per-op half of the normalisation: lowercase and trim.
-// lowerTrim owns the rule, so the id and the op are canonicalized the same
-// way by one function.
-func normalizeOp(op string) string {
-	return lowerTrim(op)
-}
-
 // normalizeOps lowercases, trims, drops empties and removes repeats.
 //
 // One rule, two callers: the transport parses a comma-separated string
@@ -86,7 +79,7 @@ func normalizeOps(ops []string) []string {
 	out := make([]string, 0, len(ops))
 	seen := map[string]bool{}
 	for _, op := range ops {
-		op = normalizeOp(op)
+		op = lowerTrim(op)
 		if op == "" || seen[op] {
 			continue
 		}
@@ -206,7 +199,7 @@ func ValidateOps(ops []string) error {
 		return namesNoOperation(len(ops))
 	}
 	for _, op := range ops {
-		norm := normalizeOp(op)
+		norm := lowerTrim(op)
 		if norm == "" {
 			continue
 		}
@@ -394,4 +387,8 @@ func closeCursor(ctx context.Context, cur *mongoDrv.Cursor) {
 
 // cursorCloseBudget bounds one cursor close, independently of the request
 // that opened it.
+//
+// The same value as auditWriteBudget, and NOT shared with it: that one
+// bounds a detached INSERT, this one a detached CLOSE. Coupling them would
+// mean tuning a read's cleanup against a write's durability.
 const cursorCloseBudget = 5 * time.Second

@@ -146,6 +146,11 @@ func TestNullIsAnArgumentTypeError(t *testing.T) {
 		{"limit": nil},
 		{"op": nil},
 		{"since": nil},
+		{"task_id": nil},
+		// An array where a string belongs, for the string filters.
+		{"op": []any{"create"}},
+		{"since": []any{"2026-10-21T00:00:00Z"}},
+		{"task_id": []any{"0123456789abcdef01234567"}},
 	} {
 		v := map[string]any{}
 		for k, val := range args {
