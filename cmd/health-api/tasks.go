@@ -359,8 +359,11 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 // changedKeys names which fields a PATCH touched, for the audit log. "PATCH
 // /api/tasks" alone does not say whether the user moved a due date or fixed a
 // typo, and that is the whole reason the log exists.
+//
+// The STORE's list, not the supplied keys: an unknown key is ignored by the
+// update, so it is not a change, and the log must not claim one.
 func changedKeys(fields map[string]any) string {
-	return tasks.ChangedFieldNames(fields)
+	return tasks.UpdateFieldNames(fields)
 }
 
 // zeroLike returns the zero value of whatever type this field takes elsewhere, so an
@@ -651,10 +654,11 @@ func updateTask(w http.ResponseWriter, r *http.Request, id string) {
 	// becomes a record of what was asked for.
 	//
 	// `changedKeys(fields) == "no fields"` is exactly the store's condition, because
-	// `set` only ever gains an entry for a field that was actually supplied. Checking it
-	// here rather than widening Update's signature keeps the knowledge where the data is
-	// though: the store is still the only thing that decides whether a write happened,
-	// and this merely mirrors the one case where it provably did not.
+	// `set` only ever gains an entry for a field the store KNOWS and the caller
+	// supplied. Checking it here rather than widening Update's signature keeps the
+	// knowledge where the data is though: the store is still the only thing that
+	// decides whether a write happened, and this merely mirrors the one case where
+	// it provably did not.
 	if names := changedKeys(fields); names != "no fields" {
 		store.RecordMutation(ctx, tasks.OpUpdate, id, requestSource(r), names)
 	}

@@ -406,7 +406,7 @@ func main() {
 			// health-api's updateTask: a PATCH carrying no field the store will set takes
 			// the no-op path, and an audit entry for it would claim a change that did not
 			// happen.
-			if names := tasks.ChangedFieldNames(fields); names != "no fields" {
+			if names := tasks.UpdateFieldNames(fields); names != "no fields" {
 				store.RecordMutation(ctx, tasks.OpUpdate, in.ID, mcpSource, names)
 			}
 			return result(map[string]any{"ok": true, "task": doc})

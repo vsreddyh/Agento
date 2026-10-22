@@ -19,6 +19,7 @@ import (
 	"log"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -739,6 +740,43 @@ func (s *Store) Get(ctx context.Context, id string) (map[string]any, error) {
 		return nil, err
 	}
 	return toDoc(doc), nil
+}
+
+// updateFields is every field the update path READS, and therefore every
+// field it can write.
+//
+// The list exists because the update path IGNORES an unknown key: a
+// caller that sends one changes nothing, and the audit log and the change
+// marker must say so. Naming the supplied keys instead would claim a
+// change that never happened — the same defect as logging a create for a
+// replayed one.
+var updateFields = []string{
+	"name", "speak_name", "description", "due_date", "due_time",
+	"estimated_minutes", "parallelable",
+	"repeat_rule", "repeat_every", "repeat_unit", "repeat_days", "repeat_custom",
+}
+
+// UpdateFieldNames names the fields an update would WRITE: the known
+// fields the caller supplied, sorted, or "no fields" when there are none.
+//
+// It mirrors the store's own no-op condition, which is what the transports
+// use to decide whether a change happened at all. An unknown key is not a
+// change, and neither the audit log nor the change marker may claim one.
+//
+// `expected_revision` is absent from the list on purpose: it is the
+// optimistic-concurrency guard, not a field of the task.
+func UpdateFieldNames(fields map[string]any) string {
+	keys := make([]string, 0, len(fields))
+	for _, k := range updateFields {
+		if v, ok := fields[k]; ok && v != nil {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return "no fields"
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
 }
 
 // Update edits mutable fields of any task (open or done). Supplied values

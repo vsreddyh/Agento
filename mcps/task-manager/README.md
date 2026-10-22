@@ -362,6 +362,12 @@ that is worth knowing before diffing two rows:
 | `delete` | the door that deleted it (`http DELETE`, `mcp delete_task`) |
 | `duplicate` | the id of the task this was duplicated from, when the writer passed a hex id (the batch path always does) — the row itself is about the COPY, whose id it carries |
 
+The copy→source direction is the joinable one: the row carries the copy's
+`task_id` and the source in its `detail`. The other direction — "what did
+this task produce?" — has no read path today, because `detail` is not
+indexed; at a 90-day personal log that is a scan, and it would be an index
+if the app ever needs it.
+
 `detail` is capped at 300 bytes, so a longer one is stored truncated with
 no marker — the op-specific extras are short by nature (a field list, a
 rollover outcome, an id), and a cap that rewrote the value would change

@@ -317,7 +317,10 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				if fields == nil {
 					fields = map[string]any{}
 				}
-				res.Detail = ChangedFieldNames(fields)
+				// The store's own list, not the supplied keys: an
+				// unknown key is ignored by Update, so it is not a
+				// change, and the log must not claim one.
+				res.Detail = UpdateFieldNames(fields)
 			case "duplicate":
 				res.Task, err = s.Duplicate(nb, srcID)
 				res.Rollover = RolloverNone

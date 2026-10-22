@@ -536,6 +536,53 @@ func TestRecordMutationDropsRowsTheReadSideWouldRefuse(t *testing.T) {
 	}
 }
 
+// An unknown key is not a change. The update path ignores it, so the
+// audit log and the change marker must not claim one — a PATCH carrying
+// only an unknown key changes nothing, and saying otherwise puts a row in
+// the log for a task that was not touched.
+func TestUpdateFieldNamesNamesOnlyWhatUpdateWrites(t *testing.T) {
+	if got := UpdateFieldNames(map[string]any{"foo": "bar"}); got != "no fields" {
+		t.Errorf("an unknown key must not name a change, got %q", got)
+	}
+	if got := UpdateFieldNames(map[string]any{"name": "x"}); got != "name" {
+		t.Errorf("got %q, want name", got)
+	}
+	// Sorted, and a null is absent (it means "untouched").
+	got := UpdateFieldNames(map[string]any{"name": "x", "due_date": "2026-10-01", "speak_name": nil})
+	if got != "due_date,name" {
+		t.Errorf("got %q, want due_date,name", got)
+	}
+	// The concurrency guard is not a field of the task.
+	if got := UpdateFieldNames(map[string]any{"expected_revision": 3}); got != "no fields" {
+		t.Errorf("expected_revision must not name a change, got %q", got)
+	}
+}
+
+// The store agrees with the names: an update carrying only an unknown key
+// leaves the task exactly as it was — no revision bump, no write.
+func TestUpdateWithOnlyAnUnknownKeyChangesNothing(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	doc, err := s.Create(ctx, "unknown key probe", "d", "2026-10-05", "08:00",
+		intP(5), customRep("monthly on the 1st"), boolP(false), "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	id := doc["id"].(string)
+	before, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	after, err := s.Update(ctx, id, map[string]any{"foo": "bar"})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if after["revision"] != before["revision"] {
+		t.Errorf("revision moved from %v to %v — the update wrote something",
+			before["revision"], after["revision"])
+	}
+}
+
 // The timestamps are stored and returned in UTC, so a log read from two
 // machines does not disagree about when an entry happened.
 func TestListMutationsTimestampsAreUTC(t *testing.T) {
