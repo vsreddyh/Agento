@@ -303,10 +303,13 @@ millisecond. Echoing a returned `at` back is exact.
 to the default (200), and a parseable-but-huge one is clamped to the ceiling
 (500). A limit can only enlarge the page, which is the answer the caller
 already had, so it is never worth a 422. A blank limit — empty, or only
-whitespace — is the same as no limit at all. Over MCP a limit of the wrong
-*type* (`"200"` instead of `200`) is an argument error, not a value the tool
-quietly rounds — types and values are different layers, and only the value
-layer is lenient.
+whitespace — is the same as no limit at all. Over MCP the TYPE is checked
+before the value: a limit of the wrong *type* (`"200"` instead of `200`, or
+a null) is an argument error, not a value the tool quietly rounds — types
+and values are different layers, and only the value layer is lenient. The
+same holds for `op` and `since`: an array where a string belongs, a number
+where a timestamp belongs, or a null, is an argument error rather than a
+filter that means something else.
 
 `since` is a URL parameter on the HTTP route, so an offset with a `+` in it
 (`2026-10-21T00:00:00+02:00`) must be percent-encoded as `%2B` — `+` in a

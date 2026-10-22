@@ -93,41 +93,18 @@ func normalizeOps(ops []string) []string {
 	return out
 }
 
-// opFilterEcho renders the filter that named nothing, for the error.
-//
-// The first few elements, each bounded, joined and bounded again: a filter
-// that names nothing is all blanks, and showing one of them is enough to
-// say what the server saw. Bounded at every step, so a 10KB list is not
-// answered with itself.
-//
-// The parser and the validator both go through here, so the SAME logical
-// filter reads the same through either door.
-func opFilterEcho(ops []string) string {
-	parts := make([]string, 0, 3)
-	for _, op := range ops {
-		if len(parts) == 3 {
-			break
-		}
-		parts = append(parts, TruncateBytes(strings.TrimSpace(op), 40))
-	}
-	return TruncateBytes(strings.Join(parts, ","), 40)
-}
-
 // namesNoOperation is the ONE message for a filter that named nothing,
 // shared by the parser and the validator: the same filter, read through
 // either door, gets the same answer.
 //
-// `shown` is the value the caller sent (trimmed): a blank one says so
-// rather than echoing empty quotes, which would read like a formatting
-// bug rather than a filter with nothing in it.
-func namesNoOperation(shown string) *StoreError {
-	shown = strings.TrimSpace(shown)
-	known := strings.Join(KnownOps(), ", ")
-	if shown == "" {
-		return fail("op filter is blank — it names no operation; known ops are %s", known)
-	}
-	return fail("op filter %q names no operation; known ops are %s",
-		TruncateBytes(shown, 40), known)
+// ONE message, not a branch on the echo: a filter that names nothing is
+// all blanks, so whether the echo comes out empty or as a row of commas
+// depends on how MANY blanks arrived — and the answer must not depend on
+// that. The value is not echoed either: it is blanks, and there is
+// nothing there to show.
+func namesNoOperation() *StoreError {
+	return fail("op filter is blank — it names no operation; known ops are %s",
+		strings.Join(KnownOps(), ", "))
 }
 
 // ParseOps parses a comma-separated op filter ("complete,skip") into the ops
@@ -164,7 +141,7 @@ func ParseOps(s string) ([]string, error) {
 	tokens := strings.Split(s, ",")
 	ops := normalizeOps(tokens)
 	if len(ops) == 0 {
-		return nil, namesNoOperation(opFilterEcho(tokens))
+		return nil, namesNoOperation()
 	}
 	if err := ValidateOps(tokens); err != nil {
 		return nil, err
@@ -211,7 +188,7 @@ func ValidateOps(ops []string) error {
 		// element is blank, and the first is the one a caller would look
 		// at. Joined, it would build the whole list first — the
 		// "never answer a huge input with itself" rule, one layer up.
-		return namesNoOperation(opFilterEcho(ops))
+		return namesNoOperation()
 	}
 	for _, op := range ops {
 		norm := normalizeOp(op)

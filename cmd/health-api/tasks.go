@@ -25,18 +25,18 @@ import (
 
 // parseLimitParam reads the `limit` query parameter, falling back to the
 // store default (0 = "use the default") when it is missing, blank, or
-// unparseable.
+// unparseable. A value that PARSES is returned as it is, zero and negative
+// included: the default for those is applied further down, in the store's
+// ClampLimit, which also clamps a limit above the ceiling.
 //
 // Lenient on purpose: a limit can only enlarge the page, which is the answer
 // the caller already had, so a stray query param must never nuke the answer.
 // One helper, because two copies of this rule are two rules — and the next
 // edit to one of them would drift from the other.
 //
-// A limit that parses but is zero or negative is NOT decided here: it falls
-// back to the default further down, in the store's ClampLimit, which also
-// clamps a limit above the ceiling. The full rule, in one line: missing,
-// blank, unparseable, zero or negative → the default; parseable-but-huge →
-// the ceiling.
+// The full rule, in one line: missing, blank or unparseable → the default;
+// zero or negative → the default (ClampLimit); parseable-but-huge → the
+// ceiling (ClampLimit).
 func parseLimitParam(q url.Values) int {
 	raw := strings.TrimSpace(q.Get("limit"))
 	if raw == "" {

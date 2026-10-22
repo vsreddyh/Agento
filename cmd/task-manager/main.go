@@ -181,10 +181,14 @@ type taskHistoryInput struct {
 	// reopen, duplicate. A filter that names no op (only commas and
 	// spaces) is refused rather than read as the whole log. `duplicate`
 	// appears only for duplicates made through a batch.
+	//
+	// A null is an argument type error here too, like a float in `limit`:
+	// the SDK's schema validation rejects it before this handler runs.
 	Op string `json:"op,omitempty"`
 	// Since is an INCLUSIVE RFC3339 lower bound on when the change
 	// happened — a string, not an epoch number (a number is an argument
-	// type error, not a filter). Fractional seconds are accepted.
+	// type error, not a filter; a null is too). Fractional seconds are
+	// accepted.
 	Since string `json:"since,omitempty"`
 	// Limit caps the rows returned (default 200, max 500). Zero or
 	// negative gives the default, a huge one is clamped to the max. A
