@@ -188,8 +188,8 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	recordBatchMutations(ctx, store, results, source)
 	if ctx.Err() != nil {
-		log.Printf("tasks: batch audit ATTEMPTED %d row(s) %s after the request deadline (%s)",
-			len(results), time.Since(started).Round(time.Millisecond), ctx.Err())
+		log.Printf("tasks: batch audit ATTEMPTED %d row(s) (%s during audit writes; the request deadline was exceeded)",
+			len(results), time.Since(started).Round(time.Millisecond))
 	}
 	out := make([]bson.M, 0, len(results))
 	for _, res := range results {

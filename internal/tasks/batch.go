@@ -299,7 +299,12 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			// from the validator that accepted it. The duplicate branch
 			// below replaces the id with the copy's own, which is canonical
 			// already.
-			res := BatchItemResult{Index: i, ID: strings.ToLower(strings.TrimSpace(op.ID)), Op: strings.ToLower(strings.TrimSpace(op.Op))}
+			//
+			// The canonical spellings come from the seam's helpers, not
+			// from a second derivation of them: canonicalID and lowerTrim
+			// own that rule, and a copy of it here would be a rule that
+			// can drift from the one every other id and op name uses.
+			res := BatchItemResult{Index: i, ID: canonicalID(op.ID), Op: lowerTrim(op.Op)}
 			// The verbs are handed the CANONICAL id, not the caller's
 			// spelling: the envelope and the log carry the lower-case
 			// form, and a verb that echoes the id it was given (the

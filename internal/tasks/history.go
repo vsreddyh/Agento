@@ -177,8 +177,8 @@ func ParseOps(s string) ([]string, error) {
 	// refusing the wrong thing. The fan-out the cap exists for is commas,
 	// and commas are not padding.
 	if len(raw) > maxOpsFilterBytes {
-		return nil, fail("op filter is too long (%d bytes; at most %d)",
-			len(raw), maxOpsFilterBytes)
+		return nil, fail("op filter is too long (%d bytes; at most %d); known ops are %s",
+			len(raw), maxOpsFilterBytes, strings.Join(KnownOps(), ", "))
 	}
 	// Split the TRIMMED string: the padding around the whole filter is
 	// not part of any op, and each TOKEN keeps its own padding — so the

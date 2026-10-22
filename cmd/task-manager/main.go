@@ -206,7 +206,9 @@ type taskHistoryInput struct {
 	// schema validation rejects it before this handler runs (pinned by
 	// TestNullIsAnArgumentTypeError), so the error comes from the layer
 	// below, not from here. A WHOLE-number float (200.0) is an integer
-	// as far as JSON goes, and lands as that integer.
+	// as far as JSON goes, and lands as that integer — pinned end to end
+	// through a real tool call by
+	// TestWholeNumberFloatReachesTheHandlerAsItsInteger.
 	Limit int `json:"limit,omitempty"`
 }
 

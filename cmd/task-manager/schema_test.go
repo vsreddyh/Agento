@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // The published input schema is what an agent reads before calling, so a field the
@@ -182,11 +186,56 @@ func TestNullIsAnArgumentTypeError(t *testing.T) {
 		t.Errorf("limit 0 must be accepted: %v", err)
 	}
 	// A WHOLE-number float is an integer as far as JSON goes — 200.0 is
-	// not a fraction, and the schema says integer — so it passes and
-	// lands as 200. Pinned here so nobody "fixes" it into an error the
-	// docs do not promise.
+	// not a fraction, and the schema says integer — so it passes
+	// validation. What the HANDLER then receives is the other half of
+	// the claim, and it is pinned by the end-to-end test below.
 	w := map[string]any{"limit": 200.0}
 	if err := resolved.Validate(&w); err != nil {
-		t.Errorf("limit 200.0 must be accepted: %v", err)
+		t.Errorf("limit 200.0 must pass validation: %v", err)
+	}
+}
+
+// The whole tool call, end to end: a whole-number float (200.0) passes
+// the schema's validation AND reaches the handler as the integer it
+// means.
+//
+// The validation test above proves only the first half. The SDK
+// validates and then decodes, and the two are different steps — so the
+// field doc's claim ("lands as that integer") belongs to the whole
+// path, and this is what pins it: the wire carries 200.0 as sent, not
+// as Go would re-marshal it.
+func TestWholeNumberFloatReachesTheHandlerAsItsInteger(t *testing.T) {
+	ctx := context.Background()
+	s := mcp.NewServer(&mcp.Implementation{Name: "probe", Version: "0.0.1"}, nil)
+	limits := make(chan int, 1)
+	mcp.AddTool(s, &mcp.Tool{Name: "probe"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in taskHistoryInput) (*mcp.CallToolResult, map[string]any, error) {
+			limits <- in.Limit
+			return &mcp.CallToolResult{}, map[string]any{}, nil
+		})
+	t1, t2 := mcp.NewInMemoryTransports()
+	server, err := s.Connect(ctx, t1, nil)
+	if err != nil {
+		t.Fatalf("connect server: %v", err)
+	}
+	defer server.Close()
+	client, err := mcp.NewClient(&mcp.Implementation{Name: "probe-client", Version: "0.0.1"}, nil).Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("connect client: %v", err)
+	}
+	defer client.Close()
+	if _, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "probe",
+		Arguments: json.RawMessage(`{"limit":200.0}`),
+	}); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	select {
+	case got := <-limits:
+		if got != 200 {
+			t.Fatalf("limit = %d, want 200", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the handler was never called")
 	}
 }
