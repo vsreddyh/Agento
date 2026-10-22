@@ -132,9 +132,11 @@ func (w *Worker) fireAsync(ctx context.Context, job Job, fireAt time.Time) {
 			// run id travels even on failure: a failed chat turn
 			// still exists in the Runs list.
 			w.logf("cron: job %s fire failed: %v", job.ID, err)
-			_ = w.Store.RecordRun(ctx, job.ID,
+			if rerr := w.Store.RecordRun(ctx, job.ID,
 				Run{At: now, Text: "error: " + err.Error(),
-					Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID}, job.LastFire)
+					Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID}, job.LastFire); rerr != nil {
+				w.logf("cron: error record failed for %s: %v", job.ID, rerr)
+			}
 			return
 		}
 		if err := w.Store.RecordRun(ctx, job.ID,
@@ -171,9 +173,11 @@ func (w *Worker) FireNow(ctx context.Context, id string) (text, runID string, er
 	now := time.Now().UnixMilli()
 	if err != nil {
 		if !errors.Is(err, ErrBusy) {
-			_ = w.Store.RecordRun(ctx, job.ID,
+			if rerr := w.Store.RecordRun(ctx, job.ID,
 				Run{At: now, Text: "error: " + err.Error(),
-					Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID}, job.LastFire)
+					Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID}, job.LastFire); rerr != nil {
+				w.logf("cron: error record failed for %s: %v", job.ID, rerr)
+			}
 		}
 		return "", res.RunID, err
 	}

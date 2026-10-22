@@ -89,18 +89,19 @@ type FireResult struct {
 }
 
 // FireFunc fires one job. The production implementation runs a chat-agent
-// turn (see gateway's FireSchedulerJob); the bare-client adapter below serves
-// skill test-fires and unit tests. A busy agent reports ErrBusy, which the
+// turn (see gateway's FireSchedulerJob); tests use the bare-client adapter
+// (FireForTest) or inline stubs. A busy agent reports ErrBusy, which the
 // worker treats as a skip (no record, no LastFire advance) rather than a
 // failure.
 type FireFunc func(ctx context.Context, job Job) (FireResult, error)
 
-// Fire runs one job through the bare model client: one prompt in, one reply
-// out, no persona and no tools. A unit-test adapter only: production
+// FireForTest runs one job through the bare model client: one prompt in,
+// one reply out, no persona and no tools. Test-only by name: production
 // scheduler fires go through the chat agent, and skill test-fires use Run
 // directly (unlabeled — a test procedure is not a scheduler fire, so it
 // must not carry the From Scheduler prefix or the unattended policy).
-func (c *BareClient) Fire(ctx context.Context, job Job) (FireResult, error) {
+// Wiring a skill test through this would silently mislabel it.
+func (c *BareClient) FireForTest(ctx context.Context, job Job) (FireResult, error) {
 	text, err := c.Run(ctx, SchedulerPrompt(job.Name, job.Prompt), "agento-cron-"+job.ID)
 	if err != nil {
 		return FireResult{}, err

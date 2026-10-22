@@ -64,7 +64,7 @@ func TestTickFiresDueJob(t *testing.T) {
 		"b": {ID: "b", Prompt: "p", Schedule: "* * * * *", Paused: true},
 	}}
 	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
-	w := &Worker{Store: be, Fire: bare.Fire}
+	w := &Worker{Store: be, Fire: bare.FireForTest}
 	w.Tick(context.Background(), time.Now())
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -98,7 +98,7 @@ func TestTickRecordsMiss(t *testing.T) {
 		"a": {ID: "a", Prompt: "p", Schedule: "0 11 * * *"},
 	}}
 	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
-	w := &Worker{Store: be, Fire: bare.Fire}
+	w := &Worker{Store: be, Fire: bare.FireForTest}
 	now := time.Date(2026, time.October, 14, 11, 7, 0, 0, IST)
 	w.Tick(context.Background(), now)
 	be.mu.Lock()
@@ -124,7 +124,7 @@ func TestFireNowManual(t *testing.T) {
 		"a": {ID: "a", Prompt: "p", Schedule: "0 0 1 1 *", Paused: true},
 	}}
 	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
-	w := &Worker{Store: be, Fire: bare.Fire}
+	w := &Worker{Store: be, Fire: bare.FireForTest}
 	text, runID, err := w.FireNow(context.Background(), "a")
 	if err != nil || text != "manual back" {
 		t.Fatalf("FireNow = %q, %v", text, err)

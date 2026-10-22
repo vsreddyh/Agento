@@ -38,7 +38,11 @@ const schedulerProfileName = "chat"
 // gateway cannot enforce read-only any other way — gated calls are held by
 // the relay, which waits on a human that is not there. The TurnTimeout still
 // bounds a turn that attempts one anyway.
-func (s *Server) FireSchedulerJob(ctx context.Context, job cronjobs.Job) (string, string, error) {
+//
+// The context is intentionally unread (named _): the turn detaches like the
+// chat path — a scheduler fire must outlive the tick that started it — and
+// TurnTimeout is the bound, never the caller's deadline.
+func (s *Server) FireSchedulerJob(_ context.Context, job cronjobs.Job) (string, string, error) {
 	h, profile := s.schedulerHandler()
 	if h == nil {
 		return "", "", fmt.Errorf("scheduler: no agent available for job %s", job.ID)

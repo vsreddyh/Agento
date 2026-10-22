@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -12,6 +13,8 @@ import (
 
 	"agento/internal/cronjobs"
 )
+
+var errBoom = errors.New("boom")
 
 var nextRunRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$`)
 
@@ -228,6 +231,28 @@ func TestJobsCRUD(t *testing.T) {
 	// Delete then list empty.
 	if rec := deleteJob(t, srv, "/default/api/jobs/"+id, "test-token"); rec.Code != http.StatusOK {
 		t.Fatalf("delete: got %d", rec.Code)
+	}
+}
+
+func TestJobsRunFailureKeepsRunID(t *testing.T) {
+	fj := &fakeJobs{jobs: map[string]cronjobs.Job{
+		"j": {ID: "j", Name: "scan", Prompt: "p", Schedule: "* * * * *"},
+	}}
+	fire := func(ctx context.Context, id string) (string, string, error) {
+		if _, err := fj.Get(ctx, id); err != nil {
+			return "", "", err
+		}
+		return "", "run-failed", errBoom
+	}
+	srv := newTestServer(t, &fakeAgent{}, Config{CronJobs: fj, CronFire: fire})
+	rec := post(t, srv, "/default/api/jobs/j/run", "test-token", `{}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("run failure: got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if body["run_id"] != "run-failed" {
+		t.Fatalf("failed run lost its id: %v", body)
 	}
 }
 

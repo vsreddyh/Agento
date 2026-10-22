@@ -150,8 +150,19 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, rest string)
 		if err != nil {
 			// Unknown job is the caller's mistake (404); a model
 			// failure is upstream (502), like every other model call.
+			// A failed tap still created a Runs entry, so the 502
+			// names it alongside the error for the same deep-link.
 			if _, ok := err.(*cronjobs.StoreError); ok {
 				jobsError(w, err)
+			} else if runID != "" {
+				writeJSONResponse(w, http.StatusBadGateway, map[string]any{
+					"error": map[string]any{
+						"message": "cron fire failed: " + bounded(err.Error()),
+						"type":    "upstream_error",
+						"code":    "502",
+					},
+					"run_id": runID,
+				})
 			} else {
 				apiError(w, http.StatusBadGateway, "upstream_error", "",
 					"cron fire failed: "+bounded(err.Error()))

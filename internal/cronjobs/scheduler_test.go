@@ -60,7 +60,7 @@ func TestBareFireSendsLabelledPrompt(t *testing.T) {
 	}))
 	defer srv.Close()
 	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
-	res, err := bare.Fire(context.Background(), Job{ID: "j1", Name: "scan", Prompt: "find things"})
+	res, err := bare.FireForTest(context.Background(), Job{ID: "j1", Name: "scan", Prompt: "find things"})
 	if err != nil {
 		t.Fatalf("Fire: %v", err)
 	}
