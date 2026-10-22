@@ -211,8 +211,10 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		//
 		// The driver's own message is bounded too: a Mongo error can
 		// embed the rejected document, and one bad insert should not
-		// write kilobytes to the log.
-		log.Printf("tasks: mutation log write failed (op=%q task_id=%q): %v",
+		// write kilobytes to the log. Quoted, for the same reason op and
+		// task_id are: an embedded document can carry newlines, and one
+		// bad insert should not write a multi-line log entry.
+		log.Printf("tasks: mutation log write failed (op=%q task_id=%q): %q",
 			TruncateBytes(sentOp, 40), TruncateBytes(sentID, 40),
 			TruncateBytes(err.Error(), 300))
 	}

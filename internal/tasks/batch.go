@@ -276,6 +276,11 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			// below replaces the id with the copy's own, which is canonical
 			// already.
 			res := BatchItemResult{Index: i, ID: strings.ToLower(strings.TrimSpace(op.ID)), Op: strings.ToLower(strings.TrimSpace(op.Op))}
+			// The verbs are handed the CANONICAL id, not the caller's
+			// spelling: the envelope and the log carry the lower-case
+			// form, and a verb that echoes the id it was given (the
+			// rollover-failure log does) must not spell it differently.
+			srcID := res.ID
 			var err error
 			// The switch and the write-marker below read res.Op, the
 			// CANONICAL op name — the same value the envelope carries and
@@ -288,16 +293,16 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				var next map[string]any
 				var reason Rollover
 				var detail string
-				res.Task, next, reason, detail, err = s.CompleteDetail(nb, op.ID)
+				res.Task, next, reason, detail, err = s.CompleteDetail(nb, srcID)
 				res.Next, res.Rollover, res.Detail = next, reason, detail
 			case "skip":
 				var next map[string]any
 				var reason Rollover
 				var detail string
-				res.Task, next, reason, detail, err = s.SkipDetail(nb, op.ID, op.Reason)
+				res.Task, next, reason, detail, err = s.SkipDetail(nb, srcID, op.Reason)
 				res.Next, res.Rollover, res.Detail = next, reason, detail
 			case "update":
-				res.Task, err = s.Update(nb, op.ID, op.Fields)
+				res.Task, err = s.Update(nb, srcID, op.Fields)
 				res.Rollover = RolloverNone
 				// The audit detail travels with the result rather than
 				// being re-derived from op order by the caller.
@@ -307,7 +312,7 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				}
 				res.Detail = ChangedFieldNames(fields)
 			case "duplicate":
-				res.Task, err = s.Duplicate(nb, op.ID)
+				res.Task, err = s.Duplicate(nb, srcID)
 				res.Rollover = RolloverNone
 				// The audit detail names the SOURCE the copy came from.
 				// The row the log gets is about the copy (its id is the
