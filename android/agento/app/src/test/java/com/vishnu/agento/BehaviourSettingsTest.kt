@@ -126,6 +126,17 @@ class BehaviourSettingsTest {
         assertEquals("At start time (no heads-up)", BehaviourSettings.leadLabel(0L))
         assertEquals("1 minute before start", BehaviourSettings.leadLabel(1L))
         assertEquals("15 minutes before start", BehaviourSettings.leadLabel(15L))
+        // Picker and notification agree past the hour.
+        assertEquals("1 hour 1 minute before start", BehaviourSettings.leadLabel(61L))
+    }
+
+    @Test
+    fun `choice labels are pinned`() {
+        assertEquals("1 hour", BehaviourSettings.intervalChoiceLabel(1L))
+        assertEquals("6 hours", BehaviourSettings.intervalChoiceLabel(6L))
+        assertEquals("1 hour", BehaviourSettings.minutesChoiceLabel(60L))
+        assertEquals("2 hours", BehaviourSettings.minutesChoiceLabel(120L))
+        assertEquals("45 minutes", BehaviourSettings.minutesChoiceLabel(45L))
     }
 
     @Test

@@ -154,9 +154,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     ) {
         OptionMenu(
             label = "Sync every",
-            shown = intervalLabel(syncHours),
+            shown = BehaviourSettings.intervalChoiceLabel(syncHours),
             options = BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS.map {
-                it.toString() to intervalLabel(it)
+                it.toString() to BehaviourSettings.intervalChoiceLabel(it)
             },
             onPick = {
                 it.toLongOrNull()?.let { h ->
@@ -183,7 +183,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 paused = it
             },
         )
-        HintLine(BehaviourSettings.syncCadenceLine(context))
+        HintLine(BehaviourSettings.syncCadenceLine(syncHours, wifiOnly, paused))
         if (syncHours !in BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS) {
             HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
         }
@@ -195,9 +195,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     ) {
         OptionMenu(
             label = "Refresh every",
-            shown = minutesLabel(taskMinutes),
+            shown = BehaviourSettings.minutesChoiceLabel(taskMinutes),
             options = BehaviourSettings.TASK_SYNC_INTERVAL_OPTIONS_MINUTES.map {
-                it.toString() to minutesLabel(it)
+                it.toString() to BehaviourSettings.minutesChoiceLabel(it)
             },
             onPick = {
                 it.toLongOrNull()?.let { m ->
@@ -206,7 +206,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 }
             },
         )
-        HintLine(BehaviourSettings.taskSyncCadenceLine(context))
+        HintLine(BehaviourSettings.taskSyncCadenceLine(taskMinutes))
         if (taskMinutes !in BehaviourSettings.TASK_SYNC_INTERVAL_OPTIONS_MINUTES) {
             HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
         }
@@ -370,15 +370,6 @@ private fun SwitchRow(
             HintLine(sub)
         }
     }
-}
-
-private fun intervalLabel(hours: Long): String =
-    if (hours == 1L) "1 hour" else "$hours hours"
-
-private fun minutesLabel(minutes: Long): String = when {
-    minutes == 60L -> "1 hour"
-    minutes % 60L == 0L -> "${minutes / 60L} hours"
-    else -> "$minutes minutes"
 }
 
 private fun voiceShown(saved: String, voices: List<Pair<String, String>>): String {

@@ -120,8 +120,19 @@ object BehaviourSettings {
 
     fun leadLabel(minutes: Long): String = when (minutes) {
         0L -> "At start time (no heads-up)"
-        1L -> "1 minute before start"
-        else -> "$minutes minutes before start"
+        // Shared with the notification copy (leadCopy): the picker and the
+        // lock screen must agree, including on hand-imported values.
+        else -> "${leadCopy(minutes)} before start"
+    }
+
+    /** Picker choice labels; pinned — the section renders these verbatim. */
+    fun intervalChoiceLabel(hours: Long): String =
+        if (hours == 1L) "1 hour" else "$hours hours"
+
+    fun minutesChoiceLabel(minutes: Long): String = when {
+        minutes == 60L -> "1 hour"
+        minutes % 60L == 0L -> "${minutes / 60L} hours"
+        else -> "$minutes minutes"
     }
 
     // ── TTS voice / rate / pitch ─────────────────────────────────────────
