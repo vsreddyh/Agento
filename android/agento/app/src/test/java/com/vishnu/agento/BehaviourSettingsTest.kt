@@ -151,9 +151,10 @@ class BehaviourSettingsTest {
         assertEquals(3, all(syncHours = 2L, kindFailed = false, autoRead = true))
         // Pure overload coerces like the getters: out-of-floor inputs read
         // as their defaults, so both overloads agree on effective state.
+        // (Coerced-to-floor need not be default: 5min reads as 15, custom.)
         assertEquals(0, all(syncHours = 0L))
-        assertEquals(0, all(taskMinutes = 5L))
-        assertEquals(0, all(ratePct = 0L))
+        assertEquals(1, all(taskMinutes = 5L))
+        assertEquals(1, all(ratePct = 0L))
     }
 
     @Test
