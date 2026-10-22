@@ -95,6 +95,7 @@ internal fun reminderPoints(
     dueTime: String,
     estimatedMinutes: Int,
     nowMillis: Long,
+    leadMinutes: Long = TaskReminders.BEFORE_START_MINUTES,
 ): Map<ReminderKind, Long> {
     val due = dueMillisOrNull(dueDate, dueTime) ?: return emptyMap()
     val out = LinkedHashMap<ReminderKind, Long>()
@@ -109,13 +110,14 @@ internal fun reminderPoints(
     val start = startMomentMillis(due, estimatedMinutes)
     if (start != null) {
         // A zero estimate has no start of its own, so there is no start time
-        // for the 5-minute warning to lead into and "Start now" would fire
+        // for the lead-time warning to lead into and "Start now" would fire
         // *at* the due moment saying the wrong thing: such a task gets the
-        // due alert alone.
+        // due alert alone. A zero lead likewise collapses: the warning lands
+        // on the start moment and the collapse below keeps Start.
         addIfFuture(
             out,
             ReminderKind.BeforeStart,
-            start - TaskReminders.BEFORE_START_MINUTES * 60_000L,
+            start - leadMinutes * 60_000L,
             nowMillis,
         )
         addIfFuture(out, ReminderKind.Start, start, nowMillis)
@@ -157,7 +159,7 @@ internal fun reminderPoints(
  * The one line each reminder says (issues #160, #287).
  *
  * A lock-screen line has one job: say what just happened. The collapsed
- * text is the bare moment ("Starting in 5 minutes", "Start now",
+ * text is the bare moment ("Starting in N minutes", "Start now",
  * "Due now", "Overdue for …") — the times live in the expanded view, not
  * in the lock-screen line, so a "Start now" and a "Due now" stay
  * distinguishable at a glance in a notification stack.
@@ -172,9 +174,11 @@ internal fun reminderMessage(
     dueLine: String,
     startLine: String?,
     overdueElapsed: Long? = null,
+    leadMinutes: Long = TaskReminders.BEFORE_START_MINUTES,
 ): String = when (kind) {
     ReminderKind.BeforeStart ->
-        "Starting in ${TaskReminders.BEFORE_START_MINUTES} minutes"
+        if (leadMinutes <= 0L) "Starting now"
+        else "Starting in $leadMinutes minutes"
     ReminderKind.Start ->
         "Start now"
     // No suffix on purpose: at the due moment the time *is* now, so the
@@ -305,7 +309,9 @@ object TaskReminders {
     // correctness, not a ceiling for capacity (#165).
     private const val MAX_ALARMS = 200
 
-    /** Lead time before the start time, for [ReminderKind.BeforeStart]. */
+    /** Default lead time before the start time, for [ReminderKind.BeforeStart].
+     * The live value is [BehaviourSettings.reminderLeadMinutes]; this stays
+     * as the default and as the unit-test expectation. */
     internal const val BEFORE_START_MINUTES = 5L
 
     /**
@@ -369,6 +375,9 @@ object TaskReminders {
         // so "now" and the arming horizon must read the same zone.
         val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
         val horizon = LocalDate.now(IST).plusDays(HORIZON_DAYS).toString()
+        // The user's lead-time pick, read once per refresh: every task in
+        // this pass arms against the same lead.
+        val leadMinutes = BehaviourSettings.reminderLeadMinutes(appCtx)
         // One critical section from here to the final write. Everything
         // below is CPU-only plus the arm/cancel calls, and the point is
         // that an alarm firing on another thread cannot edit PREF_ARMED
@@ -397,7 +406,7 @@ object TaskReminders {
             // time would sort those two the wrong way round.
             val dueAt = dueMillisOrNull(t.dueDate, t.dueTime) ?: continue
             val points = reminderPoints(
-                t.dueDate, t.dueTime, t.estimatedMinutes, nowMillis,
+                t.dueDate, t.dueTime, t.estimatedMinutes, nowMillis, leadMinutes,
             )
             // Counted once the task has actually produced a point, so
             // the reported total is a denominator the numbers divide into
@@ -808,7 +817,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             // the parsed due instant — never from rendered text. Null when
             // the fetch failed or the due time is unparseable, and the
             // message then degrades to the bare fact.
-            reminderMessage(kind, dueLine, startLine, elapsed)
+            reminderMessage(
+                kind, dueLine, startLine, elapsed,
+                BehaviourSettings.reminderLeadMinutes(appCtx),
+            )
         }
         // Locals: task is nullable and conditions below don't smart-cast.
         val taskDesc = task?.description.orEmpty()

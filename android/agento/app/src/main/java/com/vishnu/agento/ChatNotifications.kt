@@ -13,13 +13,16 @@ import androidx.core.content.edit
 import androidx.core.net.toUri
 
 /**
- * Hermes reply notifications (issue #58).
+ * Reply notifications (issue #58).
  *
- * The gateway config has no scheduler/cron section, so there are no
- * server-side cronjobs whose completion could push anything. What the app
- * CAN do client-side is notify when a chat reply finishes while the user
- * isn't looking at the app (backgrounded). That toggle lives in
- * Settings → Hermes notifications as `notify_reply_done`.
+ * Scheduler responses arrive as stored job runs the app polls for
+ * ([CronCheck]), and post through [notifyCron] below. What the app
+ * notifies client-side is a backgrounded chat reply finishing (or
+ * failing), a saved task instruction, or a fresh scheduler response.
+ * That toggle lives in
+ * Settings → Notifications as `notify_reply_done`; per-kind gates
+ * (failures, saved instructions, scheduler responses) live in Behaviour
+ * under the same master switch.
  */
 object ChatNotifications {
 
@@ -90,15 +93,16 @@ object ChatNotifications {
         nm.notify(NOTIFICATION_ID + tabTitle.hashCode(), notification)
     }
 
-    /**
-     * Posts a reply-failed notification (#287): the turn was cut off
+    /** Posts a reply-failed notification (#287): the turn was cut off
      * (dropped stream) or errored while backgrounded, and the partial text
      * (if any) is a fragment, not an answer. Same per-tab slot as
      * [notifyDone] — one tab owns one card, whatever the outcome — so a
      * crash replaces the pending ping rather than stacking beside it.
-     */
+     *
+     * Gated by the reply-failed kind (#355), which itself applies only
+     * while the master reply-alerts switch is on. */
     fun notifyCrashed(context: Context, tabTitle: String, snippet: String) {
-        if (!isEnabled(context) || !canPost(context)) return
+        if (!BehaviourSettings.notifyFailed(context) || !canPost(context)) return
         ensureChannel(context)
         val open = PendingIntent.getActivity(
             context, tabTitle.hashCode(),
@@ -123,9 +127,10 @@ object ChatNotifications {
      * Posts the task-instruction saved card (#287): tap opens the new chat
      * thread and auto-sends it exactly once. One slot per thread, so two
      * instructions never overwrite each other.
-     */
+     *
+     * Gated by the instruction-saved kind (#355), master switch above it. */
     fun notifyInstructSaved(context: Context, taskName: String, threadId: String) {
-        if (!isEnabled(context) || !canPost(context)) return
+        if (!BehaviourSettings.notifyInstruct(context) || !canPost(context)) return
         ensureChannel(context)
         val open = PendingIntent.getActivity(
             context, ("instruct-open:$threadId").hashCode(),
@@ -154,7 +159,8 @@ object ChatNotifications {
      * Posts a cron-response notification on the same replies channel; tap
      * opens the stored cron chat. Returns whether anything posted, so the
      * caller only advances its seen cursor past runs actually delivered.
-     */
+     *
+     * Gated by the scheduler kind (#355), master switch above it. */
     fun notifyCron(
         context: Context,
         jobId: String,
@@ -162,7 +168,7 @@ object ChatNotifications {
         snippet: String,
         moreCount: Int = 0,
     ): Boolean {
-        if (!isEnabled(context) || !canPost(context)) return false
+        if (!BehaviourSettings.notifyCron(context) || !canPost(context)) return false
         ensureChannel(context)
         val title = jobName.trim().ifEmpty { "Scheduled job" }
         val text = if (moreCount > 0) "$snippet (+$moreCount more)" else snippet

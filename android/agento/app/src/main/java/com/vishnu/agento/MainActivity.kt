@@ -239,10 +239,12 @@ class MainActivity : ComponentActivity() {
                         AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
                     // Built-in TTS: one engine for the Chat tab,
                     // shut down with the activity. Auto-read is a single
-                    // global toggle (prefs `tts_auto`) in each chat's bar.
+                    // global toggle (prefs `tts_auto`) in each chat's bar,
+                    // also surfaced in Settings → Behaviour: keyed on the
+                    // destination so a flip there re-reads on return here.
                     val tts = remember { ChatTts(context) }
                     DisposableEffect(Unit) { onDispose { tts.shutdown() } }
-                    var autoSpeak by remember {
+                    var autoSpeak by remember(dest) {
                         mutableStateOf(prefs.getBoolean("tts_auto", false))
                     }
                     // Bumped whenever a model/effort pick saves, so the
