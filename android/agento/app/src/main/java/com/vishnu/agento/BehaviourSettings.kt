@@ -125,8 +125,8 @@ object BehaviourSettings {
     }
 
     fun leadLabel(minutes: Long): String {
-        // Total via the import coercion: negatives read as the default
-        // branch, never "0 minutes before start".
+        // Total via the import coercion: negatives coerce to 0, the
+        // at-start branch — never "0 minutes before start".
         val m = coerceImport(KEY_REMINDER_LEAD_MINUTES, minutes)
         return when (m) {
             0L -> "At start time (no heads-up)"
@@ -291,7 +291,7 @@ object BehaviourSettings {
         if (paused) n++
         if (tm != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
         if (lm != TaskReminders.BEFORE_START_MINUTES) n++
-        if (voice.isNotEmpty()) n++
+        if (voice.trim().isNotEmpty()) n++
         if (rp != DEFAULT_TTS_PCT) n++
         if (pp != DEFAULT_TTS_PCT) n++
         if (!kindFailed) n++

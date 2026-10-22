@@ -323,7 +323,11 @@ object SettingsBackup {
             prefs.edit {
                 for (k in STRING_KEYS) {
                     if (values.has(k) && values.opt(k) is String) {
-                        putString(k, values.optString(k, ""))
+                        // The voice key trims like its setter: a padded
+                        // hand-import would otherwise store whitespace the
+                        // getter trims away, diverging stored from shown.
+                        val v = values.optString(k, "")
+                        putString(k, if (k == BehaviourSettings.KEY_TTS_VOICE) v.trim() else v)
                         applied++
                     }
                 }

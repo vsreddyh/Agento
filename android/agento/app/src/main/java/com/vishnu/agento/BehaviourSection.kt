@@ -86,7 +86,12 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
 
     // Reminder enable flow (moved from the Task Manager bell): exact alarms
     // need a settings redirect on S+, notifications a runtime grant on 33+.
-    var remindersDenied by remember(refreshTick, resumeTick) { mutableStateOf(false) }
+    // The denial hint re-derives from the live grant on resume: an explicit
+    // deny persists across resumes while still denied, and vanishes the
+    // moment the grant appears — keying the flag itself on resumeTick would
+    // wipe it unconditionally, granted or not.
+    var remindersDenied by remember(refreshTick) { mutableStateOf(false) }
+    val notifGrantedNow = remember(refreshTick, resumeTick) { hasNotifPermission(appCtx) }
     // A tap that couldn't finish for permissions re-drives on resume: the
     // exact-alarm redirect returns no result, so coming back re-runs the
     // checks instead of stranding the toggle halfway on.
@@ -122,7 +127,10 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             if (!mgr.canScheduleExactAlarms()) {
-                pendingReminders = true
+                // Best-effort, like the old bell: fire the redirect (once
+                // per tap) but enable anyway — armAlarm falls back to
+                // inexact per alarm. Making exact a hard requirement would
+                // strand users who decline it with no reminders at all.
                 if (!exactAsked) {
                     exactAsked = true
                     runCatching {
@@ -134,16 +142,13 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                         )
                     }
                 }
-                return
             }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                appCtx, Manifest.permission.POST_NOTIFICATIONS,
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (!hasNotifPermission(appCtx)) {
             pendingReminders = true
-            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
             return
         }
         TaskReminders.setEnabled(context, true)
@@ -259,7 +264,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             checked = remindersOn,
             onChange = ::setReminders,
         )
-        if (remindersDenied) {
+        if (remindersDenied && !notifGrantedNow) {
             HintLine("Notifications are blocked — reminders stay off until allowed.")
         }
         if (remindersOn && !exactAlarms) {
@@ -384,6 +389,12 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         )
     }
 }
+
+private fun hasNotifPermission(appCtx: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        ContextCompat.checkSelfPermission(
+            appCtx, Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
 
 /** One labelled switch row, the Notifications section's shape reused. */
 @Composable
