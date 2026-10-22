@@ -207,8 +207,11 @@ class BehaviourSettingsTest {
 
     @Test
     fun `tts pct labels carry the percent suffix`() {
-        assertEquals("100%", BehaviourSettings.ttsPctLabel(100L))
-        assertEquals("150%", BehaviourSettings.ttsPctLabel(150L))
+        val rate = BehaviourSettings.KEY_TTS_RATE_PCT
+        val pitch = BehaviourSettings.KEY_TTS_PITCH_PCT
+        assertEquals("100%", BehaviourSettings.ttsPctLabelFor(rate, 100L))
+        assertEquals("150%", BehaviourSettings.ttsPctLabelFor(rate, 150L))
+        assertEquals("50%", BehaviourSettings.ttsPctLabelFor(pitch, 0L))
     }
 
     @Test

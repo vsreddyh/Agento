@@ -99,8 +99,10 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // True while the permission dialog is in flight: a resume during the
     // dialog must not relaunch it (double-launch while awaiting a result).
     // Cleared by the callback either way, so the re-drive below only fires
-    // when no request is outstanding.
-    var permissionInFlight by remember(refreshTick) { mutableStateOf(false) }
+    // when no request is outstanding. Unkeyed on purpose: an import landing
+    // mid-dialog must not reset it while the dialog is outstanding, or the
+    // next resume double-launches before the first callback clears it.
+    var permissionInFlight by remember { mutableStateOf(false) }
     // The settings redirect fires at most once per tap: without this every
     // resume without a grant would throw system settings open again.
     var exactAsked by remember(refreshTick) { mutableStateOf(false) }
@@ -183,13 +185,18 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // Matched by name at speak time (Voice objects are engine-specific).
     // Bounded: a broken engine answers empty, never hangs the section.
     var voices by remember(refreshTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    // Listed on import-driven refresh only — no resume polling. An engine
-    // switch outside the app refreshes explicitly below instead: the picker
-    // offers its own reload, so a permanently-missing voice never pays the
-    // binder spin on every return.
+    // Listed on import-driven refresh plus the explicit reload below — no
+    // resume polling. `listingVoices` disables the button mid-list so a
+    // double-tap can't spin two engines concurrently.
+    var listingVoices by remember { mutableStateOf(false) }
     var voiceGen by remember { mutableIntStateOf(0) }
     LaunchedEffect(refreshTick, voiceGen) {
-        voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
+        listingVoices = true
+        try {
+            voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
+        } finally {
+            listingVoices = false
+        }
     }
 
     // Exact-alarm grant, re-read on the same resume tick as the switches
@@ -325,7 +332,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         ) {
             HintLine("Kept from an import: this engine no longer offers that voice, but the pick is kept.")
         }
-        TextButton(onClick = { voiceGen++ }) { Text("Reload voices") }
+        TextButton(onClick = { voiceGen++ }, enabled = !listingVoices) {
+            Text(if (listingVoices) "Loading…" else "Reload voices")
+        }
         OptionMenu(
             label = "Rate",
             shown = BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_RATE_PCT, ttsRate),

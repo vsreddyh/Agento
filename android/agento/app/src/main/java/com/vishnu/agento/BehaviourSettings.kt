@@ -191,11 +191,11 @@ object BehaviourSettings {
         prefs(ctx).edit { putLong(KEY_TTS_PITCH_PCT, pct.coerceIn(50L, 200L)) }
     }
 
-    fun ttsPctLabel(pct: Long): String = ttsPctLabelFor(KEY_TTS_RATE_PCT, pct)
-
     /** Keyed label: rate and pitch share 50..200 today, but the coercion
      * rides the caller's key so a future range split can't silently
-     * mis-coerce one side while setters/import stay correct. */
+     * mis-coerce one side while setters/import stay correct. There is
+     * deliberately no unkeyed shorthand: the shorter name is exactly how
+     * the next caller would reintroduce the hazard. */
     fun ttsPctLabelFor(key: String, pct: Long): String = "${coerceImport(key, pct)}%"
 
     // ── Notification kinds ───────────────────────────────────────────────
