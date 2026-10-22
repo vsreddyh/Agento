@@ -205,6 +205,13 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			// Bounded, like every other caller-controlled echo in this
 			// stack: a 10KB op name is not answered with itself, and one
 			// mistake reads the same however it was spelled.
+			//
+			// The op name here is the SENT one ("Complete"), because this
+			// is a validation error and the caller has to be able to fix
+			// it. An EXECUTION error below carries the canonical name
+			// instead, because the log joins on that one. The two cannot
+			// meet — validation runs first — and they answer two
+			// different questions: "what did you send" and "what ran".
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("unknown batch op %q: want complete, skip, update, or duplicate",
 					TruncateBytes(opName, 40))}
@@ -325,7 +332,8 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				// carried here: the result should not have to be matched
 				// back to its op to know what it was about.
 				//
-				// Lowercased for convenience, but the SEAM is the
+				// srcID, the canonical source id the verb was handed
+				// — not a second derivation of it. The SEAM is still the
 				// authority: RecordMutation canonicalises the detail
 				// itself, so this copy is belt and braces, not the rule.
 				//
@@ -339,7 +347,7 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				if err == nil {
 					if newID, _ := res.Task["id"].(string); newID != "" {
 						res.ID = newID
-						res.Detail = strings.ToLower(strings.TrimSpace(op.ID))
+						res.Detail = srcID
 					}
 				}
 			default:

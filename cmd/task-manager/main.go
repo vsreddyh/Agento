@@ -333,7 +333,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_tasks",
-		Description: "List tasks. state open (default) | done | all; overdue=true keeps open tasks due before today (requires state=open); search matches name/description; limit caps rows (default 200, max 500) and truncated says whether more exist."},
+		Description: "List tasks. state open (default) | done | all; overdue=true keeps open tasks due before today (requires state=open); search matches name/description; limit caps rows (default 200, max 500) and truncated says whether more exist. A limit of zero or negative gives the default, a huge one is clamped to the max, and a mistyped limit is an argument error."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listTasksInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, truncated, err := store.List(ctx, in.State, in.Overdue, in.Search, in.Limit)
 			if err != nil {
