@@ -14,8 +14,15 @@
 #
 # golang is build-time only (the Go binaries are copied out), so its digest
 # affects reproducibility, not the shipped runtime surface.
+#
+# The node digest and docker/pi/pi-deps.lock travel TOGETHER: the runtime
+# stage installs Pi's npm tree and then fails the build if the installed tree
+# differs from that manifest, and a new node image ships a new npm (11.19.1
+# here), so a node bump forces a manifest bump. Bump one without the other
+# and the build fails with "Pi's dependency tree differs from
+# docker/pi/pi-deps.lock" — which is the build doing its job.
 ARG GO_IMAGE=golang@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
-ARG NODE_IMAGE=node@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+ARG NODE_IMAGE=node@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 
 # ──────────────────────────────────────────────────────
 # Pi runtime — the agent host that replaces the Hermes gateway.
