@@ -13,6 +13,11 @@ const (
 	// with its job name), so fires share the conversation's history instead
 	// of each carrying its own — and the Scheduler history and the Runs
 	// list correlate on this id.
+	//
+	// Reserved: nothing validates user conversation ids against it, so a
+	// user thread with this id on the chat profile would merge with the
+	// scheduler thread. Low risk today (ids are app-generated), but do not
+	// reuse this string for anything else.
 	SchedulerConversationID = "scheduler"
 
 	// RunSourceScheduler marks runs recorded from a scheduler fire, so a
@@ -53,10 +58,15 @@ var ErrBusy = errors.New("scheduler: chat agent is already answering a turn")
 // edits.
 func SchedulerPrompt(jobName, prompt string) string {
 	name := strings.Join(strings.Fields(jobName), " ")
-	if name == "" {
+	switch {
+	case name == "":
 		name = "unnamed job"
+	case len([]rune(name)) > maxSchedulerName:
+		// An ellipsis marks the cut: two names differing only past the
+		// cap would otherwise label identically in the model-visible
+		// thread (storage still disambiguates via RunID).
+		name = truncateRunes(name, maxSchedulerName-1) + "…"
 	}
-	name = truncateRunes(name, maxSchedulerName)
 	var b strings.Builder
 	fmt.Fprintf(&b, "From Scheduler %s: %s", name, strings.TrimSpace(prompt))
 	b.WriteString("\n\nYou are firing unattended on a schedule: use read-only tools only " +

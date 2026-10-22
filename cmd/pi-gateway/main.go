@@ -391,7 +391,10 @@ func run() error {
 	if key := strings.TrimSpace(os.Getenv("OPENCODE_API_KEY")); key != "" {
 		runner := &cronjobs.BareClient{
 			APIKey: key,
-			Model:  envOr("PI_CRON_MODEL", "mimo-v2.6-flash"),
+			// Renamed with fallback: PI_CRON_MODEL predates the split
+			// (scheduler fires are chat turns now); existing deploys
+			// keep working, new ones use the honest name.
+			Model: envOr("PI_TEACH_MODEL", envOr("PI_CRON_MODEL", "mimo-v2.6-flash")),
 		}
 		teachRunner = runner.Run
 	} else {

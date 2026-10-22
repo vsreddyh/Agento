@@ -23,7 +23,9 @@ const schedulerProfileName = "chat"
 //
 // It returns the reply text and the agent run id. The run lives in the Runs
 // list under the scheduler conversation, and the worker stores the run id on
-// the cron run, so the two histories correlate both ways.
+// the cron run, so the two histories correlate both ways. (The completion id
+// is stable per conversation by construction; the run id — returned here —
+// is the correlation unit, and the app keys reattach on the session id.)
 //
 // Concurrency: one turn per profile, so a fire landing while the profile is
 // answering another turn reports ErrBusy (wrapping cronjobs.ErrBusy). The

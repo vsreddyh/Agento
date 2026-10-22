@@ -38,6 +38,10 @@ func dayTime(ms int64) string {
 func jobJSON(j cronjobs.Job, now time.Time) map[string]any {
 	runs := make([]any, 0, len(j.Runs))
 	for _, r := range j.Runs {
+		// The wire always presents the provenance keys (empty on legacy
+		// rows); storage omits empties per the omitempty tags. The app
+		// parses leniently, so the two layers intentionally differ: the
+		// wire is stable-shape, the store is compact.
 		runs = append(runs, map[string]any{
 			"at": r.At, "text": r.Text, "missed": r.Missed,
 			// Provenance (#331): which scheduler fire produced this run

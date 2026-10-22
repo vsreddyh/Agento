@@ -13,6 +13,10 @@ import (
 // is worse than saying it was missed.
 const catchupWindow = 5 * time.Minute
 
+// recordTimeout bounds one history write. Records ride a detached context
+// (see recordCtx), so this is the only deadline on them.
+const recordTimeout = 10 * time.Second
+
 // JobBackend is the storage the worker ticks against. *Store implements
 // it; tests use a fake so no MongoDB is needed.
 type JobBackend interface {
@@ -25,6 +29,14 @@ type JobBackend interface {
 // One process runs one worker: the tick loop is single-threaded and each
 // fire is guarded by the in-flight set, so a job can never overlap
 // itself (manual /run included).
+//
+// Throughput limit, stated plainly: all fires on one profile serialize on
+// the chat turn, so one tick fires at most one job per profile — the rest
+// skip as busy and retry next tick. Past the 5-minute catchup window the
+// leftovers become misses. Fine for one or two jobs; five jobs due the
+// same minute will systematically miss. Queueing (instead of fail-fast)
+// would fix that at the cost of a late fire running many minutes behind
+// its schedule — the skip keeps every fire near its minute.
 //
 // Fire-while-busy (the chat profile is answering another turn) is a skip,
 // not a failure and not a miss: nothing is recorded and LastFire stays, so
@@ -48,6 +60,14 @@ func (w *Worker) logf(format string, args ...any) {
 	}
 }
 
+// recordCtx detaches one history write from the tick / request context with
+// a short timeout. A client disconnecting mid-manual-run, or shutdown
+// mid-tick, must not orphan the cron row for a turn the Runs list keeps —
+// the record is the history, and it outlives whoever asked.
+func recordCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), recordTimeout)
+}
+
 // Tick evaluates every unpaused job once. Fire errors are recorded as
 // runs (visible in the history) without advancing LastFire, so the next
 // tick retries until the catchup window passes and the fire is recorded
@@ -58,6 +78,10 @@ func (w *Worker) Tick(ctx context.Context, now time.Time) {
 		w.logf("cron: no fire function configured; skipping tick")
 		return
 	}
+	// History writes ride their own detached context (see recordCtx):
+	// shutdown mid-tick must not orphan the rows.
+	rctx, rcancel := recordCtx()
+	defer rcancel()
 	jobs, err := w.Store.List(ctx)
 	if err != nil {
 		w.logf("cron: list failed: %v", err)
@@ -79,7 +103,7 @@ func (w *Worker) Tick(ctx context.Context, now time.Time) {
 		if now.Sub(fireAt) > catchupWindow {
 			note := fmt.Sprintf("missed fire at %s (gateway down)",
 				fireAt.In(IST).Format("2006-01-02 15:04"))
-			if err := w.Store.RecordRun(ctx, job.ID,
+			if err := w.Store.RecordRun(rctx, job.ID,
 				Run{At: now.UnixMilli(), Text: note, Missed: true,
 					Source: RunSourceScheduler, JobName: job.Name},
 				fireAt.UnixMilli()); err != nil {
@@ -118,6 +142,8 @@ func (w *Worker) fireAsync(ctx context.Context, job Job, fireAt time.Time) {
 	}
 	go func() {
 		defer w.release(job.ID)
+		rctx, rcancel := recordCtx()
+		defer rcancel()
 		res, err := w.Fire(ctx, job)
 		now := time.Now().UnixMilli()
 		if err != nil {
@@ -132,14 +158,14 @@ func (w *Worker) fireAsync(ctx context.Context, job Job, fireAt time.Time) {
 			// run id travels even on failure: a failed chat turn
 			// still exists in the Runs list.
 			w.logf("cron: job %s fire failed: %v", job.ID, err)
-			if rerr := w.Store.RecordRun(ctx, job.ID,
+			if rerr := w.Store.RecordRun(rctx, job.ID,
 				Run{At: now, Text: "error: " + err.Error(),
 					Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID}, job.LastFire); rerr != nil {
 				w.logf("cron: error record failed for %s: %v", job.ID, rerr)
 			}
 			return
 		}
-		if err := w.Store.RecordRun(ctx, job.ID,
+		if err := w.Store.RecordRun(rctx, job.ID,
 			Run{At: now, Text: res.Text,
 				Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID},
 			fireAt.UnixMilli()); err != nil {
@@ -169,11 +195,13 @@ func (w *Worker) FireNow(ctx context.Context, id string) (text, runID string, er
 		return "", "", fmt.Errorf("job %s is already running", id)
 	}
 	defer w.release(job.ID)
+	rctx, rcancel := recordCtx()
+	defer rcancel()
 	res, err := w.Fire(ctx, job)
 	now := time.Now().UnixMilli()
 	if err != nil {
 		if !errors.Is(err, ErrBusy) {
-			if rerr := w.Store.RecordRun(ctx, job.ID,
+			if rerr := w.Store.RecordRun(rctx, job.ID,
 				Run{At: now, Text: "error: " + err.Error(),
 					Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID}, job.LastFire); rerr != nil {
 				w.logf("cron: error record failed for %s: %v", job.ID, rerr)
@@ -183,7 +211,7 @@ func (w *Worker) FireNow(ctx context.Context, id string) (text, runID string, er
 	}
 	// A manual run accounts "now": it must not re-fire the same minute
 	// on the next tick, nor resurrect a missed fire.
-	if err := w.Store.RecordRun(ctx, job.ID,
+	if err := w.Store.RecordRun(rctx, job.ID,
 		Run{At: now, Text: res.Text,
 			Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID},
 		now); err != nil {

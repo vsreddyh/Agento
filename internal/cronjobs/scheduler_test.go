@@ -44,8 +44,12 @@ func TestSchedulerPromptSanitizesName(t *testing.T) {
 	long := strings.Repeat("a", 200)
 	got = SchedulerPrompt(long, "p")
 	first, _, _ = strings.Cut(got, "\n")
-	if got, want := len([]rune(strings.TrimPrefix(strings.TrimSuffix(first, ": p"), "From Scheduler "))), maxSchedulerName; got != want {
+	label := strings.TrimSuffix(strings.TrimPrefix(first, "From Scheduler "), ": p")
+	if got, want := len([]rune(label)), maxSchedulerName; got != want {
 		t.Errorf("label runes = %d, want %d", got, want)
+	}
+	if !strings.HasSuffix(label, "…") {
+		t.Errorf("truncation unmarked: %q", label)
 	}
 }
 
