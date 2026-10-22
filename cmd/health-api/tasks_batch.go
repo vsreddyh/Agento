@@ -153,6 +153,13 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 	// a slow Mongo the acknowledgement waits for up to N×5s of durability
 	// work — 50 ops is ~250s.
 	//
+	// The wait is the SERVER's, and it outlives the client: the request
+	// context expires at 30s, so a caller that has already been told
+	// "timed out" is still waiting on rows being written here. That
+	// asymmetry is what the detached write buys — a client that gave up
+	// must not take the log with it — and it is why the response can be
+	// lost while the rows are not.
+	//
 	// That is the trade this feature makes on purpose: the log is
 	// best-effort but durable-by-default, and a change the log does not
 	// record is a change nobody can explain later. The fix, if batch

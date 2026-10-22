@@ -63,7 +63,11 @@ func TestParseOpsDropsRepeats(t *testing.T) {
 // log for — the "wrong data, not merely more of it" the strict filters
 // exist to prevent.
 func TestParseOpsRejectsAFilterThatNamesNoOp(t *testing.T) {
-	for _, raw := range []string{",", ",,"} {
+	// The last shape is the README's teaching example: spaces around the
+	// comma. It is the same branch — the names are trimmed before they are
+	// counted — but the shape a reader is most likely to send is the one
+	// worth pinning.
+	for _, raw := range []string{",", ",,", " , "} {
 		if _, err := ParseOps(raw); err == nil {
 			t.Errorf("ParseOps(%q) must be rejected, not read as the whole log", raw)
 		}

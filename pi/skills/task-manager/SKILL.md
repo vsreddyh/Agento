@@ -80,6 +80,10 @@ negative gives the default, a huge one is clamped). Newest first. A
 malformed `task_id`, `op` or `since` is refused, not answered with an
 empty history.
 
+A mistyped filter is an argument type error, not a value the tool rounds
+or defaults: an array for `task_id` or `op`, a number for `since`, and a
+null for any of the four.
+
 `source` is a self-attested LABEL — `mcp` for the agent, the app's own label
 otherwise — not an authenticated identity. Say "the app changed it", not
 "the user did".

@@ -291,6 +291,14 @@ func taskHistory(ctx context.Context, store *tasks.Store, in taskHistoryInput) (
 	// tool. The caller's context still wins — a cancelled session ends the
 	// call whatever the timeout says.
 	//
+	// This is the ONLY MCP tool in this file with a deadline of its own,
+	// and that is deliberate: it is the only one that mirrors a bounded
+	// HTTP read (the change-log route), so the same question asked of
+	// the two doors behaves the same way. The write tools keep the
+	// caller's context alone — a write cut short mid-flight is a
+	// different failure from a read that hangs, and bounding it here
+	// would trade a slow write for a lost one.
+	//
 	// Named apart from ctx on purpose: two deadlines in one function, and
 	// a reader has to be able to tell which one a line holds.
 	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
