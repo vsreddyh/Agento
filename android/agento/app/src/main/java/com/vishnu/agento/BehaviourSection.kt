@@ -170,11 +170,12 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // Matched by name at speak time (Voice objects are engine-specific).
     // Bounded: a broken engine answers empty, never hangs the section.
     var voices by remember(refreshTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    // Listed on import-driven refresh only: the missing-voice case rechecks
-    // then too (an engine switch outside the app is rare, and the next
-    // import picks it up). No resume re-spin — a permanently-missing voice
-    // must not pay the binder spin on every return.
-    LaunchedEffect(refreshTick) {
+    // Listed on import-driven refresh only — no resume polling. An engine
+    // switch outside the app refreshes explicitly below instead: the picker
+    // offers its own reload, so a permanently-missing voice never pays the
+    // binder spin on every return.
+    var voiceGen by remember { mutableIntStateOf(0) }
+    LaunchedEffect(refreshTick, voiceGen) {
         voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
     }
 
@@ -311,11 +312,12 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         ) {
             HintLine("Kept from an import: this engine no longer offers that voice, but the pick is kept.")
         }
+        TextButton(onClick = { voiceGen++ }) { Text("Reload voices") }
         OptionMenu(
             label = "Rate",
             shown = BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_RATE_PCT, ttsRate),
             options = BehaviourSettings.TTS_PCT_OPTIONS.map {
-                it.toString() to BehaviourSettings.ttsPctLabel(it)
+                it.toString() to BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_RATE_PCT, it)
             },
             onPick = {
                 it.toLongOrNull()?.let { p ->
@@ -328,7 +330,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             label = "Pitch",
             shown = BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_PITCH_PCT, ttsPitch),
             options = BehaviourSettings.TTS_PCT_OPTIONS.map {
-                it.toString() to BehaviourSettings.ttsPctLabel(it)
+                it.toString() to BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_PITCH_PCT, it)
             },
             onPick = {
                 it.toLongOrNull()?.let { p ->
