@@ -158,6 +158,10 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     }
 
     // Re-drive a tap the permission flow interrupted once the user returns.
+    // Keyed on resumeTick only, deliberately not on pendingReminders: the
+    // flag is set synchronously beside the dialog launch it belongs to (and
+    // cleared synchronously by its callback), so keying on it would relaunch
+    // the dialog in a loop. Resume is the only other producer of progress.
     LaunchedEffect(resumeTick) {
         if (pendingReminders) setReminders(true)
     }
@@ -166,13 +170,20 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // Matched by name at speak time (Voice objects are engine-specific).
     // Bounded: a broken engine answers empty, never hangs the section.
     var voices by remember(refreshTick) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    // Re-list on resume only when it could matter (empty list, or the
-    // stored voice missing from it): a blind re-spin on every resume pays
-    // a binder init + enumeration on the resume path for nothing.
+    // Re-list on resume only when it could matter: a stored-but-missing
+    // voice (the engine may have gained voices), never a blind re-spin —
+    // and a broken engine (empty list) retries only on import-driven
+    // refresh, so every return doesn't pay the binder spin for an engine
+    // that keeps failing.
+    var listedFor by remember { mutableStateOf(-1) }
     LaunchedEffect(refreshTick, resumeTick) {
         val cur = voices
-        if (cur.isEmpty() || (ttsVoice.isNotEmpty() && cur.none { it.first == ttsVoice })) {
+        val missingVoice = ttsVoice.isNotEmpty() && cur.isNotEmpty() &&
+            cur.none { it.first == ttsVoice }
+        val brokenRetry = cur.isEmpty() && listedFor != refreshTick
+        if (missingVoice || brokenRetry) {
             voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
+            listedFor = refreshTick
         }
     }
 
@@ -311,7 +322,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         }
         OptionMenu(
             label = "Rate",
-            shown = BehaviourSettings.ttsPctLabel(ttsRate),
+            shown = BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_RATE_PCT, ttsRate),
             options = BehaviourSettings.TTS_PCT_OPTIONS.map {
                 it.toString() to BehaviourSettings.ttsPctLabel(it)
             },
@@ -324,7 +335,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         )
         OptionMenu(
             label = "Pitch",
-            shown = BehaviourSettings.ttsPctLabel(ttsPitch),
+            shown = BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_PITCH_PCT, ttsPitch),
             options = BehaviourSettings.TTS_PCT_OPTIONS.map {
                 it.toString() to BehaviourSettings.ttsPctLabel(it)
             },
