@@ -71,6 +71,7 @@ func (s *Server) FireSchedulerJob(_ context.Context, job cronjobs.Job) (string, 
 		return "", "", fmt.Errorf("scheduler: could not resolve the scheduler conversation: %w", err)
 	}
 	model := bounded(agentState.Model.ID)
+	provider := bounded(agentState.Model.Provider)
 
 	// Subscribe before prompting: the agent can stream before the prompt
 	// response arrives, same as the chat path.
@@ -81,6 +82,11 @@ func (s *Server) FireSchedulerJob(_ context.Context, job cronjobs.Job) (string, 
 		Profile:        profile,
 		ConversationID: cronjobs.SchedulerConversationID,
 		Prompt:         prompt,
+		// Recorded, never selected: a fire runs whatever the profile
+		// already runs, but the row must still say what answered, or
+		// model-grouped Runs views silently drop scheduler turns.
+		Provider: provider,
+		Model:    model,
 	}, h.runner.agent,
 		completionIDFor(cronjobs.SchedulerConversationID), "", time.Now())
 	userTurn := &turn{Text: prompt}

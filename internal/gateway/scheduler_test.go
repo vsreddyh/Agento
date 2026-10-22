@@ -75,6 +75,10 @@ func TestFireSchedulerJobRunsChatTurn(t *testing.T) {
 	if run.Profile != "chat" {
 		t.Errorf("profile = %q, want chat", run.Profile)
 	}
+	if run.Model != "mimo-v2.6-flash" || run.Provider != "opencode-go" {
+		t.Errorf("model = %q/%q, want the running model recorded",
+			run.Provider, run.Model)
+	}
 
 	// The scheduler conversation resumes: the session store bound it.
 	h := srv.handlers["chat"]
