@@ -169,26 +169,28 @@ func ParseOps(s string) ([]string, error) {
 	// bounded, but the echo is the small end of it: a filter is
 	// caller-controlled text, and `?op=` with a megabyte of commas would
 	// build a megabyte of tokens before anything could refuse it. The
-	// split happens only on a string small enough to split.
+	// split happens only on a filter small enough to split.
 	//
-	// The bound is on the string that is SPLIT — the one as sent, not
-	// the trimmed copy. The split runs on what was sent, so that is what
-	// has to fit: padding is part of the string the split will walk.
-	if len(s) > maxOpsFilterBytes {
+	// The bound is on the FILTER — the trimmed string, the one that is
+	// split — and not on the spaces around it: a padded-but-real filter
+	// is a SMALL filter, and refusing it for its padding would be
+	// refusing the wrong thing. The fan-out the cap exists for is commas,
+	// and commas are not padding.
+	if len(raw) > maxOpsFilterBytes {
 		return nil, fail("op filter is too long (%d bytes; at most %d)",
-			len(s), maxOpsFilterBytes)
+			len(raw), maxOpsFilterBytes)
 	}
-	// Split the SENT string, padding and all: the validator must echo
-	// the token the caller typed, exactly as it does when it is called
-	// directly. The trimmed copy is only used to decide whether there is
-	// a filter at all.
+	// Split the TRIMMED string: the padding around the whole filter is
+	// not part of any op, and each TOKEN keeps its own padding — so the
+	// validator still sees what the caller typed, exactly as it does
+	// when it is called directly.
 	//
 	// Three passes over a list of at most a few elements, deliberately:
 	// this one for the emptiness check, the validator's own for the
 	// names it knows, and the return value's. Folding them into one
 	// would lose the distinction between "no filter" and "a filter that
 	// names nothing" — the branch the strict rule exists for.
-	tokens := strings.Split(s, ",")
+	tokens := strings.Split(raw, ",")
 	ops := normalizeOps(tokens)
 	if len(ops) == 0 {
 		return nil, namesNoOperation(len(tokens))
@@ -211,7 +213,9 @@ func ParseOps(s string) ([]string, error) {
 // is a megabyte of tokens, built before anything could refuse it.
 //
 // The bound is on the INPUT, not only on the echo: every echo in this
-// file was already bounded, and the echo is the small end of it.
+// file was already bounded, and the echo is the small end of it. It is
+// on the filter itself, not on the padding around it — the fan-out it
+// prevents is commas, and commas are not padding.
 const maxOpsFilterBytes = 256
 
 // ValidateOps checks op names against the ones the log can hold.
@@ -316,6 +320,11 @@ func ParseSince(s string) (time.Time, error) {
 // there is nothing to echo and nothing to bound — a query string of spaces
 // is one trim, not a fan-out. (The op filter is the one that is SPLIT, and
 // it is the one that bounds its input; see ParseOps.)
+//
+// The message names the SHAPE, where the lookup path names the value
+// ("bad id '…'"): a filter has to teach the caller what an id looks like,
+// and a lookup already knows the caller meant one. Two doors, one mistake,
+// and each says the thing its caller needs.
 func NormalizeTaskID(id string) (string, error) {
 	trimmed := strings.TrimSpace(id)
 	if trimmed == "" {

@@ -220,11 +220,13 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("batch op %d (%s) has no id", i, opName)}
 		}
-		// The seen-key is lowercased: a hex id is case-INSENSITIVE
+		// The seen-key is the CANONICAL id: a hex id is case-INSENSITIVE
 		// (ObjectIDFromHex accepts upper case, and the log's task_id is
 		// lowercased), so "abc…" and "ABC…" name the SAME task. A guard
-		// that stops two verbs on one task has to see them as one.
-		key := strings.ToLower(id)
+		// that stops two verbs on one task has to see them as one — and
+		// the canonical spelling belongs to the seam, so the guard reads
+		// it there rather than deriving a second one.
+		key := canonicalID(id)
 		if seen[key] {
 			// The same id twice would self-conflict inside one transaction:
 			// the second verb reads the first's uncommitted write. Reject

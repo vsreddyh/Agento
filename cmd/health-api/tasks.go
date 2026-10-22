@@ -33,10 +33,6 @@ import (
 // the caller already had, so a stray query param must never nuke the answer.
 // One helper, because two copies of this rule are two rules — and the next
 // edit to one of them would drift from the other.
-//
-// The full rule, in one line: missing, blank or unparseable → the default;
-// zero or negative → the default (ClampLimit); parseable-but-huge → the
-// ceiling (ClampLimit).
 func parseLimitParam(q url.Values) int {
 	raw := strings.TrimSpace(q.Get("limit"))
 	if raw == "" {

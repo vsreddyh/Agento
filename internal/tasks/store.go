@@ -213,6 +213,13 @@ func UnknownTaskMessage(id string) string {
 
 // badID names the id that could not be read as one. Bounded, like
 // unknownTask: same rule, same reason.
+//
+// The phrasing differs from the history filter's on purpose: this path
+// is a LOOKUP, so the caller plainly meant an id and got the characters
+// wrong, and the message names the value. The filter has to teach what
+// an id looks like, so it names the shape. One mistake, two doors, and
+// each says the thing its caller needs — a cross-path grep for one
+// string will not find both, and is not meant to.
 func badID(id string) *StoreError {
 	return fail("bad id '%s'", TruncateBytes(strings.TrimSpace(id), 40))
 }
