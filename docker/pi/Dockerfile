@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────
 # Base images are pinned by digest, declared as global ARGs so a rebuild of this
 # file reproduces the same toolchain months later. The floating
-# `golang:1.26-bookworm` / `node:24-bookworm-slim` tags move under us, and a
+# `golang:1.27-bookworm` / `node:24-bookworm-slim` tags move under us, and a
 # silent toolchain change is what turns into an unexplainable build diff.
 #
 # Deliberately global (before the first FROM) and not stage-scoped: podman
@@ -14,7 +14,7 @@
 #
 # golang is build-time only (the Go binaries are copied out), so its digest
 # affects reproducibility, not the shipped runtime surface.
-ARG GO_IMAGE=golang@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d
+ARG GO_IMAGE=golang@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
 ARG NODE_IMAGE=node@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 
 # ──────────────────────────────────────────────────────
