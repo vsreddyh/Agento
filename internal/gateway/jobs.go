@@ -20,7 +20,11 @@ type JobStore interface {
 }
 
 // CronFire fires one job now (manual /run and the tick worker share it).
-type CronFire func(ctx context.Context, id string) (string, error)
+// runID names the agent run that answered (empty when the fire never became
+// a turn), so a manual tap can link straight to the run without a list
+// fetch. It is set even when err != nil — a failed chat turn still exists
+// in the Runs list.
+type CronFire func(ctx context.Context, id string) (text, runID string, err error)
 
 // dayTime formats an instant the way the app displays it: numeric and
 // locale-free, since the phone renders the string verbatim.
@@ -142,7 +146,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, rest string)
 		if !requireMethod(w, r, http.MethodPost, "/api/jobs/{id}/run") {
 			return
 		}
-		text, err := s.cfg.CronFire(r.Context(), id)
+		text, runID, err := s.cfg.CronFire(r.Context(), id)
 		if err != nil {
 			// Unknown job is the caller's mistake (404); a model
 			// failure is upstream (502), like every other model call.
@@ -154,7 +158,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, rest string)
 			}
 			return
 		}
-		writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "response": text})
+		writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "response": text, "run_id": runID})
 		return
 	case "":
 		switch r.Method {

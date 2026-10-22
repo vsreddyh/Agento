@@ -80,7 +80,8 @@ func (w *Worker) Tick(ctx context.Context, now time.Time) {
 			note := fmt.Sprintf("missed fire at %s (gateway down)",
 				fireAt.In(IST).Format("2006-01-02 15:04"))
 			if err := w.Store.RecordRun(ctx, job.ID,
-				Run{At: now.UnixMilli(), Text: note, Missed: true},
+				Run{At: now.UnixMilli(), Text: note, Missed: true,
+					Source: RunSourceScheduler, JobName: job.Name},
 				fireAt.UnixMilli()); err != nil {
 				w.logf("cron: miss record failed for %s: %v", job.ID, err)
 			} else {
@@ -127,11 +128,13 @@ func (w *Worker) fireAsync(ctx context.Context, job Job, fireAt time.Time) {
 				return
 			}
 			// Recorded but LastFire stays: the next tick retries
-			// until the catchup window turns this into a miss.
+			// until the catchup window turns this into a miss. The
+			// run id travels even on failure: a failed chat turn
+			// still exists in the Runs list.
 			w.logf("cron: job %s fire failed: %v", job.ID, err)
 			_ = w.Store.RecordRun(ctx, job.ID,
 				Run{At: now, Text: "error: " + err.Error(),
-					Source: RunSourceScheduler, JobName: job.Name}, job.LastFire)
+					Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID}, job.LastFire)
 			return
 		}
 		if err := w.Store.RecordRun(ctx, job.ID,
@@ -148,16 +151,20 @@ func (w *Worker) fireAsync(ctx context.Context, job Job, fireAt time.Time) {
 // FireNow runs one job immediately for the manual /run route, bypassing
 // the schedule but not the in-flight guard. Paused jobs may be run by
 // hand: the tap is explicit, and the pause only stops the ticker.
-func (w *Worker) FireNow(ctx context.Context, id string) (string, error) {
+//
+// runID names the agent run that answered (empty when the fire never became
+// a turn), even on failure: a failed chat turn still exists in the Runs
+// list, and the caller links to it rather than orphaning the error row.
+func (w *Worker) FireNow(ctx context.Context, id string) (text, runID string, err error) {
 	job, err := w.Store.Get(ctx, id)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if w.Fire == nil {
-		return "", fmt.Errorf("cron: no fire function configured")
+		return "", "", fmt.Errorf("cron: no fire function configured")
 	}
 	if !w.claim(job.ID) {
-		return "", fmt.Errorf("job %s is already running", id)
+		return "", "", fmt.Errorf("job %s is already running", id)
 	}
 	defer w.release(job.ID)
 	res, err := w.Fire(ctx, job)
@@ -166,9 +173,9 @@ func (w *Worker) FireNow(ctx context.Context, id string) (string, error) {
 		if !errors.Is(err, ErrBusy) {
 			_ = w.Store.RecordRun(ctx, job.ID,
 				Run{At: now, Text: "error: " + err.Error(),
-					Source: RunSourceScheduler, JobName: job.Name}, job.LastFire)
+					Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID}, job.LastFire)
 		}
-		return "", err
+		return "", res.RunID, err
 	}
 	// A manual run accounts "now": it must not re-fire the same minute
 	// on the next tick, nor resurrect a missed fire.
@@ -176,7 +183,7 @@ func (w *Worker) FireNow(ctx context.Context, id string) (string, error) {
 		Run{At: now, Text: res.Text,
 			Source: RunSourceScheduler, JobName: job.Name, RunID: res.RunID},
 		now); err != nil {
-		return "", err
+		return "", res.RunID, err
 	}
-	return res.Text, nil
+	return res.Text, res.RunID, nil
 }

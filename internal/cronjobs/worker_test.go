@@ -107,6 +107,10 @@ func TestTickRecordsMiss(t *testing.T) {
 	if len(runs) != 1 || !runs[0].Missed {
 		t.Fatalf("expected one missed run, got %+v", runs)
 	}
+	// Misses carry provenance too: the history reads without the job doc.
+	if runs[0].Source != RunSourceScheduler {
+		t.Errorf("miss source = %q", runs[0].Source)
+	}
 	// LastFire advanced past the accounted instant: the next tick moves on.
 	if be.jobs["a"].LastFire != time.Date(2026, time.October, 14, 11, 0, 0, 0, IST).UnixMilli() {
 		t.Errorf("LastFire = %d", be.jobs["a"].LastFire)
@@ -121,11 +125,14 @@ func TestFireNowManual(t *testing.T) {
 	}}
 	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
 	w := &Worker{Store: be, Fire: bare.Fire}
-	text, err := w.FireNow(context.Background(), "a")
+	text, runID, err := w.FireNow(context.Background(), "a")
 	if err != nil || text != "manual back" {
 		t.Fatalf("FireNow = %q, %v", text, err)
 	}
-	if _, err := w.FireNow(context.Background(), "nope"); err == nil {
+	if runID != "" {
+		t.Errorf("bare fire has no run record, runID = %q", runID)
+	}
+	if _, _, err := w.FireNow(context.Background(), "nope"); err == nil {
 		t.Error("unknown job should fail")
 	}
 }

@@ -101,10 +101,19 @@ func FromEnv() (*Store, error) {
 func toDoc(j Job) bson.M {
 	runs := make([]bson.M, 0, len(j.Runs))
 	for _, r := range j.Runs {
-		runs = append(runs, bson.M{
-			"at": r.At, "text": r.Text, "missed": r.Missed,
-			"source": r.Source, "jobName": r.JobName, "runId": r.RunID,
-		})
+		m := bson.M{"at": r.At, "text": r.Text, "missed": r.Missed}
+		// Provenance keys are omitted when empty, matching the omitempty
+		// tags: legacy rows and miss rows (no run began) carry none.
+		if r.Source != "" {
+			m["source"] = r.Source
+		}
+		if r.JobName != "" {
+			m["jobName"] = r.JobName
+		}
+		if r.RunID != "" {
+			m["runId"] = r.RunID
+		}
+		runs = append(runs, m)
 	}
 	return bson.M{
 		"name": j.Name, "prompt": j.Prompt, "schedule": j.Schedule,
@@ -325,12 +334,19 @@ func (s *Store) RecordRun(ctx context.Context, id string, run Run, fireInstant i
 	if err != nil {
 		return err
 	}
+	runDoc := bson.M{"at": run.At, "text": run.Text, "missed": run.Missed}
+	if run.Source != "" {
+		runDoc["source"] = run.Source
+	}
+	if run.JobName != "" {
+		runDoc["jobName"] = run.JobName
+	}
+	if run.RunID != "" {
+		runDoc["runId"] = run.RunID
+	}
 	res, err := s.jobs.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{
 		"$push": bson.M{"runs": bson.M{
-			"$each": []bson.M{{
-				"at": run.At, "text": run.Text, "missed": run.Missed,
-				"source": run.Source, "jobName": run.JobName, "runId": run.RunID,
-			}},
+			"$each":  []bson.M{runDoc},
 			"$slice": -RunHistoryCap,
 		}},
 		"$set": bson.M{"lastFire": fireInstant, "updatedAt": time.Now().UnixMilli()},

@@ -99,11 +99,11 @@ func (f *fakeJobs) RecordRun(_ context.Context, id string, run cronjobs.Run, fir
 func jobsServer(t *testing.T) (*Server, *fakeJobs) {
 	t.Helper()
 	fj := &fakeJobs{jobs: map[string]cronjobs.Job{}}
-	fire := func(ctx context.Context, id string) (string, error) {
+	fire := func(ctx context.Context, id string) (string, string, error) {
 		if _, err := fj.Get(ctx, id); err != nil {
-			return "", err
+			return "", "", err
 		}
-		return "fired", nil
+		return "fired", "run-9", nil
 	}
 	srv := newTestServer(t, &fakeAgent{}, Config{CronJobs: fj, CronFire: fire})
 	return srv, fj
@@ -207,10 +207,15 @@ func TestJobsCRUD(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("resume: got %d", rec.Code)
 	}
-	// Manual run returns the fired text.
+	// Manual run returns the fired text plus the run id for deep-linking.
 	rec = post(t, srv, "/default/api/jobs/"+id+"/run", "test-token", `{}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "fired") {
 		t.Fatalf("run: got %d: %s", rec.Code, rec.Body.String())
+	}
+	var ran map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &ran)
+	if ran["run_id"] != "run-9" {
+		t.Fatalf("run_id missing: %v", ran)
 	}
 	// Unknown id 404s, on run and on delete.
 	rec = post(t, srv, "/default/api/jobs/zzz/run", "test-token", `{}`)

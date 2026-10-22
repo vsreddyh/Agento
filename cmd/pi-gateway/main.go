@@ -291,9 +291,12 @@ func run() error {
 	var cronFire gateway.CronFire
 	if cronWorker != nil {
 		// Bound to the worker, not to its Fire field: Fire is assigned
-		// after the server exists, and the method value reads it at call
-		// time. Manual /run shares the tick path, so a hand tap and a
-		// scheduled fire can never overlap a job.
+		// after the server exists (see below), and the method value reads
+		// it at call time. Nothing serves requests before ListenAndServe,
+		// which happens after that assignment — do not move serving
+		// earlier without moving the assignment too. Manual /run shares
+		// the tick path, so a hand tap and a scheduled fire can never
+		// overlap a job.
 		cronFire = cronWorker.FireNow
 	}
 
@@ -424,8 +427,10 @@ func run() error {
 	if cronWorker != nil {
 		cronWorker.Fire = func(ctx context.Context, job cronjobs.Job) (cronjobs.FireResult, error) {
 			text, runID, err := srv.FireSchedulerJob(ctx, job)
+			// The run id travels even on failure: a failed chat turn
+			// still exists in the Runs list, and the error row links it.
 			if err != nil {
-				return cronjobs.FireResult{}, err
+				return cronjobs.FireResult{RunID: runID}, err
 			}
 			return cronjobs.FireResult{Text: text, RunID: runID}, nil
 		}

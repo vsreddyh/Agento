@@ -100,6 +100,14 @@ func (s *Server) FireSchedulerJob(ctx context.Context, job cronjobs.Job) (string
 // schedulerHandler picks the chat profile when configured, else the default.
 // The profile name is resolved per fire rather than cached: profiles are
 // fixed for the process, but a lookup is cheap and keeps one code path.
+//
+// The thread is per-profile, not global: the scheduler conversation id is
+// the same string everywhere, but sessions (and their histories) belong to
+// the profile's agent. A stack that changes shape across restarts
+// (single-profile becomes multi-profile or vice versa) therefore starts a
+// fresh scheduler thread on the newly preferred profile rather than
+// resuming the old one — accepted, and the job name on every fire still
+// says which job asked.
 func (s *Server) schedulerHandler() (*agentHandler, string) {
 	if h, ok := s.handlers[schedulerProfileName]; ok {
 		return h, schedulerProfileName
