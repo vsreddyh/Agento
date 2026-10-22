@@ -72,6 +72,12 @@ const auditCollection = "task_mutations"
 
 // RecordMutation appends one entry. Best-effort — see the package comment.
 func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail string) {
+	// The SENT spelling — trimmed, not lowercased — is what the drop
+	// paths below echo, and it is what the transports' 422 echoes: one
+	// mistake, one spelling, so an operator correlating the app's error
+	// with the server's log finds it. The four drop lines match EACH
+	// OTHER for the same reason: they are handed the same arguments.
+	sentOp, sentID := strings.TrimSpace(op), strings.TrimSpace(taskID)
 	// The id and the op are normalized HERE, on the write side, for the
 	// same reason the read side normalizes them.
 	//
@@ -89,8 +95,8 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	// constants (always lower case). A row that a direct caller wrote
 	// with an upper-case id before this change is unreachable — it was
 	// unreachable then too, because the read side has always lowercased.
-	taskID = strings.ToLower(strings.TrimSpace(taskID))
-	op = strings.ToLower(strings.TrimSpace(op))
+	taskID = strings.ToLower(sentID)
+	op = strings.ToLower(sentOp)
 	// A store that was never connected cannot record anything, and the
 	// function is best-effort by contract: it swallows its own failures
 	// rather than failing the mutation they describe. The read side says
@@ -99,7 +105,7 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	// must not have.
 	if s == nil || s.db == nil {
 		log.Printf("tasks: mutation log entry dropped (store is not connected, op=%q task_id=%q)",
-			TruncateBytes(op, 40), TruncateBytes(taskID, 40))
+			TruncateBytes(sentOp, 40), TruncateBytes(sentID, 40))
 		return
 	}
 	if op == "" || taskID == "" {
@@ -108,7 +114,8 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 		// way the failed write below is — best-effort means the mutation
 		// still succeeds, not that the gap is invisible. The values are
 		// bounded: a caller passing 10KB of id must not write 10KB of log.
-		log.Printf("tasks: mutation log entry dropped (op=%q task_id=%q)", TruncateBytes(op, 40), TruncateBytes(taskID, 40))
+		log.Printf("tasks: mutation log entry dropped (op=%q task_id=%q)",
+			TruncateBytes(sentOp, 40), TruncateBytes(sentID, 40))
 		return
 	}
 	// Every row in this collection must be one the READ side can find:
@@ -123,11 +130,11 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	// writer that invents an op the log does not know would lose the
 	// entry entirely.
 	if _, err := NormalizeTaskID(taskID); err != nil {
-		log.Printf("tasks: mutation log entry dropped (task_id=%q is not a hex id)", TruncateBytes(taskID, 40))
+		log.Printf("tasks: mutation log entry dropped (task_id=%q is not a hex id)", TruncateBytes(sentID, 40))
 		return
 	}
 	if err := ValidateOps([]string{op}); err != nil {
-		log.Printf("tasks: mutation log entry dropped (op=%q is not a known op)", TruncateBytes(op, 40))
+		log.Printf("tasks: mutation log entry dropped (op=%q is not a known op)", TruncateBytes(sentOp, 40))
 		return
 	}
 	// The duplicate's detail is an id — the task the copy came from — so
@@ -138,12 +145,13 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	if op == OpDuplicate {
 		if src, nerr := NormalizeTaskID(detail); nerr == nil {
 			detail = src
-		} else if strings.TrimSpace(detail) != "" {
+		} else {
 			// KEPT, not dropped: the row itself is findable (its task_id
 			// is valid), and dropping it would lose the record of a copy
 			// that really happened. Logged, because the detail will not
 			// join against a task_id lookup — the one thing the detail is
-			// for.
+			// for. An EMPTY detail is the same case: a copy row with no
+			// back-link at all.
 			log.Printf("tasks: mutation log entry kept with an unjoinable duplicate detail (%q)",
 				TruncateBytes(strings.TrimSpace(detail), 40))
 		}

@@ -541,6 +541,11 @@ func taskFingerprint(fields map[string]any) string {
 // requestSource names the caller for the audit log (#176). The app sends
 // X-Agento-Source; the header is trusted only as a LABEL — it decides what the log
 // says, never what the caller may do, which authorize() already settled.
+//
+// The value is trimmed here and CAPPED at 40 bytes on the write seam (the
+// store does the capping, for every writer). A 200-byte header is accepted
+// and silently shortened — so a grouping break over a long label starts at
+// the seam, not at the header.
 func requestSource(r *http.Request) string {
 	if v := strings.TrimSpace(r.Header.Get("X-Agento-Source")); v != "" {
 		return v

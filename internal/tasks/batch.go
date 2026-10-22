@@ -295,13 +295,17 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				// carried here: the result should not have to be matched
 				// back to its op to know what it was about. Lowercased,
 				// because the log's task_id is.
-				res.Detail = strings.ToLower(strings.TrimSpace(op.ID))
 				// Name the row produced, not the row asked about: the
 				// copy is a different id, and the response envelope and
 				// the audit log both read ID.
+				//
+				// The source id is set ONLY on success: a failed copy
+				// leaves res.ID as the source, and a row that claims a
+				// task was duplicated from ITSELF is worse than no row.
 				if err == nil {
 					if newID, _ := res.Task["id"].(string); newID != "" {
 						res.ID = newID
+						res.Detail = strings.ToLower(strings.TrimSpace(op.ID))
 					}
 				}
 			}

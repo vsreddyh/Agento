@@ -144,6 +144,14 @@ func ValidateOps(ops []string) error {
 		// element is blank, and the first is the one a caller would look
 		// at. Joined, it would build the whole list first — the
 		// "never answer a huge input with itself" rule, one layer up.
+		//
+		// A blank first element is named as blank: echoing it as empty
+		// quotes would read like a formatting bug rather than a filter
+		// with nothing in it.
+		if strings.TrimSpace(ops[0]) == "" {
+			return fail("op filter is blank — it names no operation; known ops are %s",
+				strings.Join(knownOps, ", "))
+		}
 		return fail("op filter %q names no operation; known ops are %s",
 			TruncateBytes(ops[0], 40), strings.Join(knownOps, ", "))
 	}
