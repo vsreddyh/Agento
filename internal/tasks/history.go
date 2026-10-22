@@ -93,6 +93,22 @@ func normalizeOps(ops []string) []string {
 	return out
 }
 
+// namesNoOperation is the ONE message for a filter that named nothing,
+// shared by the parser and the validator: the same filter, read through
+// either door, gets the same answer.
+//
+// `shown` is the value the caller sent (trimmed): a blank one says so
+// rather than echoing empty quotes, which would read like a formatting
+// bug rather than a filter with nothing in it.
+func namesNoOperation(shown string) *StoreError {
+	if strings.TrimSpace(shown) == "" {
+		return fail("op filter is blank — it names no operation; known ops are %s",
+			strings.Join(knownOps, ", "))
+	}
+	return fail("op filter %q names no operation; known ops are %s",
+		TruncateBytes(shown, 40), strings.Join(knownOps, ", "))
+}
+
 // ParseOps parses a comma-separated op filter ("complete,skip") into the ops
 // it names.
 //
@@ -121,8 +137,7 @@ func ParseOps(s string) ([]string, error) {
 	tokens := strings.Split(s, ",")
 	ops := normalizeOps(tokens)
 	if len(ops) == 0 {
-		return nil, fail("op %q names no operation; known ops are %s",
-			TruncateBytes(raw, 40), strings.Join(knownOps, ", "))
+		return nil, namesNoOperation(raw)
 	}
 	if err := ValidateOps(tokens); err != nil {
 		return nil, err
@@ -165,16 +180,7 @@ func ValidateOps(ops []string) error {
 		// element is blank, and the first is the one a caller would look
 		// at. Joined, it would build the whole list first — the
 		// "never answer a huge input with itself" rule, one layer up.
-		//
-		// A blank first element is named as blank: echoing it as empty
-		// quotes would read like a formatting bug rather than a filter
-		// with nothing in it.
-		if strings.TrimSpace(ops[0]) == "" {
-			return fail("op filter is blank — it names no operation; known ops are %s",
-				strings.Join(knownOps, ", "))
-		}
-		return fail("op filter %q names no operation; known ops are %s",
-			TruncateBytes(ops[0], 40), strings.Join(knownOps, ", "))
+		return namesNoOperation(ops[0])
 	}
 	for _, op := range ops {
 		norm := normalizeOp(op)
