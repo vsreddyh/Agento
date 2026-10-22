@@ -68,6 +68,10 @@ class BehaviourSettingsTest {
             "Starting now",
             reminderMessage(ReminderKind.BeforeStart, "Today, 08:00", "Today, 08:00", null, 0L),
         )
+        assertEquals(
+            "You need to start \"pay the power bill\" now",
+            reminderSpeech(ReminderKind.BeforeStart, "pay the power bill", leadMinutes = 0L),
+        )
     }
 
     @Test
@@ -193,6 +197,7 @@ class BehaviourSettingsTest {
         assertEquals("2 hours", BehaviourSettings.minutesChoiceLabel(120L))
         assertEquals("45 minutes", BehaviourSettings.minutesChoiceLabel(45L))
         assertEquals("15 minutes", BehaviourSettings.minutesChoiceLabel(0L))
+        assertEquals("1 hour 30 minutes", BehaviourSettings.minutesChoiceLabel(90L))
     }
 
     @Test

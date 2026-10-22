@@ -151,6 +151,8 @@ object BehaviourSettings {
         return when {
             m == 60L -> "1 hour"
             m % 60L == 0L -> "${m / 60L} hours"
+            // Same humanizer as the cadence line: picker and hint agree.
+            m > 60L -> leadCopy(m)
             else -> "$m minutes"
         }
     }
