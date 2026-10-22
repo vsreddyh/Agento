@@ -153,12 +153,12 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		{Keys: bson.D{{Key: "task_id", Value: 1}}, Options: options.Index().SetName("task_id_1")},
 		// One task's history, newest first — the query the change log is
 		// mostly read for (#350). The single-field indexes above serve the
-		// whole-log read and the task lookup; this one serves the filter
-		// AND the `at` order in one pass, so a per-task history does not
-		// sort a collection that only grows. It does not carry the `_id`
-		// tiebreak, so same-millisecond rows in one task's history are
-		// still sorted in memory — a handful of rows, and only for the
-		// ties.
+		// retention prune and serve as the prefixes of these compounds;
+		// this one serves the filter AND the `at` order in one pass, so a
+		// per-task history does not sort a collection that only grows. It
+		// does not carry the `_id` tiebreak, so same-millisecond rows in
+		// one task's history are still sorted in memory — a handful of
+		// rows, and only for the ties.
 		{Keys: bson.D{{Key: "task_id", Value: 1}, {Key: "at", Value: -1}}, Options: options.Index().SetName("task_id_at")},
 		// The whole log, newest first, in a stable order: {at, _id}. The
 		// `at_1` index above serves the retention prune and can be scanned

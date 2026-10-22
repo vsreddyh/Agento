@@ -190,12 +190,13 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// (which trims) and a direct store caller would disagree on what a
 		// padded op means.
 		//
-		// The ENVELOPE and the ERROR body spell the id two ways on
-		// purpose: a success carries the CANONICAL id (lower case, the
-		// spelling the change log stores, so a caller can join the two),
-		// while an error carries the SENT id (trimmed only, the spelling
-		// the caller can go and fix). Both are said out loud here so the
-		// difference reads as a decision rather than a drift.
+		// The copy of the ops this loop works on is TRIMMED IN PLACE, so
+		// from here on the op name and the id in the copy are the
+		// canonical spelling: the switch below and the `op.Op != "update"`
+		// test both read the trimmed value, and they agree with the
+		// validation above. Nothing downstream needs to re-trim, and
+		// nothing should "fix" validation to lowercase — the op names are
+		// lowercase-EXACT by contract.
 		opName := strings.TrimSpace(op.Op)
 		id := strings.TrimSpace(op.ID)
 		switch opName {

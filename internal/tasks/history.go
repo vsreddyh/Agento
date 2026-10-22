@@ -188,9 +188,14 @@ func ValidateOps(ops []string) error {
 			continue
 		}
 		if !slices.Contains(knownOps, norm) {
-			// The offending token is echoed, bounded: a 10KB query
-			// parameter answered with itself is a log line nobody wants.
-			return fail("unknown op %q; known ops are %s", TruncateBytes(op, 40), strings.Join(knownOps, ", "))
+			// The offending token is echoed, bounded and trimmed: the CASE
+			// is kept (it is what the caller typed, and the fix is in the
+			// case), the padding is not (it is not what the mistake is,
+			// and the id echo trims too — one caller typo, one spelling
+			// across the filters). Bounded, because a 10KB query parameter
+			// answered with itself is a log line nobody wants.
+			return fail("unknown op %q; known ops are %s",
+				TruncateBytes(strings.TrimSpace(op), 40), strings.Join(knownOps, ", "))
 		}
 	}
 	return nil
