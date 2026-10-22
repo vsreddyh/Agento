@@ -157,8 +157,9 @@ object ChatNotifications {
 
     /**
      * Posts a cron-response notification on the same replies channel; tap
-     * opens the stored cron chat. Returns whether anything posted, so the
-     * caller only advances its seen cursor past runs actually delivered.
+     * opens the stored cron chat. Returns whether anything posted. The
+     * caller advances past posted runs, plus kind-off and empty-text
+     * drops (see CronCheck: only system denial retries).
      *
      * Gated by the scheduler kind (#355), master switch above it. */
     fun notifyCron(
