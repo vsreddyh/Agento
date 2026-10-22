@@ -25,6 +25,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	mongoDrv "go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -358,7 +359,11 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	// that inherits the expired context would leave it to the driver's own
 	// expiry instead. The same reason the audit write detaches its
 	// context (audit.go).
-	defer cur.Close(context.WithoutCancel(ctx))
+	//
+	// BOUNDED, like the audit write: WithoutCancel drops the deadline as
+	// well as the cancellation, so an unbounded Close on a hung Mongo
+	// would hold this goroutine long past the request that started it.
+	defer closeCursor(ctx, cur)
 	var rows []Mutation
 	if err := cur.All(ctx, &rows); err != nil {
 		return nil, false, err
@@ -374,3 +379,19 @@ func (s *Store) ListMutations(ctx context.Context, f MutationFilter) ([]Mutation
 	}
 	return rows, false, nil
 }
+
+// closeCursor releases a cursor with a deadline of its own.
+//
+// It detaches from the caller's context (so a read that TIMED OUT still
+// releases the server-side cursor) and bounds the wait (so a Close on a
+// hung Mongo cannot hold the goroutine forever — WithoutCancel drops the
+// deadline as well as the cancellation).
+func closeCursor(ctx context.Context, cur *mongoDrv.Cursor) {
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cursorCloseBudget)
+	defer cancel()
+	_ = cur.Close(closeCtx)
+}
+
+// cursorCloseBudget bounds one cursor close, independently of the request
+// that opened it.
+const cursorCloseBudget = 5 * time.Second

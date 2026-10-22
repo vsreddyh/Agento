@@ -713,7 +713,7 @@ func (s *Store) List(ctx context.Context, state string, overdue bool, search str
 	// that inherits the expired context would leave it to the driver's
 	// own expiry instead. The same reason the audit write detaches its
 	// context (audit.go).
-	defer cur.Close(context.WithoutCancel(ctx))
+	defer closeCursor(ctx, cur)
 	out := []map[string]any{}
 	for cur.Next(ctx) {
 		var doc bson.M
