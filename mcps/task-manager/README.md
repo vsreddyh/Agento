@@ -317,7 +317,8 @@ filter that means something else.
 `since` is a URL parameter on the HTTP route, so an offset with a `+` in it
 (`2026-10-21T00:00:00+02:00`) must be percent-encoded as `%2B` — `+` in a
 query string means a space. `Z` needs no encoding, and is what the examples
-use.
+use. The zone is UPPER case: RFC3339 spells it `Z07:00`, so
+`2026-10-21T00:00:00z` is a 422, not a timestamp.
 
 The `task_id` check is shared by both transports (`tasks.NormalizeTaskID`),
 so the agent and the app are told the same thing: a typo'd id is refused

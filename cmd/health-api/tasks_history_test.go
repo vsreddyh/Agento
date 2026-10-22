@@ -71,6 +71,10 @@ func TestTaskMutationsRejectsBadFilters(t *testing.T) {
 		// A filter long enough to be a mistake is refused before it is
 		// split: the query string is caller-controlled text.
 		{"/api/tasks/mutations?op=" + strings.Repeat(",", 300), "op"},
+		// A lower-case "z" is not an RFC3339 zone: Go's layout wants
+		// "Z07:00", so "…00:00:00z" is refused. An author who types it
+		// debugs the grammar, not the casing.
+		{"/api/tasks/mutations?since=2026-10-21T00:00:00z", "since"},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodGet, tc.target, nil)

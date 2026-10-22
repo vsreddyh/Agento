@@ -288,3 +288,26 @@ func ChangedFieldNames(fields map[string]any) string {
 	sort.Strings(keys)
 	return strings.Join(keys, ",")
 }
+
+// HasAnyField reports whether a fields object carries anything at all —
+// any key with a non-null value.
+//
+// It is the OTHER half of ChangedFieldNames, and it asks the different
+// question. That one names the fields the store would actually WRITE,
+// so it skips expected_revision (a concurrency guard, not a change) and
+// nulls. This one asks whether there is anything here — which is what
+// the batch's extras guard needs: on a verb that does not read fields
+// at all, a lone expected_revision is still a value the caller sent
+// and the server would drop, and a dropped concurrency guard is a
+// silent drop.
+//
+// The null rule is the same in both: a JSON null is ABSENT to every
+// field read in this store, so an all-null object carries nothing.
+func HasAnyField(fields map[string]any) bool {
+	for _, v := range fields {
+		if v != nil {
+			return true
+		}
+	}
+	return false
+}

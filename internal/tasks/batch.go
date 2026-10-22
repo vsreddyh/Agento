@@ -243,11 +243,18 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// single-task layer rejects at its boundary. Empty counts as absent
 		// (a blank reason, an empty or all-null fields object), the same
 		// "no fields" rule the audit log uses.
+		//
+		// The guard asks whether the object carries ANY value, not whether
+		// it names a change: on a verb that never reads fields, a lone
+		// expected_revision is still something the caller sent and the
+		// server would drop — and a dropped concurrency guard is a silent
+		// drop. (ChangedFieldNames skips it, because for the AUDIT it is
+		// not a change; the two questions have two answers.)
 		if opName != "skip" && strings.TrimSpace(op.Reason) != "" {
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("batch op %d (%s) takes no reason; reason rides only on skip", i, opName)}
 		}
-		if opName != "update" && ChangedFieldNames(op.Fields) != "no fields" {
+		if opName != "update" && HasAnyField(op.Fields) {
 			return nil, &BatchOpError{Index: i, Op: opName, ID: id,
 				Err: fail("batch op %d (%s) takes no fields; fields ride only on update", i, opName)}
 		}

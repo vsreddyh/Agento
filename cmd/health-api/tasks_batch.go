@@ -181,10 +181,14 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 	// this is the server-side anchor for what the server was doing all
 	// that time. A loop that finished inside the request says nothing —
 	// that is the ordinary case and it needs no line in the log.
+	//
+	// ATTEMPTED, not "wrote": RecordMutation is best-effort by contract
+	// and returns nothing, so a dropped insert still counts here. The
+	// line is an anchor for the timeline, not a claim about the log.
 	started := time.Now()
 	recordBatchMutations(ctx, store, results, source)
 	if ctx.Err() != nil {
-		log.Printf("tasks: batch audit wrote %d row(s) %s after the request deadline (%s)",
+		log.Printf("tasks: batch audit ATTEMPTED %d row(s) %s after the request deadline (%s)",
 			len(results), time.Since(started).Round(time.Millisecond), ctx.Err())
 	}
 	out := make([]bson.M, 0, len(results))

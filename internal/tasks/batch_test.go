@@ -157,6 +157,12 @@ func TestBatchValidationRejectsBadEnvelopes(t *testing.T) {
 		"fields on complete": {
 			{Op: "complete", ID: id, Fields: map[string]any{"due_date": "2026-12-01"}},
 		},
+		// A concurrency guard on a verb that never reads fields is still
+		// a value the caller sent and the server would drop — and a
+		// dropped guard is a silent drop, so it is refused.
+		"expected_revision on complete": {
+			{Op: "complete", ID: id, Fields: map[string]any{"expected_revision": "7"}},
+		},
 		"reason on update": {
 			{Op: "update", ID: id, Reason: "busy", Fields: map[string]any{"due_date": "2026-12-01"}},
 		},

@@ -550,6 +550,13 @@ func taskFingerprint(fields map[string]any) string {
 // store does the capping, for every writer). A 200-byte header is accepted
 // and silently shortened — so a grouping break over a long label starts at
 // the seam, not at the header.
+//
+// The DEFAULT is the canonical lower case ("http", like the agent's "mcp"),
+// but an explicit header is stored AS SENT: a client that sends "HTTP" gets
+// "HTTP" in the log. A label is the caller's own claim about who it is, and
+// rewriting it would change what the log says about them. The one rule
+// worth knowing before grouping by this field: the default is lower case
+// and an explicit value is not, so group on the value, not on a guess.
 func requestSource(r *http.Request) string {
 	if v := strings.TrimSpace(r.Header.Get("X-Agento-Source")); v != "" {
 		return v
