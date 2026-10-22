@@ -216,6 +216,16 @@ func badID(id string) *StoreError {
 	return fail("bad id '%s'", TruncateBytes(strings.TrimSpace(id), 40))
 }
 
+// canonicalID is the id as the store keeps it: lower case, trimmed.
+//
+// A hex id is CASE-INSENSITIVE to Mongo, so the caller's spelling must
+// not leak into anything the server produces — a row, a log line, a
+// read-back. The verbs canonicalize at the door so every one of those
+// spells the id the same way, whichever path wrote it.
+func canonicalID(id string) string {
+	return strings.ToLower(strings.TrimSpace(id))
+}
+
 // checkDue validates the due date/time pair.
 func checkDue(dueDate, dueTime string) error {
 	if dueDate != "" {
@@ -912,7 +922,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		return nil, conflict("task changed since revision %d (now %d) — reload and retry", want, now)
 	}
 	s.bumpChanges(ctx)
-	return s.Get(ctx, id)
+	return s.Get(ctx, canonicalID(id))
 }
 
 // mergeRepeat folds the supplied recurrence fields onto the task's stored
@@ -1055,7 +1065,7 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 		}
 		return nil, nil, "", "", resolvedStateErr(doc, id)
 	}
-	done, err := s.Get(ctx, id)
+	done, err := s.Get(ctx, canonicalID(id))
 	if err != nil {
 		return nil, nil, "", "", err
 	}
@@ -1071,7 +1081,7 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 		// The id is trimmed and bounded, like every other echo here: the
 		// row this failure produces stores the CANONICAL id, and a log
 		// line that spells it differently is one grep away from missing.
-		log.Printf("task %s completed but rollover failed: %v", TruncateBytes(strings.TrimSpace(id), 40), rerr)
+		log.Printf("task %s completed but rollover failed: %v", canonicalID(id), rerr)
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reason, "", nil
@@ -1123,7 +1133,7 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 	next, reasonOut, rerr := s.rollOver(ctx, done)
 	if rerr != nil {
 		// Trimmed and bounded, like the completion path above.
-		log.Printf("task %s skipped but rollover failed: %v", TruncateBytes(strings.TrimSpace(id), 40), rerr)
+		log.Printf("task %s skipped but rollover failed: %v", canonicalID(id), rerr)
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reasonOut, "", nil
@@ -1212,7 +1222,7 @@ func (s *Store) Reopen(ctx context.Context, id string) (map[string]any, error) {
 		return nil, fail("task '%s' is already open", TruncateBytes(strings.TrimSpace(id), 40))
 	}
 	s.bumpChanges(ctx)
-	return s.Get(ctx, id)
+	return s.Get(ctx, canonicalID(id))
 }
 
 // Delete removes a task regardless of completion.
