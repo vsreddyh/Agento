@@ -246,7 +246,7 @@ class MainActivity : ComponentActivity() {
                     val tts = remember { ChatTts(context) }
                     DisposableEffect(Unit) { onDispose { tts.shutdown() } }
                     var autoSpeak by remember(dest, section) {
-                        mutableStateOf(prefs.getBoolean("tts_auto", false))
+                        mutableStateOf(BehaviourSettings.ttsAuto(context))
                     }
                     // Bumped whenever a model/effort pick saves, so the
                     // drawer subtitles below recompute without waiting for
@@ -302,9 +302,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onAutoSpeak = {
                                         autoSpeak = it
-                                        prefs.edit {
-                                            putBoolean("tts_auto", it)
-                                        }
+                                        BehaviourSettings.setTtsAuto(context, it)
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
                                     onConfigChanged = { drawerTick++ },

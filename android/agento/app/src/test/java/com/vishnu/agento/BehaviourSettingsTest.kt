@@ -104,6 +104,11 @@ class BehaviourSettingsTest {
             BehaviourSettings.KEY_NOTIFY_CRON,
             BehaviourSettings.KEY_SYNC_WIFI_ONLY,
             BehaviourSettings.KEY_SYNC_PAUSED,
+            // Surfaced-but-pre-existing switches: auto-read must survive a
+            // restore exactly like the reminders switch it sits beside —
+            // dropping either silently is the regression this pins.
+            BehaviourSettings.KEY_TTS_AUTO,
+            "task_reminders_enabled",
         )) {
             assertTrue("BOOLEAN_KEYS lacks $k", SettingsBackup.BOOLEAN_KEYS.contains(k))
         }
