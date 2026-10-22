@@ -358,9 +358,9 @@ rollover outcome, an id), and a cap that rewrote the value would change
 what the log says.
 
 `at` is RFC3339 **with milliseconds** — unlike the task documents, whose
-`completedAt`/`createdAt` are RFC3339 to the second. Both are valid
-timestamps; the app parses the two shapes with one lenient parser rather
-than assuming one format.
+`completedAt`/`createdAt` are RFC3339 to the second. The fractional digits
+vary (`100ms` emits as `.1Z`, not `.100Z`), so parse it with one lenient
+parser rather than a fixed-width one; both are valid timestamps.
 
 `source` is a self-attested LABEL (`mcp` for the agent, the app's own
 `X-Agento-Source` otherwise), not an authenticated identity — see the tamper

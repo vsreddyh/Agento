@@ -188,7 +188,10 @@ type taskHistoryInput struct {
 	// Limit caps the rows returned (default 200, max 500). Zero or
 	// negative gives the default, a huge one is clamped to the max. A
 	// non-integer number — or null — is an argument type error, not a
-	// value that gets rounded.
+	// value that gets rounded: null is rejected by the SDK's schema
+	// validation before this handler runs (pinned by
+	// TestNullIsAnArgumentTypeError), so the error comes from the layer
+	// below, not from here.
 	Limit int `json:"limit,omitempty"`
 }
 
