@@ -40,9 +40,9 @@ internal object CronCheck {
      * Suspends: must be called from a worker or a launched coroutine, never
      * the main thread bare. Returns how many notifications posted. Safe to
      * call from a worker or a screen refresh: failures are swallowed (a
-     * missed check retries on the next tick), and the cursor advances only
-     * past runs actually posted — a denied notification permission retries
-     * rather than dropping the runs silently.
+     * missed check retries on the next tick). The cursor advances past
+     * posted runs, plus kind-off and empty-text drops; only a denied
+     * notification permission retries rather than dropping the runs.
      */
     suspend fun check(context: Context): Int {
         val appCtx = context.applicationContext

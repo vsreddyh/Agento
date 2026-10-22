@@ -96,12 +96,18 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // exact-alarm redirect returns no result, so coming back re-runs the
     // checks instead of stranding the toggle halfway on.
     var pendingReminders by remember(refreshTick) { mutableStateOf(false) }
+    // True while the permission dialog is in flight: a resume during the
+    // dialog must not relaunch it (double-launch while awaiting a result).
+    // Cleared by the callback either way, so the re-drive below only fires
+    // when no request is outstanding.
+    var permissionInFlight by remember(refreshTick) { mutableStateOf(false) }
     // The settings redirect fires at most once per tap: without this every
     // resume without a grant would throw system settings open again.
     var exactAsked by remember(refreshTick) { mutableStateOf(false) }
     val notifPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
+        permissionInFlight = false
         pendingReminders = false
         if (granted) {
             TaskReminders.setEnabled(context, true)
@@ -150,7 +156,8 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         }
         if (!hasNotifPermission(appCtx)) {
             pendingReminders = true
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !permissionInFlight) {
+                permissionInFlight = true
                 notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
             return
@@ -166,8 +173,10 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // flag is set synchronously beside the dialog launch it belongs to (and
     // cleared synchronously by its callback), so keying on it would relaunch
     // the dialog in a loop. Resume is the only other producer of progress.
+    // The in-flight guard skips resumes landing while the dialog is still
+    // showing, so the dialog is never launched twice for one tap.
     LaunchedEffect(resumeTick) {
-        if (pendingReminders) setReminders(true)
+        if (pendingReminders && !permissionInFlight) setReminders(true)
     }
 
     // Engine voices for the picker: a short-lived engine lists, then dies.

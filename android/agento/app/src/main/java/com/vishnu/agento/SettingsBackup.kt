@@ -116,13 +116,13 @@ object SettingsBackup {
      * [BehaviourSettings.coerceImport], so a hand-edited import can never
      * store a value the getters silently disagree with.
      */
-    val LONG_KEYS: List<String> = UsageStore.LONG_KEYS + listOf(
+    val LONG_KEYS: List<String> = (UsageStore.LONG_KEYS + listOf(
         BehaviourSettings.KEY_SYNC_INTERVAL_HOURS,
         BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES,
         BehaviourSettings.KEY_REMINDER_LEAD_MINUTES,
         BehaviourSettings.KEY_TTS_RATE_PCT,
         BehaviourSettings.KEY_TTS_PITCH_PCT,
-    )
+    )).distinct()
 
     /**
      * True for per-model effort memory keys (`effort_<tab>_<model>` with tab
