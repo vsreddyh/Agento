@@ -75,6 +75,9 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         // The target folder is captured now, not read at completion: a
         // navigation mid-upload must not retarget the refresh.
         val target = path
+        // Grabbed up front on Main (cheap handle, not IO): the blocking
+        // query/open below must not re-reach into the Activity per call.
+        val cr = context.contentResolver
         scope.launch {
             try {
                 // Metadata reads ride IO: SAF queries can block on a slow
@@ -83,10 +86,14 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                 // its named error instead of collapsing to generic text.
                 val result = withContext(Dispatchers.IO) {
                     runCatching {
-                        val cr = context.contentResolver
                         var displayName = "upload"
                         var size = -1L
-                        cr.query(uri, null, null, null, null)?.use { c ->
+                        // Narrow projection: only the two columns read below.
+                        cr.query(
+                            uri,
+                            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                            null, null, null,
+                        )?.use { c ->
                             val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                             val si = c.getColumnIndex(OpenableColumns.SIZE)
                             if (c.moveToFirst()) {
@@ -95,7 +102,10 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                                         displayName = it
                                     }
                                 }
-                                if (si >= 0) size = c.getLong(si)
+                                // NULL size means unknown, not zero: getLong
+                                // on NULL yields 0, which would declare an
+                                // empty body while streaming real bytes.
+                                if (si >= 0 && !c.isNull(si)) size = c.getLong(si)
                             }
                         }
                         // Separators cannot survive the server's name check; fold them
