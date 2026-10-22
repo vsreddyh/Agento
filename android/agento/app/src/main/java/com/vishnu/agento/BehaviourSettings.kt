@@ -104,6 +104,8 @@ object BehaviourSettings {
         return when {
             m == 60L -> "Task and widget refresh runs every hour."
             m % 60L == 0L -> "Task and widget refresh runs every ${m / 60L} hours."
+            // Same humanizer as the lead copy: adjacent cards must agree.
+            m > 60L -> "Task and widget refresh runs every ${leadCopy(m)}."
             else -> "Task and widget refresh runs every $m minutes."
         }
     }
@@ -199,6 +201,9 @@ object BehaviourSettings {
     fun ttsPctLabelFor(key: String, pct: Long): String = "${coerceImport(key, pct)}%"
 
     // ── Notification kinds ───────────────────────────────────────────────
+    // The shared skipped-not-queued clause, spelled once: the master copy
+    // and the kind copy below must never drift apart again.
+    const val SKIPPED_NOT_QUEUED = "Runs from while off are skipped, not queued."
     // The master switch (notify_reply_done, default on) keeps its exact
     // meaning: off silences everything, as today. Each kind below defaults
     // on and applies only while the master is on, so an install that never

@@ -106,6 +106,10 @@ class BehaviourSettingsTest {
             BehaviourSettings.taskSyncCadenceLine(45L),
         )
         assertEquals(
+            "Task and widget refresh runs every 1 hour 30 minutes.",
+            BehaviourSettings.taskSyncCadenceLine(90L),
+        )
+        assertEquals(
             "Task and widget refresh runs every 15 minutes.",
             BehaviourSettings.taskSyncCadenceLine(0L),
         )

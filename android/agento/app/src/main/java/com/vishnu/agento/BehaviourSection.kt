@@ -422,7 +422,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         )
         SwitchRow(
             text = "Scheduler responses",
-            sub = "A scheduled job produced a new response. Runs from while off are skipped, not queued.",
+            sub = "A scheduled job produced a new response. " + BehaviourSettings.SKIPPED_NOT_QUEUED,
             checked = kindCron,
             onChange = {
                 BehaviourSettings.setNotifyCron(context, it)

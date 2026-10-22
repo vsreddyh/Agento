@@ -733,8 +733,8 @@ internal fun NotificationsSection() {
         title = "Reply alerts",
         subtitle = "Agento can notify you when a chat reply finishes while the " +
             "app is in the background. This master switch gates every kind — " +
-            "scheduler runs from while it is off are skipped, not queued; " +
-            "per-kind toggles for failures, saved instructions and scheduler " +
+            BehaviourSettings.SKIPPED_NOT_QUEUED +
+            " Per-kind toggles for failures, saved instructions and scheduler " +
             "responses live in Settings → Behaviour.",
     ) {
         Row(
