@@ -168,7 +168,7 @@ internal fun leadCopy(minutes: Long): String = when {
         val h = minutes / 60L
         val m = minutes % 60L
         val hs = if (h == 1L) "1 hour" else "$h hours"
-        if (m == 0L) hs else "$hs $m minutes"
+        if (m == 0L) hs else "$hs ${if (m == 1L) "1 minute" else "$m minutes"}"
     }
 }
 

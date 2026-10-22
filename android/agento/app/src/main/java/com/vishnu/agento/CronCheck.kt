@@ -76,6 +76,15 @@ internal object CronCheck {
             val latest = fresh.maxByOrNull { it.at } ?: continue
             val more = fresh.size - 1
             val snippet = latest.text.replace(Regex("\\s+"), " ").trim().take(160)
+            // Opted out means drop, not defer (#355): when the user turned
+            // scheduler responses (or the master switch) off, runs from
+            // while it was off are skipped — re-enabling surfaces only new
+            // runs, never a catch-up blast. System denial still queues and
+            // retries below: the user didn't opt out, the OS refused.
+            if (!BehaviourSettings.notifyCron(appCtx)) {
+                p.edit { putLong(seenKey(job.id), maxAt) }
+                continue
+            }
             if (snippet.isNotEmpty() &&
                 ChatNotifications.notifyCron(appCtx, job.id, job.name, snippet, more)
             ) {

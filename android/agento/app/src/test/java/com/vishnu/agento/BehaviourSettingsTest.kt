@@ -95,6 +95,10 @@ class BehaviourSettingsTest {
             "In 1 hour 30 minutes you need to start \"x\"",
             reminderSpeech(ReminderKind.BeforeStart, "x", leadMinutes = 90L),
         )
+        assertEquals(
+            "Starting in 1 hour 1 minute",
+            reminderMessage(ReminderKind.BeforeStart, "d", "s", null, 61L),
+        )
     }
 
     @Test

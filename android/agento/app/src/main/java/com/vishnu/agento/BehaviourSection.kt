@@ -147,7 +147,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
 
     SectionCard(
         title = "Health sync cadence",
-        subtitle = "How often health data pushes while the app is idle.",
+        subtitle = "How often health data pushes while the app is idle. Changes apply from the next scheduled run.",
     ) {
         OptionMenu(
             label = "Sync every",
@@ -185,7 +185,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
 
     SectionCard(
         title = "Task and widget refresh",
-        subtitle = "How often open tasks, the widget and reminder alarms re-derive.",
+        subtitle = "How often open tasks, the widget and reminder alarms re-derive. Changes apply from the next scheduled run.",
     ) {
         OptionMenu(
             label = "Refresh every",
@@ -201,6 +201,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             },
         )
         HintLine(BehaviourSettings.taskSyncCadenceLine(context))
+        if (taskMinutes > (BehaviourSettings.TASK_SYNC_INTERVAL_OPTIONS_MINUTES.maxOrNull() ?: 120L)) {
+            HintLine("Above the offered range (kept from an import): refresh may lag up to a day behind task changes.")
+        }
     }
 
     SectionCard(
@@ -232,6 +235,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 }
             },
         )
+        if (leadMinutes > (BehaviourSettings.REMINDER_LEAD_OPTIONS_MINUTES.maxOrNull() ?: 60L)) {
+            HintLine("Above the offered range (kept from an import): the warning reads in hours.")
+        }
     }
 
     SectionCard(
@@ -312,7 +318,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         )
         SwitchRow(
             text = "Scheduler responses",
-            sub = "A scheduled job produced a new response.",
+            sub = "A scheduled job produced a new response. Runs from while off are skipped, not queued.",
             checked = kindCron,
             onChange = {
                 BehaviourSettings.setNotifyCron(context, it)
