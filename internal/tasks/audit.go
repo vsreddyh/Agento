@@ -147,6 +147,13 @@ func (s *Store) RecordMutation(ctx context.Context, op, taskID, source, detail s
 	// batch path already lowercases it, but the seam is where every
 	// writer's id passes, and a detail that kept the caller's spelling
 	// would not join against a task_id lookup.
+	//
+	// ONLY the duplicate's detail is id-like, and only it is
+	// canonicalised: the other ops' details are field lists and rollover
+	// outcomes, which are already lower-case constants. A future op with
+	// an id-like detail (a merge source, say) has to route it through
+	// NormalizeTaskID the same way, or it will store a value that joins
+	// against nothing.
 	if op == OpDuplicate {
 		if src, nerr := NormalizeTaskID(detail); nerr == nil && src != "" {
 			detail = src

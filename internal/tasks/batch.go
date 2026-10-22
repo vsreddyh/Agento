@@ -287,6 +287,11 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 			// spelling: the envelope and the log carry the lower-case
 			// form, and a verb that echoes the id it was given (the
 			// rollover-failure log does) must not spell it differently.
+			//
+			// An ERROR carries the SENT id instead, like its op name: the
+			// caller has to be able to fix what they sent. So the same
+			// task reads two ways across two attempts — canonical in the
+			// success, sent in the failure — which is the point of each.
 			srcID := res.ID
 			var err error
 			// The switch and the write-marker below read res.Op, the
