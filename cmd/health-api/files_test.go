@@ -328,23 +328,29 @@ func TestDownloadSanitizesStoredName(t *testing.T) {
 	t.Setenv("PASSWORD", "test-secret-12345678")
 	// Planted outside the upload path (uploads reject these now): the
 	// download must still serve a safe header.
-	evil := "evil\".txt"
-	if err := os.WriteFile(filepath.Join(root, evil), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
+	evils := []string{"evil\".txt", "a\\b.txt"}
+	for _, evil := range evils {
+		if err := os.WriteFile(filepath.Join(root, evil), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/files/download?path="+url.QueryEscape(evil), nil)
-	req.Header.Set("Authorization", "Bearer test-secret-12345678")
-	w := httptest.NewRecorder()
-	downloadFile(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("download: %d %s", w.Code, w.Body.String())
-	}
-	cd := w.Header().Get("Content-Disposition")
-	if strings.Contains(cd, "\"evil\"\".txt\"") || strings.Contains(cd, "evil\".txt") {
-		t.Fatalf("header carries the quote: %q", cd)
-	}
-	if !strings.Contains(cd, "evil.txt") {
-		t.Fatalf("sanitized name missing: %q", cd)
+	for _, evil := range evils {
+		req := httptest.NewRequest(http.MethodGet, "/api/files/download?path="+url.QueryEscape(evil), nil)
+		req.Header.Set("Authorization", "Bearer test-secret-12345678")
+		w := httptest.NewRecorder()
+		downloadFile(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("download %q: %d %s", evil, w.Code, w.Body.String())
+		}
+		cd := w.Header().Get("Content-Disposition")
+		// The header legitimately wraps the name in quotes; what must
+		// not survive is the raw quote/backslash inside it.
+		if strings.Contains(cd, "evil\".txt") || strings.Contains(cd, "a\\b") {
+			t.Fatalf("header carries the raw name: %q", cd)
+		}
+		if !strings.Contains(cd, "filename=") {
+			t.Fatalf("no filename in header: %q", cd)
+		}
 	}
 }

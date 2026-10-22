@@ -152,14 +152,15 @@ func downloadFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, full)
 }
 
-// sanitizeHeaderName strips what cleanFileName rejects (quotes, ASCII
-// controls), so a pre-existing stored name cannot break or inject the
-// Content-Disposition header. A name that sanitizes to nothing falls back
-// to a fixed filename rather than an empty quoted string.
+// sanitizeHeaderName strips what cleanFileName rejects (quotes, backslash,
+// ASCII controls), so a pre-existing stored name cannot break or inject the
+// Content-Disposition header. Backslash is the quoted-string escape, so it
+// goes too. A name that sanitizes to nothing falls back to a fixed filename
+// rather than an empty quoted string.
 func sanitizeHeaderName(name string) string {
 	var b strings.Builder
 	for _, r := range name {
-		if r == '"' || r < 0x20 || r == 0x7F {
+		if r == '"' || r == '\\' || r < 0x20 || r == 0x7F {
 			continue
 		}
 		b.WriteRune(r)
