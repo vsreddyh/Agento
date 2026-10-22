@@ -25,7 +25,7 @@ see GitHub Releases for older notes.
   or nothing does, with the failing item named. The detail sheet and each
   open row gain a Skip button next to Complete. Server adds
   `POST /api/tasks/batch` and a canonical server-side duplicate op (the
-  store's, not a verb of its own) used by single + bulk duplicate.
+  store's, not a verb of its own) used by the batch — one copy or many.
 
 ## [5.10.1]
 - **Fixed:** the connection test counts only real model names. Blank entries

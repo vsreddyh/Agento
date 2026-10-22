@@ -356,15 +356,15 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, doc)
 }
 
-// changedKeys names which fields a PATCH touched, for the audit log. "PATCH
-// /api/tasks" alone does not say whether the user moved a due date or fixed a
-// typo, and that is the whole reason the log exists.
+// The audit log names which fields a PATCH touched — "PATCH /api/tasks"
+// alone does not say whether the user moved a due date or fixed a typo, and
+// that is the whole reason the log exists.
 //
 // The STORE's list, not the supplied keys: an unknown key is ignored by the
-// update, so it is not a change, and the log must not claim one.
-func changedKeys(fields map[string]any) string {
-	return tasks.UpdateFieldNames(fields)
-}
+// update, so it is not a change, and the log must not claim one. The store's
+// helper is called directly: a wrapper around it is a second name for one
+// rule, and the wrapper is how the two copies this package once had came
+// back.
 
 // zeroLike returns the zero value of whatever type this field takes elsewhere, so an
 // absent key and an explicit zero hash the same. Type is taken from the OTHER keys
@@ -653,13 +653,13 @@ func updateTask(w http.ResponseWriter, r *http.Request, id string) {
 	// create for a replayed one: the log stops being a record of what happened and
 	// becomes a record of what was asked for.
 	//
-	// `changedKeys(fields) == "no fields"` is exactly the store's condition, because
+	// `UpdateFieldNames(fields) == "no fields"` is exactly the store's condition, because
 	// `set` only ever gains an entry for a field the store KNOWS and the caller
 	// supplied. Checking it here rather than widening Update's signature keeps the
 	// knowledge where the data is though: the store is still the only thing that
 	// decides whether a write happened, and this merely mirrors the one case where
 	// it provably did not.
-	if names := changedKeys(fields); names != "no fields" {
+	if names := tasks.UpdateFieldNames(fields); names != "no fields" {
 		store.RecordMutation(ctx, tasks.OpUpdate, id, requestSource(r), names)
 	}
 	writeJSON(w, http.StatusOK, doc)
