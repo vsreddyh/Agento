@@ -96,6 +96,16 @@ func TestPolicyTableIsComplete(t *testing.T) {
 		"memory": {"save_memory", "list_memory"},
 		"browser": {"browser_goto", "browser_read", "browser_screenshot",
 			"browser_save_evidence"},
+		// First connectors v1 (#316): servers not yet wired, but the policy
+		// is classified now so a future mcp.json wiring cannot run a send
+		// free. Send rows are doubly covered: the relay refuses them
+		// outright (connectors.IsDraftOnlySend) and the true here backstops
+		// any caller that bypasses that check.
+		"gmail": {"search_gmail", "read_gmail", "list_messages",
+			"create_draft", "send_message", "send_gmail"},
+		"calendar": {"list_events", "get_event", "create_event_draft",
+			"create_event", "send_invite"},
+		"drive": {"list_files", "read_file", "save_file", "delete_file"},
 	}
 	n := 0
 	for server, tools := range known {
@@ -113,8 +123,8 @@ func TestPolicyTableIsComplete(t *testing.T) {
 			t.Errorf("server %s table has %d rules for %d tools", server, len(rules), len(tools))
 		}
 	}
-	if n != 57 {
-		t.Errorf("pinned %d tools, want the 57 inventoried", n)
+	if n != 72 {
+		t.Errorf("pinned %d tools, want the 72 inventoried", n)
 	}
 }
 
@@ -422,5 +432,20 @@ func TestMarkServerInterruptedIsScoped(t *testing.T) {
 	}
 	if got, err := m.GetApproval(ctx, other.ID); err != nil || got.Status != StatusPending {
 		t.Fatalf("other server row = %+v, %v; want untouched pending", got, err)
+	}
+}
+
+// Case-insensitive like the relay refusal (#316 re-review): a "Gmail"
+// --server flag must not change a tool's gate. Fail-closed either way, but
+// the same logical tool must gate the same way whatever the case.
+func TestNeedsApprovalCaseInsensitive(t *testing.T) {
+	if NeedsApproval("Gmail", "Search_Gmail", nil) {
+		t.Error("Gmail/Search_Gmail should run free like gmail/search_gmail")
+	}
+	if !NeedsApproval("GMAIL", "SEND_MESSAGE", nil) {
+		t.Error("GMAIL/SEND_MESSAGE should hold like gmail/send_message")
+	}
+	if !KnownServer("Gmail") {
+		t.Error("KnownServer(Gmail) should be true")
 	}
 }

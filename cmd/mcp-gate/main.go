@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"agento/internal/approvals"
+	"agento/internal/connectors"
 )
 
 // maxLineBytes caps one JSON-RPC frame. The SDK allows 16 MB lines; the relay
@@ -74,6 +75,16 @@ func main() {
 	flag.Parse()
 	rest := flag.Args()
 	if *server == "" || len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: mcp-gate --server NAME -- <command> [args...]")
+		os.Exit(2)
+	}
+	// Normalise once, here, not per call: the flag is operator-controlled
+	// and every downstream use — policy lookup, refusal check, audit labels,
+	// MarkServerInterrupted sweep — exact-matches. A "Gmail" wiring would
+	// otherwise gate correctly (normalised lookups) while audit rows grouped
+	// as Gmail vs gmail and the sweep missed the other spelling's rows.
+	*server = strings.ToLower(strings.TrimSpace(*server))
+	if *server == "" {
 		fmt.Fprintln(os.Stderr, "usage: mcp-gate --server NAME -- <command> [args...]")
 		os.Exit(2)
 	}
@@ -126,6 +137,10 @@ func openStore(server string) approvals.Store {
 
 // newRelay builds a relay with production timings.
 func newRelay(server string, store approvals.Store, log *log.Logger) *relay {
+	// Construction-enforced, not call-site-dependent: main() normalises
+	// --server, but any direct construction (tests, future callers) must get
+	// the same lowercase spelling or policy/audit/sweep diverge again.
+	server = strings.ToLower(strings.TrimSpace(server))
 	return &relay{
 		server: server, store: store, log: log,
 		waitFor: approvals.WaitTimeout, pollFor: pollInterval,
@@ -332,7 +347,7 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			continue
 		}
 		var params callParams
-		if json.Unmarshal(env.Params, &params) != nil || params.Name == "" {
+		if json.Unmarshal(env.Params, &params) != nil || strings.TrimSpace(params.Name) == "" {
 			// The relay could not classify this call, so it cannot know
 			// whether it is safe. Forwarding it would be the one fail-open
 			// path around the gate: a lenient server would run a call the
@@ -348,6 +363,40 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			if hasReplyID(env.ID) {
 				if werr := r.writePi(rpcError(env.ID, -32602,
 					"tools/call params could not be parsed; failed closed")); werr != nil {
+					r.log.Printf("write to Pi failed: %v", werr)
+				}
+			}
+			continue
+		}
+		// Normalise once, here: the tool name is operator-adjacent (Pi sends
+		// it, casing is Pi's choice) and every downstream use — refusal
+		// check, policy lookup, tracked state, audit rows — exact-matches.
+		// Without this, Send_Message and send_message refuse identically but
+		// audit as two tool names. The forwarded frame keeps Pi's raw bytes
+		// (line is written verbatim): policy and audit see the folded
+		// spelling, the server sees exactly what Pi sent. A mixed-case
+		// allowed tool therefore gates correctly but may arrive at a
+		// case-sensitive MCP server as an unknown method — fail-closed
+		// downstream (server errors, Pi sees a tool error), and Pi sends
+		// lowercase in practice. Rewriting the frame would break the
+		// byte-identical forwarding contract, so the case lives with Pi.
+		// (Intentional double-fold with IsDraftOnlySend/NeedsApproval, which
+		// normalise their own inputs: this fold fixes the audit spelling;
+		// the callee folds defend future direct callers. Idempotent —
+		// either side alone would do, neither may be removed assuming the
+		// other.)
+		params.Name = strings.ToLower(strings.TrimSpace(params.Name))
+		if connectors.IsDraftOnlySend(r.server, params.Name) {
+			// Draft-only v1 (#316): sends never reach the server, gated or
+			// not. Refused with a clear message naming drafts, audited as a
+			// human-readable deny. A notification (no id) has nobody to
+			// answer, so it is only audited.
+			r.log.Printf("refusing draft-only send %s/%s", r.server, params.Name)
+			r.auditAsync(params.Name, approvals.Redact(params.Arguments),
+				approvals.DispositionDenied,
+				"connector_draft_only: "+connectors.RefusalMessage, "")
+			if hasReplyID(env.ID) {
+				if werr := r.writePi(rpcError(env.ID, -32602, connectors.RefusalMessage)); werr != nil {
 					r.log.Printf("write to Pi failed: %v", werr)
 				}
 			}
@@ -459,7 +508,11 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 // forward the exact bytes Pi sent (ids included), and re-encoding happens
 // nowhere else in the relay. A multi-MB arguments blob is therefore pinned for
 // up to waitFor; traffic is one turn per profile, so the bound is a single
-// frame, not a queue.
+// frame, not a queue. Same spelling split as the allow path: the approval
+// row and audit trail carry the folded tool name (normalised at the pump),
+// while the approved forward writes the raw frame — triage joining audit
+// rows to server logs must fold server-side casing first. Byte-identical
+// forwarding is the contract on both paths; do not "fix" one side.
 //
 // Both parsed views of the arguments (params.Arguments and the envelope's
 // raw params) are nil'd immediately after redaction, so the hold pins ONE

@@ -157,6 +157,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `tasks_changes` | Permanent | **Never pruned** — one single-document counter, not a log (#178) |
 | `tasks` (repeats) | n/a | **Reconciled, not pruned**: completed structured repeats with no successor are reported (#180) |
 | `story` / `resumes` (retired #289) | Git history | No database retention operations |
+| `connectors` (#316) | Permanent | **Never pruned** — 3 fixed rows, no TTL (tokens live until disconnect/revoke) |
 
 Run manual dry-runs via:
 ```bash
@@ -316,6 +317,37 @@ Threat note — what this does and does not fix:
   (connectors own the vault).
 - Residual: a held call occupies its turn until expiry; an approval shows
   tool + args + time but not which conversation asked.
+
+### First connectors — Gmail, Calendar, Drive (#316, v1 foundation)
+
+Three connectors with explicit read vs draft/write scopes, each
+connecting/disconnecting independently from the app:
+
+- Gmail: search/read + draft (sends refused with "create a draft instead").
+- Calendar: list/upcoming + draft event (creates/invites refused the same way).
+- Drive: read/list + save agent-produced file (deletes gate as a backstop). Ungated-save scope is create-only: if the wired server's save can overwrite an existing file, that is a destructive write and the follow-up must gate it.
+
+The refusal is enforced in the relay before the approval check, audited as
+`connector_draft_only`, and parks no approval card. Token placement: OAuth
+refresh tokens live **server-side in Mongo** (`connectors` collection),
+never in the app and never pasted in chat — the API returns status + scopes
+only, and disconnect `$unset`s the token columns. Already-fetched data
+(chat history, saved files) is not wiped on disconnect; disconnect stops
+future access. Without Mongo the list still answers from memory but nothing
+survives a restart and no token can be stored. API: `GET /api/connectors`,
+`POST /api/connectors/{id}/disconnect`; `POST .../connect` answers 501
+until the OAuth follow-up lands (the app treats it as "needs setup"). An
+expired row carries a `reconnect` hint instead of asking for a secret.
+Wire shape note: a row with no `updated_at` was never touched; an explicit
+disconnect sets it. Same status, different shape — the difference is the
+signal (explicit-off vs never-touched), so a future shape-normalisation
+must not erase it. `last_error` appears only on `expired` rows: connected
+and disconnected rows never carry it (enforced on write, repaired on read),
+so the app can branch on its presence for the reconnect case. `connected_at`
+appears only on `connected` rows with a valid stamp (a connected row without
+one omits it fail-closed); the stored value is first-connected-at, retained
+across disconnect/expire.
+Full design: `docs/adr/0009-connectors.md`.
 
 ---
 

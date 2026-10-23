@@ -609,3 +609,84 @@ func TestUnsharedStoreFailsFast(t *testing.T) {
 		t.Fatalf("audit = %+v, want one relay_unavailable deny", audit)
 	}
 }
+
+// Draft-only v1 (#316): sends never reach the server, gated or not. The
+// relay refuses inline with the draft message, audits a deny, and parks no
+// approval card.
+func TestDraftOnlySendIsRefused(t *testing.T) {
+	store := testStore()
+	r := testRelay(store)
+	r.server = "gmail"
+	r.out = &bufWriter{}
+	r.childIn = &bufWriter{}
+
+	line, _, _ := callLine("7", "send_message", `{"to":"a@b.c"}`)
+	if err := r.pumpPiToChild(strings.NewReader(string(line) + "\n")); err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	if got := r.childIn.(*bufWriter).String(); got != "" {
+		t.Fatalf("draft-only send reached the child: %q", got)
+	}
+	if out := r.out.(*bufWriter).String(); !strings.Contains(out, "draft") {
+		t.Fatalf("Pi got no draft refusal: %q", out)
+	}
+	if list, _ := store.ListApprovals(context.Background(), approvals.ApprovalFilter{}); len(list) != 0 {
+		t.Fatalf("refused send parked an approval: %+v", list)
+	}
+	audit := waitForAudit(t, store, 1)
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionDenied {
+		t.Fatalf("audit = %+v, want one denied row", audit)
+	}
+	if !strings.Contains(audit[0].Error, "connector_draft_only") {
+		t.Fatalf("audit error should name the draft-only cause, got %q", audit[0].Error)
+	}
+}
+
+// A draft-only notification (no id) audits without answering: nobody is
+// waiting, so there is no reply frame, but the refusal is still recorded.
+func TestDraftOnlyNotificationIsAudited(t *testing.T) {
+	store := testStore()
+	out, child := &bufWriter{}, &bufWriter{}
+	r := testRelay(store)
+	r.server = "calendar"
+	r.out = out
+	r.childIn = child
+
+	line := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"create_event","arguments":{}}}` + "\n"
+	if err := r.pumpPiToChild(strings.NewReader(line)); err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	if out.String() != "" {
+		t.Fatalf("notification got a reply: %q", out.String())
+	}
+	if child.String() != "" {
+		t.Fatalf("draft-only notification reached the child: %q", child.String())
+	}
+	audit := waitForAudit(t, store, 1)
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionDenied {
+		t.Fatalf("audit = %+v, want one denied row", audit)
+	}
+}
+
+// Operator-controlled casing traverses the relay path: a mixed-case send
+// still refuses inline, and the audit row stores the folded spelling so two
+// casings don't become two tool names.
+func TestDraftOnlySendFoldsCaseAtRelay(t *testing.T) {
+	store := testStore()
+	r := testRelay(store)
+	r.server = "gmail"
+	r.out = &bufWriter{}
+	r.childIn = &bufWriter{}
+
+	line, _, _ := callLine("7", "Send_Message", `{"to":"a@b.c"}`)
+	if err := r.pumpPiToChild(strings.NewReader(string(line) + "\n")); err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	if got := r.childIn.(*bufWriter).String(); got != "" {
+		t.Fatalf("mixed-case send reached the child: %q", got)
+	}
+	audit := waitForAudit(t, store, 1)
+	if len(audit) != 1 || audit[0].Tool != "send_message" {
+		t.Fatalf("audit = %+v, want folded send_message", audit)
+	}
+}

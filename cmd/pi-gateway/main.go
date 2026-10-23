@@ -28,6 +28,7 @@ package main
 
 import (
 	"agento/internal/approvals"
+	"agento/internal/connectors"
 	"agento/internal/crashlog"
 	"agento/internal/cronjobs"
 	"agento/internal/memory"
@@ -401,6 +402,24 @@ func run() error {
 		logger.Printf("teach: no OPENCODE_API_KEY, skill tests unavailable")
 	}
 
+	// First connectors (#316). Same database, sibling collection. Without
+	// Mongo the routes still answer from memory, but statuses die with the
+	// process and no OAuth token can be stored anyway — the connect verb
+	// 501s until the OAuth follow-up lands either way.
+	var connectorStore connectors.Store
+	if store, err := connectors.FromEnv(); err != nil {
+		logger.Printf("connectors: falling back to in-process (statuses do not survive restart): %v", err)
+		connectorStore = connectors.NewMemoryStore()
+	} else {
+		connectorStore = store
+		store.Logf = logger.Printf
+		// No EnsureIndexes call: three fixed rows keyed by _id need no
+		// secondary index, and the method is an explicit no-op. The call
+		// (with its 10s ctx and "index setup failed" branch) is dropped
+		// rather than retained as dead ceremony; the OAuth follow-up
+		// re-adds it alongside the first real index.
+	}
+
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")
 	if _, ok := agents[defaultProfile]; !ok {
 		// Fall back to the first profile that actually STARTED, not the first one
@@ -417,7 +436,7 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, memoryStore, teachStore, teachRunner, logger.Printf), agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, memoryStore, teachStore, teachRunner, connectorStore, logger.Printf), agents)
 	if err != nil {
 		return err
 	}
@@ -648,7 +667,7 @@ func skillArgs(skillsDir string) []string {
 // InventoryTimeout line left every test green, because the test exercised secondsEnv
 // directly and never the wiring. A budget that cannot be shown to reach its field is
 // not configurable in any useful sense.
-func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, memoryStore memory.Store, teachStore teach.Store, teachRunner gateway.TeachRunner, logf func(string, ...any)) gateway.Config {
+func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, memoryStore memory.Store, teachStore teach.Store, teachRunner gateway.TeachRunner, connectorStore connectors.Store, logf func(string, ...any)) gateway.Config {
 	return gateway.Config{
 		Password: password,
 		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
@@ -679,6 +698,9 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStor
 		TeachMaterialize: func(profile string, skills []teach.Skill) (int, []string, error) {
 			return teach.Materialize(teach.RuntimeDir(agentDir, profile), skills)
 		},
+		// First connectors (#316), owned by run() for the same reason.
+		// Nil means gateway.New falls back to memory.
+		ConnectorStore: connectorStore,
 		// Each budget is configurable for the same reason: the right value depends on
 		// the host, and changing it should not mean rebuilding the binary.
 		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),
