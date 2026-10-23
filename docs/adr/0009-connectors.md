@@ -63,7 +63,7 @@ but if it fails after a landed write the verb still 502s while the state
 landed. That is retry-safe (a second verb succeeds idempotently), not a
 divergence — worth stating so triage doesn't read it as one.
 
-Disconnect stops future access (token columns `$unset`). Already-fetched
+Disconnect stops future access (token columns `$unset`) with no audit row: the 90-day audit trail covers relayed tool calls, not connector lifecycle, so `updated_at` + container logs (`disconnected (tokens cleared)`, transition-only) are the intended "who turned it off and when" trail in v1. The OAuth follow-up — which writes real grants on these same verbs — must add grant lifecycle to the audit trail rather than copy this gap. Already-fetched
 data — chat history, saved files — is NOT wiped: disconnect stops the tap,
 it does not rewrite the past (cf. Dots delete-the-Dot semantics, explicitly
 not adopted for history).

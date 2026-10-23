@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -454,5 +455,51 @@ func TestBackfillDisplayCanonicalisesScopeOrder(t *testing.T) {
 	want := ScopesFor("gmail")
 	if len(got.Scopes) != len(want) || got.Scopes[0] != want[0] || got.Scopes[1] != want[1] {
 		t.Errorf("scopes = %v, want canonical %v", got.Scopes, want)
+	}
+}
+
+// Struct-vs-projection parity: every Connector bson field the app may see
+// must be selected by displayProjection, and no token column may be. A new
+// struct field forgotten in the projection would otherwise read back zero
+// with no test breaking — the exact hole the privacy invariant depends on.
+func TestDisplayProjectionMatchesStruct(t *testing.T) {
+	type field struct {
+		name string
+		tag  string
+	}
+	rt := reflect.TypeOf(Connector{})
+	fields := map[string]bool{}
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		tag, _, _ := strings.Cut(f.Tag.Get("bson"), ",")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		fields[tag] = true
+	}
+	var proj []string
+	for _, e := range displayProjection() {
+		proj = append(proj, e.Key)
+	}
+	for key := range fields {
+		if key == refreshTokenField || key == accessTokenField {
+			continue // no such fields on the struct; guarded below
+		}
+		found := false
+		for _, k := range proj {
+			if k == key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("struct bson field %q not selected by displayProjection", key)
+		}
+	}
+	// And the reverse: no projection key the struct doesn't know.
+	for _, k := range proj {
+		if !fields[k] {
+			t.Errorf("projection key %q has no struct field", k)
+		}
 	}
 }

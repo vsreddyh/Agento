@@ -95,6 +95,32 @@ func connectorCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
 
+// serveConnectorsList answers GET /api/connectors (and the trailing-slash
+// alias): the three v1 rows, disconnected synthesised on fresh deploys.
+// One helper so the two spellings cannot drift apart.
+func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet, "/api/connectors") {
+		return
+	}
+	ctx, cancel := connectorCtx(r)
+	defer cancel()
+	list, err := s.connectors.List(ctx)
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			apiError(w, http.StatusBadGateway, "upstream_error", "",
+				"the connector store did not answer in time")
+			return
+		}
+		connectorsError(w, err)
+		return
+	}
+	out := make([]any, 0, len(list))
+	for _, c := range list {
+		out = append(out, connectorWire(c))
+	}
+	writeJSONResponse(w, http.StatusOK, map[string]any{"connectors": out})
+}
+
 // handleConnectors serves /api/connectors. Global like approvals, not
 // per-profile like memory.
 func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest string) {
@@ -103,26 +129,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// prefix form without a slash boundary would mislabel the resource and
 	// send triage after a bad id instead of a bad path.
 	if rest == "api/connectors" {
-		if !requireMethod(w, r, http.MethodGet, "/api/connectors") {
-			return
-		}
-		ctx, cancel := connectorCtx(r)
-		defer cancel()
-		list, err := s.connectors.List(ctx)
-		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				apiError(w, http.StatusBadGateway, "upstream_error", "",
-					"the connector store did not answer in time")
-				return
-			}
-			connectorsError(w, err)
-			return
-		}
-		out := make([]any, 0, len(list))
-		for _, c := range list {
-			out = append(out, connectorWire(c))
-		}
-		writeJSONResponse(w, http.StatusOK, map[string]any{"connectors": out})
+		s.serveConnectorsList(w, r)
 		return
 	}
 	if !strings.HasPrefix(rest, "api/connectors/") {
@@ -138,26 +145,9 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	path = strings.TrimSuffix(path, "/")
 
 	if path == "" {
-		if !requireMethod(w, r, http.MethodGet, "/api/connectors") {
-			return
-		}
-		ctx, cancel := connectorCtx(r)
-		defer cancel()
-		list, err := s.connectors.List(ctx)
-		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				apiError(w, http.StatusBadGateway, "upstream_error", "",
-					"the connector store did not answer in time")
-				return
-			}
-			connectorsError(w, err)
-			return
-		}
-		out := make([]any, 0, len(list))
-		for _, c := range list {
-			out = append(out, connectorWire(c))
-		}
-		writeJSONResponse(w, http.StatusOK, map[string]any{"connectors": out})
+		// "api/connectors/" with trailing slash: the collection, same as
+		// the exact form above — one list shape, one helper.
+		s.serveConnectorsList(w, r)
 		return
 	}
 

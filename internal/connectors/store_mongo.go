@@ -416,7 +416,11 @@ func disconnectUpdateDoc(id string, now int64) bson.D {
 // DefaultRow synthesis covers absent ones: scopes rewrite to canonical
 // order (not just fill-when-empty, so a hand-edited reversed order never
 // reaches the wire — matching displayFresh's order-sensitive heal check),
-// display name fills when empty, and status defaults to disconnected.
+// display name always rewrites for the same reason, and status defaults to
+// disconnected. A connected row with a zero stamp (hand-edit, OAuth bug
+// writing status without the stamp) is repaired to now for the response —
+// write-path parity (resolveConnectedAt maps 0 → now on transition); the
+// store heals on the next real transition write.
 // Only the expired path carries error text anywhere in this package
 // (write paths enforce it, no-op refreshes preserve the clear): a corrupt
 // doc's stale error on a healthy (connected) or off (disconnected) row is
@@ -430,15 +434,17 @@ func disconnectUpdateDoc(id string, now int64) bson.D {
 // already-scrubbed text.
 func backfillDisplay(c Connector, id string) Connector {
 	// Display is canonical, not best-effort: scopes always rewrite from the
-	// constants (order included), so a hand-edited reversed order never
-	// survives to the wire — consistent with displayFresh, which treats
-	// order as significant, and with every write path.
+	// constants (order included) and so does the display name, so a
+	// hand-edited reversed order or label never survives to the wire —
+	// consistent with displayFresh, which treats any display mismatch as
+	// heal-worthy, and with every write path.
 	c.Scopes = ScopesFor(id)
-	if c.DisplayName == "" {
-		c.DisplayName = DisplayName(id)
-	}
+	c.DisplayName = DisplayName(id)
 	if !c.Status.Valid() {
 		c.Status = StatusDisconnected
+	}
+	if c.Status == StatusConnected && c.ConnectedAt == 0 {
+		c.ConnectedAt = time.Now().UnixMilli()
 	}
 	if c.Status == StatusExpired {
 		c.LastError = approvals.ScrubError(c.LastError)
