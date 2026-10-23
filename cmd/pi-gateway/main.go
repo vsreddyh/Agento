@@ -413,11 +413,11 @@ func run() error {
 	} else {
 		connectorStore = store
 		store.Logf = logger.Printf
-		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
-		if err := store.EnsureIndexes(indexCtx); err != nil {
-			logger.Printf("connectors: index setup failed: %v", err)
-		}
-		cancelIndex()
+		// No EnsureIndexes call: three fixed rows keyed by _id need no
+		// secondary index, and the method is an explicit no-op. The call
+		// (with its 10s ctx and "index setup failed" branch) is dropped
+		// rather than retained as dead ceremony; the OAuth follow-up
+		// re-adds it alongside the first real index.
 	}
 
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")

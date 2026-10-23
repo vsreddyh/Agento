@@ -228,4 +228,18 @@ func TestSetStatusPreservesConnectedAt(t *testing.T) {
 	if second.ConnectedAt != first.ConnectedAt {
 		t.Errorf("ConnectedAt moved %d -> %d on re-mark", first.ConnectedAt, second.ConnectedAt)
 	}
+	// Disconnect→reconnect keeps the first-ever stamp: Disconnect retains
+	// ConnectedAt and SetStatus(connected) preserves-if-nonzero, so both
+	// backends agree the wire means "since first connect", not "since
+	// current streak".
+	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
+		t.Fatal(err)
+	}
+	third, err := s.SetStatus(ctx, "gmail", StatusConnected, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.ConnectedAt != first.ConnectedAt {
+		t.Errorf("ConnectedAt moved %d -> %d across disconnect/reconnect", first.ConnectedAt, third.ConnectedAt)
+	}
 }

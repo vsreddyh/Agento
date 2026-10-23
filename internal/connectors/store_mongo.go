@@ -167,13 +167,19 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	if st == StatusExpired {
 		lastErr = approvals.ScrubError(lastError)
 	}
-	// ConnectedAt is first-connect, not last-write: re-marking an already
-	// connected row (e.g. a future idempotent token-refresh write) must not
-	// move the timestamp. Read-then-decide on this path only — 3 rows, and
-	// the alternative (pipeline conditional) buys nothing at this size.
+	// ConnectedAt is first-ever connect, not last-write and not
+	// last-reconnect: re-marking an already connected row (e.g. a future
+	// idempotent token-refresh write) must not move the timestamp, and a
+	// disconnect→reconnect cycle keeps the original stamp (Disconnect
+	// retains it, both backends). Read-then-decide on this path only — 3
+	// rows, and the alternative (pipeline conditional) buys nothing at this
+	// size. Single-writer assumption: no two SetStatus(connected) run
+	// concurrently in v1 (gateway verbs only; the OAuth follow-up must keep
+	// token writes on one serialised path, not copy this read for
+	// non-idempotent work).
 	connectedAt := now
 	if st == StatusConnected {
-		if cur, gerr := s.Get(ctx, id); gerr == nil && cur.Status == StatusConnected && cur.ConnectedAt != 0 {
+		if cur, gerr := s.Get(ctx, id); gerr == nil && cur.ConnectedAt != 0 {
 			connectedAt = cur.ConnectedAt
 		}
 	}

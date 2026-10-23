@@ -58,6 +58,13 @@ data — chat history, saved files — is NOT wiped: disconnect stops the tap,
 it does not rewrite the past (cf. Dots delete-the-Dot semantics, explicitly
 not adopted for history).
 
+Expired retains the refresh token: expiry means the access token aged out,
+not that the grant is known-bad, and the follow-up's silent-refresh attempt
+needs the refresh to try with. The reader must never use an expired row's
+tokens for data access — only the refresh attempt may. Tokens live until
+disconnect/revoke with no TTL (unlike approvals 15m / audit 90d): a future
+retention pass must not add a TTL to this collection.
+
 ### Surfaces
 
 - `GET /api/connectors` — three rows, disconnected synthesised when no

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"agento/internal/approvals"
 	"agento/internal/connectors"
 )
 
@@ -73,7 +74,7 @@ func connectorsError(w http.ResponseWriter, err error) {
 		}
 		return
 	}
-	apiError(w, http.StatusBadRequest, "invalid_request_error", "", bounded(err.Error()))
+	apiError(w, http.StatusBadRequest, "invalid_request_error", "", bounded(approvals.ScrubError(err.Error())))
 }
 
 func connectorCtx(r *http.Request) (context.Context, context.CancelFunc) {
