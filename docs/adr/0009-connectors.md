@@ -22,7 +22,20 @@ Draft-only is a refusal, not a gate: the relay (`cmd/mcp-gate`) answers Pi
 with `connectors.RefusalMessage` ("create a draft instead") and audits a
 `connector_draft_only` deny. No approval card is parked for a refused send.
 The `approvals.gatedTools` rows for the same tools are `true` as a backstop
-for any caller that bypasses the relay check — a send must never run free.
+for any caller that bypasses the relay check: a send must never run free.
+
+Reads and Drive saves are intentionally ungated (`false`): reads never gate
+anywhere in this stack (ADR-0002 — gating search would make the agent ask
+permission to look, which is approval fatigue, not safety), and a Drive save
+is the routine-create side of the same rule (like `log_meal` or
+`create_task`: the agent writing at the user's direction, not moving money
+or deleting). The dangerous directions — sends, invites, deletes — refuse
+or gate. If exfiltration-via-read becomes a concern, it belongs to a
+scoping/per-connector-approval pass, not to gating search in v1.
+
+`Disconnect` upserts rather than no-ops on never-connected ids: List
+synthesises disconnected rows anyway, so the stored row just makes the rest
+state explicit. Harmless at three rows; creating rows is accepted.
 
 ### Token placement
 

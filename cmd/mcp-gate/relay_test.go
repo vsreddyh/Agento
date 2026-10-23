@@ -641,3 +641,29 @@ func TestDraftOnlySendIsRefused(t *testing.T) {
 		t.Fatalf("audit error should name the draft-only cause, got %q", audit[0].Error)
 	}
 }
+
+// A draft-only notification (no id) audits without answering: nobody is
+// waiting, so there is no reply frame, but the refusal is still recorded.
+func TestDraftOnlyNotificationIsAudited(t *testing.T) {
+	store := testStore()
+	out, child := &bufWriter{}, &bufWriter{}
+	r := testRelay(store)
+	r.server = "calendar"
+	r.out = out
+	r.childIn = child
+
+	line := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"create_event","arguments":{}}}` + "\n"
+	if err := r.pumpPiToChild(strings.NewReader(line)); err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	if out.String() != "" {
+		t.Fatalf("notification got a reply: %q", out.String())
+	}
+	if child.String() != "" {
+		t.Fatalf("draft-only notification reached the child: %q", child.String())
+	}
+	audit := waitForAudit(t, store, 1)
+	if len(audit) != 1 || audit[0].Disposition != approvals.DispositionDenied {
+		t.Fatalf("audit = %+v, want one denied row", audit)
+	}
+}

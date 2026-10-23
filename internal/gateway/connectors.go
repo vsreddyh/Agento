@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -29,14 +30,15 @@ import (
 const maxConnectorIDLen = 64
 
 func connectorWire(c connectors.Connector) map[string]any {
+	scopes := c.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
 	out := map[string]any{
 		"id":           c.ID,
 		"display_name": c.DisplayName,
-		"scopes":       c.Scopes,
+		"scopes":       scopes,
 		"status":       string(c.Status),
-	}
-	if out["scopes"] == nil {
-		out["scopes"] = []string{}
 	}
 	if c.LastError != "" {
 		out["last_error"] = c.LastError
@@ -55,7 +57,8 @@ func connectorWire(c connectors.Connector) map[string]any {
 }
 
 func connectorsError(w http.ResponseWriter, err error) {
-	if se, ok := err.(*connectors.StoreError); ok {
+	var se *connectors.StoreError
+	if errors.As(err, &se) {
 		switch {
 		case se.NotFound:
 			apiError(w, http.StatusNotFound, "invalid_request_error", "", bounded(se.Msg))
@@ -78,6 +81,9 @@ func connectorCtx(r *http.Request) (context.Context, context.CancelFunc) {
 func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest string) {
 	path := strings.TrimPrefix(rest, "api/connectors")
 	path = strings.TrimPrefix(path, "/")
+	// Trailing slashes are client noise, not different resources:
+	// /gmail/disconnect/ is the disconnect verb, not an unknown path.
+	path = strings.TrimSuffix(path, "/")
 
 	if path == "" {
 		if !requireMethod(w, r, http.MethodGet, "/api/connectors") {
@@ -109,7 +115,8 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			"unknown connector")
 		return
 	}
-	// Normalise before Known: " GMail " 404s as unknown, never connects.
+	// Normalise before Known: " GMail " addresses gmail (case and spacing
+	// fold), while a truly unknown id still 404s.
 	norm := connectors.NormalizedID(id)
 	if !connectors.Known(norm) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",

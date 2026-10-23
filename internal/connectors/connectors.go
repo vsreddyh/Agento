@@ -22,8 +22,6 @@ package connectors
 
 import (
 	"strings"
-
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // Collection holds one document per connector id. Fixed ids, so the table
@@ -117,12 +115,10 @@ type Connector struct {
 	UpdatedAt   int64 `bson:"updatedAt,omitempty" json:"updated_at,omitempty"`
 }
 
-// NewID returns a hex ObjectID (unused for the fixed ids, kept for parity
-// with the sibling stores' test helpers).
-func NewID() string { return primitive.NewObjectID().Hex() }
-
-// NormalizedID lowercases and trims a path id. Gateway rejects unknown ids
-// after this, so " GMail " 404s as unknown rather than connecting something.
+// NormalizedID lowercases and trims a path id, so " GMail " addresses the
+// gmail connector rather than 404ing on case or spacing. Unknown ids still
+// 404 after this (see Known): normalisation only folds spellings of a real
+// connector, it never invents one.
 func NormalizedID(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
@@ -130,7 +126,14 @@ func NormalizedID(raw string) string {
 // IsDraftOnlySend reports whether (server, tool) is a send path that v1
 // refuses outright. Draft tools run (free or gated by the relay); send tools
 // never reach the server — the relay answers Pi with RefusalMessage.
+//
+// Case-insensitive on both parts: r.server comes from the operator-controlled
+// --server flag, and an exact-case match would let a "Gmail" mcp.json entry
+// bypass both this refusal and the approval backstop. Same hardening the
+// follow-up mcp.json wiring must keep (pin lowercase names).
 func IsDraftOnlySend(server, tool string) bool {
+	server = strings.ToLower(strings.TrimSpace(server))
+	tool = strings.ToLower(strings.TrimSpace(tool))
 	switch server {
 	case "gmail":
 		switch tool {

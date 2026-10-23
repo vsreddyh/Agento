@@ -57,17 +57,14 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 	return err
 }
 
-// rowIn is the stored shape: Connector plus server-side token columns that
-// never leave the process.
-type rowIn struct {
-	Connector `bson:",inline"`
-	// RefreshToken holds the OAuth refresh token server-side. Never
-	// selected into API reads (see projection below) and never logged.
-	RefreshToken string `bson:"refreshToken,omitempty"`
-	// AccessToken is short-lived and kept only to avoid re-exchanging on
-	// every turn; same secrecy as the refresh token.
-	AccessToken string `bson:"accessToken,omitempty"`
-}
+// Token columns live in this collection alongside the display fields but
+// are never projected into API reads (see displayProjection). The field
+// names are defined once here so SetStatus/Disconnect and the future OAuth
+// exchange cannot drift apart.
+const (
+	refreshTokenField = "refreshToken"
+	accessTokenField  = "accessToken"
+)
 
 var displayProjection = bson.D{
 	{Key: "_id", Value: 1},
@@ -90,6 +87,7 @@ func findOneOpts() *options.FindOneOptions {
 func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	cur, err := s.coll.Find(ctx, bson.D{}, findOpts())
 	if err != nil {
+		s.logf("connectors: list failed: %v", err)
 		return nil, NewStoreError("connector list failed", true)
 	}
 	defer cur.Close(ctx)
@@ -97,11 +95,13 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	for cur.Next(ctx) {
 		var c Connector
 		if err := cur.Decode(&c); err != nil {
+			s.logf("connectors: list decode failed: %v", err)
 			return nil, NewStoreError("connector list failed", true)
 		}
 		byID[c.ID] = c
 	}
 	if err := cur.Err(); err != nil {
+		s.logf("connectors: list cursor failed: %v", err)
 		return nil, NewStoreError("connector list failed", true)
 	}
 	out := make([]Connector, 0, len(ListIDs))
@@ -131,6 +131,7 @@ func (s *MongoStore) Get(ctx context.Context, id string) (Connector, error) {
 		if err == mongoDrv.ErrNoDocuments {
 			return DefaultRow(id), nil
 		}
+		s.logf("connectors: read %s failed: %v", id, err)
 		return Connector{}, NewStoreError("connector read failed", true)
 	}
 	if len(c.Scopes) == 0 {
@@ -164,6 +165,7 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
 		bson.D{{Key: "$set", Value: set}}, options.Update().SetUpsert(true))
 	if err != nil {
+		s.logf("connectors: write %s failed: %v", id, err)
 		return Connector{}, NewStoreError("connector write failed", true)
 	}
 	return s.Get(ctx, id)
@@ -186,11 +188,12 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 		// Tokens die here: future access stops at the next read. History
 		// (chat, saved files) is untouched by design.
 		{Key: "$unset", Value: bson.D{
-			{Key: "refreshToken", Value: ""},
-			{Key: "accessToken", Value: ""},
+			{Key: refreshTokenField, Value: ""},
+			{Key: accessTokenField, Value: ""},
 		}},
 	}, options.Update().SetUpsert(true))
 	if err != nil {
+		s.logf("connectors: disconnect %s failed: %v", id, err)
 		return Connector{}, NewStoreError("connector disconnect failed", true)
 	}
 	s.logf("connectors: %s disconnected (tokens cleared)", id)

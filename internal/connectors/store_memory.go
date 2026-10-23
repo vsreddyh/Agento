@@ -2,7 +2,6 @@ package connectors
 
 import (
 	"context"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -118,10 +117,9 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	c.LastError = ""
 	c.UpdatedAt = time.Now().UnixMilli()
 	// No token field in this shape to clear; the Mongo backend clears its
-	// token columns here. Documented so the two backends cannot diverge
-	// silently: a future field must be cleared in both.
+	// token columns here (see refreshTokenField/accessTokenField). Documented
+	// so the two backends cannot diverge silently: a future field must be
+	// cleared in both.
 	s.rows[id] = c
-	// Sort-stability helper for tests that list after writes.
-	_ = sort.StringSlice{}
 	return c, nil
 }

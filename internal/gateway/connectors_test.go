@@ -66,6 +66,10 @@ func TestConnectorsDisconnectAndUnknown(t *testing.T) {
 	if st := decodeBody(t, rec)["connector"].(map[string]any)["status"]; st != "disconnected" {
 		t.Fatalf("status = %v, want disconnected", st)
 	}
+	// Trailing slash is the same verb, not an unknown path.
+	if rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/disconnect/", ""); rec.Code != http.StatusOK {
+		t.Fatalf("trailing-slash disconnect: %d, want 200 (%s)", rec.Code, rec.Body)
+	}
 }
 
 func TestConnectorsConnectIs501NotSecretPrompt(t *testing.T) {

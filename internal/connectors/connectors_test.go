@@ -78,6 +78,11 @@ func TestDraftOnlySend(t *testing.T) {
 			t.Errorf("%s/%s should not be a refused send", tc.server, tc.tool)
 		}
 	}
+	// Case-insensitive: the --server flag is operator-controlled, and a
+	// "Gmail" mcp.json entry must not bypass the refusal.
+	if !IsDraftOnlySend("Gmail", "Send_Message") {
+		t.Error("mixed-case Gmail/Send_Message should still refuse")
+	}
 	if RefusalMessage == "" {
 		t.Error("refusal message must name the draft path")
 	}
