@@ -269,10 +269,13 @@ class MainActivity : ComponentActivity() {
                             val m = chatApi.modelFor(tab)
                             if (m.isEmpty()) return ""
                             // effortFor reads the same per-model/tab memory as
-                            // the request, retired god keys included; an unset
-                            // pick shows the level that will actually run.
-                            val e = chatApi.effortFor(tab, m)
-                                .ifEmpty { EffortCatalog.defaultFor(m) }
+                            // the request, retired god keys included; one
+                            // resolver turns an unset/stale pick into the level
+                            // that will actually run.
+                            val e = EffortCatalog.effectiveFor(
+                                m,
+                                chatApi.effortFor(tab, m),
+                            )
                             return "$m · $e"
                         }
                         mapOf(

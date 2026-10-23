@@ -1631,8 +1631,7 @@ internal fun TabModelSheet(
             // The shown value is clamped: a pick restored for another model
             // never displays as valid here.
             val effortOptions = EffortCatalog.optionsFor(model)
-            val shownEffort = effort.takeIf { it in effortOptions }
-                ?: EffortCatalog.defaultFor(model)
+            val shownEffort = EffortCatalog.effectiveFor(model, effort)
             OptionMenu(
                 label = "Effort",
                 shown = shownEffort,

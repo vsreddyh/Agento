@@ -103,7 +103,7 @@ object EffortCatalog {
 
     /** Normalizes a model name for catalog lookup. */
     fun normalize(model: String): String {
-        var m = model.trim().lowercase().replace('_', '-').replace('.', '-')
+        var m = model.trim().lowercase(Locale.ROOT).replace('_', '-').replace('.', '-')
         // Strip a provider prefix ("xiaomi/mimo-..." or "opencode-go/...").
         val slash = m.lastIndexOf('/')
         if (slash >= 0) m = m.substring(slash + 1)
@@ -155,5 +155,5 @@ object EffortCatalog {
 
     /** Display label for an effort value ("none" reads as off). */
     fun labelFor(effort: String): String =
-        if (effort.trim().lowercase() == "none") "none (off)" else effort
+        if (effort.trim().lowercase(Locale.ROOT) == "none") "none (off)" else effort
 }
