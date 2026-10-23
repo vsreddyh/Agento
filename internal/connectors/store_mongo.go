@@ -169,11 +169,13 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	}
 	// Transition-aware like Disconnect: a repeated SetStatus with no state
 	// change skips the write (updated_at = last transition on every path).
-	// Absent doc always writes. Probe carries status+lastError only.
+	// Absent doc always writes. One probe carries status+lastError+stamp, so
+	// the connected path resolves first-ever-connect from the same read —
+	// no second round-trip.
 	pctx, pcancel := quickCtx()
 	var cur probeDoc
 	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
-		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}, {Key: "lastError", Value: 1}})).Decode(&cur)
+		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}, {Key: "lastError", Value: 1}, {Key: "connectedAt", Value: 1}})).Decode(&cur)
 	pcancel()
 	if probeErr == nil && cur.Status == st && cur.LastError == lastErr {
 		return s.readBack(id)
@@ -182,31 +184,20 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	// last-reconnect: re-marking an already connected row (e.g. a future
 	// idempotent token-refresh write) must not move the timestamp, and a
 	// disconnect→reconnect cycle keeps the original stamp (Disconnect
-	// retains it, both backends). Read-then-decide on this path only — 3
-	// rows, and the alternative (pipeline conditional) buys nothing at this
-	// size. Single-writer assumption: no two SetStatus(connected) run
-	// concurrently in v1 (gateway verbs only; the OAuth follow-up must keep
-	// token writes on one serialised path, not copy this read for
-	// non-idempotent work).
-	// Pre-reads (stamp lookup here, transition check in Disconnect) run on
-	// their own budget, not the verb's: they spend it before the write runs,
-	// and a slow pre-read must never starve a would-be-successful write
-	// into a 502. Same shape as readBack below; same single-writer
-	// assumption documented there.
+	// retains it, both backends). Single-writer assumption: no two
+	// SetStatus(connected) run concurrently in v1 (gateway verbs only; the
+	// OAuth follow-up must keep token writes on one serialised path, not
+	// copy this read for non-idempotent work). A failed probe fails the
+	// connected write rather than guessing the stamp (the caller retries;
+	// the stamp survives) — but an absent doc is a normal first connect,
+	// not an error.
 	connectedAt := now
 	if st == StatusConnected {
-		pctx, cancel := quickCtx()
-		cur, gerr := s.Get(pctx, id)
-		cancel()
-		if gerr != nil {
-			// Fail the write, don't guess the stamp: falling through with
-			// now would silently reset first-ever-connect on a transient
-			// read failure while reporting success. The caller retries; the
-			// stamp survives.
-			s.logf("connectors: pre-read %s failed: %v", id, gerr)
+		if probeErr != nil && !errors.Is(probeErr, mongoDrv.ErrNoDocuments) {
+			s.logf("connectors: pre-read %s failed: %v", id, probeErr)
 			return Connector{}, NewStoreError("connector read failed", true)
 		}
-		connectedAt = resolveConnectedAt(cur, now)
+		connectedAt = resolveConnectedAt(cur.ConnectedAt, now)
 	}
 	// One write, never two: when marking disconnected the token $unset rides
 	// in the same UpdateOne as the status $set (mirroring Disconnect). A
@@ -278,20 +269,22 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 
 // resolveConnectedAt is the first-ever-connect rule both backends share:
 // a nonzero stored stamp survives re-marks and disconnect→reconnect cycles,
-// zero takes now. Pure, so the Mongo read-then-write sequence and the memory
+// zero takes now. Pure, so the Mongo probe-then-write sequence and the memory
 // write pin the same semantic with one no-DB test.
-func resolveConnectedAt(cur Connector, now int64) int64 {
-	if cur.ConnectedAt != 0 {
-		return cur.ConnectedAt
+func resolveConnectedAt(stamp, now int64) int64 {
+	if stamp != 0 {
+		return stamp
 	}
 	return now
 }
 
 // probeDoc is the minimal read for transition decisions: status (+lastError
-// where compared). Never the token columns.
+// where compared, +connectedAt where the stamp resolves). Never the token
+// columns.
 type probeDoc struct {
-	Status    Status `bson:"status"`
-	LastError string `bson:"lastError"`
+	Status      Status `bson:"status"`
+	LastError   string `bson:"lastError"`
+	ConnectedAt int64  `bson:"connectedAt"`
 }
 
 // disconnectTransition decides the Disconnect write from the raw status
@@ -377,7 +370,14 @@ func backfillDisplay(c Connector, id string) Connector {
 	if !c.Status.Valid() {
 		c.Status = StatusDisconnected
 	}
-	c.LastError = approvals.ScrubError(c.LastError)
+	// Disconnected rows carry no error text (same contract as the SetStatus
+	// write path): a corrupt doc's stale lastError is cleared here rather
+	// than rendered, matching the empty-status repair above.
+	if c.Status == StatusDisconnected {
+		c.LastError = ""
+	} else {
+		c.LastError = approvals.ScrubError(c.LastError)
+	}
 	return c
 }
 

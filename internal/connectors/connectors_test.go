@@ -309,10 +309,10 @@ func TestDisconnectRepeatLeavesTimestamps(t *testing.T) {
 // resolveConnectedAt pins first-ever-connect for both backends with no DB:
 // nonzero survives, zero takes now.
 func TestResolveConnectedAt(t *testing.T) {
-	if got := resolveConnectedAt(Connector{ConnectedAt: 42}, 99); got != 42 {
+	if got := resolveConnectedAt(42, 99); got != 42 {
 		t.Errorf("got %d, want 42", got)
 	}
-	if got := resolveConnectedAt(Connector{}, 99); got != 99 {
+	if got := resolveConnectedAt(0, 99); got != 99 {
 		t.Errorf("got %d, want 99", got)
 	}
 }
@@ -350,5 +350,35 @@ func TestSetStatusNoChangeSkipsWrite(t *testing.T) {
 	}
 	if second.UpdatedAt != first.UpdatedAt {
 		t.Errorf("UpdatedAt moved %d -> %d on no-change re-set", first.UpdatedAt, second.UpdatedAt)
+	}
+}
+
+// Regression: the transition check must compare BEFORE mutating. A
+// connected→disconnected flip with empty error once early-returned a
+// mutated-but-unpersisted copy (caller saw disconnected, store kept
+// connected). Re-read after flip to pin persistence.
+func TestSetStatusFlipPersists(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if _, err := s.SetStatus(ctx, "gmail", StatusConnected, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, "gmail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusDisconnected {
+		t.Errorf("stored status = %q, want disconnected", got.Status)
+	}
+}
+
+// Disconnected backfill clears stale error text, matching the write path.
+func TestBackfillDisplayClearsDisconnectedError(t *testing.T) {
+	got := backfillDisplay(Connector{ID: "gmail", Status: StatusDisconnected, LastError: "boom"}, "gmail")
+	if got.LastError != "" {
+		t.Errorf("disconnected LastError = %q, want cleared", got.LastError)
 	}
 }

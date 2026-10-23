@@ -139,6 +139,13 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// the normalised form — what Known actually sees — so padding cannot
 	// turn a known id unknown.
 	norm := connectors.NormalizedID(id)
+	if norm == "" {
+		// Empty after folding (" "): same bare 404 as the NUL path above,
+		// not the trailing-space echo the unknown branch would emit.
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown connector")
+		return
+	}
 	if len(norm) > maxConnectorIDLen {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")

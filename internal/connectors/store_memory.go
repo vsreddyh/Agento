@@ -108,13 +108,7 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	if !ok {
 		c = DefaultRow(id)
 	}
-	// Same self-heal as the Mongo backend: display fields always rewrite
-	// from the current constants, so a future scope/name change cannot leave
-	// stale values on existing rows.
-	c.DisplayName = DisplayName(id)
-	c.Scopes = ScopesFor(id)
 	now := time.Now().UnixMilli()
-	c.Status = st
 	// Only the expired path carries error text: connected (healthy) and
 	// disconnected (off) rows carry none, so a stale error can never render
 	// as failure text on a healthy row. Scrubbed (approvals.ScrubError):
@@ -124,19 +118,31 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	if st == StatusExpired {
 		wantErr = approvals.ScrubError(lastError)
 	}
-	// Transition-aware like Disconnect: a repeated SetStatus with no state
-	// change returns the row untouched — updated_at means last transition
-	// on every path, not last write on this one. Missing doc always writes
-	// (explicit state, same rule as Disconnect's absent-means-transition).
+	// Transition-aware like Disconnect: compare BEFORE mutating — the old
+	// code assigned c.Status first, so every same-error flip early-returned
+	// a mutated-but-unpersisted copy (caller saw the new status, the store
+	// kept the old). A repeated SetStatus with no state change refreshes
+	// display fields without moving updated_at; a missing doc always writes.
 	if ok && c.Status == st && c.LastError == wantErr {
+		// No-op: self-heal display without touching timestamps (same as
+		// the Disconnect no-op below).
+		c.DisplayName = DisplayName(id)
+		c.Scopes = ScopesFor(id)
+		s.rows[id] = c
 		return backfillDisplay(c, id), nil
 	}
+	// Same self-heal as the Mongo backend: display fields always rewrite
+	// from the current constants, so a future scope/name change cannot leave
+	// stale values on existing rows.
+	c.DisplayName = DisplayName(id)
+	c.Scopes = ScopesFor(id)
+	c.Status = st
 	c.LastError = wantErr
 	c.UpdatedAt = now
 	// First-ever connect, shared with Mongo via resolveConnectedAt (same
 	// helper, same semantic on both backends).
 	if st == StatusConnected {
-		c.ConnectedAt = resolveConnectedAt(c, now)
+		c.ConnectedAt = resolveConnectedAt(c.ConnectedAt, now)
 	}
 	s.rows[id] = c
 	return backfillDisplay(c, id), nil
