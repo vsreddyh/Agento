@@ -36,7 +36,9 @@ const (
 	Drive    = "drive"
 )
 
-// ListIDs is the fixed v1 set, in display order.
+// ListIDs is the fixed v1 set, in display order. Do not mutate: List
+// synthesizes the API shape by iterating this slice, so an in-place edit
+// silently changes what every client sees. Treat as read-only.
 var ListIDs = []string{Gmail, Calendar, Drive}
 
 // DisplayName names a connector for the app. Unknown ids echo back: the

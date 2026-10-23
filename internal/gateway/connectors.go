@@ -158,7 +158,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			"connect for "+bounded(norm)+" is not configured on this server yet; OAuth lands in a follow-up — never paste a token in chat")
 		return
 	case "":
-		w.Header().Set("Allow", "POST (use /disconnect or /connect)")
+		w.Header().Set("Allow", "POST")
 		apiError(w, http.StatusMethodNotAllowed, "invalid_request_error", "",
 			"no verb on /api/connectors/{id}; use /disconnect or /connect")
 		return

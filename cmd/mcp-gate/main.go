@@ -78,6 +78,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: mcp-gate --server NAME -- <command> [args...]")
 		os.Exit(2)
 	}
+	// Normalise once, here, not per call: the flag is operator-controlled
+	// and every downstream use — policy lookup, refusal check, audit labels,
+	// MarkServerInterrupted sweep — exact-matches. A "Gmail" wiring would
+	// otherwise gate correctly (normalised lookups) while audit rows grouped
+	// as Gmail vs gmail and the sweep missed the other spelling's rows.
+	*server = strings.ToLower(strings.TrimSpace(*server))
+	if *server == "" {
+		fmt.Fprintln(os.Stderr, "usage: mcp-gate --server NAME -- <command> [args...]")
+		os.Exit(2)
+	}
 	if !approvals.KnownServer(*server) {
 		// Fail-closed still applies (every call holds), but a typo in
 		// mcp.json should be loud at startup, not discovered hold by hold.

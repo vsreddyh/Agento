@@ -141,11 +141,17 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 		return Connector{}, NewStoreError("unknown connector status", false)
 	}
 	now := time.Now().UnixMilli()
+	// Disconnect clears lastError in both backends; SetStatus matches it on
+	// the disconnected path so the two routes to the same state agree.
+	lastErr := strings.TrimSpace(lastError)
+	if st == StatusDisconnected {
+		lastErr = ""
+	}
 	set := bson.D{
 		{Key: "displayName", Value: DisplayName(id)},
 		{Key: "scopes", Value: ScopesFor(id)},
 		{Key: "status", Value: string(st)},
-		{Key: "lastError", Value: strings.TrimSpace(lastError)},
+		{Key: "lastError", Value: lastErr},
 		{Key: "updatedAt", Value: now},
 	}
 	if st == StatusConnected {

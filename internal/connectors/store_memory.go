@@ -93,7 +93,14 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	}
 	now := time.Now().UnixMilli()
 	c.Status = st
-	c.LastError = strings.TrimSpace(lastError)
+	// Disconnect clears the error in both backends: the off state carries no
+	// failure text. Disconnect is the documented path; SetStatus matches it
+	// so the two routes to the same state don't diverge in visibility.
+	if st == StatusDisconnected {
+		c.LastError = ""
+	} else {
+		c.LastError = strings.TrimSpace(lastError)
+	}
 	c.UpdatedAt = now
 	if st == StatusConnected {
 		c.ConnectedAt = now

@@ -119,3 +119,20 @@ func TestBackfillDisplayRepairsStatus(t *testing.T) {
 		t.Errorf("backfill dropped scopes/display: %+v", got)
 	}
 }
+
+// Disconnect clears the error like the off state should: SetStatus to
+// disconnected matches Disconnect so the two paths agree.
+func TestSetStatusDisconnectedClearsError(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if _, err := s.SetStatus(ctx, "gmail", StatusExpired, "aged out"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.SetStatus(ctx, "gmail", StatusDisconnected, "stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastError != "" {
+		t.Errorf("LastError = %q, want cleared on disconnect", got.LastError)
+	}
+}
