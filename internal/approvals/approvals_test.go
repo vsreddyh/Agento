@@ -434,3 +434,18 @@ func TestMarkServerInterruptedIsScoped(t *testing.T) {
 		t.Fatalf("other server row = %+v, %v; want untouched pending", got, err)
 	}
 }
+
+// Case-insensitive like the relay refusal (#316 re-review): a "Gmail"
+// --server flag must not change a tool's gate. Fail-closed either way, but
+// the same logical tool must gate the same way whatever the case.
+func TestNeedsApprovalCaseInsensitive(t *testing.T) {
+	if NeedsApproval("Gmail", "Search_Gmail", nil) {
+		t.Error("Gmail/Search_Gmail should run free like gmail/search_gmail")
+	}
+	if !NeedsApproval("GMAIL", "SEND_MESSAGE", nil) {
+		t.Error("GMAIL/SEND_MESSAGE should hold like gmail/send_message")
+	}
+	if !KnownServer("Gmail") {
+		t.Error("KnownServer(Gmail) should be true")
+	}
+}

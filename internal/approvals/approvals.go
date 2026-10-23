@@ -100,6 +100,12 @@ func (s Status) Valid() bool {
 // blind. Pi built-in tools (bash/read/write via codemode) never reach the
 // relay at all — see the ADR's threat note.
 func NeedsApproval(server, tool string, args map[string]any) bool {
+	// Case-insensitive like connectors.IsDraftOnlySend: --server comes from
+	// the operator-controlled flag, and an exact-case match would let a
+	// "Gmail" mcp.json entry silently change a tool's gate. The table keys
+	// stay lowercase; the follow-up mcp.json wiring pins lowercase names.
+	server = strings.ToLower(strings.TrimSpace(server))
+	tool = strings.ToLower(strings.TrimSpace(tool))
 	// Dry runs only count: both prune tools default dry_run=true, and a
 	// counting call changes nothing. Scoped to the two servers that have the
 	// tool: an unclassified "prune_old" elsewhere must not inherit a free
@@ -123,7 +129,7 @@ func NeedsApproval(server, tool string, args map[string]any) bool {
 // visible at boot instead of only as per-hold lines. Execution stays
 // fail-closed either way: unknown servers hold every call.
 func KnownServer(server string) bool {
-	_, ok := gatedTools[server]
+	_, ok := gatedTools[strings.ToLower(strings.TrimSpace(server))]
 	return ok
 }
 

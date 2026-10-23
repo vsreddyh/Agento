@@ -47,8 +47,8 @@ func FromEnv() (*MongoStore, error) {
 	return New(uri, db)
 }
 
-// EnsureIndexes creates the id lookup (implicit via _id; kept as an explicit
-// step so main's startup sequence matches the sibling stores).
+// EnsureIndexes creates the status index List never strictly needs at three
+// rows but keeps the read path covered if the set ever grows beyond v1.
 func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 	_, err := s.coll.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
 		Keys:    bson.D{{Key: "status", Value: 1}},
@@ -168,7 +168,19 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 		s.logf("connectors: write %s failed: %v", id, err)
 		return Connector{}, NewStoreError("connector write failed", true)
 	}
-	return s.Get(ctx, id)
+	// Disconnect is the sole off-path, but a caller that marks disconnected
+	// via SetStatus must not leave tokens behind either: belt and braces.
+	if st == StatusDisconnected {
+		if _, uerr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
+			bson.D{{Key: "$unset", Value: bson.D{
+				{Key: refreshTokenField, Value: ""},
+				{Key: accessTokenField, Value: ""},
+			}}}); uerr != nil {
+			s.logf("connectors: token clear %s failed: %v", id, uerr)
+			return Connector{}, NewStoreError("connector write failed", true)
+		}
+	}
+	return s.readBack(id)
 }
 
 func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, error) {
@@ -197,5 +209,15 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 		return Connector{}, NewStoreError("connector disconnect failed", true)
 	}
 	s.logf("connectors: %s disconnected (tokens cleared)", id)
+	return s.readBack(id)
+}
+
+// readBack re-reads one row on a fresh budget. The gateway hands one 5s ctx
+// for the whole verb; a slow Atlas write could consume it and turn a landed
+// write into a 502 on the confirming read. The read is cheap and idempotent,
+// so it gets its own 5s rather than the write's leftovers.
+func (s *MongoStore) readBack(id string) (Connector, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	return s.Get(ctx, id)
 }
