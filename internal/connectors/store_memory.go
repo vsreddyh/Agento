@@ -120,11 +120,18 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// as failure text on a healthy row. Scrubbed (approvals.ScrubError):
 	// lastError is app-visible and the OAuth follow-up will store provider
 	// errors here.
+	wantErr := ""
 	if st == StatusExpired {
-		c.LastError = approvals.ScrubError(lastError)
-	} else {
-		c.LastError = ""
+		wantErr = approvals.ScrubError(lastError)
 	}
+	// Transition-aware like Disconnect: a repeated SetStatus with no state
+	// change returns the row untouched — updated_at means last transition
+	// on every path, not last write on this one. Missing doc always writes
+	// (explicit state, same rule as Disconnect's absent-means-transition).
+	if ok && c.Status == st && c.LastError == wantErr {
+		return backfillDisplay(c, id), nil
+	}
+	c.LastError = wantErr
 	c.UpdatedAt = now
 	// First-ever connect, shared with Mongo via resolveConnectedAt (same
 	// helper, same semantic on both backends).
@@ -132,7 +139,7 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 		c.ConnectedAt = resolveConnectedAt(c, now)
 	}
 	s.rows[id] = c
-	return c, nil
+	return backfillDisplay(c, id), nil
 }
 
 func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error) {
@@ -149,10 +156,11 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	c.DisplayName = DisplayName(id)
 	c.Scopes = ScopesFor(id)
 	// Idempotent no-op like the Mongo backend: already disconnected returns
-	// without writing (updated_at stays the last transition, not the last
-	// verb), still success. No store-back of the identical value, and the
-	// read path repairs display fields on every read anyway.
+	// without moving updated_at (stays the last transition), still success —
+	// but the repaired display fields persist, so a scope change lands even
+	// on rows that never transition again.
 	if ok && c.Status == StatusDisconnected {
+		s.rows[id] = c
 		return backfillDisplay(c, id), nil
 	}
 	c.Status = StatusDisconnected

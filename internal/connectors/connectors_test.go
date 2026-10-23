@@ -2,11 +2,17 @@ package connectors
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/bson"
+	mongoDrv "go.mongodb.org/mongo-driver/mongo"
 )
+
+func mongoErrNotFound() error { return mongoDrv.ErrNoDocuments }
+
+func errBoom() error { return errors.New("boom") }
 
 func TestListSynthesisesDisconnected(t *testing.T) {
 	s := NewMemoryStore()
@@ -308,5 +314,41 @@ func TestResolveConnectedAt(t *testing.T) {
 	}
 	if got := resolveConnectedAt(Connector{}, 99); got != 99 {
 		t.Errorf("got %d, want 99", got)
+	}
+}
+
+// disconnectTransition pins the explicit-off rule without Atlas: absent
+// means transition (write; sets explicit-off), stored-disconnected means
+// no-op, other statuses mean transition, probe errors write anyway flagged.
+func TestDisconnectTransition(t *testing.T) {
+	if tr, ok := disconnectTransition(mongoErrNotFound(), StatusDisconnected); !tr || !ok {
+		t.Errorf("absent = %v,%v want true,true", tr, ok)
+	}
+	if tr, ok := disconnectTransition(nil, StatusDisconnected); tr || !ok {
+		t.Errorf("stored-disconnected = %v,%v want false,true", tr, ok)
+	}
+	if tr, ok := disconnectTransition(nil, StatusConnected); !tr || !ok {
+		t.Errorf("stored-connected = %v,%v want true,true", tr, ok)
+	}
+	if tr, ok := disconnectTransition(errBoom(), StatusDisconnected); !tr || ok {
+		t.Errorf("probe-error = %v,%v want true,false", tr, ok)
+	}
+}
+
+// Repeated SetStatus with no state change skips the write: updated_at is
+// last transition on every path.
+func TestSetStatusNoChangeSkipsWrite(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	first, err := s.SetStatus(ctx, "gmail", StatusExpired, "aged out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.SetStatus(ctx, "gmail", StatusExpired, "aged out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.UpdatedAt != first.UpdatedAt {
+		t.Errorf("UpdatedAt moved %d -> %d on no-change re-set", first.UpdatedAt, second.UpdatedAt)
 	}
 }

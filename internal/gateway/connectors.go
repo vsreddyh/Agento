@@ -125,9 +125,11 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	id, action, _ := strings.Cut(path, "/")
 	// Verbs fold like ids: "Gmail/Disconnect" from a hand test lands on the
 	// verb instead of 404ing as an unknown path. Trimmed like the id — a
-	// padded verb is client noise, not a different resource.
+	// padded verb is client noise, not a different resource. NUL-checked
+	// like the id too: a control byte in the verb gets the same bare 404
+	// (no echo) as one in the id, rather than an echoed unknown-path.
 	action = strings.ToLower(strings.TrimSpace(action))
-	if id == "" || strings.ContainsRune(id, 0) {
+	if id == "" || strings.ContainsRune(id, 0) || strings.ContainsRune(action, 0) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")
 		return

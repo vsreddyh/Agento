@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 
@@ -48,13 +49,10 @@ func FromEnv() (*MongoStore, error) {
 	return New(uri, db)
 }
 
-// EnsureIndexes is a no-op: three fixed rows keyed by _id need no secondary
-// index. List scans all three and Get/writes key on _id (already indexed),
-// so a status index would be dead weight that merely looks load-bearing.
-// Kept as an explicit step so main's startup sequence matches the sibling
-// stores, and so the OAuth follow-up has a place to add the index its
-// queries actually need.
-func (s *MongoStore) EnsureIndexes(_ context.Context) error { return nil }
+// Note: no EnsureIndexes method exists on purpose. Three fixed rows keyed
+// by _id need no secondary index, and an uncalled no-op hook would bit-rot
+// silently (signature drift, no callers, no test). The OAuth follow-up adds
+// the real index method alongside the first query that needs one.
 
 // Token columns live in this collection alongside the display fields but
 // are never projected into API reads (see displayProjection). The field
@@ -169,6 +167,17 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	if st == StatusExpired {
 		lastErr = approvals.ScrubError(lastError)
 	}
+	// Transition-aware like Disconnect: a repeated SetStatus with no state
+	// change skips the write (updated_at = last transition on every path).
+	// Absent doc always writes. Probe carries status+lastError only.
+	pctx, pcancel := quickCtx()
+	var cur probeDoc
+	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
+		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}, {Key: "lastError", Value: 1}})).Decode(&cur)
+	pcancel()
+	if probeErr == nil && cur.Status == st && cur.LastError == lastErr {
+		return s.readBack(id)
+	}
 	// ConnectedAt is first-ever connect, not last-write and not
 	// last-reconnect: re-marking an already connected row (e.g. a future
 	// idempotent token-refresh write) must not move the timestamp, and a
@@ -222,37 +231,35 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	now := time.Now().UnixMilli()
-	// Log only on transition, and define transition against the STORED row,
-	// not Get's synthesised view: Get returns DefaultRow(disconnected) for
-	// a missing doc, which would read a never-touched id as "already off"
-	// and skip the write — losing the explicit-off signal (updated_at set)
-	// and diverging from memory (which writes when the row is absent).
-	// ErrNoDocuments therefore means transition.
-	transition := true
-	preReadOK := true
+	// Transition is defined against the STORED row, not Get's synthesised
+	// view: Get returns DefaultRow(disconnected) for a missing doc, which
+	// would read a never-touched id as "already off" and skip the write —
+	// losing the explicit-off signal (updated_at set). ErrNoDocuments
+	// therefore means transition (see disconnectTransition).
 	pctx, pcancel := quickCtx()
-	var probe struct {
-		Status Status `bson:"status"`
-	}
-	switch err := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
-		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}})).Decode(&probe); {
-	case err == nil:
-		transition = probe.Status != StatusDisconnected
-	case err == mongoDrv.ErrNoDocuments:
-		transition = true
-	default:
-		preReadOK = false
-	}
+	var probe probeDoc
+	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
+		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}})).Decode(&probe)
 	pcancel()
+	transition, preReadOK := disconnectTransition(probeErr, probe.Status)
 	// Idempotent no-op: already disconnected means updated_at is the last
-	// transition, not the last verb — a repeat verb returns success without
-	// moving the timestamp, so triage can read updated_at as "last
-	// transition". Tokens were cleared by the transition that got here
-	// (every path to disconnected unsets them), so skipping the write loses
-	// nothing.
-	if !transition && preReadOK {
+	// transition, not the last verb — but the self-heal still runs: display
+	// fields refresh without moving updated_at, so a scope change lands even
+	// on rows that never transition again.
+	if !transition {
+		if _, derr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
+			bson.D{{Key: "$set", Value: bson.D{
+				{Key: "displayName", Value: DisplayName(id)},
+				{Key: "scopes", Value: ScopesFor(id)},
+			}}}); derr != nil {
+			s.logf("connectors: display refresh %s failed: %v", id, derr)
+			return Connector{}, NewStoreError("connector disconnect failed", true)
+		}
 		return s.readBack(id)
 	}
+	// On probe error the write lands anyway (fail-loud) but updated_at then
+	// means "last verb attempted", not "last transition" — the
+	// (pre-read unavailable) log label marks exactly this case.
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
 		disconnectUpdateDoc(id, now), options.Update().SetUpsert(true))
 	if err != nil {
@@ -278,6 +285,30 @@ func resolveConnectedAt(cur Connector, now int64) int64 {
 		return cur.ConnectedAt
 	}
 	return now
+}
+
+// probeDoc is the minimal read for transition decisions: status (+lastError
+// where compared). Never the token columns.
+type probeDoc struct {
+	Status    Status `bson:"status"`
+	LastError string `bson:"lastError"`
+}
+
+// disconnectTransition decides the Disconnect write from the raw status
+// probe. Pure so the explicit-off rule is pinned without Atlas:
+//   - absent doc (ErrNoDocuments) → transition (write; sets explicit-off)
+//   - stored-disconnected → no-op (skip; updated_at stays last transition)
+//   - any other status → transition (write)
+//   - probe error → write anyway, flagged (fail-loud; see preReadOK)
+func disconnectTransition(probeErr error, status Status) (transition, preReadOK bool) {
+	switch {
+	case probeErr == nil:
+		return status != StatusDisconnected, true
+	case errors.Is(probeErr, mongoDrv.ErrNoDocuments):
+		return true, true
+	default:
+		return true, false
+	}
 }
 
 // statusUpdateDoc builds the single UpdateOne body for SetStatus: $set with
