@@ -109,6 +109,51 @@ import kotlinx.coroutines.withContext
  * wording, so the two can never disagree above 99. */
 private fun pendingCountLabel(count: Int): String = if (count > 99) "99+" else "$count"
 
+/**
+ * Chat header actions (#354): the single named list the header's action set
+ * comes from. The bar keeps [chatHeaderVisibleActions] on screen and folds
+ * [chatHeaderOverflowActions] behind the "More" menu, so a future action
+ * cannot silently re-stuff the bar — adding it here without assigning it to
+ * one of the two lists fails [ChatHeaderTest].
+ */
+internal enum class ChatHeaderAction {
+    MODEL,
+    CONVERSATIONS,
+    RUNS,
+    APPROVALS,
+    MEMORY,
+    AUTO_READ,
+    NEW,
+}
+
+/** Always-visible header actions (#354): Model, Conversations, Auto-read, New. */
+internal val chatHeaderVisibleActions: List<ChatHeaderAction> =
+    listOf(
+        ChatHeaderAction.MODEL,
+        ChatHeaderAction.CONVERSATIONS,
+        ChatHeaderAction.AUTO_READ,
+        ChatHeaderAction.NEW,
+    )
+
+/** Header actions folded behind the "More" overflow menu (#354). */
+internal val chatHeaderOverflowActions: List<ChatHeaderAction> =
+    listOf(
+        ChatHeaderAction.RUNS,
+        ChatHeaderAction.APPROVALS,
+        ChatHeaderAction.MEMORY,
+    )
+
+/** Every header action, exactly once: visible + overflow with no overlap. */
+internal val chatHeaderAllActions: List<ChatHeaderAction> =
+    chatHeaderVisibleActions + chatHeaderOverflowActions
+
+/**
+ * Combined badge for the "More" overflow icon (#354): the pending Approval
+ * count plus the pending Memory count. Zero means no badge.
+ */
+internal fun chatHeaderOverflowBadgeCount(pendingApprovals: Int, pendingMemory: Int): Int =
+    maxOf(0, pendingApprovals) + maxOf(0, pendingMemory)
+
 /** Unwraps a possibly-wrapped Context to its Activity, if any. */
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -2429,6 +2474,9 @@ internal fun ChatScreen(
             toasts.toast(friendlyError(state.error).title, ToastKind.Error)
         }
     }
+    // Header overflow menu (#354): Runs/Approvals/Memory live behind "More"
+    // so the bar fits a 360dp phone with the title intact.
+    var showHeaderMore by remember { mutableStateOf(false) }
     // The toast card floats top-end over the content (Box overlay, not
     // the bottom-anchored Scaffold slot) so it never shifts the layout.
     Box(modifier = Modifier.fillMaxSize()) {
@@ -2465,7 +2513,11 @@ internal fun ChatScreen(
                 },
                 title = {
                     Column {
-                        Text(title, maxLines = 1)
+                        // Ellipsis, never mid-glyph clip (#354): with seven
+                        // actions the title collapsed to "C"; the overflow
+                        // below frees the row, and the ellipsis is the
+                        // backstop at 360dp + 1.3 font scale.
+                        Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (setupNeeded) {
                             Text(
                                 "Choose a model to start",
@@ -2486,55 +2538,16 @@ internal fun ChatScreen(
                     }
                 },
                 actions = {
+                    // Visible set mirrors chatHeaderVisibleActions (#354):
+                    // Model, Conversations, Auto-read, New. Runs, Approvals
+                    // and Memory live behind "More" so the title keeps its
+                    // row on a 360dp phone. Keep this block in sync with the
+                    // two lists — ChatHeaderTest fails otherwise.
                     IconButton(onClick = onModel, enabled = !state.streaming) {
                         Icon(Icons.Filled.Tune, contentDescription = "Model")
                     }
                     IconButton(onClick = onHistory, enabled = !state.streaming) {
                         Icon(Icons.Filled.History, contentDescription = "Conversations")
-                    }
-                    // Runs (#311): the thread's server-side turns, in-flight
-                    // and finished. Gated on a loaded thread: a blank thread
-                    // would list every conversation's runs unscoped.
-                    IconButton(
-                        onClick = onRuns,
-                        enabled = state.ready && state.threadId.isNotBlank(),
-                    ) {
-                        Icon(Icons.Filled.List, contentDescription = "Runs")
-                    }
-                    // Approvals (#313): held tool calls need an explicit
-                    // decision, and a gate stalls the stream with no frames.
-                    // Badged with the pending count; always enabled once
-                    // ready — approvals are global, not per-thread.
-                    BadgedBox(
-                        badge = {
-                            if (state.pendingApprovalCount > 0) {
-                                Badge { Text(pendingCountLabel(state.pendingApprovalCount)) }
-                            }
-                        },
-                    ) {
-                        IconButton(
-                            onClick = onApprovals,
-                            enabled = state.ready,
-                        ) {
-                            Icon(Icons.Filled.Approval, contentDescription = "Approvals")
-                        }
-                    }
-                    // Memory (#315): learned facts. Badged with pending
-                    // proposals awaiting review; always enabled once ready —
-                    // memory is per-profile, not per-thread.
-                    BadgedBox(
-                        badge = {
-                            if (state.pendingMemoryCount > 0) {
-                                Badge { Text(pendingCountLabel(state.pendingMemoryCount)) }
-                            }
-                        },
-                    ) {
-                        IconButton(
-                            onClick = onMemory,
-                            enabled = state.ready,
-                        ) {
-                            Icon(Icons.Filled.Psychology, contentDescription = "Memory")
-                        }
                     }
                     // Auto-read: speak each finished reply aloud.
                     //
@@ -2564,6 +2577,93 @@ internal fun ChatScreen(
                     // + starts a new conversation; older ones are kept.
                     IconButton(onClick = stopThen(onNew), enabled = !state.streaming) {
                         Icon(Icons.Filled.Add, contentDescription = "New conversation")
+                    }
+                    // Overflow (#354): Runs (#311), Approvals (#313), Memory
+                    // (#315). The badge sums both pending counts so a held
+                    // approval or proposal is never invisible while folded.
+                    // Box-anchored so the menu drops from the "More" icon,
+                    // not the actions row.
+                    val overflowBadge =
+                        chatHeaderOverflowBadgeCount(
+                            state.pendingApprovalCount,
+                            state.pendingMemoryCount,
+                        )
+                    Box {
+                        BadgedBox(
+                            badge = {
+                                if (overflowBadge > 0) {
+                                    Badge { Text(pendingCountLabel(overflowBadge)) }
+                                }
+                            },
+                        ) {
+                            IconButton(onClick = { showHeaderMore = true }) {
+                                Icon(Icons.Filled.MoreVert, contentDescription = "More")
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = showHeaderMore,
+                            onDismissRequest = { showHeaderMore = false },
+                        ) {
+                        // Runs (#311): the thread's server-side turns,
+                        // in-flight and finished. Gated on a loaded thread: a
+                        // blank thread would list every conversation's runs
+                        // unscoped.
+                        DropdownMenuItem(
+                            text = { Text("Runs") },
+                            leadingIcon = {
+                                Icon(Icons.Filled.List, contentDescription = null)
+                            },
+                            onClick = {
+                                showHeaderMore = false
+                                onRuns()
+                            },
+                            enabled = state.ready && state.threadId.isNotBlank(),
+                        )
+                        // Approvals (#313): held tool calls need an explicit
+                        // decision, and a gate stalls the stream with no
+                        // frames. Badged with the pending count; always
+                        // enabled once ready — approvals are global, not
+                        // per-thread.
+                        DropdownMenuItem(
+                            text = { Text("Approvals") },
+                            leadingIcon = {
+                                Icon(Icons.Filled.Approval, contentDescription = null)
+                            },
+                            trailingIcon = {
+                                if (state.pendingApprovalCount > 0) {
+                                    Badge {
+                                        Text(pendingCountLabel(state.pendingApprovalCount))
+                                    }
+                                }
+                            },
+                            onClick = {
+                                showHeaderMore = false
+                                onApprovals()
+                            },
+                            enabled = state.ready,
+                        )
+                        // Memory (#315): learned facts. Badged with pending
+                        // proposals awaiting review; always enabled once
+                        // ready — memory is per-profile, not per-thread.
+                        DropdownMenuItem(
+                            text = { Text("Memory") },
+                            leadingIcon = {
+                                Icon(Icons.Filled.Psychology, contentDescription = null)
+                            },
+                            trailingIcon = {
+                                if (state.pendingMemoryCount > 0) {
+                                    Badge {
+                                        Text(pendingCountLabel(state.pendingMemoryCount))
+                                    }
+                                }
+                            },
+                            onClick = {
+                                showHeaderMore = false
+                                onMemory()
+                            },
+                            enabled = state.ready,
+                        )
+                        }
                     }
                 },
             )
