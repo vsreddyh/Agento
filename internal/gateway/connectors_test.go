@@ -112,3 +112,12 @@ func TestConnectorsWireGatesConnectedAt(t *testing.T) {
 		t.Errorf("disconnected row must omit connected_at, got %v", got)
 	}
 }
+
+func TestConnectorsMalformedVerbPathIs404(t *testing.T) {
+	srv := connectorsServer(t)
+	// Extra segment is a bad path (404), not a wrong method (405 with
+	// Allow): the verb is right, the resource doesn't exist.
+	if rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/disconnect/extra", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("disconnect/extra: %d, want 404 (%s)", rec.Code, rec.Body)
+	}
+}

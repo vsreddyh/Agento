@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"agento/internal/approvals"
@@ -118,7 +119,8 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	// Fixed-set v1: stray docs (typo'd id from a future OAuth bug,
 	// hand-edit) are excluded from the shape, but must not vanish silently
 	// — triage would otherwise see "3 disconnected rows" while Mongo holds
-	// 4 docs.
+	// 4 docs. Sorted so two log lines for the same stray id diff clean.
+	sort.Strings(ignored)
 	if len(ignored) > 0 {
 		s.logf("connectors: ignoring %d unknown row(s): %q", len(ignored), ignored)
 	}
@@ -179,7 +181,16 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	// non-idempotent work).
 	connectedAt := now
 	if st == StatusConnected {
-		if cur, gerr := s.Get(ctx, id); gerr == nil && cur.ConnectedAt != 0 {
+		cur, gerr := s.Get(ctx, id)
+		if gerr != nil {
+			// Fail the write, don't guess the stamp: falling through with
+			// now would silently reset first-ever-connect on a transient
+			// read failure while reporting success. The caller retries; the
+			// stamp survives.
+			s.logf("connectors: pre-read %s failed: %v", id, gerr)
+			return Connector{}, NewStoreError("connector read failed", true)
+		}
+		if cur.ConnectedAt != 0 {
 			connectedAt = cur.ConnectedAt
 		}
 	}

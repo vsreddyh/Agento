@@ -51,7 +51,11 @@ func NewMemoryStore() *MemoryStore {
 // DefaultRow synthesises the disconnected row for an id with no document.
 // UpdatedAt stays zero (and the wire omits it): absence means never touched,
 // which is exactly the fresh-deploy state worth distinguishing while
-// debugging "was this ever written".
+// debugging "was this ever written". Note the companion case: Disconnect on
+// a never-touched id upserts with UpdatedAt set, so an explicitly-off row
+// carries updated_at where a never-touched one omits it — same status,
+// different shape, and the difference is the signal (explicit-off vs never
+// touched), not an inconsistency.
 func DefaultRow(id string) Connector {
 	return Connector{
 		ID:          id,

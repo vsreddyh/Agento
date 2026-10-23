@@ -243,3 +243,14 @@ func TestSetStatusPreservesConnectedAt(t *testing.T) {
 		t.Errorf("ConnectedAt moved %d -> %d across disconnect/reconnect", first.ConnectedAt, third.ConnectedAt)
 	}
 }
+
+// Expired retains tokens for the follow-up's silent-refresh attempt: only
+// the disconnected path carries $unset. A future edit adding $unset here
+// would silently break the refresh path the ADR promises.
+func TestStatusUpdateDocExpiredRetainsTokens(t *testing.T) {
+	for _, e := range statusUpdateDoc("gmail", StatusExpired, "aged out", 123, 0) {
+		if e.Key == "$unset" {
+			t.Errorf("expired update must not $unset tokens, got %v", e.Value)
+		}
+	}
+}
