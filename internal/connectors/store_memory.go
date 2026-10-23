@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -121,13 +122,21 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// Transition-aware like Disconnect: compare BEFORE mutating — the old
 	// code assigned c.Status first, so every same-error flip early-returned
 	// a mutated-but-unpersisted copy (caller saw the new status, the store
-	// kept the old). A repeated SetStatus with no state change refreshes
-	// display fields without moving updated_at; a missing doc always writes.
-	if ok && c.Status == st && c.LastError == wantErr {
-		// No-op: self-heal display without touching timestamps (same as
-		// the Disconnect no-op below).
+	// kept the old). Three tiers like Mongo: pure no-op (display fresh,
+	// error matches — no store touch), repair-only (display/error refresh,
+	// no updated_at bump), full transition write. A missing doc always
+	// takes the full write.
+	if ok && c.Status == st && c.LastError == wantErr &&
+		c.DisplayName == DisplayName(id) && slices.Equal(c.Scopes, ScopesFor(id)) {
+		return backfillDisplay(c, id), nil
+	}
+	if ok && c.Status == st {
+		// Repair-only: heal display + error text, leave every timestamp
+		// (and, for connected, the stamp) exactly where the last
+		// transition put it.
 		c.DisplayName = DisplayName(id)
 		c.Scopes = ScopesFor(id)
+		c.LastError = wantErr
 		s.rows[id] = c
 		return backfillDisplay(c, id), nil
 	}
@@ -161,17 +170,25 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	if !ok {
 		c = DefaultRow(id)
 	}
-	c.DisplayName = DisplayName(id)
-	c.Scopes = ScopesFor(id)
 	// Idempotent no-op like the Mongo backend: already disconnected refreshes
 	// display AND clears lastError without moving updated_at (stays the last
 	// transition), still success — so a scope change lands and a corrupt
-	// error clears even on rows that never transition again.
+	// error clears even on rows that never transition again. Pure no-op when
+	// there is nothing to heal: no store touch at all.
+	if ok && c.Status == StatusDisconnected &&
+		c.LastError == "" && c.DisplayName == DisplayName(id) &&
+		slices.Equal(c.Scopes, ScopesFor(id)) {
+		return backfillDisplay(c, id), nil
+	}
 	if ok && c.Status == StatusDisconnected {
+		c.DisplayName = DisplayName(id)
+		c.Scopes = ScopesFor(id)
 		c.LastError = ""
 		s.rows[id] = c
 		return backfillDisplay(c, id), nil
 	}
+	c.DisplayName = DisplayName(id)
+	c.Scopes = ScopesFor(id)
 	c.Status = StatusDisconnected
 	c.LastError = ""
 	c.UpdatedAt = time.Now().UnixMilli()

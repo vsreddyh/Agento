@@ -110,7 +110,12 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	out := make([]Connector, 0, len(listIDs))
 	var ignored []string
 	for id := range byID {
-		if !Known(id) {
+		// Stored _id folds like every read path: a hand-edited "Gmail" doc
+		// is the same logical id Get("Gmail") would normalise to, so the
+		// stray check normalises too — otherwise List calls it unknown
+		// while Get calls it never-touched. (The OAuth follow-up must still
+		// write lowercase _ids.)
+		if !Known(NormalizedID(id)) {
 			ignored = append(ignored, id)
 		}
 	}
@@ -167,32 +172,28 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	if st == StatusExpired {
 		lastErr = approvals.ScrubError(lastError)
 	}
-	// Transition-aware like Disconnect: a repeated SetStatus with no state
-	// change refreshes display fields without moving updated_at (updated_at
-	// = last transition on every path). Absent doc always writes. One probe
-	// carries status+lastError+stamp, so the connected path resolves
-	// first-ever-connect from the same read — no second round-trip.
-	// Unexpected probe failures log once, here: the write below still lands
-	// (fail-loud), except the connected path, which fails rather than
-	// guessing the stamp.
+	// Three tiers, one probe (status+error+stamp+display). Absent doc always
+	// takes the full write. Unexpected probe failures log once, here.
 	pctx, pcancel := quickCtx()
 	var cur probeDoc
 	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
-		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}, {Key: "lastError", Value: 1}, {Key: "connectedAt", Value: 1}})).Decode(&cur)
+		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}, {Key: "lastError", Value: 1}, {Key: "connectedAt", Value: 1}, {Key: "displayName", Value: 1}, {Key: "scopes", Value: 1}})).Decode(&cur)
 	pcancel()
 	probeUnexpected := probeErr != nil && !errors.Is(probeErr, mongoDrv.ErrNoDocuments)
 	if probeUnexpected {
 		s.logf("connectors: SetStatus pre-read %s failed: %v", id, probeErr)
 	}
 	if probeErr == nil && cur.Status == st && cur.LastError == lastErr {
-		// No-op: self-heal display (and nothing else) so a scope change
-		// lands even on rows that never transition — same as the Disconnect
-		// no-op, without touching updated_at.
+		if displayFresh(cur, id, lastErr) {
+			// Pure no-op: nothing to heal, no write at all.
+			return s.readBack(id)
+		}
+		// Repair-only: display and/or cleared error, no updated_at bump —
+		// updated_at stays last transition. $unset rides along on the
+		// disconnecting state so a corrupt row's tokens die in the same
+		// write that would otherwise leave them.
 		if _, derr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
-			bson.D{{Key: "$set", Value: bson.D{
-				{Key: "displayName", Value: DisplayName(id)},
-				{Key: "scopes", Value: ScopesFor(id)},
-			}}}); derr != nil {
+			repairUpdateDoc(id, lastErr, st == StatusDisconnected)); derr != nil {
 			s.logf("connectors: display refresh %s failed: %v", id, derr)
 			return Connector{}, NewStoreError("connector write failed", true)
 		}
@@ -245,21 +246,20 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	pctx, pcancel := quickCtx()
 	var probe probeDoc
 	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
-		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}})).Decode(&probe)
+		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}, {Key: "lastError", Value: 1}, {Key: "displayName", Value: 1}, {Key: "scopes", Value: 1}})).Decode(&probe)
 	pcancel()
 	transition, preReadOK := disconnectTransition(probeErr, probe.Status)
 	// Idempotent no-op: already disconnected means updated_at is the last
-	// transition, not the last verb — but the self-heal still runs: display
-	// fields refresh AND lastError clears without moving updated_at, so a
-	// scope change lands and a corrupt error clears even on rows that never
-	// transition again.
+	// transition, not the last verb. Pure no-op (display fresh, error
+	// already clear) skips the write entirely; stale display/error takes
+	// the repair shape — display + clear, no updated_at bump, tokens
+	// unset in the same write.
 	if !transition {
+		if displayFresh(probe, id, "") {
+			return s.readBack(id)
+		}
 		if _, derr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
-			bson.D{{Key: "$set", Value: bson.D{
-				{Key: "displayName", Value: DisplayName(id)},
-				{Key: "scopes", Value: ScopesFor(id)},
-				{Key: "lastError", Value: ""},
-			}}}); derr != nil {
+			repairUpdateDoc(id, "", true)); derr != nil {
 			s.logf("connectors: display refresh %s failed: %v", id, derr)
 			return Connector{}, NewStoreError("connector disconnect failed", true)
 		}
@@ -296,12 +296,53 @@ func resolveConnectedAt(stamp, now int64) int64 {
 }
 
 // probeDoc is the minimal read for transition decisions: status (+lastError
-// where compared, +connectedAt where the stamp resolves). Never the token
-// columns.
+// where compared, +connectedAt where the stamp resolves, +display where the
+// no-op decides heal-vs-skip). Never the token columns.
 type probeDoc struct {
-	Status      Status `bson:"status"`
-	LastError   string `bson:"lastError"`
-	ConnectedAt int64  `bson:"connectedAt"`
+	Status      Status   `bson:"status"`
+	LastError   string   `bson:"lastError"`
+	ConnectedAt int64    `bson:"connectedAt"`
+	DisplayName string   `bson:"displayName"`
+	Scopes      []string `bson:"scopes"`
+}
+
+// displayFresh reports whether the stored display already matches the
+// constants (and the error matches the caller's intent): nothing to heal,
+// so the no-op can skip the $set entirely rather than healing nothing at
+// the cost of two round trips.
+func displayFresh(cur probeDoc, id, lastErr string) bool {
+	if cur.LastError != lastErr || cur.DisplayName != DisplayName(id) {
+		return false
+	}
+	want := ScopesFor(id)
+	if len(cur.Scopes) != len(want) {
+		return false
+	}
+	for i := range want {
+		if cur.Scopes[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// repairUpdateDoc builds the repair-only write: display + error refresh with
+// NO updatedAt/status/connectedAt keys, so a repair can never move the
+// last-transition timestamp. Pinned by test — a future edit adding
+// updatedAt here silently turns every repeat verb into a bump.
+func repairUpdateDoc(id, lastErr string, unsetTokens bool) bson.D {
+	update := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "displayName", Value: DisplayName(id)},
+		{Key: "scopes", Value: ScopesFor(id)},
+		{Key: "lastError", Value: lastErr},
+	}}}
+	if unsetTokens {
+		update = append(update, bson.E{Key: "$unset", Value: bson.D{
+			{Key: refreshTokenField, Value: ""},
+			{Key: accessTokenField, Value: ""},
+		}})
+	}
+	return update
 }
 
 // disconnectTransition decides the Disconnect write from the raw status

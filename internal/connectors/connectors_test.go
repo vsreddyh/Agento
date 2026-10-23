@@ -382,3 +382,59 @@ func TestBackfillDisplayClearsDisconnectedError(t *testing.T) {
 		t.Errorf("disconnected LastError = %q, want cleared", got.LastError)
 	}
 }
+
+// repairUpdateDoc must never carry updatedAt/status/connectedAt: a repair
+// that bumped updatedAt would silently turn every repeat verb into a
+// timestamp bump, breaking the last-transition contract with no test failing.
+func TestRepairUpdateDocShape(t *testing.T) {
+	for _, doc := range []bson.D{
+		repairUpdateDoc("gmail", "", true),
+		repairUpdateDoc("gmail", "aged out", false),
+	} {
+		seen := map[string]bool{}
+		var setBody, unsetBody bson.D
+		for _, e := range doc {
+			seen[e.Key] = true
+			if e.Key == "$set" {
+				setBody, _ = e.Value.(bson.D)
+			}
+			if e.Key == "$unset" {
+				unsetBody, _ = e.Value.(bson.D)
+			}
+		}
+		if len(doc) > 2 {
+			t.Fatalf("repair doc has %d ops %v, want at most $set+$unset", len(doc), seen)
+		}
+		for _, k := range []string{"updatedAt", "status", "connectedAt"} {
+			for _, e := range setBody {
+				if e.Key == k {
+					t.Errorf("repair $set carries %q", k)
+				}
+			}
+		}
+		foundErr := false
+		for _, e := range setBody {
+			if e.Key == "lastError" {
+				foundErr = true
+			}
+		}
+		if !foundErr {
+			t.Errorf("repair $set missing lastError: %v", setBody)
+		}
+		_ = unsetBody
+	}
+	// Disconnect repair unsets tokens; a non-disconnect repair must not.
+	withUnset := repairUpdateDoc("gmail", "", true)
+	withoutUnset := repairUpdateDoc("gmail", "aged out", false)
+	hasUnset := func(doc bson.D) bool {
+		for _, e := range doc {
+			if e.Key == "$unset" {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasUnset(withUnset) || hasUnset(withoutUnset) {
+		t.Errorf("unset mismatch: disconnect=%v expired=%v", hasUnset(withUnset), hasUnset(withoutUnset))
+	}
+}
