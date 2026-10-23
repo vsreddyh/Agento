@@ -168,23 +168,34 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 		lastErr = approvals.ScrubError(lastError)
 	}
 	// Transition-aware like Disconnect: a repeated SetStatus with no state
-	// change skips the write (updated_at = last transition on every path).
-	// Absent doc always writes. One probe carries status+lastError+stamp, so
-	// the connected path resolves first-ever-connect from the same read —
-	// no second round-trip.
+	// change refreshes display fields without moving updated_at (updated_at
+	// = last transition on every path). Absent doc always writes. One probe
+	// carries status+lastError+stamp, so the connected path resolves
+	// first-ever-connect from the same read — no second round-trip.
+	// Unexpected probe failures log once, here: the write below still lands
+	// (fail-loud), except the connected path, which fails rather than
+	// guessing the stamp.
 	pctx, pcancel := quickCtx()
 	var cur probeDoc
 	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
 		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}, {Key: "lastError", Value: 1}, {Key: "connectedAt", Value: 1}})).Decode(&cur)
 	pcancel()
-	if probeErr != nil && !errors.Is(probeErr, mongoDrv.ErrNoDocuments) {
-		// Fail-loud like Disconnect's (pre-read unavailable) label: the
-		// write below still lands, but triage can tell it ran without a
-		// confirming pre-read. Absent doc is a normal first write, not an
-		// error — only unexpected failures log.
+	probeUnexpected := probeErr != nil && !errors.Is(probeErr, mongoDrv.ErrNoDocuments)
+	if probeUnexpected {
 		s.logf("connectors: SetStatus pre-read %s failed: %v", id, probeErr)
 	}
 	if probeErr == nil && cur.Status == st && cur.LastError == lastErr {
+		// No-op: self-heal display (and nothing else) so a scope change
+		// lands even on rows that never transition — same as the Disconnect
+		// no-op, without touching updated_at.
+		if _, derr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
+			bson.D{{Key: "$set", Value: bson.D{
+				{Key: "displayName", Value: DisplayName(id)},
+				{Key: "scopes", Value: ScopesFor(id)},
+			}}}); derr != nil {
+			s.logf("connectors: display refresh %s failed: %v", id, derr)
+			return Connector{}, NewStoreError("connector write failed", true)
+		}
 		return s.readBack(id)
 	}
 	// ConnectedAt is first-ever connect, not last-write and not
@@ -194,14 +205,11 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	// retains it, both backends). Single-writer assumption: no two
 	// SetStatus(connected) run concurrently in v1 (gateway verbs only; the
 	// OAuth follow-up must keep token writes on one serialised path, not
-	// copy this read for non-idempotent work). A failed probe fails the
-	// connected write rather than guessing the stamp (the caller retries;
-	// the stamp survives) — but an absent doc is a normal first connect,
-	// not an error.
-	connectedAt := now
+	// copy this read for non-idempotent work). Resolved only on the
+	// connected path — other paths pass 0, which the builder ignores.
+	connectedAt := int64(0)
 	if st == StatusConnected {
-		if probeErr != nil && !errors.Is(probeErr, mongoDrv.ErrNoDocuments) {
-			s.logf("connectors: pre-read %s failed: %v", id, probeErr)
+		if probeUnexpected {
 			return Connector{}, NewStoreError("connector read failed", true)
 		}
 		connectedAt = resolveConnectedAt(cur.ConnectedAt, now)
@@ -360,15 +368,18 @@ func disconnectUpdateDoc(id string, now int64) bson.D {
 }
 
 // backfillDisplay repairs a present-but-thin document the way List's
-// DefaultRow synthesis covers absent ones: scopes, display name, and — for
-// a corrupt/hand-edited doc with a missing status — the status itself,
-// which otherwise decodes to "" and would emit a fourth state the app never
-// expects and the reconnect hint never matches. Fail-closed to disconnected.
+// DefaultRow synthesis covers absent ones: scopes, display name, and status.
+// Only the expired path carries error text anywhere in this package
+// (write paths enforce it, no-op refreshes preserve the clear): a corrupt
+// doc's stale error on a healthy (connected) or off (disconnected) row is
+// cleared here rather than rendered, matching the empty-status repair
+// below. Fail-closed display repair — never invents state, only removes
+// text healthy rows must not show.
 //
-// LastError is scrubbed here too, not only on the SetStatus write path: a
-// corrupt/hand-edited doc with a token in lastError would otherwise emit it
-// verbatim on the next read — the exact leak the write scrub exists to
-// prevent. ScrubError is idempotent on already-scrubbed text.
+// The scrub stays for the expired path: a token in an expired row's
+// lastError would otherwise emit verbatim on read — the exact leak the
+// write scrub exists to prevent. ScrubError is idempotent on
+// already-scrubbed text.
 func backfillDisplay(c Connector, id string) Connector {
 	if len(c.Scopes) == 0 {
 		c.Scopes = ScopesFor(id)
@@ -379,13 +390,10 @@ func backfillDisplay(c Connector, id string) Connector {
 	if !c.Status.Valid() {
 		c.Status = StatusDisconnected
 	}
-	// Disconnected rows carry no error text (same contract as the SetStatus
-	// write path): a corrupt doc's stale lastError is cleared here rather
-	// than rendered, matching the empty-status repair above.
-	if c.Status == StatusDisconnected {
-		c.LastError = ""
-	} else {
+	if c.Status == StatusExpired {
 		c.LastError = approvals.ScrubError(c.LastError)
+	} else {
+		c.LastError = ""
 	}
 	return c
 }

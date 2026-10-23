@@ -369,7 +369,13 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 		// check, policy lookup, tracked state, audit rows — exact-matches.
 		// Without this, Send_Message and send_message refuse identically but
 		// audit as two tool names. The forwarded frame keeps Pi's raw bytes
-		// (line is written verbatim); only the relay's own bookkeeping folds.
+		// (line is written verbatim): policy and audit see the folded
+		// spelling, the server sees exactly what Pi sent. A mixed-case
+		// allowed tool therefore gates correctly but may arrive at a
+		// case-sensitive MCP server as an unknown method — fail-closed
+		// downstream (server errors, Pi sees a tool error), and Pi sends
+		// lowercase in practice. Rewriting the frame would break the
+		// byte-identical forwarding contract, so the case lives with Pi.
 		params.Name = strings.ToLower(strings.TrimSpace(params.Name))
 		if connectors.IsDraftOnlySend(r.server, params.Name) {
 			// Draft-only v1 (#316): sends never reach the server, gated or
