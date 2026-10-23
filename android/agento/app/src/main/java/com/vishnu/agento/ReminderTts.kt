@@ -29,6 +29,10 @@ object ReminderTts {
     @Volatile private var engine: TextToSpeech? = null
     private var ready = false
     private var inited = false
+    /** Application context for reading stored TTS prefs in pump(). Set on
+     * every speak(); the object never holds an Activity. Volatile like the
+     * engine: written on the caller thread, read off the TTS callback. */
+    @Volatile private var appCtxRef: Context? = null
     private var speaking = false
     private var speakStartedAt = 0L
     /** Engine generation: a late callback from a dead engine must not clear the new one's state. */
@@ -57,9 +61,11 @@ object ReminderTts {
 
     internal fun speak(appCtx: Context, kind: ReminderKind, task: ServerTask, overdueElapsed: Long? = null) {
         if (isSilent(appCtx)) return
+        appCtxRef = appCtx.applicationContext
         // Quotes delimit the name in text but some engines verbalize "quote",
         // so they are stripped only on the speech path (reminderSpeech keeps them).
-        val text = ChatTts.cleanForSpeech(reminderSpeech(kind, task.name, task.speakName, overdueElapsed))
+        val leadMinutes = BehaviourSettings.reminderLeadMinutes(appCtx)
+        val text = ChatTts.cleanForSpeech(reminderSpeech(kind, task.name, task.speakName, overdueElapsed, leadMinutes))
             .replace("\"", "").replace(QUOTE_CHARS, "")
         val id = "${kind.key}-${UUID.randomUUID()}"
         synchronized(lock) {
@@ -209,6 +215,9 @@ object ReminderTts {
                 }
             }
             if (next == null) return
+            // Stored voice/rate/pitch (#355); skipped at defaults so
+            // untouched installs speak exactly like before.
+            appCtxRef?.let { applyStoredTtsSettings(eng, it) }
             // A throw (broken OEM binder state) counts like ERROR: clear and
             // advance. Uncaught here it would escape from onDone/onError's thread.
             val rc = runCatching {

@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -80,6 +81,7 @@ internal enum class SettingSection(val title: String) {
     Appearance("Appearance"),
     Widget("Home-screen widget"),
     Notifications("Notifications"),
+    Behaviour("Behaviour"),
     Storage("Backup"),
     Usage("Usage"),
     About("About"),
@@ -198,6 +200,9 @@ internal fun SettingsScreen(
                                 else -> "System"
                             },
                             notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
+                            behaviourStatus = remember(context, settingsRefresh, resumeTick) {
+                                BehaviourSettings.hubStatus(context)
+                            },
                             // Re-read on resume, keyed above.
                             widgetStatus = remember(context, resumeTick) {
                                 val placed = taskWidgetIds(context).size
@@ -433,7 +438,9 @@ internal fun SettingsScreen(
                             else -> {
                                 SectionCard(
                                     title = "Sync",
-                                    subtitle = "Push the latest health data to your server now. Automatic sync runs hourly.",
+                                    subtitle = "Push the latest health data to your server now. " +
+                                        BehaviourSettings.syncCadenceLine(context) +
+                                        " Cadence, Wi-Fi-only and pause live in Settings → Behaviour.",
                                 ) {
                                     Button(
                                         onClick = { viewModel.syncNow() },
@@ -466,6 +473,9 @@ internal fun SettingsScreen(
                     }
                     SettingSection.Notifications -> {
                         NotificationsSection()
+                    }
+                    SettingSection.Behaviour -> {
+                        BehaviourSection(refreshTick = settingsRefresh)
                     }
                     SettingSection.Storage -> {
                         SettingsBackupSection(
@@ -617,18 +627,20 @@ internal fun SettingsHub(
     healthStatus: String,
     themeStatus: String,
     notificationsStatus: String,
+    behaviourStatus: String,
     widgetStatus: String,
     usageStatus: String,
     appVersion: String,
     onPick: (SettingSection) -> Unit,
 ) {
-    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, widgetStatus, usageStatus, appVersion) {
+    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, behaviourStatus, widgetStatus, usageStatus, appVersion) {
         listOf(
             HubRow(SettingSection.Connection, serverStatus),
             HubRow(SettingSection.Health, healthStatus),
             HubRow(SettingSection.Appearance, themeStatus),
             HubRow(SettingSection.Widget, widgetStatus),
             HubRow(SettingSection.Notifications, notificationsStatus),
+            HubRow(SettingSection.Behaviour, behaviourStatus),
             HubRow(SettingSection.Storage, "Export & import"),
             HubRow(SettingSection.Usage, usageStatus),
             HubRow(SettingSection.About, appVersion),
@@ -679,16 +691,16 @@ internal fun SettingSection.hubIcon() = when (this) {
     SettingSection.Appearance -> Icons.Filled.DarkMode
     SettingSection.Widget -> Icons.Filled.Dashboard
     SettingSection.Notifications -> Icons.Filled.Notifications
+    SettingSection.Behaviour -> Icons.Filled.Tune
     SettingSection.Storage -> Icons.Filled.Backup
     SettingSection.Usage -> Icons.Filled.DataUsage
     SettingSection.About -> Icons.Filled.Info
 }
 
-/** Hermes notifications hub (issue #58).
+/** Reply-alerts hub (issue #58).
  *
- * 1) Scheduler status: the gateway config has no scheduler/cron section, so
- *    Hermes currently has NO cronjobs — there is nothing server-side whose
- *    completion could notify. This text says exactly that.
+ * 1) Scheduler responses post through [ChatNotifications.notifyCron] and are
+ *    gated by the scheduler kind in Behaviour, under this master switch.
  * 2) Completion notifications: when a chat reply finishes while the app is
  *    in the background, Agento posts a local notification (toggle below).
  */
@@ -719,8 +731,11 @@ internal fun NotificationsSection() {
 
     SectionCard(
         title = "Reply alerts",
-        subtitle = "The server runs no scheduled jobs, so there are no server-side completions to report. " +
-            "Instead, Agento can notify you when a chat reply finishes while the app is in the background.",
+        subtitle = "Agento can notify you when a chat reply finishes while the " +
+            "app is in the background. This master switch gates every kind. " +
+            BehaviourSettings.SKIPPED_NOT_QUEUED +
+            " Per-kind toggles for failures, saved instructions and scheduler " +
+            "responses live in Settings → Behaviour.",
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

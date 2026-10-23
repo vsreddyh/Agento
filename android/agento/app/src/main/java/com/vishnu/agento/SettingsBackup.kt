@@ -76,6 +76,8 @@ object SettingsBackup {
         add("auth_token")
         add("theme_mode")
         add("last_sync_at")
+        // Behaviour (#355): stored TTS voice name, "" for engine default.
+        add(BehaviourSettings.KEY_TTS_VOICE)
     }
 
     /** Boolean prefs the app reads. */
@@ -85,8 +87,22 @@ object SettingsBackup {
         // Reminders on/off — the one task_reminder_* key that is a user
         // setting rather than device-local alarm bookkeeping (#169). The
         // armed set and the budget snapshot are excluded on purpose; see the
-        // note under [isWidgetDisplayKey].
-        "task_reminders_enabled",
+        // note under [isWidgetDisplayKey]. By reference like every other
+        // entry: no re-spelled keys anywhere in this list.
+        TaskReminders.PREF_ENABLED,
+        // Auto-read (#355): a user setting like the reminders switch above,
+        // previously omitted by oversight — without it an export silently
+        // lost the pick while reminders survived. Additive like everything
+        // else: old backups (without it) restore to off, old readers skip it.
+        BehaviourSettings.KEY_TTS_AUTO,
+        // Behaviour (#355): per-kind notification gates plus the health-sync
+        // pause/Wi-Fi-only switches. All default to today's behaviour, so
+        // old backups (without them) restore identically.
+        BehaviourSettings.KEY_NOTIFY_FAILED,
+        BehaviourSettings.KEY_NOTIFY_INSTRUCT,
+        BehaviourSettings.KEY_NOTIFY_CRON,
+        BehaviourSettings.KEY_SYNC_WIFI_ONLY,
+        BehaviourSettings.KEY_SYNC_PAUSED,
     )
 
     /**
@@ -94,8 +110,19 @@ object SettingsBackup {
      * exported/imported like the string/boolean allowlists above — additive
      * and optional, so old backups (without these keys) still restore and
      * old readers ignore the extra numbers.
+     *
+     * Behaviour (#355) cadence/lead/TTS knobs ride the same list: they are
+     * longs for exactly this reason, and both sides coerce through
+     * [BehaviourSettings.coerceImport], so a hand-edited import can never
+     * store a value the getters silently disagree with.
      */
-    val LONG_KEYS: List<String> = UsageStore.LONG_KEYS
+    val LONG_KEYS: List<String> = (UsageStore.LONG_KEYS + listOf(
+        BehaviourSettings.KEY_SYNC_INTERVAL_HOURS,
+        BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES,
+        BehaviourSettings.KEY_REMINDER_LEAD_MINUTES,
+        BehaviourSettings.KEY_TTS_RATE_PCT,
+        BehaviourSettings.KEY_TTS_PITCH_PCT,
+    )).distinct()
 
     /**
      * True for per-model effort memory keys (`effort_<tab>_<model>` with tab
@@ -236,12 +263,15 @@ object SettingsBackup {
             // Long-or-Int only: a hand-set Int still carries the count
             // (widened), but a fractional Double/Float is corruption —
             // truncating 1.9 to 1 would persist a wrong-but-plausible count.
+            // Behaviour keys coerce through the inventory (see the import
+            // twin below): export must never emit a value the getters
+            // disagree with, or export→import stops being idempotent.
             val n: Long? = when (val v = all[k]) {
                 is Long -> v
                 is Int -> v.toLong()
                 else -> null
             }
-            n?.let { values.put(k, maxOf(0L, it)) }
+            n?.let { values.put(k, BehaviourSettings.coerceImport(k, it)) }
         }
         val files = JSONObject()
         // Unreadable files are named, not swallowed (#339): the backup
@@ -293,7 +323,11 @@ object SettingsBackup {
             prefs.edit {
                 for (k in STRING_KEYS) {
                     if (values.has(k) && values.opt(k) is String) {
-                        putString(k, values.optString(k, ""))
+                        // The voice key trims like its setter: a padded
+                        // hand-import would otherwise store whitespace the
+                        // getter trims away, diverging stored from shown.
+                        val v = values.optString(k, "")
+                        putString(k, if (k == BehaviourSettings.KEY_TTS_VOICE) v.trim() else v)
                         applied++
                     }
                 }
@@ -305,7 +339,9 @@ object SettingsBackup {
                 }
                 // Real token totals: Long/Int only, mirroring export — opt()
                 // then optLong() would coerce a fractional Double (1.9) into
-                // a wrong-but-plausible 1. Negatives (hand-edited) clamp to 0.
+                // a wrong-but-plausible 1. Negatives (hand-edited) clamp to 0,
+                // except behaviour keys, which coerce to their own floors via
+                // the inventory, so stored and shown can never disagree.
                 for (k in LONG_KEYS) {
                     val n: Long? = when (val v = values.opt(k)) {
                         is Long -> v
@@ -313,7 +349,7 @@ object SettingsBackup {
                         else -> null
                     }
                     if (n != null) {
-                        putLong(k, maxOf(0L, n))
+                        putLong(k, BehaviourSettings.coerceImport(k, n))
                         applied++
                     }
                 }
