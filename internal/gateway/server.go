@@ -153,6 +153,13 @@ type Config struct {
 	// process. main sets a Mongo store when the database is reachable.
 	ConnectorStore connectors.Store
 
+	// ConnectorOAuth is the server-side Google OAuth client. Nil means
+	// unconfigured: connect answers 501 exactly like the v1 foundation,
+	// and no token can be stored. main sets it from
+	// GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URL plus the
+	// envelope key; any piece missing leaves it nil.
+	ConnectorOAuth *connectors.OAuthConfig
+
 	// Logf receives operational messages. Nil discards them.
 	Logf func(format string, args ...any)
 }

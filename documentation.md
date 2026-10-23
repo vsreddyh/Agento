@@ -318,7 +318,7 @@ Threat note — what this does and does not fix:
 - Residual: a held call occupies its turn until expiry; an approval shows
   tool + args + time but not which conversation asked.
 
-### First connectors — Gmail, Calendar, Drive (#316, v1 foundation)
+### First connectors — Gmail, Calendar, Drive (#316, OAuth grants)
 
 Three connectors with explicit read vs draft/write scopes, each
 connecting/disconnecting independently from the app:
@@ -327,17 +327,26 @@ connecting/disconnecting independently from the app:
 - Calendar: list/upcoming + draft event (creates/invites refused the same way).
 - Drive: read/list + save agent-produced file (deletes gate as a backstop). Ungated-save scope is create-only: if the wired server's save can overwrite an existing file, that is a destructive write and the follow-up must gate it.
 
+Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
+(PKCE S256 + offline access + per-connector least-privilege scopes) for the
+app to open in a browser; Google redirects to the single registered
+`GET /api/connectors/callback?code=&state=`, the server consumes the
+single-use state, exchanges the code, seals both tokens with the envelope
+key (AES-256-GCM, `CONNECTORS_ENCRYPTION_KEY`), and flips the row to
+connected. Tokens land before the status flips — a connected-with-no-tokens
+row is never servable. Without full OAuth config (client id/secret,
+redirect URL, envelope key, durable store) connect answers 501.
+
 The refusal is enforced in the relay before the approval check, audited as
 `connector_draft_only`, and parks no approval card. Token placement: OAuth
-refresh tokens live **server-side in Mongo** (`connectors` collection),
-never in the app and never pasted in chat — the API returns status + scopes
-only, and disconnect `$unset`s the token columns. Already-fetched data
-(chat history, saved files) is not wiped on disconnect; disconnect stops
-future access. Without Mongo the list still answers from memory but nothing
-survives a restart and no token can be stored. API: `GET /api/connectors`,
-`POST /api/connectors/{id}/disconnect`; `POST .../connect` answers 501
-until the OAuth follow-up lands (the app treats it as "needs setup"). An
-expired row carries a `reconnect` hint instead of asking for a secret.
+refresh tokens live **server-side in Mongo** (`connectors` collection,
+envelope-encrypted), never in the app and never pasted in chat — the API
+returns status + scopes only, and disconnect `$unset`s the token columns.
+Already-fetched data (chat history, saved files) is not wiped on
+disconnect; disconnect stops future access. Without Mongo the list still
+answers from memory but nothing survives a restart and no token can be
+stored. An expired row carries a `reconnect` hint instead of asking for a
+secret.
 Wire shape note: a row with no `updated_at` was never touched; an explicit
 disconnect sets it. Same status, different shape — the difference is the
 signal (explicit-off vs never-touched), so a future shape-normalisation
