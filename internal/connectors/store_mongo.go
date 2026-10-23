@@ -64,22 +64,28 @@ const (
 	accessTokenField  = "accessToken"
 )
 
-var displayProjection = bson.D{
-	{Key: "_id", Value: 1},
-	{Key: "displayName", Value: 1},
-	{Key: "scopes", Value: 1},
-	{Key: "status", Value: 1},
-	{Key: "lastError", Value: 1},
-	{Key: "connectedAt", Value: 1},
-	{Key: "updatedAt", Value: 1},
+// displayProjection returns the display-only read shape: every API-visible
+// field, never the token columns. A fresh copy per call (same class as
+// ListIDs): the token-exclusion invariant TestDisplayProjectionExcludesTokens
+// pins would otherwise rest on no in-package edit ever appending a field.
+func displayProjection() bson.D {
+	return bson.D{
+		{Key: "_id", Value: 1},
+		{Key: "displayName", Value: 1},
+		{Key: "scopes", Value: 1},
+		{Key: "status", Value: 1},
+		{Key: "lastError", Value: 1},
+		{Key: "connectedAt", Value: 1},
+		{Key: "updatedAt", Value: 1},
+	}
 }
 
 func findOpts() *options.FindOptions {
-	return options.Find().SetProjection(displayProjection)
+	return options.Find().SetProjection(displayProjection())
 }
 
 func findOneOpts() *options.FindOneOptions {
-	return options.FindOne().SetProjection(displayProjection)
+	return options.FindOne().SetProjection(displayProjection())
 }
 
 func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
@@ -114,7 +120,7 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	// — triage would otherwise see "3 disconnected rows" while Mongo holds
 	// 4 docs.
 	if len(ignored) > 0 {
-		s.logf("connectors: ignoring %d unknown row(s): %v", len(ignored), ignored)
+		s.logf("connectors: ignoring %d unknown row(s): %q", len(ignored), ignored)
 	}
 	for _, id := range listIDs {
 		if c, ok := byID[id]; ok {
@@ -152,13 +158,24 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 		return Connector{}, NewStoreError("unknown connector status", false)
 	}
 	now := time.Now().UnixMilli()
-	// Disconnect clears lastError in both backends; SetStatus matches it on
-	// the disconnected path so the two routes to the same state agree.
+	// Only the expired path carries error text: connected (healthy) and
+	// disconnected (off) rows carry none, mirroring each other, so a stale
+	// or empty error can never render as failure text on a healthy row.
 	// Scrubbed (approvals.ScrubError): lastError is app-visible and the
 	// OAuth follow-up will store provider errors here.
-	lastErr := approvals.ScrubError(lastError)
-	if st == StatusDisconnected {
-		lastErr = ""
+	lastErr := ""
+	if st == StatusExpired {
+		lastErr = approvals.ScrubError(lastError)
+	}
+	// ConnectedAt is first-connect, not last-write: re-marking an already
+	// connected row (e.g. a future idempotent token-refresh write) must not
+	// move the timestamp. Read-then-decide on this path only — 3 rows, and
+	// the alternative (pipeline conditional) buys nothing at this size.
+	connectedAt := now
+	if st == StatusConnected {
+		if cur, gerr := s.Get(ctx, id); gerr == nil && cur.Status == StatusConnected && cur.ConnectedAt != 0 {
+			connectedAt = cur.ConnectedAt
+		}
 	}
 	// One write, never two: when marking disconnected the token $unset rides
 	// in the same UpdateOne as the status $set (mirroring Disconnect). A
@@ -169,7 +186,7 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	// the belt-and-braces for any caller that marks disconnected via
 	// SetStatus.
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
-		statusUpdateDoc(id, st, lastErr, now), options.Update().SetUpsert(true))
+		statusUpdateDoc(id, st, lastErr, now, connectedAt), options.Update().SetUpsert(true))
 	if err != nil {
 		s.logf("connectors: write %s failed: %v", id, err)
 		return Connector{}, NewStoreError("connector write failed", true)
@@ -197,8 +214,9 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 // the display fields plus status, $unset of the token columns on the
 // disconnected path. One document, one write — a future edit must not split
 // it again (see the atomicity note on SetStatus). lastErr must already be
-// normalised (cleared on the disconnected path).
-func statusUpdateDoc(id string, st Status, lastErr string, now int64) bson.D {
+// normalised (only the expired path carries text); connectedAt must already
+// be resolved (first-connect preserved by the caller).
+func statusUpdateDoc(id string, st Status, lastErr string, now, connectedAt int64) bson.D {
 	set := bson.D{
 		{Key: "displayName", Value: DisplayName(id)},
 		{Key: "scopes", Value: ScopesFor(id)},
@@ -207,7 +225,7 @@ func statusUpdateDoc(id string, st Status, lastErr string, now int64) bson.D {
 		{Key: "updatedAt", Value: now},
 	}
 	if st == StatusConnected {
-		set = append(set, bson.E{Key: "connectedAt", Value: now})
+		set = append(set, bson.E{Key: "connectedAt", Value: connectedAt})
 	}
 	update := bson.D{{Key: "$set", Value: set}}
 	if st == StatusDisconnected {

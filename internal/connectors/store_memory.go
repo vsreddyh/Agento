@@ -20,8 +20,9 @@ type Store interface {
 	// Get returns one row, or NotFound for an unknown id.
 	Get(ctx context.Context, id string) (Connector, error)
 	// SetStatus flips one known id's status (connect/expire path). Unknown
-	// ids are NotFound. Marking disconnected clears lastError and the token
-	// columns, matching Disconnect.
+	// ids are NotFound. Only the expired path carries error text (scrubbed);
+	// connected and disconnected rows carry none. ConnectedAt is
+	// first-connect: re-marking connected preserves it.
 	//
 	// OAuth follow-up note: nothing sets connected in v1 (connect 501s), and
 	// when it does it must write tokens + status in ONE UpdateOne (see
@@ -108,20 +109,20 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	c.Scopes = ScopesFor(id)
 	now := time.Now().UnixMilli()
 	c.Status = st
-	// Disconnect clears the error in both backends: the off state carries no
-	// failure text. Disconnect is the documented path; SetStatus matches it
-	// so the two routes to the same state don't diverge in visibility.
-	// Scrubbed like approvals.ScrubError at the relay: LastError is
-	// app-visible (last_error) and the OAuth follow-up will store
-	// provider/driver errors here, so a token echoing upstream must land
-	// redacted, never verbatim.
-	if st == StatusDisconnected {
-		c.LastError = ""
-	} else {
+	// Only the expired path carries error text: connected (healthy) and
+	// disconnected (off) rows carry none, so a stale error can never render
+	// as failure text on a healthy row. Scrubbed (approvals.ScrubError):
+	// lastError is app-visible and the OAuth follow-up will store provider
+	// errors here.
+	if st == StatusExpired {
 		c.LastError = approvals.ScrubError(lastError)
+	} else {
+		c.LastError = ""
 	}
 	c.UpdatedAt = now
-	if st == StatusConnected {
+	// First-connect, not last-write: re-marking an already-connected row
+	// must not move the timestamp.
+	if st == StatusConnected && c.ConnectedAt == 0 {
 		c.ConnectedAt = now
 	}
 	s.rows[id] = c

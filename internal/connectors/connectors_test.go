@@ -95,7 +95,7 @@ func TestDraftOnlySend(t *testing.T) {
 // database (DB tests skip without MONGODB_URI; this one always runs).
 func TestDisplayProjectionExcludesTokens(t *testing.T) {
 	seen := map[string]bool{}
-	for _, e := range displayProjection {
+	for _, e := range displayProjection() {
 		seen[e.Key] = true
 	}
 	for _, tok := range []string{refreshTokenField, accessTokenField} {
@@ -143,7 +143,7 @@ func TestSetStatusDisconnectedClearsError(t *testing.T) {
 // $unset in the SAME document as the status $set, so no edit can split them
 // into two writes again. No database needed.
 func TestStatusUpdateDocAtomic(t *testing.T) {
-	doc := statusUpdateDoc("gmail", StatusDisconnected, "", 123)
+	doc := statusUpdateDoc("gmail", StatusDisconnected, "", 123, 123)
 	var unset bson.D
 	for _, e := range doc {
 		if e.Key == "$unset" {
@@ -160,7 +160,7 @@ func TestStatusUpdateDocAtomic(t *testing.T) {
 	if !keys[refreshTokenField] || !keys[accessTokenField] {
 		t.Errorf("$unset = %v, want both token columns", unset)
 	}
-	if doc := statusUpdateDoc("gmail", StatusConnected, "", 123); len(doc) != 1 {
+	if doc := statusUpdateDoc("gmail", StatusConnected, "", 123, 77); len(doc) != 1 {
 		t.Errorf("connected update should be $set only, got %d ops", len(doc))
 	}
 	if doc := disconnectUpdateDoc("gmail", 123); len(doc) != 2 {
@@ -190,5 +190,42 @@ func TestListIDsReturnsCopy(t *testing.T) {
 	}
 	if len(ListIDs()) != 3 {
 		t.Errorf("ListIDs = %v, want 3", ListIDs())
+	}
+}
+
+// Healthy and off rows carry no error text: only expired does.
+func TestSetStatusOnlyExpiredCarriesError(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if got, err := s.SetStatus(ctx, "gmail", StatusConnected, "stale"); err != nil {
+		t.Fatal(err)
+	} else if got.LastError != "" {
+		t.Errorf("connected LastError = %q, want empty", got.LastError)
+	}
+	if _, err := s.SetStatus(ctx, "gmail", StatusExpired, "aged out"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.SetStatus(ctx, "gmail", StatusConnected, "stale")
+	if err != nil {
+		t.Fatal(err)
+	} else if got.LastError != "" {
+		t.Errorf("reconnected LastError = %q, want empty", got.LastError)
+	}
+}
+
+// ConnectedAt is first-connect: re-marking connected preserves it.
+func TestSetStatusPreservesConnectedAt(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	first, err := s.SetStatus(ctx, "gmail", StatusConnected, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.SetStatus(ctx, "gmail", StatusConnected, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ConnectedAt != first.ConnectedAt {
+		t.Errorf("ConnectedAt moved %d -> %d on re-mark", first.ConnectedAt, second.ConnectedAt)
 	}
 }

@@ -67,7 +67,9 @@ not adopted for history).
 - `POST /api/connectors/{id}/connect` — v1 answers **501**: OAuth lands in
   the follow-up. The app treats it as "needs setup", never as a prompt to
   paste a secret. Expired rows carry a `reconnect` hint with the same
-  no-secrets wording.
+  no-secrets wording — but no v1 writer sets expired (only Disconnect and the
+  501 connect exist; SetStatus has no route), so the hint path is wired and
+  covered but dormant until the OAuth follow-up drives it.
 - `@-mention` in-chat attach and the real OAuth exchange are follow-ups, not
   this PR. The relay refusal and the list/disconnect shapes are what they
   build on.
