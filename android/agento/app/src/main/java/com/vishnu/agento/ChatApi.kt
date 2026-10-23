@@ -351,8 +351,11 @@ class ChatApi(context: Context) {
             .ifEmpty { (prefs.getString("model_god", "") ?: "").trim() }
 
     /**
-     * Reasoning effort for a tab+model pair; blank means unset (the gateway
-     * applies its own default). Per-model memory first
+     * Reasoning effort for a tab+model pair; blank means unset — the user
+     * never picked one, so the picker shows [EffortCatalog.defaultFor] and
+     * [streamChat] puts that same level on the wire. The gateway does NOT
+     * default a missing `reasoning_effort`; it refuses the turn (#361), so
+     * blank must stay a UI-only value. Per-model memory first
      * (`effort_<tab>_<model>`), falling back to the tab's last pick
      * (`effort_<tab>`). Retired `god` keys are read as fallback, like
      * provider/model above. The stored value is clamped to the model's own
@@ -626,12 +629,9 @@ class ChatApi(context: Context) {
             if (model.isNotEmpty()) payload.put("model", model)
             // Per-request reasoning override: the gateway translates
             // model_options.reasoning_effort into the agent's reasoning config.
-            if (effort.trim().isNotEmpty()) {
-                payload.put(
-                    "model_options",
-                    JSONObject().put("reasoning_effort", effort.trim().lowercase(Locale.ROOT)),
-                )
-            }
+            // Always attached — the gateway requires it and refuses a turn
+            // without it (#361). An unset pick resolves to the model default.
+            payload.put("model_options", chatModelOptions(model, effort))
             val arr = JSONArray()
             // Only the trailing user turn keeps its photo parts: the server
             // prompts Pi with the last user turn alone, so earlier photo turns
@@ -817,6 +817,20 @@ class ChatApi(context: Context) {
         }
     }.buffer(Channel.UNLIMITED)
 }
+
+/**
+ * The `model_options` object every chat request carries.
+ *
+ * Extracted so the one property the gateway refuses a turn over (#361) is a
+ * tested pure value instead of a branch buried in the request builder: an
+ * unset pick resolves to the model's default here, at the wire boundary, so no
+ * send path can omit the field. Blank never reaches the server.
+ */
+internal fun chatModelOptions(model: String, effort: String): JSONObject =
+    JSONObject().put(
+        "reasoning_effort",
+        EffortCatalog.effectiveFor(model, effort).lowercase(Locale.ROOT),
+    )
 
 /**
  * Maps how a stream ended onto the terminal event the consumer sees.

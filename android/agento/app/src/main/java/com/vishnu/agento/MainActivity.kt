@@ -259,9 +259,11 @@ class MainActivity : ComponentActivity() {
                     // a navigation (remember(dest, section) alone goes stale).
                     var drawerTick by remember { mutableIntStateOf(0) }
                     val tabModels = remember(dest, section, drawerTick) {
-                        // Drawer subtitles: model plus its effort pick, so the
-                        // active reasoning level is visible without reopening
-                        // the picker. Blank effort = server default (medium).
+                        // Drawer subtitles: model plus the level that will
+                        // actually run, so the active reasoning depth is
+                        // visible without reopening the picker. An unset pick
+                        // shows the model default — the same level the picker
+                        // displays and the request carries (#361).
                         fun sub(tab: String): String {
                             val m = (prefs.getString("model_$tab", "") ?: "").trim()
                             if (m.isEmpty()) return ""
@@ -270,8 +272,9 @@ class MainActivity : ComponentActivity() {
                             val e = (prefs.getString("effort_${tab}_$m", "") ?: "").trim()
                                 .ifEmpty { (prefs.getString("effort_$tab", "") ?: "").trim() }
                                 .lowercase()
-                                .takeIf { it in EffortCatalog.optionsFor(m) }.orEmpty()
-                            return if (e.isEmpty()) m else "$m · $e"
+                                .takeIf { it in EffortCatalog.optionsFor(m) }
+                                ?: EffortCatalog.defaultFor(m)
+                            return "$m · $e"
                         }
                         mapOf(
                             "chat" to sub("chat"),

@@ -8,6 +8,21 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.13.1]
+- **Reasoning effort: the picker and the first turn agree again (#360,
+  #361).** Every DeepSeek V4 row was re-measured against Pi with the model
+  applied and each provider copy: `deepseek-v4.1-flash` offers low/high/max
+  (the old row also offered none and xhigh, both refused by the server),
+  `deepseek-v4-flash` and `deepseek-v4-flash-vision` offer low/high/max, and
+  `deepseek-v4-pro` offers high/max. Where the two provider copies disagree
+  (`opencode-go` additionally allows off on three of them), the picker lists
+  only the levels both accept, because a row is keyed on the model alone;
+  the dead `deepseek-flash` row named no live model and is gone. Separately,
+  a tab with no saved effort no longer sends a request without
+  `model_options`: the unset pick resolves at the wire boundary to the level
+  the picker already shows, so the first turn on a fresh tab succeeds
+  instead of being refused.
+
 ## [5.13.0]
 - **Settings → Behaviour: the device owns its behaviour (#355).** A new
   Behaviour section gathers every device-local knob that used to be a
