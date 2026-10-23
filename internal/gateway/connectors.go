@@ -116,14 +116,21 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	}
 
 	id, action, _ := strings.Cut(path, "/")
-	if id == "" || len(id) > maxConnectorIDLen || strings.ContainsRune(id, 0) {
+	if id == "" || strings.ContainsRune(id, 0) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")
 		return
 	}
 	// Normalise before Known: " GMail " addresses gmail (case and spacing
-	// fold), while a truly unknown id still 404s.
+	// fold), while a truly unknown id still 404s. The length guard measures
+	// the normalised form — what Known actually sees — so padding cannot
+	// turn a known id unknown.
 	norm := connectors.NormalizedID(id)
+	if len(norm) > maxConnectorIDLen {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown connector")
+		return
+	}
 	if !connectors.Known(norm) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector "+bounded(norm))

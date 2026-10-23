@@ -2,9 +2,10 @@ package connectors
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
+
+	"agento/internal/approvals"
 )
 
 // Store is the persistence surface. *MongoStore and *MemoryStore implement
@@ -110,10 +111,14 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// Disconnect clears the error in both backends: the off state carries no
 	// failure text. Disconnect is the documented path; SetStatus matches it
 	// so the two routes to the same state don't diverge in visibility.
+	// Scrubbed like approvals.ScrubError at the relay: LastError is
+	// app-visible (last_error) and the OAuth follow-up will store
+	// provider/driver errors here, so a token echoing upstream must land
+	// redacted, never verbatim.
 	if st == StatusDisconnected {
 		c.LastError = ""
 	} else {
-		c.LastError = strings.TrimSpace(lastError)
+		c.LastError = approvals.ScrubError(lastError)
 	}
 	c.UpdatedAt = now
 	if st == StatusConnected {

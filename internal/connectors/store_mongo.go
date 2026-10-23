@@ -2,9 +2,9 @@ package connectors
 
 import (
 	"context"
-	"strings"
 	"time"
 
+	"agento/internal/approvals"
 	"agento/internal/mongostore"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -47,15 +47,13 @@ func FromEnv() (*MongoStore, error) {
 	return New(uri, db)
 }
 
-// EnsureIndexes creates the status index List never strictly needs at three
-// rows but keeps the read path covered if the set ever grows beyond v1.
-func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
-	_, err := s.coll.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
-		Keys:    bson.D{{Key: "status", Value: 1}},
-		Options: options.Index().SetName("connectors_status"),
-	})
-	return err
-}
+// EnsureIndexes is a no-op: three fixed rows keyed by _id need no secondary
+// index. List scans all three and Get/writes key on _id (already indexed),
+// so a status index would be dead weight that merely looks load-bearing.
+// Kept as an explicit step so main's startup sequence matches the sibling
+// stores, and so the OAuth follow-up has a place to add the index its
+// queries actually need.
+func (s *MongoStore) EnsureIndexes(_ context.Context) error { return nil }
 
 // Token columns live in this collection alongside the display fields but
 // are never projected into API reads (see displayProjection). The field
@@ -105,6 +103,19 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 		return nil, NewStoreError("connector list failed", true)
 	}
 	out := make([]Connector, 0, len(listIDs))
+	var ignored []string
+	for id := range byID {
+		if !Known(id) {
+			ignored = append(ignored, id)
+		}
+	}
+	// Fixed-set v1: stray docs (typo'd id from a future OAuth bug,
+	// hand-edit) are excluded from the shape, but must not vanish silently
+	// — triage would otherwise see "3 disconnected rows" while Mongo holds
+	// 4 docs.
+	if len(ignored) > 0 {
+		s.logf("connectors: ignoring %d unknown row(s): %v", len(ignored), ignored)
+	}
 	for _, id := range listIDs {
 		if c, ok := byID[id]; ok {
 			c = backfillDisplay(c, id)
@@ -143,7 +154,9 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	now := time.Now().UnixMilli()
 	// Disconnect clears lastError in both backends; SetStatus matches it on
 	// the disconnected path so the two routes to the same state agree.
-	lastErr := strings.TrimSpace(lastError)
+	// Scrubbed (approvals.ScrubError): lastError is app-visible and the
+	// OAuth follow-up will store provider errors here.
+	lastErr := approvals.ScrubError(lastError)
 	if st == StatusDisconnected {
 		lastErr = ""
 	}

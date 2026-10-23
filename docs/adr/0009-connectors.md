@@ -17,6 +17,11 @@ per-connector OAuth and no read vs write scopes.
 - Gmail: search/read + draft. Sends refused outright.
 - Calendar: list/upcoming + draft event. Creates/invites refused outright.
 - Drive: read/list + save agent-produced file. Deletes gate (backstop).
+  Ungated-save scope: create-only stays free; if the wired server's save can
+  overwrite an existing file by id/path, that is a destructive write and the
+  follow-up must gate it (`save_file: true`) — overwrite slips between the
+  free-read and gated-delete rules otherwise. Confirm against the real tool
+  semantics when the connector MCP servers land.
 
 Draft-only is a refusal, not a gate: the relay (`cmd/mcp-gate`) answers Pi
 with `connectors.RefusalMessage` ("create a draft instead") and audits a
