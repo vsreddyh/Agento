@@ -438,3 +438,21 @@ func TestRepairUpdateDocShape(t *testing.T) {
 		t.Errorf("unset mismatch: disconnect=%v expired=%v", hasUnset(withUnset), hasUnset(withoutUnset))
 	}
 }
+
+// Same contract on the other healthy state: a corrupt connected row's
+// lastError clears on read, matching the write path.
+func TestBackfillDisplayClearsConnectedError(t *testing.T) {
+	got := backfillDisplay(Connector{ID: "gmail", Status: StatusConnected, LastError: "boom"}, "gmail")
+	if got.LastError != "" {
+		t.Errorf("connected LastError = %q, want cleared", got.LastError)
+	}
+}
+
+// Canonical scope order is enforced on read, not just filled when empty.
+func TestBackfillDisplayCanonicalisesScopeOrder(t *testing.T) {
+	got := backfillDisplay(Connector{ID: "gmail", Status: StatusConnected, Scopes: []string{"gmail.draft", "gmail.read"}}, "gmail")
+	want := ScopesFor("gmail")
+	if len(got.Scopes) != len(want) || got.Scopes[0] != want[0] || got.Scopes[1] != want[1] {
+		t.Errorf("scopes = %v, want canonical %v", got.Scopes, want)
+	}
+}

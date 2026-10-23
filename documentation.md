@@ -341,7 +341,9 @@ expired row carries a `reconnect` hint instead of asking for a secret.
 Wire shape note: a row with no `updated_at` was never touched; an explicit
 disconnect sets it. Same status, different shape — the difference is the
 signal (explicit-off vs never-touched), so a future shape-normalisation
-must not erase it.
+must not erase it. `last_error` appears only on `expired` rows: connected
+and disconnected rows never carry it (enforced on write, repaired on read),
+so the app can branch on its presence for the reconnect case.
 Full design: `docs/adr/0009-connectors.md`.
 
 ---

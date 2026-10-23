@@ -129,3 +129,13 @@ func TestConnectorsVerbFoldsCase(t *testing.T) {
 		t.Fatalf("mixed-case verb: %d, want 200 (%s)", rec.Code, rec.Body)
 	}
 }
+
+func TestConnectorsPrefixBoundary(t *testing.T) {
+	srv := connectorsServer(t)
+	// No slash boundary: a bad path, not a bad id.
+	rec := do(t, srv, http.MethodGet, "/api/connectorsfoo", "")
+	body := rec.Body.String()
+	if rec.Code != http.StatusNotFound || !strings.Contains(body, "unknown path") {
+		t.Fatalf("prefix-no-slash: %d, want 404 unknown path (%s)", rec.Code, body)
+	}
+}

@@ -93,7 +93,9 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 		s.logf("connectors: list failed: %v", err)
 		return nil, NewStoreError("connector list failed", true)
 	}
-	defer cur.Close(ctx)
+	// Cleanup on its own budget, not the verb's: a slow Atlas read must not
+	// make the cursor close eat the same expired deadline.
+	defer cur.Close(context.Background())
 	byID := make(map[string]Connector, 3)
 	for cur.Next(ctx) {
 		var c Connector
@@ -110,12 +112,14 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	out := make([]Connector, 0, len(listIDs))
 	var ignored []string
 	for id := range byID {
-		// Stored _id folds like every read path: a hand-edited "Gmail" doc
-		// is the same logical id Get("Gmail") would normalise to, so the
-		// stray check normalises too — otherwise List calls it unknown
-		// while Get calls it never-touched. (The OAuth follow-up must still
-		// write lowercase _ids.)
-		if !Known(NormalizedID(id)) {
+		// Raw, deliberately NOT folded: the storage contract is lowercase
+		// _ids (every write normalises), so a case-variant doc ("Gmail")
+		// stays stray + logged rather than served. Folding here would make
+		// List serve a row Get(FindOne, exact match) cannot see — List
+		// saying "connected" while Get says "never touched" for the same
+		// logical id. Unfolded, both synthesise DefaultRow and triage gets
+		// the log line. (The OAuth follow-up must write lowercase _ids.)
+		if !Known(id) {
 			ignored = append(ignored, id)
 		}
 	}
@@ -409,7 +413,10 @@ func disconnectUpdateDoc(id string, now int64) bson.D {
 }
 
 // backfillDisplay repairs a present-but-thin document the way List's
-// DefaultRow synthesis covers absent ones: scopes, display name, and status.
+// DefaultRow synthesis covers absent ones: scopes rewrite to canonical
+// order (not just fill-when-empty, so a hand-edited reversed order never
+// reaches the wire — matching displayFresh's order-sensitive heal check),
+// display name fills when empty, and status defaults to disconnected.
 // Only the expired path carries error text anywhere in this package
 // (write paths enforce it, no-op refreshes preserve the clear): a corrupt
 // doc's stale error on a healthy (connected) or off (disconnected) row is
@@ -422,9 +429,11 @@ func disconnectUpdateDoc(id string, now int64) bson.D {
 // write scrub exists to prevent. ScrubError is idempotent on
 // already-scrubbed text.
 func backfillDisplay(c Connector, id string) Connector {
-	if len(c.Scopes) == 0 {
-		c.Scopes = ScopesFor(id)
-	}
+	// Display is canonical, not best-effort: scopes always rewrite from the
+	// constants (order included), so a hand-edited reversed order never
+	// survives to the wire — consistent with displayFresh, which treats
+	// order as significant, and with every write path.
+	c.Scopes = ScopesFor(id)
 	if c.DisplayName == "" {
 		c.DisplayName = DisplayName(id)
 	}

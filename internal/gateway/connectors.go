@@ -98,8 +98,39 @@ func connectorCtx(r *http.Request) (context.Context, context.CancelFunc) {
 // handleConnectors serves /api/connectors. Global like approvals, not
 // per-profile like memory.
 func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest string) {
-	path := strings.TrimPrefix(rest, "api/connectors")
-	path = strings.TrimPrefix(path, "/")
+	// Exact match for the collection, prefix-with-slash for members:
+	// "api/connectorsfoo" is an unknown path, not connector "foo" — the
+	// prefix form without a slash boundary would mislabel the resource and
+	// send triage after a bad id instead of a bad path.
+	if rest == "api/connectors" {
+		if !requireMethod(w, r, http.MethodGet, "/api/connectors") {
+			return
+		}
+		ctx, cancel := connectorCtx(r)
+		defer cancel()
+		list, err := s.connectors.List(ctx)
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				apiError(w, http.StatusBadGateway, "upstream_error", "",
+					"the connector store did not answer in time")
+				return
+			}
+			connectorsError(w, err)
+			return
+		}
+		out := make([]any, 0, len(list))
+		for _, c := range list {
+			out = append(out, connectorWire(c))
+		}
+		writeJSONResponse(w, http.StatusOK, map[string]any{"connectors": out})
+		return
+	}
+	if !strings.HasPrefix(rest, "api/connectors/") {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown path "+bounded(approvals.ScrubError(rest)))
+		return
+	}
+	path := strings.TrimPrefix(rest, "api/connectors/")
 	// Belt-and-braces: splitProfile already ran path.Clean, which strips
 	// trailing slashes, so this rarely fires — but a doubly-slashed client
 	// path reaching here as "gmail/disconnect/" would otherwise 404 as an
