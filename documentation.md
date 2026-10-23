@@ -345,7 +345,7 @@ must not erase it. `last_error` appears only on `expired` rows: connected
 and disconnected rows never carry it (enforced on write, repaired on read),
 so the app can branch on its presence for the reconnect case. `connected_at`
 appears only on `connected` rows with a valid stamp (a connected row without
-one omits it fail-closed); the stored value is last-connected-at, retained
+one omits it fail-closed); the stored value is first-connected-at, retained
 across disconnect/expire.
 Full design: `docs/adr/0009-connectors.md`.
 

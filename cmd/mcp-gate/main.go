@@ -347,7 +347,7 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			continue
 		}
 		var params callParams
-		if json.Unmarshal(env.Params, &params) != nil || params.Name == "" {
+		if json.Unmarshal(env.Params, &params) != nil || strings.TrimSpace(params.Name) == "" {
 			// The relay could not classify this call, so it cannot know
 			// whether it is safe. Forwarding it would be the one fail-open
 			// path around the gate: a lenient server would run a call the

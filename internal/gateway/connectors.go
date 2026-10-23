@@ -53,7 +53,7 @@ func connectorWire(c connectors.Connector) map[string]any {
 		out["last_error"] = c.LastError
 	}
 	// Emitted only while connected with a valid stamp: the stored value is
-	// last-connected-at and is retained across disconnect/expire, so
+	// first-connected-at and is retained across disconnect/expire, so
 	// emitting it on an off-state row would read as "connected since X".
 	// A zero stamp on a connected row (corrupt) omits too — fail-closed
 	// rather than a per-response now that drifts without persisting.
@@ -101,22 +101,23 @@ func connectorCtx(r *http.Request) (context.Context, context.CancelFunc) {
 // verbs share: store didn't answer (deadline) → 502; client went away first
 // (any other ctx error) → logged distinctly so triage doesn't read a hangup
 // as a store failure, then falls through to the domain error (the write
-// fails silently on a dead conn either way). Returns true when it answered.
-func storeTimeoutOrGone(w http.ResponseWriter, s *Server, ctx context.Context, err error, verb string) bool {
+// fails silently on a dead conn either way). Void by design: both branches
+// answer, so there is no conditional for callers to branch on — a bool
+// would invite a meaningless `if !storeTimeoutOrGone`.
+func storeTimeoutOrGone(w http.ResponseWriter, s *Server, ctx context.Context, err error, verb string) {
 	if ctx.Err() == context.DeadlineExceeded {
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"the connector store did not answer in time")
-		return true
+		return
 	}
 	if ctx.Err() != nil {
 		// Observe-only: writing a domain error on a dead connection only
 		// buys a second log line at the http layer for a hangup. Log and
 		// return without a body.
 		s.cfg.Logf("connectors: %s aborted, client gone: %v", verb, ctx.Err())
-		return true
+		return
 	}
 	connectorsError(w, err)
-	return true
 }
 
 // serveConnectorsList answers GET /api/connectors (and the trailing-slash

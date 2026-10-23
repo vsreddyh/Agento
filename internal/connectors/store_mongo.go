@@ -166,7 +166,6 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	if !st.Valid() {
 		return Connector{}, NewStoreError("unknown connector status", false)
 	}
-	now := time.Now().UnixMilli()
 	// Only the expired path carries error text: connected (healthy) and
 	// disconnected (off) rows carry none, mirroring each other, so a stale
 	// or empty error can never render as failure text on a healthy row.
@@ -212,6 +211,10 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	// OAuth follow-up must keep token writes on one serialised path, not
 	// copy this read for non-idempotent work). Resolved only on the
 	// connected path — other paths pass 0, which the builder ignores.
+	// Sampled AFTER the probe: the stamp must reflect the write, not the
+	// pre-read start — a slow Atlas read would otherwise backdate updatedAt
+	// by up to 5s. Same below in Disconnect.
+	now := time.Now().UnixMilli()
 	connectedAt := int64(0)
 	if st == StatusConnected {
 		if probeUnexpected {
@@ -241,6 +244,8 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
+	// Sampled AFTER the probe, like SetStatus: the stamp reflects the write,
+	// not the pre-read start.
 	now := time.Now().UnixMilli()
 	// Transition is defined against the STORED row, not Get's synthesised
 	// view: Get returns DefaultRow(disconnected) for a missing doc, which
@@ -325,20 +330,26 @@ type probeDoc struct {
 	Scopes      []string `bson:"scopes"`
 }
 
-// displayFresh reports whether the stored display already matches the
-// constants (and the error matches the caller's intent): nothing to heal,
-// so the no-op can skip the $set entirely rather than healing nothing at
-// the cost of two round trips.
+// displayFresh is the probeDoc-shaped entry to displayFieldsFresh for the
+// Mongo no-op paths.
 func displayFresh(cur probeDoc, id, lastErr string) bool {
-	if cur.LastError != lastErr || cur.DisplayName != DisplayName(id) {
+	return displayFieldsFresh(id, cur.DisplayName, cur.Scopes, cur.LastError, lastErr)
+}
+
+// displayFieldsFresh is the shared no-op heal check behind displayFresh
+// (Mongo) and the memory store's inline compare: same fields, same order
+// sensitivity, one definition. Both backends call this so a new display
+// field cannot heal on one path and skip on the other.
+func displayFieldsFresh(id, displayName string, scopes []string, lastErr, wantErr string) bool {
+	if lastErr != wantErr || displayName != DisplayName(id) {
 		return false
 	}
 	want := ScopesFor(id)
-	if len(cur.Scopes) != len(want) {
+	if len(scopes) != len(want) {
 		return false
 	}
 	for i := range want {
-		if cur.Scopes[i] != want[i] {
+		if scopes[i] != want[i] {
 			return false
 		}
 	}

@@ -2,7 +2,6 @@ package connectors
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"time"
 
@@ -130,8 +129,7 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// expired error-text change (aged out → revoked) heals the text without
 	// moving the timestamp — triage reads failure recency from last_error
 	// content, not from updated_at.
-	if ok && c.Status == st && c.LastError == wantErr &&
-		c.DisplayName == DisplayName(id) && slices.Equal(c.Scopes, ScopesFor(id)) {
+	if ok && c.Status == st && displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, wantErr) {
 		return backfillDisplay(c, id), nil
 	}
 	if ok && c.Status == st {
@@ -180,8 +178,7 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	// error clears even on rows that never transition again. Pure no-op when
 	// there is nothing to heal: no store touch at all.
 	if ok && c.Status == StatusDisconnected &&
-		c.LastError == "" && c.DisplayName == DisplayName(id) &&
-		slices.Equal(c.Scopes, ScopesFor(id)) {
+		displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, "") {
 		return backfillDisplay(c, id), nil
 	}
 	if ok && c.Status == StatusDisconnected {
