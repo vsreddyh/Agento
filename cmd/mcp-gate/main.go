@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"agento/internal/approvals"
+	"agento/internal/connectors"
 )
 
 // maxLineBytes caps one JSON-RPC frame. The SDK allows 16 MB lines; the relay
@@ -348,6 +349,22 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			if hasReplyID(env.ID) {
 				if werr := r.writePi(rpcError(env.ID, -32602,
 					"tools/call params could not be parsed; failed closed")); werr != nil {
+					r.log.Printf("write to Pi failed: %v", werr)
+				}
+			}
+			continue
+		}
+		if connectors.IsDraftOnlySend(r.server, params.Name) {
+			// Draft-only v1 (#316): sends never reach the server, gated or
+			// not. Refused with a clear message naming drafts, audited as a
+			// human-readable deny. A notification (no id) has nobody to
+			// answer, so it is only audited.
+			r.log.Printf("refusing draft-only send %s/%s", r.server, params.Name)
+			r.auditAsync(params.Name, approvals.Redact(params.Arguments),
+				approvals.DispositionDenied,
+				"connector_draft_only: "+connectors.RefusalMessage, "")
+			if hasReplyID(env.ID) {
+				if werr := r.writePi(rpcError(env.ID, -32602, connectors.RefusalMessage)); werr != nil {
 					r.log.Printf("write to Pi failed: %v", werr)
 				}
 			}

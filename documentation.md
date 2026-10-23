@@ -317,6 +317,28 @@ Threat note — what this does and does not fix:
 - Residual: a held call occupies its turn until expiry; an approval shows
   tool + args + time but not which conversation asked.
 
+### First connectors — Gmail, Calendar, Drive (#316, v1 foundation)
+
+Three connectors with explicit read vs draft/write scopes, each
+connecting/disconnecting independently from the app:
+
+- Gmail: search/read + draft (sends refused with "create a draft instead").
+- Calendar: list/upcoming + draft event (creates/invites refused the same way).
+- Drive: read/list + save agent-produced file (deletes gate as a backstop).
+
+The refusal is enforced in the relay before the approval check, audited as
+`connector_draft_only`, and parks no approval card. Token placement: OAuth
+refresh tokens live **server-side in Mongo** (`connectors` collection),
+never in the app and never pasted in chat — the API returns status + scopes
+only, and disconnect `$unset`s the token columns. Already-fetched data
+(chat history, saved files) is not wiped on disconnect; disconnect stops
+future access. Without Mongo the list still answers from memory but nothing
+survives a restart and no token can be stored. API: `GET /api/connectors`,
+`POST /api/connectors/{id}/disconnect`; `POST .../connect` answers 501
+until the OAuth follow-up lands (the app treats it as "needs setup"). An
+expired row carries a `reconnect` hint instead of asking for a secret.
+Full design: `docs/adr/0009-connectors.md`.
+
 ---
 
 ## Extending the Stack

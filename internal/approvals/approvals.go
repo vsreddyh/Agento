@@ -202,6 +202,24 @@ var gatedTools = map[string]map[string]bool{
 		"browser_goto": true, "browser_read": false,
 		"browser_screenshot": false, "browser_save_evidence": false,
 	},
+	// First connectors, v1 (#316). Reads and drafts run under the normal
+	// gate; send paths are refused outright by the relay (see
+	// connectors.IsDraftOnlySend), and the true here is the backstop for a
+	// caller that bypasses that check: a send must never run free.
+	"gmail": {
+		"search_gmail": false, "read_gmail": false,
+		"list_messages": false, "create_draft": false,
+		"send_message": true, "send_gmail": true,
+	},
+	"calendar": {
+		"list_events": false, "get_event": false,
+		"create_event_draft": false,
+		"create_event":       true, "send_invite": true,
+	},
+	"drive": {
+		"list_files": false, "read_file": false,
+		"save_file": false, "delete_file": true,
+	},
 }
 
 // Redact returns a copy of args with secret-shaped values masked, recursing
