@@ -503,3 +503,15 @@ func TestDisplayProjectionMatchesStruct(t *testing.T) {
 		}
 	}
 }
+
+// Struct must never grow token columns: the parity test skips them, so pin
+// the skip — a future RefreshToken field would otherwise pass both loops.
+func TestConnectorStructHasNoTokenFields(t *testing.T) {
+	rt := reflect.TypeOf(Connector{})
+	for i := 0; i < rt.NumField(); i++ {
+		tag, _, _ := strings.Cut(rt.Field(i).Tag.Get("bson"), ",")
+		if tag == refreshTokenField || tag == accessTokenField {
+			t.Errorf("Connector carries token column %q; tokens live outside the wire shape", tag)
+		}
+	}
+}

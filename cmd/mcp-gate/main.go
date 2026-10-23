@@ -499,7 +499,11 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 // forward the exact bytes Pi sent (ids included), and re-encoding happens
 // nowhere else in the relay. A multi-MB arguments blob is therefore pinned for
 // up to waitFor; traffic is one turn per profile, so the bound is a single
-// frame, not a queue.
+// frame, not a queue. Same spelling split as the allow path: the approval
+// row and audit trail carry the folded tool name (normalised at the pump),
+// while the approved forward writes the raw frame — triage joining audit
+// rows to server logs must fold server-side casing first. Byte-identical
+// forwarding is the contract on both paths; do not "fix" one side.
 //
 // Both parsed views of the arguments (params.Arguments and the envelope's
 // raw params) are nil'd immediately after redaction, so the hold pins ONE

@@ -417,10 +417,9 @@ func disconnectUpdateDoc(id string, now int64) bson.D {
 // order (not just fill-when-empty, so a hand-edited reversed order never
 // reaches the wire — matching displayFresh's order-sensitive heal check),
 // display name always rewrites for the same reason, and status defaults to
-// disconnected. A connected row with a zero stamp (hand-edit, OAuth bug
-// writing status without the stamp) is repaired to now for the response —
-// write-path parity (resolveConnectedAt maps 0 → now on transition); the
-// store heals on the next real transition write.
+// disconnected. A connected row with a zero stamp keeps 0 (no per-response
+// now-fill — that would drift on every read without persisting); the wire
+// omits connected_at and the store heals on the next transition.
 // Only the expired path carries error text anywhere in this package
 // (write paths enforce it, no-op refreshes preserve the clear): a corrupt
 // doc's stale error on a healthy (connected) or off (disconnected) row is
@@ -443,9 +442,12 @@ func backfillDisplay(c Connector, id string) Connector {
 	if !c.Status.Valid() {
 		c.Status = StatusDisconnected
 	}
-	if c.Status == StatusConnected && c.ConnectedAt == 0 {
-		c.ConnectedAt = time.Now().UnixMilli()
-	}
+	// No stamp repair here, deliberately: a connected row with a zero stamp
+	// (hand-edit, OAuth bug writing status without it) keeps 0 in the
+	// response and the wire omits connected_at (fail-closed — "emitted only
+	// while connected with a valid stamp"). Repairing to now per response
+	// would show a moving timestamp that never persists; the store heals on
+	// the next real transition write (resolveConnectedAt maps 0 → now).
 	if c.Status == StatusExpired {
 		c.LastError = approvals.ScrubError(c.LastError)
 	} else {

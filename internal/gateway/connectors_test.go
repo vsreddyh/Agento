@@ -139,3 +139,13 @@ func TestConnectorsPrefixBoundary(t *testing.T) {
 		t.Fatalf("prefix-no-slash: %d, want 404 unknown path (%s)", rec.Code, body)
 	}
 }
+
+func TestConnectorsTrailingSlashList(t *testing.T) {
+	srv := connectorsServer(t)
+	// Trailing-slash alias serves the same list shape.
+	got := decodeBody(t, do(t, srv, http.MethodGet, "/api/connectors/", ""))
+	rows, ok := got["connectors"].([]any)
+	if !ok || len(rows) != 3 {
+		t.Fatalf("trailing-slash list = %v, want 3 rows", got)
+	}
+}

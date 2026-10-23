@@ -52,10 +52,12 @@ func connectorWire(c connectors.Connector) map[string]any {
 	if c.LastError != "" {
 		out["last_error"] = c.LastError
 	}
-	// Emitted only while connected: the stored value is last-connected-at
-	// and is retained across disconnect/expire, so emitting it on an
-	// off-state row would read as "connected since X". Absence of
-	// updated_at means never touched (see DefaultRow).
+	// Emitted only while connected with a valid stamp: the stored value is
+	// last-connected-at and is retained across disconnect/expire, so
+	// emitting it on an off-state row would read as "connected since X".
+	// A zero stamp on a connected row (corrupt) omits too — fail-closed
+	// rather than a per-response now that drifts without persisting.
+	// Absence of updated_at means never touched (see DefaultRow).
 	if c.Status == connectors.StatusConnected && c.ConnectedAt != 0 {
 		out["connected_at"] = c.ConnectedAt
 	}
@@ -152,18 +154,21 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	}
 
 	id, action, _ := strings.Cut(path, "/")
-	// Verbs fold like ids: "Gmail/Disconnect" from a hand test lands on the
-	// verb instead of 404ing as an unknown path. Trimmed like the id — a
-	// padded verb is client noise, not a different resource. Control bytes
-	// (NUL, \n, \r, ...) in either segment get the same bare echoless 404:
-	// JSON-escaping keeps the app safe, but line-oriented log tailing must
-	// never see an injected break — and no valid id or verb contains one.
-	action = strings.ToLower(strings.TrimSpace(action))
+	// Control bytes checked on the RAW segments, before any trim: TrimSpace
+	// strips \n/\r/\t, so checking after folding would turn " \n " into ""
+	// (no-verb 405) while the id path rejects the same bytes with a bare
+	// 404. Same bare echoless 404 for both — JSON-escaping keeps the app
+	// safe, but line-oriented log tailing must never see an injected break,
+	// and no valid id or verb contains one.
 	if id == "" || hasControl(id) || hasControl(action) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")
 		return
 	}
+	// Verbs fold like ids: "Gmail/Disconnect" from a hand test lands on the
+	// verb instead of 404ing as an unknown path. Trimmed like the id — a
+	// padded verb is client noise, not a different resource.
+	action = strings.ToLower(strings.TrimSpace(action))
 	// Normalise before Known: " GMail " addresses gmail (case and spacing
 	// fold), while a truly unknown id still 404s. The length guard measures
 	// the normalised form — what Known actually sees — so padding cannot
