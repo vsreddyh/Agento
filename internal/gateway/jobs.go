@@ -20,7 +20,11 @@ type JobStore interface {
 }
 
 // CronFire fires one job now (manual /run and the tick worker share it).
-type CronFire func(ctx context.Context, id string) (string, error)
+// runID names the agent run that answered (empty when the fire never became
+// a turn), so a manual tap can link straight to the run without a list
+// fetch. It is set even when err != nil — a failed chat turn still exists
+// in the Runs list.
+type CronFire func(ctx context.Context, id string) (text, runID string, err error)
 
 // dayTime formats an instant the way the app displays it: numeric and
 // locale-free, since the phone renders the string verbatim.
@@ -34,8 +38,16 @@ func dayTime(ms int64) string {
 func jobJSON(j cronjobs.Job, now time.Time) map[string]any {
 	runs := make([]any, 0, len(j.Runs))
 	for _, r := range j.Runs {
+		// The wire always presents the provenance keys (empty on legacy
+		// rows); storage omits empties per the omitempty tags. The app
+		// parses leniently, so the two layers intentionally differ: the
+		// wire is stable-shape, the store is compact.
 		runs = append(runs, map[string]any{
 			"at": r.At, "text": r.Text, "missed": r.Missed,
+			// Provenance (#331): which scheduler fire produced this run
+			// and which agent run answered it. Empty on rows written
+			// before the field existed; the app parses leniently.
+			"source": r.Source, "job_name": r.JobName, "run_id": r.RunID,
 		})
 	}
 	var lastRun string
@@ -138,19 +150,35 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, rest string)
 		if !requireMethod(w, r, http.MethodPost, "/api/jobs/{id}/run") {
 			return
 		}
-		text, err := s.cfg.CronFire(r.Context(), id)
+		text, runID, err := s.cfg.CronFire(r.Context(), id)
 		if err != nil {
 			// Unknown job is the caller's mistake (404); a model
 			// failure is upstream (502), like every other model call.
+			// A failed tap still created a Runs entry, so the 502
+			// names it alongside the error for the same deep-link.
+			//
+			// The 404 branch carries no run_id by invariant, not by
+			// omission: a Get failure never began a turn, so FireNow
+			// returns "" there. If a future Fire ever returns a
+			// StoreError WITH a run id, this branch must name it too.
 			if _, ok := err.(*cronjobs.StoreError); ok {
 				jobsError(w, err)
+			} else if runID != "" {
+				writeJSONResponse(w, http.StatusBadGateway, map[string]any{
+					"error": map[string]any{
+						"message": "cron fire failed: " + bounded(err.Error()),
+						"type":    "upstream_error",
+						"code":    "502",
+					},
+					"run_id": runID,
+				})
 			} else {
 				apiError(w, http.StatusBadGateway, "upstream_error", "",
 					"cron fire failed: "+bounded(err.Error()))
 			}
 			return
 		}
-		writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "response": text})
+		writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "response": text, "run_id": runID})
 		return
 	case "":
 		switch r.Method {

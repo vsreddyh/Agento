@@ -160,7 +160,7 @@ services:
       # portfolio-resume) stay mounted but unmanaged (#289).
       - ../workspace:/workspace
       # Exports, writable: the browser MCP server saves evidence bundles
-      # under browser/ (the Storage tab reads them via health-api). rw only
+      # under browser/ (the Files tab reads them via health-api). rw only
       # here — health-api keeps its read-only mount — and the server jails
       # every write under browser/ with generated filenames, so the agent
       # cannot touch anything else in the tree.

@@ -2,9 +2,12 @@
 //
 // Collection: cron_jobs. One doc per job: name, prompt, cron schedule,
 // paused flag, delivery target, last fire instant, and the short run
-// history (capped, newest last). The runner is BARE: a direct model call
-// with no persona and no tools — nudge-style prompts only, single
-// request/response per fire, no history sent.
+// history (capped, newest last).
+//
+// Fires run as turns on the chat agent (#331), not as bare model calls: one
+// recurring scheduler conversation carries every job's fires (each prefixed
+// with its job name), so a fire can read notes and fetch live pages at fire
+// time. The bare client remains for skill test-fires and unit tests.
 package cronjobs
 
 import (

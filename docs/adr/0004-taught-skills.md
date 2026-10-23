@@ -29,8 +29,9 @@ taught skills.**
 - Drafts are inert by construction: activation requires a recorded test
   (`testedAt`), enforced in the store, not the UI. Disabling removes the
   file on the next reconcile; deleting removes the row.
-- A test fire runs the rendered procedure once through the same bare model
-  client as cron fires and stores the transcript. It is a smoke test,
+- A test fire runs the rendered procedure once through a bare model client
+  (no persona, no tools — the same client cron fires used before #331, kept
+  for this purpose) and stores the transcript. It is a smoke test,
   honestly scoped: the runner has no MCP tools, so a pass means the
   procedure reads coherently, not that it ran against real data.
 - Promoting creates a cron job whose prompt embeds the procedure. The job's

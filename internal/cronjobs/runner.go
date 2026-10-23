@@ -54,6 +54,11 @@ type chatResponse struct {
 
 // BareClient is a direct model client with no persona and no tools: one
 // prompt in, one reply out. HTTP is injectable for tests.
+//
+// Production scheduler fires do NOT use this path anymore: they run as
+// chat-agent turns (see FireFunc and gateway's FireSchedulerJob), so they can
+// read notes and fetch live pages. BareClient serves skill test-fires (same
+// key and model, no job store) and unit tests.
 type BareClient struct {
 	APIKey  string
 	Model   string

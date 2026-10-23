@@ -7,9 +7,20 @@ import androidx.core.net.toUri
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
+import okio.BufferedSink
 import org.json.JSONObject
+import java.io.IOException
+import java.io.InputStream
+
+/** Upload cap, mirroring the server's maxUploadBytes (cmd/health-api/files.go).
+ * Checked client-side first so an obviously oversized pick fails fast with
+ * the same named error instead of uploading megabytes to be refused. */
+const val FILES_UPLOAD_LIMIT_BYTES = 25L * 1024 * 1024
 
 data class RemoteEntry(
     val name: String,
@@ -18,7 +29,7 @@ data class RemoteEntry(
     val mtime: String = "",
 )
 
-/** VPS exports browser: list folders + download files to mobile (#26). */
+/** VPS exports browser: list folders + download files to mobile + upload (#26, #340). */
 class StorageApi(context: Context) {
 
     private val appCtx = context.applicationContext
@@ -26,6 +37,13 @@ class StorageApi(context: Context) {
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
+        .build()
+    // Uploads carry up to 25 MiB bodies: the list client's default 10s write
+    // timeout would abort them mid-stream, so uploads get their own client.
+    private val uploadHttp = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(180, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
     private fun base(): String {
@@ -86,6 +104,76 @@ class StorageApi(context: Context) {
                         }
                     }
                     Triple(o.optString("path"), dirs, files)
+                }
+            }
+        }
+
+    /** Uploads `name` into the exports folder `dir` (empty = root), streaming
+     * the bytes straight from [open] into the request — the file is never
+     * held whole in memory (at the 25 MiB cap a buffered copy peaks ~2x plus
+     * multipart overhead, an OOM cliff on low-end devices). Pass the
+     * ContentResolver size (or -1 when unknown) so uploads can set an exact
+     * length; the server still enforces its cap and names its refusals.
+     *
+     * Server policy (cmd/health-api/files.go): confined to the exports root,
+     * refused — never replaced — when the name exists (409 file_exists),
+     * refused past 25 MiB (413 file_too_large). Error bodies carry the
+     * server's named detail so the refusal is actionable, not opaque. */
+    suspend fun upload(
+        dir: String,
+        name: String,
+        mime: String,
+        contentLength: Long,
+        open: () -> InputStream?,
+    ): Result<RemoteEntry> =
+        withContext(Dispatchers.IO) {
+            val base = base()
+            if (base.isEmpty()) {
+                return@withContext Result.failure(IllegalStateException("Server URL not configured"))
+            }
+            val url = "$base/api/files/upload?path=" +
+                java.net.URLEncoder.encode(dir, "UTF-8") +
+                "&name=" + java.net.URLEncoder.encode(name, "UTF-8")
+            val streamBody = object : RequestBody() {
+                override fun contentType() = mime.toMediaTypeOrNull()
+                override fun contentLength() = contentLength
+                override fun writeTo(sink: BufferedSink) {
+                    val input = open()
+                        ?: throw IOException("Could not read that file")
+                    input.use { stream ->
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = stream.read(buf)
+                            if (n < 0) break
+                            sink.write(buf, 0, n)
+                        }
+                    }
+                }
+            }
+            val body = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", name, streamBody)
+                .build()
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer ${password()}")
+                .post(body)
+                .build()
+            runCatching {
+                uploadHttp.newCall(request).execute().use { response ->
+                    val raw = response.body?.string() ?: ""
+                    if (!response.isSuccessful) {
+                        val detail = runCatching {
+                            JSONObject(raw).optString("detail", raw)
+                        }.getOrDefault(raw).ifEmpty { raw }
+                        throw RuntimeException("HTTP ${response.code}: ${detail.take(300)}")
+                    }
+                    val o = JSONObject(raw)
+                    RemoteEntry(
+                        o.optString("name", name), false,
+                        o.optLong("size"),
+                        o.optString("mtime"),
+                    )
                 }
             }
         }

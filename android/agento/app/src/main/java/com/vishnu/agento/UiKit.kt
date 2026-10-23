@@ -168,6 +168,10 @@ fun friendlyError(raw: String): FriendlyError {
             "Server rejected the password",
             "Check the password in Settings → Server, save, and retry.",
         )
+        has("folder not found") -> FriendlyError(
+            "That folder no longer exists",
+            "Go Up and pick the destination again, then retry.",
+        )
         has("http 404", "not found") -> FriendlyError(
             "Server didn't recognise that request",
             "The app may be outdated — check Settings → App updates, then retry.",
@@ -179,6 +183,18 @@ fun friendlyError(raw: String): FriendlyError {
         has("http 500", "http 502", "http 503", "http 504", "internal error", "bad gateway", "unavailable") -> FriendlyError(
             "Server had a problem",
             "The request reached the server but it failed. Wait a bit and retry.",
+        )
+        has("file_too_large") -> FriendlyError(
+            "That file is too big to upload",
+            "Uploads are capped at 25 MiB — shrink the file and try again.",
+        )
+        has("file_exists") -> FriendlyError(
+            "A file with that name is already there",
+            "Rename the file on your device and upload again — uploads never replace existing files.",
+        )
+        has("invalid_name", "file_missing") -> FriendlyError(
+            "That file can't be uploaded as named",
+            "Pick a plain file name without folders or special characters and try again.",
         )
         has("http 4") && has("http") -> FriendlyError(
             "Request failed",

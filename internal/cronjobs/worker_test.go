@@ -63,7 +63,8 @@ func TestTickFiresDueJob(t *testing.T) {
 		"a": {ID: "a", Prompt: "p", Schedule: "* * * * *"},
 		"b": {ID: "b", Prompt: "p", Schedule: "* * * * *", Paused: true},
 	}}
-	w := &Worker{Store: be, Runner: &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}}
+	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
+	w := &Worker{Store: be, Fire: bare.FireForTest}
 	w.Tick(context.Background(), time.Now())
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -96,7 +97,8 @@ func TestTickRecordsMiss(t *testing.T) {
 	be := &fakeBackend{jobs: map[string]*Job{
 		"a": {ID: "a", Prompt: "p", Schedule: "0 11 * * *"},
 	}}
-	w := &Worker{Store: be, Runner: &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}}
+	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
+	w := &Worker{Store: be, Fire: bare.FireForTest}
 	now := time.Date(2026, time.October, 14, 11, 7, 0, 0, IST)
 	w.Tick(context.Background(), now)
 	be.mu.Lock()
@@ -104,6 +106,10 @@ func TestTickRecordsMiss(t *testing.T) {
 	runs := be.jobs["a"].Runs
 	if len(runs) != 1 || !runs[0].Missed {
 		t.Fatalf("expected one missed run, got %+v", runs)
+	}
+	// Misses carry provenance too: the history reads without the job doc.
+	if runs[0].Source != RunSourceScheduler {
+		t.Errorf("miss source = %q", runs[0].Source)
 	}
 	// LastFire advanced past the accounted instant: the next tick moves on.
 	if be.jobs["a"].LastFire != time.Date(2026, time.October, 14, 11, 0, 0, 0, IST).UnixMilli() {
@@ -117,12 +123,16 @@ func TestFireNowManual(t *testing.T) {
 	be := &fakeBackend{jobs: map[string]*Job{
 		"a": {ID: "a", Prompt: "p", Schedule: "0 0 1 1 *", Paused: true},
 	}}
-	w := &Worker{Store: be, Runner: &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}}
-	text, err := w.FireNow(context.Background(), "a")
+	bare := &BareClient{APIKey: "k", Model: "m", BaseURL: srv.URL, HTTP: srv.Client()}
+	w := &Worker{Store: be, Fire: bare.FireForTest}
+	text, runID, err := w.FireNow(context.Background(), "a")
 	if err != nil || text != "manual back" {
 		t.Fatalf("FireNow = %q, %v", text, err)
 	}
-	if _, err := w.FireNow(context.Background(), "nope"); err == nil {
+	if runID != "" {
+		t.Errorf("bare fire has no run record, runID = %q", runID)
+	}
+	if _, _, err := w.FireNow(context.Background(), "nope"); err == nil {
 		t.Error("unknown job should fail")
 	}
 }
