@@ -241,8 +241,9 @@ class MainActivity : ComponentActivity() {
                     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { mainResume++ }
                     // Per-assistant model subtitles for the drawer: refreshed
                     // on every navigation so model picks show up immediately.
-                    val prefs = context.getSharedPreferences(
-                        AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                    // One reader for the drawer, so the subtitle honours the
+                    // same retired-key fallbacks and clamping as the request.
+                    val chatApi = remember { ChatApi(context) }
                     // Built-in TTS: one engine for the Chat tab,
                     // shut down with the activity. Auto-read is a single
                     // global toggle (prefs `tts_auto`) in each chat's bar,
@@ -265,15 +266,13 @@ class MainActivity : ComponentActivity() {
                         // shows the model default — the same level the picker
                         // displays and the request carries (#361).
                         fun sub(tab: String): String {
-                            val m = (prefs.getString("model_$tab", "") ?: "").trim()
+                            val m = chatApi.modelFor(tab)
                             if (m.isEmpty()) return ""
-                            // Clamped like effortFor: a pick saved for another
-                            // model never leaks into this model's subtitle.
-                            val e = (prefs.getString("effort_${tab}_$m", "") ?: "").trim()
-                                .ifEmpty { (prefs.getString("effort_$tab", "") ?: "").trim() }
-                                .lowercase()
-                                .takeIf { it in EffortCatalog.optionsFor(m) }
-                                ?: EffortCatalog.defaultFor(m)
+                            // effortFor reads the same per-model/tab memory as
+                            // the request, retired god keys included; an unset
+                            // pick shows the level that will actually run.
+                            val e = chatApi.effortFor(tab, m)
+                                .ifEmpty { EffortCatalog.defaultFor(m) }
                             return "$m · $e"
                         }
                         mapOf(

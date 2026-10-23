@@ -19,9 +19,11 @@ see GitHub Releases for older notes.
   only the levels both accept, because a row is keyed on the model alone;
   the dead `deepseek-flash` row named no live model and is gone. Separately,
   a tab with no saved effort no longer sends a request without
-  `model_options`: the unset pick resolves at the wire boundary to the level
-  the picker already shows, so the first turn on a fresh tab succeeds
-  instead of being refused.
+  `model_options`: the unset pick, and a stale pick the current model does
+  not offer, resolve at the wire boundary to the level the picker already
+  shows — so the first turn on a fresh tab succeeds instead of being
+  refused. The drawer subtitle now shows that same level (legacy `god`
+  keys included).
 
 ## [5.13.0]
 - **Settings → Behaviour: the device owns its behaviour (#355).** A new

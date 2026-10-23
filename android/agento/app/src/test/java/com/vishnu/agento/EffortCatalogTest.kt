@@ -122,11 +122,24 @@ class EffortCatalogTest {
             chatModelOptions("opencode-go/deepseek-v4.1-flash", "max")
                 .getString("reasoning_effort"),
         )
-        // Stored picks are normalized at the wire, matching the old behaviour.
+        // Case is folded once, in effectiveFor, with Locale.ROOT.
         assertEquals(
             "high",
             chatModelOptions("deepseek-v4-pro", " HIGH ").getString("reasoning_effort"),
         )
+    }
+
+    @Test
+    fun `a stale or invalid stored effort falls back instead of 400ing`() {
+        // effortFor already clamps, but the wire boundary must not depend on
+        // every caller having done so: an explicit level this model does not
+        // offer (including the two #360 phantoms) resolves to its default.
+        for (stale in listOf("none", "xhigh", "medium", "ultra")) {
+            val sent = chatModelOptions("opencode-go/deepseek-v4.1-flash", stale)
+                .getString("reasoning_effort")
+            assertEquals("high", sent)
+            assertTrue(sent in EffortCatalog.optionsFor("opencode-go/deepseek-v4.1-flash"))
+        }
     }
 
     @Test

@@ -824,13 +824,11 @@ class ChatApi(context: Context) {
  * Extracted so the one property the gateway refuses a turn over (#361) is a
  * tested pure value instead of a branch buried in the request builder: an
  * unset pick resolves to the model's default here, at the wire boundary, so no
- * send path can omit the field. Blank never reaches the server.
+ * send path can omit the field. A stale pick the model does not offer resolves
+ * the same way. Blank and invalid never reach the server.
  */
 internal fun chatModelOptions(model: String, effort: String): JSONObject =
-    JSONObject().put(
-        "reasoning_effort",
-        EffortCatalog.effectiveFor(model, effort).lowercase(Locale.ROOT),
-    )
+    JSONObject().put("reasoning_effort", EffortCatalog.effectiveFor(model, effort))
 
 /**
  * Maps how a stream ended onto the terminal event the consumer sees.

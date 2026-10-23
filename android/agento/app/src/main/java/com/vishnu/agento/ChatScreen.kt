@@ -1569,7 +1569,7 @@ internal fun TabModelSheet(
         val prefs = appContext.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         provider = (prefs.getString("provider_$tab", "") ?: "").trim()
         model = (prefs.getString("model_$tab", "") ?: "").trim()
-        effort = ChatApi(appContext).effortFor(tab, model).ifEmpty { EffortCatalog.defaultFor(model) }
+        effort = EffortCatalog.effectiveFor(model, ChatApi(appContext).effortFor(tab, model))
         val api = ChatApi(appContext)
         catalog = runCatching {
             api.fetchCatalog(catalogPath(api)).getOrThrow()
@@ -1617,8 +1617,10 @@ internal fun TabModelSheet(
                     model = it
                     // Each model has its own effort vocabulary: restore this
                     // model's saved pick, else its sensible default.
-                    effort = ChatApi(context).effortFor(tab, model)
-                        .ifEmpty { EffortCatalog.defaultFor(model) }
+                    effort = EffortCatalog.effectiveFor(
+                        model,
+                        ChatApi(context).effortFor(tab, model),
+                    )
                     error = ""
                     save(provider, model, effort)
                 },

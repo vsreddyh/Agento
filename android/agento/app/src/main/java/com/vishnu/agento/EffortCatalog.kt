@@ -1,5 +1,7 @@
 package com.vishnu.agento
 
+import java.util.Locale
+
 /**
  * Reasoning-effort options per model.
  *
@@ -34,7 +36,9 @@ package com.vishnu.agento
  */
 object EffortCatalog {
 
-    /** Server default when no override is sent (matches gateway default). */
+    /** Preferred level when a model offers it. There is no server default to
+     * match: the gateway refuses a turn with no `reasoning_effort` (#361), so
+     * this is a picker/request default the client resolves itself. */
     const val DEFAULT = "medium"
 
     /** Full-ladder fallback for models with no specific entry. "ultra" is
@@ -131,16 +135,22 @@ object EffortCatalog {
     }
 
     /**
-     * The level that actually goes on the wire for [model]: the stored pick
-     * when there is one, else [defaultFor] — never blank. The gateway requires
-     * an explicit `reasoning_effort` and refuses a turn without it (#361), so
-     * "unset" is a picker/settings concept, not a request concept. Resolving
-     * here (not in prefs) keeps "blank means the user never chose" readable
-     * while the request still carries the level the picker would have shown.
+     * The level actually used for [model]: [stored] when it is one this model
+     * offers, else [defaultFor] — never blank, never invalid. Both are
+     * single-sourced here: the display paths and the request share this value,
+     * so the drawer, the picker and the wire agree, and a stale pick saved for
+     * another model cannot 400 the turn. Case is folded once, with
+     * [Locale.ROOT] so the result is locale-independent.
+     *
+     * The gateway requires an explicit `reasoning_effort` and refuses a turn
+     * without one (#361), so "unset" is a picker/settings concept, not a
+     * request concept. Resolving here (not in prefs) keeps "blank means the
+     * user never chose" readable while the request still carries the level the
+     * picker would have shown.
      */
     fun effectiveFor(model: String, stored: String): String {
-        val pick = stored.trim()
-        return if (pick.isEmpty()) defaultFor(model) else pick
+        val pick = stored.trim().lowercase(Locale.ROOT)
+        return pick.takeIf { it in optionsFor(model) } ?: defaultFor(model)
     }
 
     /** Display label for an effort value ("none" reads as off). */
