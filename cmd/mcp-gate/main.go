@@ -137,6 +137,10 @@ func openStore(server string) approvals.Store {
 
 // newRelay builds a relay with production timings.
 func newRelay(server string, store approvals.Store, log *log.Logger) *relay {
+	// Construction-enforced, not call-site-dependent: main() normalises
+	// --server, but any direct construction (tests, future callers) must get
+	// the same lowercase spelling or policy/audit/sweep diverge again.
+	server = strings.ToLower(strings.TrimSpace(server))
 	return &relay{
 		server: server, store: store, log: log,
 		waitFor: approvals.WaitTimeout, pollFor: pollInterval,

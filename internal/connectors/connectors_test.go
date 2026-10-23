@@ -538,3 +538,19 @@ func TestProbeProjectionShape(t *testing.T) {
 		t.Errorf("probe projection has %d keys %v, want exactly 5", len(seen), seen)
 	}
 }
+
+// Probe keys must stay within the display keys: the no-op heal-vs-skip
+// decision reads off the probe, so a display field missing from the probe
+// silently forces heal-writes. Same pin class as the struct and projection
+// shape tests.
+func TestProbeProjectionWithinDisplay(t *testing.T) {
+	display := map[string]bool{}
+	for _, e := range displayProjection() {
+		display[e.Key] = true
+	}
+	for _, e := range probeProjection() {
+		if !display[e.Key] {
+			t.Errorf("probe key %q not in display projection", e.Key)
+		}
+	}
+}

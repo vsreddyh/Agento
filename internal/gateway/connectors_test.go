@@ -161,3 +161,17 @@ func TestConnectorsNoVerbIs405WithAllow(t *testing.T) {
 		t.Fatalf("Allow = %q, want POST", allow)
 	}
 }
+
+func TestConnectorsCollectionWrongMethod(t *testing.T) {
+	srv := connectorsServer(t)
+	// Collection with wrong method: 405 with Allow, on both spellings.
+	for _, p := range []string{"/api/connectors", "/api/connectors/"} {
+		rec := do(t, srv, http.MethodPost, p, "")
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("POST %s: %d, want 405 (%s)", p, rec.Code, rec.Body)
+		}
+		if allow := rec.Header().Get("Allow"); allow != "GET" {
+			t.Fatalf("POST %s Allow = %q, want GET", p, allow)
+		}
+	}
+}

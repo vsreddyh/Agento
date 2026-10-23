@@ -109,7 +109,11 @@ func storeTimeoutOrGone(w http.ResponseWriter, s *Server, ctx context.Context, e
 		return true
 	}
 	if ctx.Err() != nil {
+		// Observe-only: writing a domain error on a dead connection only
+		// buys a second log line at the http layer for a hangup. Log and
+		// return without a body.
 		s.cfg.Logf("connectors: %s aborted, client gone: %v", verb, ctx.Err())
+		return true
 	}
 	connectorsError(w, err)
 	return true

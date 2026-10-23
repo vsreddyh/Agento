@@ -172,6 +172,11 @@ const RefusalMessage = "sending is disabled for this connector in v1; create a d
 // upstream=true renders 502 (BadGateway) via connectorsError; false renders
 // 4xx (NotFound when NotFound, else BadRequest). Get the bool right at the
 // call site: it is the status code.
+//
+// Trust boundary: the GATEWAY is the control-byte boundary (hasControl
+// rejects before the store). Msg may carry caller-influenced text (e.g.
+// "unknown connector a\nb" from a direct store caller); gateway echoes are
+// scrubbed+bounded, but store callers must not log Msg raw.
 type StoreError struct {
 	Msg      string
 	NotFound bool
