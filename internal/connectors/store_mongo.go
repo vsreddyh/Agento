@@ -181,7 +181,7 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	pctx, pcancel := quickCtx()
 	var cur probeDoc
 	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
-		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}, {Key: "lastError", Value: 1}, {Key: "connectedAt", Value: 1}, {Key: "displayName", Value: 1}, {Key: "scopes", Value: 1}})).Decode(&cur)
+		options.FindOne().SetProjection(probeProjection())).Decode(&cur)
 	pcancel()
 	probeUnexpected := probeErr != nil && !errors.Is(probeErr, mongoDrv.ErrNoDocuments)
 	if probeUnexpected {
@@ -250,7 +250,7 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	pctx, pcancel := quickCtx()
 	var probe probeDoc
 	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
-		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}, {Key: "lastError", Value: 1}, {Key: "displayName", Value: 1}, {Key: "scopes", Value: 1}})).Decode(&probe)
+		options.FindOne().SetProjection(probeProjection())).Decode(&probe)
 	pcancel()
 	transition, preReadOK := disconnectTransition(probeErr, probe.Status)
 	// Idempotent no-op: already disconnected means updated_at is the last
@@ -299,9 +299,24 @@ func resolveConnectedAt(stamp, now int64) int64 {
 	return now
 }
 
-// probeDoc is the minimal read for transition decisions: status (+lastError
-// where compared, +connectedAt where the stamp resolves, +display where the
-// no-op decides heal-vs-skip). Never the token columns.
+// probeProjection selects the transition-decision fields: status (+lastError
+// where compared, +connectedAt where the stamp resolves, +display for the
+// no-op heal-vs-skip). A fresh copy per call, like displayProjection: the
+// no-op path decides heal-vs-skip off these keys, so dropping one (e.g.
+// scopes) silently turns every repeat verb into a heal-write. Never the
+// token columns.
+func probeProjection() bson.D {
+	return bson.D{
+		{Key: "status", Value: 1},
+		{Key: "lastError", Value: 1},
+		{Key: "connectedAt", Value: 1},
+		{Key: "displayName", Value: 1},
+		{Key: "scopes", Value: 1},
+	}
+}
+
+// probeDoc is the minimal read for transition decisions. Never the token
+// columns.
 type probeDoc struct {
 	Status      Status   `bson:"status"`
 	LastError   string   `bson:"lastError"`
@@ -334,6 +349,13 @@ func displayFresh(cur probeDoc, id, lastErr string) bool {
 // NO updatedAt/status/connectedAt keys, so a repair can never move the
 // last-transition timestamp. Pinned by test — a future edit adding
 // updatedAt here silently turns every repeat verb into a bump.
+//
+// Repairs never upsert: both call sites guarantee the doc exists (SetStatus
+// repair requires a matching probe, Disconnect no-op requires a stored
+// disconnected row). A future delete path (the ADR leaves the door open for
+// a reaper on abandoned-expired rows) must preserve that guarantee — a
+// repair matching 0 docs reads back synthesised DefaultRow, and the caller
+// would see healed state over a missing doc with no error.
 func repairUpdateDoc(id, lastErr string, unsetTokens bool) bson.D {
 	update := bson.D{{Key: "$set", Value: bson.D{
 		{Key: "displayName", Value: DisplayName(id)},

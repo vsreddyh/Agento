@@ -97,6 +97,24 @@ func connectorCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
 
+// storeTimeoutOrGone maps a store failure onto the timeout contract both
+// verbs share: store didn't answer (deadline) → 502; client went away first
+// (any other ctx error) → logged distinctly so triage doesn't read a hangup
+// as a store failure, then falls through to the domain error (the write
+// fails silently on a dead conn either way). Returns true when it answered.
+func storeTimeoutOrGone(w http.ResponseWriter, s *Server, ctx context.Context, err error, verb string) bool {
+	if ctx.Err() == context.DeadlineExceeded {
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"the connector store did not answer in time")
+		return true
+	}
+	if ctx.Err() != nil {
+		s.cfg.Logf("connectors: %s aborted, client gone: %v", verb, ctx.Err())
+	}
+	connectorsError(w, err)
+	return true
+}
+
 // serveConnectorsList answers GET /api/connectors (and the trailing-slash
 // alias): the three v1 rows, disconnected synthesised on fresh deploys.
 // One helper so the two spellings cannot drift apart.
@@ -108,20 +126,7 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	list, err := s.connectors.List(ctx)
 	if err != nil {
-		// Store-timeout vs client-hangup: DeadlineExceeded means the store
-		// didn't answer (502); any other ctx error means the client went
-		// away first — logged distinctly so triage doesn't read a hangup
-		// as a store failure (the write below fails silently on a dead
-		// conn either way).
-		if ctx.Err() == context.DeadlineExceeded {
-			apiError(w, http.StatusBadGateway, "upstream_error", "",
-				"the connector store did not answer in time")
-			return
-		}
-		if ctx.Err() != nil {
-			s.cfg.Logf("connectors: list aborted, client gone: %v", ctx.Err())
-		}
-		connectorsError(w, err)
+		storeTimeoutOrGone(w, s, ctx, err, "list")
 		return
 	}
 	out := make([]any, 0, len(list))
@@ -181,8 +186,16 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	}
 	// Verbs fold like ids: "Gmail/Disconnect" from a hand test lands on the
 	// verb instead of 404ing as an unknown path. Trimmed like the id — a
-	// padded verb is client noise, not a different resource.
+	// padded verb is client noise, not a different resource. Length-capped
+	// like the id: bounded() keeps any echo safe and the server caps total
+	// header size anyway, but there is no reason to pay rune-scan + alloc
+	// on a garbage path before the inevitable 404.
 	action = strings.ToLower(strings.TrimSpace(action))
+	if len(action) > maxConnectorIDLen {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown path "+bounded(approvals.ScrubError(path)))
+		return
+	}
 	// Normalise before Known: " GMail " addresses gmail (case and spacing
 	// fold), while a truly unknown id still 404s. The length guard measures
 	// the normalised form — what Known actually sees — so padding cannot
@@ -215,12 +228,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		defer cancel()
 		c, err := s.connectors.Disconnect(ctx, norm)
 		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				apiError(w, http.StatusBadGateway, "upstream_error", "",
-					"the connector store did not answer in time")
-				return
-			}
-			connectorsError(w, err)
+			storeTimeoutOrGone(w, s, ctx, err, "disconnect")
 			return
 		}
 		writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "connector": connectorWire(c)})
