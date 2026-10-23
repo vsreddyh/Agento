@@ -81,8 +81,10 @@ func connectorCtx(r *http.Request) (context.Context, context.CancelFunc) {
 func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest string) {
 	path := strings.TrimPrefix(rest, "api/connectors")
 	path = strings.TrimPrefix(path, "/")
-	// Trailing slashes are client noise, not different resources:
-	// /gmail/disconnect/ is the disconnect verb, not an unknown path.
+	// Belt-and-braces: splitProfile already ran path.Clean, which strips
+	// trailing slashes, so this rarely fires — but a doubly-slashed client
+	// path reaching here as "gmail/disconnect/" would otherwise 404 as an
+	// unknown action instead of hitting the verb.
 	path = strings.TrimSuffix(path, "/")
 
 	if path == "" {
@@ -156,6 +158,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			"connect for "+bounded(norm)+" is not configured on this server yet; OAuth lands in a follow-up — never paste a token in chat")
 		return
 	case "":
+		w.Header().Set("Allow", "POST (use /disconnect or /connect)")
 		apiError(w, http.StatusMethodNotAllowed, "invalid_request_error", "",
 			"no verb on /api/connectors/{id}; use /disconnect or /connect")
 		return

@@ -131,6 +131,13 @@ func NormalizedID(raw string) string {
 // --server flag, and an exact-case match would let a "Gmail" mcp.json entry
 // bypass both this refusal and the approval backstop. Same hardening the
 // follow-up mcp.json wiring must keep (pin lowercase names).
+//
+// Follow-up obligation: keep this list in sync with the wired servers' real
+// tool names. The approvals completeness test pins gatedTools, but nothing
+// pins THIS list — a renamed tool (sendMessage, send_email) misses the
+// refusal and falls through to the gated backstop (fail-closed: holds for
+// approval instead of refusing with the draft message). Safe, but a UX
+// divergence worth a sync check when the connector MCP servers land.
 func IsDraftOnlySend(server, tool string) bool {
 	server = strings.ToLower(strings.TrimSpace(server))
 	tool = strings.ToLower(strings.TrimSpace(tool))

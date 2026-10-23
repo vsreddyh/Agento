@@ -87,3 +87,35 @@ func TestDraftOnlySend(t *testing.T) {
 		t.Error("refusal message must name the draft path")
 	}
 }
+
+// The display projection is the load-bearing privacy invariant: token
+// columns must never be selected into API reads. Unit-pinned without a
+// database (DB tests skip without MONGODB_URI; this one always runs).
+func TestDisplayProjectionExcludesTokens(t *testing.T) {
+	seen := map[string]bool{}
+	for _, e := range displayProjection {
+		seen[e.Key] = true
+	}
+	for _, tok := range []string{refreshTokenField, accessTokenField} {
+		if seen[tok] {
+			t.Errorf("display projection selects token column %q", tok)
+		}
+	}
+	for _, want := range []string{"_id", "displayName", "scopes", "status"} {
+		if !seen[want] {
+			t.Errorf("display projection missing %q", want)
+		}
+	}
+}
+
+// A corrupt/hand-edited doc with an empty status must read back
+// disconnected, never a fourth state the app doesn't expect.
+func TestBackfillDisplayRepairsStatus(t *testing.T) {
+	got := backfillDisplay(Connector{ID: "gmail"}, "gmail")
+	if got.Status != StatusDisconnected {
+		t.Errorf("status = %q, want disconnected", got.Status)
+	}
+	if len(got.Scopes) == 0 || got.DisplayName == "" {
+		t.Errorf("backfill dropped scopes/display: %+v", got)
+	}
+}

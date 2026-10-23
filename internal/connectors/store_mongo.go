@@ -107,12 +107,7 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	out := make([]Connector, 0, len(ListIDs))
 	for _, id := range ListIDs {
 		if c, ok := byID[id]; ok {
-			if len(c.Scopes) == 0 {
-				c.Scopes = ScopesFor(id)
-			}
-			if c.DisplayName == "" {
-				c.DisplayName = DisplayName(id)
-			}
+			c = backfillDisplay(c, id)
 			out = append(out, c)
 		} else {
 			out = append(out, DefaultRow(id))
@@ -134,13 +129,7 @@ func (s *MongoStore) Get(ctx context.Context, id string) (Connector, error) {
 		s.logf("connectors: read %s failed: %v", id, err)
 		return Connector{}, NewStoreError("connector read failed", true)
 	}
-	if len(c.Scopes) == 0 {
-		c.Scopes = ScopesFor(id)
-	}
-	if c.DisplayName == "" {
-		c.DisplayName = DisplayName(id)
-	}
-	return c, nil
+	return backfillDisplay(c, id), nil
 }
 
 func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastError string) (Connector, error) {
@@ -162,23 +151,26 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	if st == StatusConnected {
 		set = append(set, bson.E{Key: "connectedAt", Value: now})
 	}
+	// One write, never two: when marking disconnected the token $unset rides
+	// in the same UpdateOne as the status $set (mirroring Disconnect). A
+	// split $set-then-$unset could land the first and lose the second (Atlas
+	// hiccup, deadline) and leave status: disconnected with tokens present —
+	// the reported state and the safe state diverging in exactly the failure
+	// case that matters. Disconnect stays the documented off-path; this is
+	// the belt-and-braces for any caller that marks disconnected via
+	// SetStatus.
+	update := bson.D{{Key: "$set", Value: set}}
+	if st == StatusDisconnected {
+		update = append(update, bson.E{Key: "$unset", Value: bson.D{
+			{Key: refreshTokenField, Value: ""},
+			{Key: accessTokenField, Value: ""},
+		}})
+	}
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
-		bson.D{{Key: "$set", Value: set}}, options.Update().SetUpsert(true))
+		update, options.Update().SetUpsert(true))
 	if err != nil {
 		s.logf("connectors: write %s failed: %v", id, err)
 		return Connector{}, NewStoreError("connector write failed", true)
-	}
-	// Disconnect is the sole off-path, but a caller that marks disconnected
-	// via SetStatus must not leave tokens behind either: belt and braces.
-	if st == StatusDisconnected {
-		if _, uerr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
-			bson.D{{Key: "$unset", Value: bson.D{
-				{Key: refreshTokenField, Value: ""},
-				{Key: accessTokenField, Value: ""},
-			}}}); uerr != nil {
-			s.logf("connectors: token clear %s failed: %v", id, uerr)
-			return Connector{}, NewStoreError("connector write failed", true)
-		}
 	}
 	return s.readBack(id)
 }
@@ -212,10 +204,33 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	return s.readBack(id)
 }
 
+// backfillDisplay repairs a present-but-thin document the way List's
+// DefaultRow synthesis covers absent ones: scopes, display name, and — for
+// a corrupt/hand-edited doc with a missing status — the status itself,
+// which otherwise decodes to "" and would emit a fourth state the app never
+// expects and the reconnect hint never matches. Fail-closed to disconnected.
+func backfillDisplay(c Connector, id string) Connector {
+	if len(c.Scopes) == 0 {
+		c.Scopes = ScopesFor(id)
+	}
+	if c.DisplayName == "" {
+		c.DisplayName = DisplayName(id)
+	}
+	if !c.Status.Valid() {
+		c.Status = StatusDisconnected
+	}
+	return c
+}
+
 // readBack re-reads one row on a fresh budget. The gateway hands one 5s ctx
 // for the whole verb; a slow Atlas write could consume it and turn a landed
 // write into a 502 on the confirming read. The read is cheap and idempotent,
 // so it gets its own 5s rather than the write's leftovers.
+//
+// Deliberately detached from the request: a client disconnect mid-verb still
+// pays for one cheap idempotent read. Correct at three rows; do not copy
+// this pattern for non-idempotent work (the OAuth follow-up's heavier
+// writes must stay on the request ctx).
 func (s *MongoStore) readBack(id string) (Connector, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
