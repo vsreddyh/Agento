@@ -163,6 +163,16 @@ Run manual dry-runs via:
 ./scripts/retention.sh --dry-run
 ```
 
+### Operator-set, not app settings (#355)
+
+The retention windows above, the gateway timeouts (`PI_TURN_TIMEOUT`,
+`PI_INVENTORY_TIMEOUT` in `docker/docker-compose.yml`) and the agent's
+personality and instructions (`pi/profiles/<name>/AGENTS.md`) are
+operator-set by design: they live in the repo / deployment, not in the app.
+The app's Settings → Behaviour section owns the device-local knobs (sync
+cadence, reminder lead time, TTS, notifications) — everything with an
+obvious default that the device can apply itself.
+
 ---
 
 ## Health Connect Pipeline
@@ -186,7 +196,7 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► 
 
 ## Android App API (Chat)
 
-The custom Android app (`android/agento/`, sidebar: Chat + Tasks + Storage + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`). There is no Hermes gateway any more — `:8642` is neither published nor proxied:
+The custom Android app (`android/agento/`, sidebar: Chat + Tasks + Files + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`). There is no Hermes gateway any more — `:8642` is neither published nor proxied:
 
 ```bash
 curl http://<host>:8080/p/chat/v1/models -H "Authorization: Bearer <PASSWORD>"

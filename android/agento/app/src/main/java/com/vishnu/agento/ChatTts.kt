@@ -120,6 +120,9 @@ class ChatTts(context: Context) {
     private fun speakInternal(key: String, text: String) {
         val tts = engine ?: return
         _speakingKey.value = key
+        // Stored voice/rate/pitch (#355); skipped at defaults so untouched
+        // installs speak exactly like before.
+        applyStoredTtsSettings(tts, appCtx)
         // ~3500-char chunks at sentence boundaries (engine limit is ~4000).
         // Only the last chunk's ID is tracked: its completion is what
         // clears the speaking state.

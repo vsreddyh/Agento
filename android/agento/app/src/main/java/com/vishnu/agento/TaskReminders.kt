@@ -95,7 +95,14 @@ internal fun reminderPoints(
     dueTime: String,
     estimatedMinutes: Int,
     nowMillis: Long,
+    leadMinutes: Long = TaskReminders.BEFORE_START_MINUTES,
 ): Map<ReminderKind, Long> {
+    // Total like every pure helper here: a negative lead would arm the
+    // "warning" after the start, which then collapses against Start in
+    // ways the zero-lead path never exercises.
+    val lead = BehaviourSettings.coerceImport(
+        BehaviourSettings.KEY_REMINDER_LEAD_MINUTES, leadMinutes,
+    )
     val due = dueMillisOrNull(dueDate, dueTime) ?: return emptyMap()
     val out = LinkedHashMap<ReminderKind, Long>()
     if (due <= nowMillis) {
@@ -109,13 +116,14 @@ internal fun reminderPoints(
     val start = startMomentMillis(due, estimatedMinutes)
     if (start != null) {
         // A zero estimate has no start of its own, so there is no start time
-        // for the 5-minute warning to lead into and "Start now" would fire
+        // for the lead-time warning to lead into and "Start now" would fire
         // *at* the due moment saying the wrong thing: such a task gets the
-        // due alert alone.
+        // due alert alone. A zero lead likewise collapses: the warning lands
+        // on the start moment and the collapse below keeps Start.
         addIfFuture(
             out,
             ReminderKind.BeforeStart,
-            start - TaskReminders.BEFORE_START_MINUTES * 60_000L,
+            start - lead * 60_000L,
             nowMillis,
         )
         addIfFuture(out, ReminderKind.Start, start, nowMillis)
@@ -154,10 +162,33 @@ internal fun reminderPoints(
 }
 
 /**
+ * Human lead for copy: minutes under the hour, hours past it. Defaults
+ * render exactly like the old constant interpolation ("5 minutes"), so
+ * untouched installs read identically; hand-imported out-of-option values
+ * (lead=1440) read "24 hours" instead of "1440 minutes".
+ */
+internal fun leadCopy(minutes: Long): String {
+    // Total like every neighbour: coerce, so a hand-passed 2000 renders
+    // the ceiling ("24 hours"), never "33 hours 20 minutes".
+    val m = BehaviourSettings.coerceImport(BehaviourSettings.KEY_REMINDER_LEAD_MINUTES, minutes)
+    return when {
+        m <= 0L -> "0 minutes"
+        m == 1L -> "1 minute"
+        m < 60L -> "$m minutes"
+        else -> {
+            val h = m / 60L
+            val r = m % 60L
+            val hs = if (h == 1L) "1 hour" else "$h hours"
+            if (r == 0L) hs else "$hs ${if (r == 1L) "1 minute" else "$r minutes"}"
+        }
+    }
+}
+
+/**
  * The one line each reminder says (issues #160, #287).
  *
  * A lock-screen line has one job: say what just happened. The collapsed
- * text is the bare moment ("Starting in 5 minutes", "Start now",
+ * text is the bare moment ("Starting in N minutes", "Start now",
  * "Due now", "Overdue for …") — the times live in the expanded view, not
  * in the lock-screen line, so a "Start now" and a "Due now" stay
  * distinguishable at a glance in a notification stack.
@@ -172,9 +203,11 @@ internal fun reminderMessage(
     dueLine: String,
     startLine: String?,
     overdueElapsed: Long? = null,
+    leadMinutes: Long = TaskReminders.BEFORE_START_MINUTES,
 ): String = when (kind) {
     ReminderKind.BeforeStart ->
-        "Starting in ${TaskReminders.BEFORE_START_MINUTES} minutes"
+        if (leadMinutes <= 0L) "Starting now"
+        else "Starting in ${leadCopy(leadMinutes)}"
     ReminderKind.Start ->
         "Start now"
     // No suffix on purpose: at the due moment the time *is* now, so the
@@ -260,7 +293,7 @@ private fun addIfFuture(
 }
 
 /**
- * Due-time reminders for server tasks. Opt-in via the Task Manager bell
+ * Due-time reminders for server tasks. Opt-in via Settings → Behaviour
  * (default off: alarms must never surprise a fresh install). [refresh]
  * (re)computes the alarm set from **open** tasks that have a due time and
  * arms them; [TaskAlarmReceiver] posts the notification on fire,
@@ -269,8 +302,8 @@ private fun addIfFuture(
  * periodically, so a quiet list costs nothing.
  *
  * A task gets up to three armed reminder points (see [reminderPoints]) —
- * five minutes before the start, at the start, and at the due time — plus,
- * once the due time has passed, a nag that repeats every
+ * a lead-time warning before the start, at the start, and at the due
+ * time — plus, once the due time has passed, a nag that repeats every
  * [OVERDUE_EVERY_MINUTES] minutes until the task is dealt with.
  *
  * Scope guardrails: only open tasks with a due date + time inside
@@ -288,7 +321,10 @@ object TaskReminders {
 
     private const val PREF_ARMED = "task_reminder_armed"
     private const val PREF_BUDGET = "task_reminder_budget"
-    private const val PREF_ENABLED = "task_reminders_enabled"
+    /** Backed up (see SettingsBackup.BOOLEAN_KEYS): internal so the backup
+     * test pins the key by reference, not by a string literal that could
+     * drift silently on rename. */
+    internal const val PREF_ENABLED = "task_reminders_enabled"
     const val CHANNEL_ID = "task_reminders"
     private const val HORIZON_DAYS = 7L
     // An overdue point's own time is in the past by definition, so every nag
@@ -305,7 +341,9 @@ object TaskReminders {
     // correctness, not a ceiling for capacity (#165).
     private const val MAX_ALARMS = 200
 
-    /** Lead time before the start time, for [ReminderKind.BeforeStart]. */
+    /** Default lead time before the start time, for [ReminderKind.BeforeStart].
+     * The live value is [BehaviourSettings.reminderLeadMinutes]; this stays
+     * as the default and as the unit-test expectation. */
     internal const val BEFORE_START_MINUTES = 5L
 
     /**
@@ -375,6 +413,12 @@ object TaskReminders {
         // between this read and that write. The network fetch above is
         // deliberately outside it — nothing else may be held up for it.
         synchronized(this@TaskReminders) {
+        // The lead-time pick reads INSIDE the critical section, not above
+        // it: two rapid refreshes (two picker taps) each fetch over the
+        // network, and the pass that arms last must see the newest pick —
+        // reading before the fetch lets a slow first pass overwrite a fast
+        // second one with a stale lead until the next tick.
+        val leadMinutes = BehaviourSettings.reminderLeadMinutes(appCtx)
         val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
         // Nags the receiver already owns. They are not re-armed here —
         // that would fire an extra alert on every refresh, which happens
@@ -397,7 +441,7 @@ object TaskReminders {
             // time would sort those two the wrong way round.
             val dueAt = dueMillisOrNull(t.dueDate, t.dueTime) ?: continue
             val points = reminderPoints(
-                t.dueDate, t.dueTime, t.estimatedMinutes, nowMillis,
+                t.dueDate, t.dueTime, t.estimatedMinutes, nowMillis, leadMinutes,
             )
             // Counted once the task has actually produced a point, so
             // the reported total is a denominator the numbers divide into
@@ -808,7 +852,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             // the parsed due instant — never from rendered text. Null when
             // the fetch failed or the due time is unparseable, and the
             // message then degrades to the bare fact.
-            reminderMessage(kind, dueLine, startLine, elapsed)
+            reminderMessage(
+                kind, dueLine, startLine, elapsed,
+                BehaviourSettings.reminderLeadMinutes(appCtx),
+            )
         }
         // Locals: task is nullable and conditions below don't smart-cast.
         val taskDesc = task?.description.orEmpty()

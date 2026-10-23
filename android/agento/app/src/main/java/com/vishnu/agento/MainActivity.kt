@@ -35,6 +35,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.core.content.edit
 import java.util.Locale
 import kotlinx.coroutines.launch
@@ -44,7 +46,7 @@ private enum class Destination(val title: String) {
     Chat("Chat"),
     Tasks("Projects"),
     TaskManager("Task Manager"),
-    Storage("Storage"),
+    Storage("Files"),
     Scheduler("Scheduler"),
     Skills("Skills"),
     Tools("Tools"),
@@ -64,7 +66,7 @@ private fun Destination.icon() = when (this) {
 
 /** Settings subsections; each gets its own drawer entry + screen (#60).
  * Taxonomy follows Android conventions (General/Notifications/Data & sync,
- * Storage, About): connection setup first, feature areas next, device data
+ * Backup, About): connection setup first, feature areas next, device data
  * and app info last. */
 object ThemeStore {
     const val KEY = "theme_mode"
@@ -233,17 +235,24 @@ class MainActivity : ComponentActivity() {
                     var settingsOpen by remember { mutableStateOf(false) }
                     val drawerState = rememberDrawerState(DrawerValue.Closed)
                     val scope = rememberCoroutineScope()
+                    // Resume tick for cross-screen freshness: a flip in
+                    // Settings → Behaviour must re-read on return here.
+                    var mainResume by remember { mutableIntStateOf(0) }
+                    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { mainResume++ }
                     // Per-assistant model subtitles for the drawer: refreshed
                     // on every navigation so model picks show up immediately.
                     val prefs = context.getSharedPreferences(
                         AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
                     // Built-in TTS: one engine for the Chat tab,
                     // shut down with the activity. Auto-read is a single
-                    // global toggle (prefs `tts_auto`) in each chat's bar.
+                    // global toggle (prefs `tts_auto`) in each chat's bar,
+                    // also surfaced in Settings → Behaviour: keyed on the
+                    // destination, the settings section AND resume, so a
+                    // flip in either direction re-reads on return.
                     val tts = remember { ChatTts(context) }
                     DisposableEffect(Unit) { onDispose { tts.shutdown() } }
-                    var autoSpeak by remember {
-                        mutableStateOf(prefs.getBoolean("tts_auto", false))
+                    var autoSpeak by remember(dest, section, mainResume) {
+                        mutableStateOf(BehaviourSettings.ttsAuto(context))
                     }
                     // Bumped whenever a model/effort pick saves, so the
                     // drawer subtitles below recompute without waiting for
@@ -299,9 +308,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onAutoSpeak = {
                                         autoSpeak = it
-                                        prefs.edit {
-                                            putBoolean("tts_auto", it)
-                                        }
+                                        BehaviourSettings.setTtsAuto(context, it)
                                     },
                                     onMenu = { scope.launch { drawerState.open() } },
                                     onConfigChanged = { drawerTick++ },

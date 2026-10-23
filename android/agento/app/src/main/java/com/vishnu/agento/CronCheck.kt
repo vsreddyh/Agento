@@ -40,9 +40,9 @@ internal object CronCheck {
      * Suspends: must be called from a worker or a launched coroutine, never
      * the main thread bare. Returns how many notifications posted. Safe to
      * call from a worker or a screen refresh: failures are swallowed (a
-     * missed check retries on the next tick), and the cursor advances only
-     * past runs actually posted — a denied notification permission retries
-     * rather than dropping the runs silently.
+     * missed check retries on the next tick). The cursor advances past
+     * posted runs, plus kind-off and empty-text drops; only a denied
+     * notification permission retries rather than dropping the runs.
      */
     suspend fun check(context: Context): Int {
         val appCtx = context.applicationContext
@@ -76,8 +76,29 @@ internal object CronCheck {
             val latest = fresh.maxByOrNull { it.at } ?: continue
             val more = fresh.size - 1
             val snippet = latest.text.replace(Regex("\\s+"), " ").trim().take(160)
-            if (snippet.isNotEmpty() &&
-                ChatNotifications.notifyCron(appCtx, job.id, job.name, snippet, more)
+            // Opted out means drop, not defer (#355): when the user turned
+            // scheduler responses (or the master switch) off, runs from
+            // while it was off are skipped — re-enabling surfaces only new
+            // runs, never a catch-up blast. System denial still queues and
+            // retries below: the user didn't opt out, the OS refused.
+            //
+            // notifyCron re-checks the same gate before posting: a flip
+            // mid-loop only disagrees safely (check saw on, post sees off
+            // → no post, cursor stays, retry next tick). The reverse needs
+            // no handling: check-saw-off advances and continues before the
+            // post is ever reached.
+            if (!BehaviourSettings.notifyCron(appCtx)) {
+                p.edit { putLong(seenKey(job.id), maxAt) }
+                continue
+            }
+            // An empty-text run has nothing to show and would stall the
+            // cursor forever (every check retries it, hiding later runs
+            // behind it): advance past it without counting a post.
+            if (snippet.isEmpty()) {
+                p.edit { putLong(seenKey(job.id), maxAt) }
+                continue
+            }
+            if (ChatNotifications.notifyCron(appCtx, job.id, job.name, snippet, more)
             ) {
                 posted++
                 p.edit { putLong(seenKey(job.id), maxAt) }

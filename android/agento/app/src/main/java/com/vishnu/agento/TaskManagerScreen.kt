@@ -10,15 +10,7 @@ package com.vishnu.agento
  * (`private` to `internal`, same package, so every caller keeps working)
  * and the import list, which carries exactly what this file uses.
  */
-import android.Manifest
-import android.app.AlarmManager
 import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
-import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -44,7 +36,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assignment
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -56,14 +47,12 @@ import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -78,7 +67,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import java.util.Locale
 import kotlinx.coroutines.delay
@@ -256,33 +244,9 @@ internal fun TaskManagerScreen(
             onDeepLinkConsumed()
         }
     }
-    // Reminder bell state + notification permission gate (Android 13+).
-    var remindersOn by remember { mutableStateOf(TaskReminders.isEnabled(context)) }
-    // Enable path for the reminder bell: exact-alarm grant is best
-    // effort (the scheduler falls back to inexact), notifications are
-    // required, so those gate through the permission request below.
-    // Declared before the launcher: the callback calls it, and locals
-    // are only visible after their declaration point.
-    fun armRemindersAfterChecks() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val mgr = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            if (!mgr.canScheduleExactAlarms()) {
-                runCatching {
-                    context.startActivity(
-                        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM),
-                    )
-                }
-            }
-        }
-        TaskReminders.setEnabled(context, true)
-        remindersOn = true
-    }
-    val notifPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) armRemindersAfterChecks()
-        else toasts.toast("Notifications denied — reminders stay off.", ToastKind.Error)
-    }
+    // Due-time reminders moved to Settings → Behaviour (#355): the bell,
+    // its permission flow and its state lived here and now live there, on
+    // the same `task_reminders_enabled` key — no re-tap needed.
 
     // First successful load also (re)arms due-time alarms, covering
     // agent-side changes made while the app was closed.
@@ -521,21 +485,6 @@ internal fun TaskManagerScreen(
     fun noteRowShown(id: String) {
         val known = knownIdsByFilter[rowsFilterName].orEmpty()
         knownIdsByFilter = knownIdsByFilter + (rowsFilterName to (known + id))
-    }
-
-    fun onBell() {
-        if (remindersOn) {
-            TaskReminders.setEnabled(context, false)
-            remindersOn = false
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                context, Manifest.permission.POST_NOTIFICATIONS,
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            armRemindersAfterChecks()
-        }
     }
 
     /**
@@ -1037,20 +986,9 @@ internal fun TaskManagerScreen(
                     },
                     title = { Text("Task Manager") },
                     // Never gated: mutations are per-row now, so the Select,
-                    // bell, New and Refresh stay live while a request runs.
+                    // New and Refresh stay live while a request runs.
                     actions = {
                         TextButton(onClick = { bulkMode = true }) { Text("Select") }
-                        IconButton(onClick = ::onBell) {
-                            Icon(
-                                Icons.Filled.Notifications,
-                                contentDescription = "Due-time reminders",
-                                tint = if (remindersOn) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                            )
-                        }
                         IconButton(onClick = { editing = ServerTaskDraft() }) {
                             Icon(Icons.Filled.Add, contentDescription = "New task")
                         }
