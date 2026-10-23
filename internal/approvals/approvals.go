@@ -212,6 +212,12 @@ var gatedTools = map[string]map[string]bool{
 	// gate; send paths are refused outright by the relay (see
 	// connectors.IsDraftOnlySend), and the true here is the backstop for a
 	// caller that bypasses that check: a send must never run free.
+	// Follow-up sync obligation (both sides): the draft allowlist here
+	// (create_draft/create_event_draft/save_file:false) depends on exact
+	// tool names exactly like the refusal list does. A renamed draft tool
+	// misses the free rule and holds for approval instead — safe, but a
+	// stall on the exact flow v1 sells ("create a draft instead"). Sync
+	// both lists with the wired servers' real names when they land.
 	"gmail": {
 		"search_gmail": false, "read_gmail": false,
 		"list_messages": false, "create_draft": false,

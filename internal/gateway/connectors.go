@@ -64,13 +64,19 @@ func connectorWire(c connectors.Connector) map[string]any {
 func connectorsError(w http.ResponseWriter, err error) {
 	var se *connectors.StoreError
 	if errors.As(err, &se) {
+		// Scrubbed in every branch, including NotFound: that message
+		// carries caller-influenced text ("unknown connector "+id), so it
+		// is the one branch that most needs it. Contract for future
+		// StoreError construction: Msg must be safe OR get scrubbed here —
+		// this switch scrubs, so callers don't have to.
+		msg := bounded(approvals.ScrubError(se.Msg))
 		switch {
 		case se.NotFound:
-			apiError(w, http.StatusNotFound, "invalid_request_error", "", bounded(se.Msg))
+			apiError(w, http.StatusNotFound, "invalid_request_error", "", msg)
 		case se.Upstream:
-			apiError(w, http.StatusBadGateway, "upstream_error", "", bounded(se.Msg))
+			apiError(w, http.StatusBadGateway, "upstream_error", "", msg)
 		default:
-			apiError(w, http.StatusBadRequest, "invalid_request_error", "", bounded(se.Msg))
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "", msg)
 		}
 		return
 	}

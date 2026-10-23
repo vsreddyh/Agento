@@ -169,6 +169,9 @@ func IsDraftOnlySend(server, tool string) bool {
 const RefusalMessage = "sending is disabled for this connector in v1; create a draft instead and let the user send it"
 
 // StoreError is the domain error the HTTP layer maps onto status codes.
+// upstream=true renders 502 (BadGateway) via connectorsError; false renders
+// 4xx (NotFound when NotFound, else BadRequest). Get the bool right at the
+// call site: it is the status code.
 type StoreError struct {
 	Msg      string
 	NotFound bool

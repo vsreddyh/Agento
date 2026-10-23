@@ -179,9 +179,16 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	// concurrently in v1 (gateway verbs only; the OAuth follow-up must keep
 	// token writes on one serialised path, not copy this read for
 	// non-idempotent work).
+	// Pre-reads (stamp lookup here, transition check in Disconnect) run on
+	// their own budget, not the verb's: they spend it before the write runs,
+	// and a slow pre-read must never starve a would-be-successful write
+	// into a 502. Same shape as readBack below; same single-writer
+	// assumption documented there.
 	connectedAt := now
 	if st == StatusConnected {
-		cur, gerr := s.Get(ctx, id)
+		pctx, cancel := quickCtx()
+		cur, gerr := s.Get(pctx, id)
+		cancel()
 		if gerr != nil {
 			// Fail the write, don't guess the stamp: falling through with
 			// now would silently reset first-ever-connect on a transient
@@ -225,10 +232,21 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	// over fail-silent, honestly labeled).
 	transition := true
 	preReadOK := true
-	if cur, gerr := s.Get(ctx, id); gerr == nil {
+	pctx, pcancel := quickCtx()
+	if cur, gerr := s.Get(pctx, id); gerr == nil {
 		transition = cur.Status != StatusDisconnected
 	} else {
 		preReadOK = false
+	}
+	pcancel()
+	// Idempotent no-op: already disconnected means updated_at is the last
+	// transition, not the last verb — a repeat verb returns success without
+	// moving the timestamp, so triage can read updated_at as "last
+	// transition". Tokens were cleared by the transition that got here
+	// (every path to disconnected unsets them), so skipping the write loses
+	// nothing.
+	if !transition && preReadOK {
+		return s.readBack(id)
 	}
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
 		disconnectUpdateDoc(id, now), options.Update().SetUpsert(true))
@@ -318,15 +336,20 @@ func backfillDisplay(c Connector, id string) Connector {
 
 // readBack re-reads one row on a fresh budget. The gateway hands one 5s ctx
 // for the whole verb; a slow Atlas write could consume it and turn a landed
-// write into a 502 on the confirming read. The read is cheap and idempotent,
-// so it gets its own 5s rather than the write's leftovers.
-//
-// Deliberately detached from the request: a client disconnect mid-verb still
-// pays for one cheap idempotent read. Correct at three rows; do not copy
-// this pattern for non-idempotent work (the OAuth follow-up's heavier
-// writes must stay on the request ctx).
+// write into a 502 on the confirming read (retry-safe: a second verb
+// succeeds idempotently, but triage shouldn't have to know that).
+// quickCtx gives pre-reads and the confirming read their own short budget
+// instead of spending the verb's deadline: a slow read must never starve a
+// would-be-successful write into a 502. Detached from request cancellation
+// deliberately — one cheap idempotent read at 3 rows. Do not copy this for
+// non-idempotent work (the OAuth follow-up's token writes stay on the
+// request ctx).
+func quickCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 5*time.Second)
+}
+
 func (s *MongoStore) readBack(id string) (Connector, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := quickCtx()
 	defer cancel()
 	return s.Get(ctx, id)
 }

@@ -281,3 +281,21 @@ func TestBackfillDisplayScrubsLastError(t *testing.T) {
 		t.Errorf("status changed by scrub: %q", got.Status)
 	}
 }
+
+// Repeat disconnect is a no-op success: updated_at stays the last transition,
+// not the last verb.
+func TestDisconnectRepeatLeavesTimestamps(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	first, err := s.Disconnect(ctx, "gmail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Disconnect(ctx, "gmail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.UpdatedAt != first.UpdatedAt {
+		t.Errorf("UpdatedAt moved %d -> %d on repeat disconnect", first.UpdatedAt, second.UpdatedAt)
+	}
+}

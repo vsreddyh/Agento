@@ -148,6 +148,13 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	}
 	c.DisplayName = DisplayName(id)
 	c.Scopes = ScopesFor(id)
+	// Idempotent no-op like the Mongo backend: already disconnected returns
+	// the row untouched (updated_at stays the last transition, not the last
+	// verb), still success.
+	if ok && c.Status == StatusDisconnected {
+		s.rows[id] = c
+		return backfillDisplay(c, id), nil
+	}
 	c.Status = StatusDisconnected
 	c.LastError = ""
 	c.UpdatedAt = time.Now().UnixMilli()
@@ -156,5 +163,5 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	// so the two backends cannot diverge silently: a future field must be
 	// cleared in both.
 	s.rows[id] = c
-	return c, nil
+	return backfillDisplay(c, id), nil
 }
