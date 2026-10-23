@@ -364,6 +364,13 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 			}
 			continue
 		}
+		// Normalise once, here: the tool name is operator-adjacent (Pi sends
+		// it, casing is Pi's choice) and every downstream use — refusal
+		// check, policy lookup, tracked state, audit rows — exact-matches.
+		// Without this, Send_Message and send_message refuse identically but
+		// audit as two tool names. The forwarded frame keeps Pi's raw bytes
+		// (line is written verbatim); only the relay's own bookkeeping folds.
+		params.Name = strings.ToLower(strings.TrimSpace(params.Name))
 		if connectors.IsDraftOnlySend(r.server, params.Name) {
 			// Draft-only v1 (#316): sends never reach the server, gated or
 			// not. Refused with a clear message naming drafts, audited as a

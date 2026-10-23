@@ -53,6 +53,16 @@ selected into API responses. Without Mongo both sides fall back to memory
 that cannot meet — same contract as approvals: the list still answers, but
 nothing survives a restart and no token can be stored.
 
+Encryption: v1 stores no tokens (connect 501s), so the only cover is Atlas
+at-rest encryption — there is NO field-level envelope in this PR. The OAuth
+follow-up must add envelope encryption before the first token write; real
+refresh tokens must never land under cover of this sentence without it.
+
+Write confirmation: the confirming read-after-write runs on a fresh budget,
+but if it fails after a landed write the verb still 502s while the state
+landed. That is retry-safe (a second verb succeeds idempotently), not a
+divergence — worth stating so triage doesn't read it as one.
+
 Disconnect stops future access (token columns `$unset`). Already-fetched
 data — chat history, saved files — is NOT wiped: disconnect stops the tap,
 it does not rewrite the past (cf. Dots delete-the-Dot semantics, explicitly

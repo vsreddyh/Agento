@@ -217,13 +217,23 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	now := time.Now().UnixMilli()
+	// Log only on transition: the upsert is idempotent by design, so a
+	// repeat disconnect would otherwise read as "tokens cleared" when
+	// nothing changed. Best-effort pre-read; on read failure the write
+	// still lands and the line fires (fail-loud over fail-silent).
+	transition := true
+	if cur, gerr := s.Get(ctx, id); gerr == nil {
+		transition = cur.Status != StatusDisconnected
+	}
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
 		disconnectUpdateDoc(id, now), options.Update().SetUpsert(true))
 	if err != nil {
 		s.logf("connectors: disconnect %s failed: %v", id, err)
 		return Connector{}, NewStoreError("connector disconnect failed", true)
 	}
-	s.logf("connectors: %s disconnected (tokens cleared)", id)
+	if transition {
+		s.logf("connectors: %s disconnected (tokens cleared)", id)
+	}
 	return s.readBack(id)
 }
 
@@ -278,6 +288,11 @@ func disconnectUpdateDoc(id string, now int64) bson.D {
 // a corrupt/hand-edited doc with a missing status — the status itself,
 // which otherwise decodes to "" and would emit a fourth state the app never
 // expects and the reconnect hint never matches. Fail-closed to disconnected.
+//
+// LastError is scrubbed here too, not only on the SetStatus write path: a
+// corrupt/hand-edited doc with a token in lastError would otherwise emit it
+// verbatim on the next read — the exact leak the write scrub exists to
+// prevent. ScrubError is idempotent on already-scrubbed text.
 func backfillDisplay(c Connector, id string) Connector {
 	if len(c.Scopes) == 0 {
 		c.Scopes = ScopesFor(id)
@@ -288,6 +303,7 @@ func backfillDisplay(c Connector, id string) Connector {
 	if !c.Status.Valid() {
 		c.Status = StatusDisconnected
 	}
+	c.LastError = approvals.ScrubError(c.LastError)
 	return c
 }
 

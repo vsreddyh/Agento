@@ -93,19 +93,30 @@ func TestDraftOnlySend(t *testing.T) {
 // The display projection is the load-bearing privacy invariant: token
 // columns must never be selected into API reads. Unit-pinned without a
 // database (DB tests skip without MONGODB_URI; this one always runs).
+// Exact key set, not subset: lastError/connectedAt/updatedAt are load-bearing
+// too (expired loses its error text, the wire loses timestamps if any drops),
+// so any field addition/removal fails loudly instead of silently changing
+// the wire.
 func TestDisplayProjectionExcludesTokens(t *testing.T) {
 	seen := map[string]bool{}
 	for _, e := range displayProjection() {
+		if seen[e.Key] {
+			t.Errorf("duplicate projection key %q", e.Key)
+		}
 		seen[e.Key] = true
+	}
+	want := []string{"_id", "displayName", "scopes", "status", "lastError", "connectedAt", "updatedAt"}
+	if len(seen) != len(want) {
+		t.Fatalf("projection has %d keys %v, want %d %v", len(seen), seen, len(want), want)
+	}
+	for _, k := range want {
+		if !seen[k] {
+			t.Errorf("display projection missing %q", k)
+		}
 	}
 	for _, tok := range []string{refreshTokenField, accessTokenField} {
 		if seen[tok] {
 			t.Errorf("display projection selects token column %q", tok)
-		}
-	}
-	for _, want := range []string{"_id", "displayName", "scopes", "status"} {
-		if !seen[want] {
-			t.Errorf("display projection missing %q", want)
 		}
 	}
 }
