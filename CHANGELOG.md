@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.13.2]
+- **Chat header: the title reads again (#354).** The bar carried seven
+  action icons, so Material 3 measured the actions first and the title got
+  what was left — "Chat" clipped to "C" with "…" where the model name
+  belongs. Model, Conversations, Auto-read and New stay on the bar; Runs,
+  Approvals and Memory move behind a labelled "More" overflow whose badge
+  sums both pending counts, so a held approval is never invisible. The
+  title and model lines ellipsize instead of clipping mid-glyph.
+
 ## [5.13.1]
 - **Reasoning effort: the picker and the first turn agree again (#360,
   #361).** Every DeepSeek V4 row was re-measured against Pi with the model
