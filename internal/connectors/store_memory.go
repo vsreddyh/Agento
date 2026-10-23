@@ -126,6 +126,10 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// error matches — no store touch), repair-only (display/error refresh,
 	// no updated_at bump), full transition write. A missing doc always
 	// takes the full write.
+	// updated_at means last STATUS transition, not last failure reason: an
+	// expired error-text change (aged out → revoked) heals the text without
+	// moving the timestamp — triage reads failure recency from last_error
+	// content, not from updated_at.
 	if ok && c.Status == st && c.LastError == wantErr &&
 		c.DisplayName == DisplayName(id) && slices.Equal(c.Scopes, ScopesFor(id)) {
 		return backfillDisplay(c, id), nil

@@ -108,10 +108,18 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	list, err := s.connectors.List(ctx)
 	if err != nil {
+		// Store-timeout vs client-hangup: DeadlineExceeded means the store
+		// didn't answer (502); any other ctx error means the client went
+		// away first — logged distinctly so triage doesn't read a hangup
+		// as a store failure (the write below fails silently on a dead
+		// conn either way).
 		if ctx.Err() == context.DeadlineExceeded {
 			apiError(w, http.StatusBadGateway, "upstream_error", "",
 				"the connector store did not answer in time")
 			return
+		}
+		if ctx.Err() != nil {
+			s.cfg.Logf("connectors: list aborted, client gone: %v", ctx.Err())
 		}
 		connectorsError(w, err)
 		return
@@ -125,6 +133,12 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 
 // handleConnectors serves /api/connectors. Global like approvals, not
 // per-profile like memory.
+//
+// Budget note for the next writer (OAuth follow-up starts here): verbs fan
+// out to quickCtx-budgeted pre-reads + readBack around one verb-ctx write
+// (~15s worst case, no overall deadline, detached from request cancel by
+// design — see quickCtx). Do NOT copy that stacking for heavier writes or
+// the real token exchange; bind those to one verb-level deadline instead.
 func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest string) {
 	// Exact match for the collection, prefix-with-slash for members:
 	// "api/connectorsfoo" is an unknown path, not connector "foo" — the

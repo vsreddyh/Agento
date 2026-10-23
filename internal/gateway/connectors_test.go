@@ -149,3 +149,15 @@ func TestConnectorsTrailingSlashList(t *testing.T) {
 		t.Fatalf("trailing-slash list = %v, want 3 rows", got)
 	}
 }
+
+func TestConnectorsNoVerbIs405WithAllow(t *testing.T) {
+	srv := connectorsServer(t)
+	// Bare id with no verb: 405 with an Allow header naming POST, not 404.
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail", "")
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("no-verb: %d, want 405 (%s)", rec.Code, rec.Body)
+	}
+	if allow := rec.Header().Get("Allow"); allow != "POST" {
+		t.Fatalf("Allow = %q, want POST", allow)
+	}
+}
