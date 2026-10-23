@@ -68,15 +68,25 @@ func DefaultRow(id string) Connector {
 }
 
 func (s *MemoryStore) List(_ context.Context) ([]Connector, error) {
+	// Copy under the read lock, repair outside it: backfillDisplay runs
+	// ScrubError regexes, and holding RLock across regex scan blocks the
+	// Lock that SetStatus/Disconnect need. Same return value, no
+	// lock-held scrub.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]Connector, 0, len(listIDs))
+	rows := make([]Connector, 0, len(listIDs))
+	ids := make([]string, 0, len(listIDs))
 	for _, id := range listIDs {
+		ids = append(ids, id)
 		if c, ok := s.rows[id]; ok {
-			out = append(out, backfillDisplay(c, id))
+			rows = append(rows, c)
 		} else {
-			out = append(out, DefaultRow(id))
+			rows = append(rows, DefaultRow(id))
 		}
+	}
+	s.mu.RUnlock()
+	out := make([]Connector, 0, len(rows))
+	for i, c := range rows {
+		out = append(out, backfillDisplay(c, ids[i]))
 	}
 	return out, nil
 }
@@ -87,8 +97,9 @@ func (s *MemoryStore) Get(_ context.Context, id string) (Connector, error) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if c, ok := s.rows[id]; ok {
+	c, ok := s.rows[id]
+	s.mu.RUnlock()
+	if ok {
 		return backfillDisplay(c, id), nil
 	}
 	return DefaultRow(id), nil

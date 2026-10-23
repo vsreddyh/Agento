@@ -380,6 +380,11 @@ func (r *relay) pumpPiToChild(piIn io.Reader) error {
 		// downstream (server errors, Pi sees a tool error), and Pi sends
 		// lowercase in practice. Rewriting the frame would break the
 		// byte-identical forwarding contract, so the case lives with Pi.
+		// (Intentional double-fold with IsDraftOnlySend/NeedsApproval, which
+		// normalise their own inputs: this fold fixes the audit spelling;
+		// the callee folds defend future direct callers. Idempotent —
+		// either side alone would do, neither may be removed assuming the
+		// other.)
 		params.Name = strings.ToLower(strings.TrimSpace(params.Name))
 		if connectors.IsDraftOnlySend(r.server, params.Name) {
 			// Draft-only v1 (#316): sends never reach the server, gated or

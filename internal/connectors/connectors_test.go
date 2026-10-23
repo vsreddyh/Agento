@@ -518,9 +518,10 @@ func TestConnectorStructHasNoTokenFields(t *testing.T) {
 
 // probeProjection must select exactly the transition-decision fields:
 // status, lastError, connectedAt for the stamp resolve, displayName+scopes
-// for the heal-vs-skip check. Dropping one compiles fine and silently turns
-// repeat verbs into heal-writes (or breaks the stamp resolve) — the no-DB
-// pin in the same class as the displayProjection and builder pins.
+// for the heal-vs-skip check — and exclude _id, which the probe decodes
+// into nothing. Dropping one compiles fine and silently turns repeat verbs
+// into heal-writes (or breaks the stamp resolve) — the no-DB pin in the
+// same class as the displayProjection and builder pins.
 func TestProbeProjectionShape(t *testing.T) {
 	seen := map[string]bool{}
 	for _, e := range probeProjection() {
@@ -534,8 +535,13 @@ func TestProbeProjectionShape(t *testing.T) {
 			t.Errorf("probe projection missing %q", k)
 		}
 	}
-	if len(seen) != 5 {
-		t.Errorf("probe projection has %d keys %v, want exactly 5", len(seen), seen)
+	if len(seen) != 6 {
+		t.Errorf("probe projection has %d keys %v, want exactly 6", len(seen), seen)
+	}
+	for _, e := range probeProjection() {
+		if e.Key == "_id" && e.Value != 0 {
+			t.Errorf("_id must be excluded (0), got %v", e.Value)
+		}
 	}
 }
 

@@ -244,9 +244,6 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
-	// Sampled AFTER the probe, like SetStatus: the stamp reflects the write,
-	// not the pre-read start.
-	now := time.Now().UnixMilli()
 	// Transition is defined against the STORED row, not Get's synthesised
 	// view: Get returns DefaultRow(disconnected) for a missing doc, which
 	// would read a never-touched id as "already off" and skip the write —
@@ -257,6 +254,10 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
 		options.FindOne().SetProjection(probeProjection())).Decode(&probe)
 	pcancel()
+	// Sampled AFTER the probe, like SetStatus: the stamp reflects the write,
+	// not the pre-read start — a slow Atlas read would otherwise backdate
+	// updatedAt by up to 5s on the one verb v1 actually serves.
+	now := time.Now().UnixMilli()
 	transition, preReadOK := disconnectTransition(probeErr, probe.Status)
 	// Idempotent no-op: already disconnected means updated_at is the last
 	// transition, not the last verb. Pure no-op (display fresh, error
@@ -312,6 +313,7 @@ func resolveConnectedAt(stamp, now int64) int64 {
 // token columns.
 func probeProjection() bson.D {
 	return bson.D{
+		{Key: "_id", Value: 0},
 		{Key: "status", Value: 1},
 		{Key: "lastError", Value: 1},
 		{Key: "connectedAt", Value: 1},
