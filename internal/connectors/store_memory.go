@@ -25,9 +25,11 @@ type Store interface {
 	// first-connect: re-marking connected preserves it.
 	//
 	// OAuth follow-up note: nothing sets connected in v1 (connect 501s), and
-	// when it does it must write tokens + status in ONE UpdateOne (see
-	// statusUpdateDoc) — a connected-with-no-tokens row would otherwise be
-	// servable between two writes.
+	// when it does it must write tokens + status in ONE UpdateOne — a
+	// connected-with-no-tokens row would otherwise be servable between two
+	// writes. That needs a NEW builder (e.g. connectUpdateDoc carrying
+	// tokens+status); do not extend statusUpdateDoc, which is status-only by
+	// contract and pinned as such.
 	SetStatus(ctx context.Context, id string, st Status, lastError string) (Connector, error)
 	// Disconnect stops future access for one id: status disconnected and
 	// the token fields cleared server-side (see store_mongo.go). Unknown

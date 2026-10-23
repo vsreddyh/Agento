@@ -220,10 +220,15 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	// Log only on transition: the upsert is idempotent by design, so a
 	// repeat disconnect would otherwise read as "tokens cleared" when
 	// nothing changed. Best-effort pre-read; on read failure the write
-	// still lands and the line fires (fail-loud over fail-silent).
+	// still lands but the line says the pre-read was unavailable rather
+	// than claiming a transition that may not have happened (fail-loud
+	// over fail-silent, honestly labeled).
 	transition := true
+	preReadOK := true
 	if cur, gerr := s.Get(ctx, id); gerr == nil {
 		transition = cur.Status != StatusDisconnected
+	} else {
+		preReadOK = false
 	}
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
 		disconnectUpdateDoc(id, now), options.Update().SetUpsert(true))
@@ -232,7 +237,11 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 		return Connector{}, NewStoreError("connector disconnect failed", true)
 	}
 	if transition {
-		s.logf("connectors: %s disconnected (tokens cleared)", id)
+		if preReadOK {
+			s.logf("connectors: %s disconnected (tokens cleared)", id)
+		} else {
+			s.logf("connectors: %s disconnected (tokens cleared, pre-read unavailable)", id)
+		}
 	}
 	return s.readBack(id)
 }

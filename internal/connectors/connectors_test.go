@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -263,5 +264,20 @@ func TestStatusUpdateDocExpiredRetainsTokens(t *testing.T) {
 		if e.Key == "$unset" {
 			t.Errorf("expired update must not $unset tokens, got %v", e.Value)
 		}
+	}
+}
+
+// Read-path scrub: a corrupt doc with a token in lastError must not echo it
+// verbatim — the exact leak the write-path scrub exists to prevent.
+func TestBackfillDisplayScrubsLastError(t *testing.T) {
+	got := backfillDisplay(Connector{ID: "gmail", Status: StatusExpired, LastError: "token=sk-live-1234567890"}, "gmail")
+	if strings.Contains(got.LastError, "sk-live") {
+		t.Errorf("LastError echoes token verbatim: %q", got.LastError)
+	}
+	if !strings.Contains(got.LastError, "[redacted]") {
+		t.Errorf("LastError not scrubbed: %q", got.LastError)
+	}
+	if got.Status != StatusExpired {
+		t.Errorf("status changed by scrub: %q", got.Status)
 	}
 }

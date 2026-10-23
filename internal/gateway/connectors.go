@@ -134,7 +134,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	}
 	if !connectors.Known(norm) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
-			"unknown connector "+bounded(norm))
+			"unknown connector "+bounded(approvals.ScrubError(norm)))
 		return
 	}
 
@@ -167,7 +167,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		// disconnected — it must never fall back to asking for a secret in
 		// chat.
 		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
-			"connect for "+bounded(norm)+" is not configured on this server yet; OAuth lands in a follow-up — never paste a token in chat")
+			"connect for "+bounded(approvals.ScrubError(norm))+" is not configured on this server yet; OAuth lands in a follow-up — never paste a token in chat")
 		return
 	case "":
 		w.Header().Set("Allow", "POST")
@@ -176,5 +176,5 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		return
 	}
 	apiError(w, http.StatusNotFound, "invalid_request_error", "",
-		"unknown path "+bounded(r.URL.Path))
+		"unknown path "+bounded(approvals.ScrubError(r.URL.Path)))
 }
