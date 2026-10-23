@@ -53,10 +53,12 @@ selected into API responses. Without Mongo both sides fall back to memory
 that cannot meet — same contract as approvals: the list still answers, but
 nothing survives a restart and no token can be stored.
 
-Encryption: v1 stores no tokens (connect 501s), so the only cover is Atlas
-at-rest encryption — there is NO field-level envelope in this PR. The OAuth
-follow-up must add envelope encryption before the first token write; real
-refresh tokens must never land under cover of this sentence without it.
+Encryption: envelope is implemented (AES-256-GCM, random nonce per
+value, base64(nonce||ciphertext) in Mongo). The key lives in
+CONNECTORS_ENCRYPTION_KEY (64 hex chars, server-side only); without it the
+OAuth config refuses to build and connect 501s — tokens can never land
+unencrypted by omission. Atlas at-rest is the second layer, not the cover
+story.
 
 Write confirmation: the confirming read-after-write runs on a fresh budget,
 but if it fails after a landed write the verb still 502s while the state
@@ -81,25 +83,35 @@ retention pass must not add a TTL to this collection.
   document exists (a fresh deploy lists three disconnected connectors, not
   an empty list).
 - `POST /api/connectors/{id}/disconnect` — clears tokens server-side.
-- `POST /api/connectors/{id}/connect` — v1 answers **501**: OAuth lands in
-  the follow-up. The app treats it as "needs setup", never as a prompt to
-  paste a secret. Expired rows carry a `reconnect` hint with the same
-  no-secrets wording — but no v1 writer sets expired (only Disconnect and the
-  501 connect exist; SetStatus has no route), so the hint path is wired and
-  covered but dormant until the OAuth follow-up drives it.
-- `@-mention` in-chat attach and the real OAuth exchange are follow-ups, not
-  this PR. The relay refusal and the list/disconnect shapes are what they
-  build on.
+- `POST /api/connectors/{id}/connect` — mints a one-time state+PKCE pair,
+  records the pending attempt (10-minute TTL), and returns the Google
+  consent `auth_url`. Without full OAuth config answers **501** like the v1
+  foundation. The app opens the URL in a browser and polls; it never sees a
+  code, verifier, or token.
+- `GET /api/connectors/callback?code=&state=` — single registered redirect
+  URI for all three connectors (the connector travels inside the state row,
+  not the path). Consumes the state (single-use: no code exchanged twice),
+  exchanges server-side, seals tokens with the envelope key, flips the row
+  to connected. Tokens land before the status flips — a
+  connected-with-no-tokens row is never servable.
+- `@-mention` in-chat attach, connector MCP servers, and the app Connect
+  screen are follow-ups, not this PR. The relay refusal, list/disconnect
+  shapes, and now the grant pipeline are what they build on.
 
 ### What this does and does not fix
 
 - Fixed: per-connector status/scopes, independent disconnect, send paths
-  that cannot run, a documented token home, and an expired state that
-  prompts a reconnect instead of a password in chat.
-- NOT fixed: no real Google OAuth yet (connect 501s), no connector MCP
-  servers wired in `pi/mcp.json`, no app Connect screen, no per-user auth
-  (single PASSWORD still authenticates everything), Pi built-in tools still
-  ungated by the relay.
+  that cannot run, a documented token home, an expired state that prompts a
+  reconnect instead of a password in chat, and now the real OAuth grant
+  pipeline (connect URL → single callback → exchange → sealed tokens →
+  connected), with PKCE, single-use states, and tokens-before-status
+  ordering.
+- NOT fixed: no connector MCP servers wired in `pi/mcp.json` yet (the agent
+  still cannot read mail/calendar/Drive — the grant pipeline lands first so
+  servers never touch an unsealed secret), no app Connect screen (Settings
+  opens the auth_url from the API today), no per-user auth (single PASSWORD
+  still authenticates everything), Pi built-in tools still ungated by the
+  relay.
 
 ## Consequences
 

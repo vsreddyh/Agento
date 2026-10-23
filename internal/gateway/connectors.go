@@ -163,6 +163,19 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			"unknown path "+bounded(approvals.ScrubError(rest)))
 		return
 	}
+	// Single callback for all three connectors: Google requires the EXACT
+	// registered redirect URI, so one stable spelling (rather than one per
+	// connector id) means one URI to register. The connector travels inside
+	// the signed-by-opaque state row, not the path — the handler resolves it
+	// from ConsumeState and rejects cross-wired states. Checked before the
+	// id/action split below so "callback" can never read as a connector id.
+	if rest == "api/connectors/callback" {
+		if !requireMethod(w, r, http.MethodGet, "/api/connectors/callback") {
+			return
+		}
+		s.handleConnectorCallback(w, r)
+		return
+	}
 	path := strings.TrimPrefix(rest, "api/connectors/")
 	// Belt-and-braces: splitProfile already ran path.Clean, which strips
 	// trailing slashes, so this rarely fires — but a doubly-slashed client
@@ -242,13 +255,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		if !requireMethod(w, r, http.MethodPost, "/api/connectors/{id}/connect") {
 			return
 		}
-		// v1 foundation: OAuth is not wired yet, so connect cannot succeed.
-		// 501 (not 400): the request is fine, the server side is not built.
-		// The app treats this as "needs setup" and keeps the row
-		// disconnected — it must never fall back to asking for a secret in
-		// chat.
-		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
-			"connect for "+bounded(approvals.ScrubError(norm))+" is not configured on this server yet; OAuth lands in a follow-up — never paste a token in chat")
+		s.handleConnectorConnect(w, r, norm)
 		return
 	case "":
 		w.Header().Set("Allow", "POST")
@@ -264,4 +271,118 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// with every other route in this server.
 	apiError(w, http.StatusNotFound, "invalid_request_error", "",
 		"unknown path "+bounded(approvals.ScrubError(path)))
+}
+
+// handleConnectorConnect starts one OAuth attempt: mints state+verifier,
+// records the pending attempt, and returns the Google consent URL the app
+// opens in a browser. The app never sees the verifier, the code, or any
+// token — it opens a URL and polls GET /api/connectors.
+//
+// Unconfigured (nil ConnectorOAuth) answers 501 exactly like the v1
+// foundation: the request is fine, the server side isn't built, and the app
+// must never fall back to asking for a secret in chat.
+func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, id string) {
+	if s.cfg.ConnectorOAuth == nil {
+		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
+			"connect for "+bounded(approvals.ScrubError(id))+" is not configured on this server yet — never paste a token in chat")
+		return
+	}
+	state, verifier, err := connectors.NewState()
+	if err != nil {
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"could not start the connect flow")
+		return
+	}
+	ctx, cancel := connectorCtx(r)
+	defer cancel()
+	if err := s.connectors.CreateState(ctx, connectors.OAuthState{
+		State:     state,
+		Connector: id,
+		Verifier:  verifier,
+		ExpiresAt: time.Now().Add(connectors.StateTTL),
+	}); err != nil {
+		connectorsError(w, err)
+		return
+	}
+	writeJSONResponse(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"auth_url": connectors.AuthURL(s.cfg.ConnectorOAuth, id, state, verifier),
+	})
+}
+
+// handleConnectorCallback finishes one OAuth attempt: the browser lands here
+// from Google with ?code=&state= on the single registered redirect URI. The
+// connector id travels inside the state row (resolved via ConsumeState), not
+// the path — there is exactly one callback spelling to register, and a
+// state minted for gmail can never land anywhere else. The state is consumed
+// (single-use: a code can never be exchanged twice), the code is exchanged
+// server-side, the tokens are sealed with the envelope key, and the
+// connector flips to connected. Every failure answers 4xx with "try connect
+// again" semantics — codes, verifiers, and token errors never reach the
+// response body verbatim.
+func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.ConnectorOAuth == nil {
+		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
+			"connect is not configured on this server yet — never paste a token in chat")
+		return
+	}
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	if code == "" || state == "" {
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+			"callback needs ?code= and ?state=; start over from connect")
+		return
+	}
+	ctx, cancel := connectorCtx(r)
+	defer cancel()
+	st, err := s.connectors.ConsumeState(ctx, state)
+	if err != nil {
+		// Unknown, consumed, or expired: same answer, "try connect again".
+		// The store already refuses to distinguish; the gateway must not
+		// add an oracle on top by varying the message.
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+			"that connect attempt expired or was already used; start over from connect")
+		return
+	}
+	id := st.Connector
+	tok, err := connectors.Exchange(ctx, s.cfg.ConnectorOAuth, id, code, st.Verifier)
+	if err != nil {
+		connectorsError(w, err)
+		return
+	}
+	cfg := s.cfg.ConnectorOAuth
+	refreshSealed, err := connectors.EncryptToken(cfg.Key, tok.RefreshToken)
+	if err != nil {
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"could not store the grant")
+		return
+	}
+	accessSealed, err := connectors.EncryptToken(cfg.Key, tok.AccessToken)
+	if err != nil {
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"could not store the grant")
+		return
+	}
+	var expiry int64
+	if !tok.Expiry.IsZero() {
+		expiry = tok.Expiry.UnixMilli()
+	}
+	if err := s.connectors.SetTokens(ctx, id, connectors.TokenRow{
+		RefreshCipher:         refreshSealed,
+		AccessCipher:          accessSealed,
+		AccessExpiryUnixMilli: expiry,
+	}); err != nil {
+		connectorsError(w, err)
+		return
+	}
+	// Status last, tokens first: a connected row without tokens is the one
+	// servable-but-useless state this stack refuses to invent (see
+	// statusUpdateDoc's atomicity note). SetStatus(connected) carries no
+	// error text by contract.
+	c, err := s.connectors.SetStatus(ctx, id, connectors.StatusConnected, "")
+	if err != nil {
+		connectorsError(w, err)
+		return
+	}
+	writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "connector": connectorWire(c)})
 }

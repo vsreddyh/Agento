@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,19 +36,39 @@ type Store interface {
 	// the token fields cleared server-side (see store_mongo.go). Unknown
 	// ids are NotFound; already-disconnected is a no-op success.
 	Disconnect(ctx context.Context, id string) (Connector, error)
+	// SetTokens persists an encrypted grant (see TokenRow: the store holds
+	// ciphertext opaquely and needs no key). Unknown ids are NotFound;
+	// empty refresh cipher is rejected (a stored grant must always renew).
+	SetTokens(ctx context.Context, id string, tok TokenRow) error
+	// GetTokens reads back the ciphertext grant for renewal. Unknown ids
+	// and rows with no grant are NotFound — callers treat both as
+	// "reconnect".
+	GetTokens(ctx context.Context, id string) (TokenRow, error)
+	// CreateState records a pending OAuth attempt.
+	CreateState(ctx context.Context, st OAuthState) error
+	// ConsumeState returns and deletes a pending attempt. Unknown, already
+	// consumed, or expired states are NotFound — a code can never be
+	// exchanged twice, and a stale tap fails as "try connect again".
+	ConsumeState(ctx context.Context, state string) (OAuthState, error)
 }
 
 // MemoryStore is the in-process backend: rows die with the process, like
 // every other memory fallback. The gateway still serves the routes, which
 // keeps a development stack usable without pretending tokens survive.
 type MemoryStore struct {
-	mu   sync.RWMutex
-	rows map[string]Connector
+	mu     sync.RWMutex
+	rows   map[string]Connector
+	tokens map[string]TokenRow
+	states map[string]OAuthState
 }
 
 // NewMemoryStore builds a store with no rows (List synthesises disconnected).
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{rows: make(map[string]Connector)}
+	return &MemoryStore{
+		rows:   make(map[string]Connector),
+		tokens: make(map[string]TokenRow),
+		states: make(map[string]OAuthState),
+	}
 }
 
 // DefaultRow synthesises the disconnected row for an id with no document.
@@ -210,4 +231,72 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	// cleared in both.
 	s.rows[id] = c
 	return backfillDisplay(c, id), nil
+}
+
+// SetTokens stores an encrypted grant. Ciphertext-opaque: the store never
+// sees plaintext and enforces only "a stored grant renews" (non-empty
+// refresh cipher). Tokens die with the process like every other row here.
+func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) error {
+	id = NormalizedID(id)
+	if !Known(id) {
+		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
+	}
+	if strings.TrimSpace(tok.RefreshCipher) == "" {
+		return NewStoreError("connector grant needs a refresh token", false)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokens[id] = tok
+	return nil
+}
+
+// GetTokens reads the ciphertext grant. Unknown ids and grant-less rows are
+// both NotFound: the caller reconnects either way, and distinguishing them
+// would oracle stored-grant existence to any bearer holder.
+func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) {
+	id = NormalizedID(id)
+	if !Known(id) {
+		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tok, ok := s.tokens[id]
+	if !ok || strings.TrimSpace(tok.RefreshCipher) == "" {
+		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
+	}
+	return tok, nil
+}
+
+// CreateState records a pending OAuth attempt.
+func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
+	if strings.TrimSpace(st.State) == "" {
+		return NewStoreError("oauth state needs an id", false)
+	}
+	if !Known(st.Connector) {
+		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.states[st.State]; exists {
+		return NewStoreError("oauth state already exists", false)
+	}
+	s.states[st.State] = st
+	return nil
+}
+
+// ConsumeState returns and deletes a pending attempt. Unknown and expired
+// states are the same NotFound: expiry is lazy (no sweeper at 3 rows/hour),
+// and the caller message is "try connect again" either way.
+func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.states[state]
+	if !ok {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
+	delete(s.states, state)
+	if !st.ExpiresAt.IsZero() && !time.Now().Before(st.ExpiresAt) {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
+	return st, nil
 }

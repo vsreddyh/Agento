@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	mongoDrv "go.mongodb.org/mongo-driver/mongo"
@@ -558,5 +559,115 @@ func TestProbeProjectionWithinDisplay(t *testing.T) {
 		if !display[e.Key] {
 			t.Errorf("probe key %q not in display projection", e.Key)
 		}
+	}
+}
+
+// Envelope round-trips, and every tamper class fails closed.
+func TestTokenEnvelope(t *testing.T) {
+	key := [32]byte{1, 2, 3}
+	sealed, err := EncryptToken(key, "refresh-token-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sealed == "refresh-token-value" {
+		t.Fatal("sealed must not equal plaintext")
+	}
+	open, err := DecryptToken(key, sealed)
+	if err != nil || open != "refresh-token-value" {
+		t.Fatalf("round trip = %q, %v", open, err)
+	}
+	// Two seals of the same value differ (random nonce).
+	second, err := EncryptToken(key, "refresh-token-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == sealed {
+		t.Error("deterministic seal: nonce reuse")
+	}
+	// Wrong key, tampered tail, truncated, non-base64: all fail.
+	var other [32]byte
+	other[0] = 9
+	if _, err := DecryptToken(other, sealed); err == nil {
+		t.Error("wrong key opened")
+	}
+	bad := sealed[:len(sealed)-2] + "AA"
+	if _, err := DecryptToken(key, bad); err == nil {
+		t.Error("tampered seal opened")
+	}
+	if _, err := DecryptToken(key, "!!!not-base64!!!"); err == nil {
+		t.Error("non-base64 opened")
+	}
+	if _, err := EncryptToken([32]byte{}, "x"); err == nil {
+		t.Error("zero-key seal allowed")
+	}
+	if _, err := DecryptToken([32]byte{}, sealed); err == nil {
+		t.Error("zero-key open allowed")
+	}
+}
+
+// States are single-use and expiring (memory backend).
+func TestOAuthStateLifecycle(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ConsumeState(ctx, "s1")
+	if err != nil || got.Connector != "gmail" || got.Verifier != "v" {
+		t.Fatalf("consume = %+v, %v", got, err)
+	}
+	// Double consume fails: a code can never be exchanged twice.
+	if _, err := s.ConsumeState(ctx, "s1"); err == nil {
+		t.Fatal("second consume should fail")
+	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
+		t.Fatalf("second consume should be NotFound, got %v", err)
+	}
+	// Expired consumes as NotFound.
+	if err := s.CreateState(ctx, OAuthState{State: "s2", Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeState(ctx, "s2"); err == nil {
+		t.Fatal("expired consume should fail")
+	}
+	// Unknown connector rejected at create.
+	if err := s.CreateState(ctx, OAuthState{State: "s3", Connector: "slack", Verifier: "v"}); err == nil {
+		t.Fatal("unknown connector state should fail")
+	}
+}
+
+// Token grant lifecycle (memory backend): renewability enforced, unknown
+// and grant-less both NotFound.
+func TestTokenGrantLifecycle(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if _, err := s.GetTokens(ctx, "gmail"); err == nil {
+		t.Fatal("grant-less get should fail")
+	}
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "", AccessCipher: "a"}); err == nil {
+		t.Fatal("empty refresh cipher should fail")
+	}
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a", AccessExpiryUnixMilli: 1}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetTokens(ctx, "gmail")
+	if err != nil || got.RefreshCipher != "r" {
+		t.Fatalf("get = %+v, %v", got, err)
+	}
+	if _, err := s.GetTokens(ctx, "slack"); err == nil {
+		t.Fatal("unknown get should fail")
+	}
+}
+
+// Auth URL carries the connector scopes, PKCE challenge, and offline access.
+func TestAuthURLShape(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	u := AuthURL(cfg, Gmail, "STATE", "verifier-value")
+	for _, want := range []string{"client_id=cid", "state=STATE", "code_challenge=", "code_challenge_method=S256", "access_type=offline", "prompt=consent", "gmail.readonly", "gmail.compose"} {
+		if !strings.Contains(u, want) {
+			t.Errorf("auth URL missing %q:\n%s", want, u)
+		}
+	}
+	if scopes := GoogleScopes("slack"); scopes != nil {
+		t.Errorf("unknown scopes = %v, want nil", scopes)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"agento/internal/approvals"
@@ -24,6 +25,8 @@ import (
 // rewrite the past.
 type MongoStore struct {
 	coll *mongoDrv.Collection
+	// states holds pending OAuth attempts (see StatesCollection).
+	states *mongoDrv.Collection
 	// Logf receives operational notes. Nil discards them.
 	Logf func(string, ...any)
 }
@@ -40,7 +43,10 @@ func New(uri, dbName string) (*MongoStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &MongoStore{coll: db.Collection(Collection)}, nil
+	return &MongoStore{
+		coll:   db.Collection(Collection),
+		states: db.Collection(StatesCollection),
+	}, nil
 }
 
 // FromEnv connects from the shared MONGODB_URI/MONGODB_DB pair.
@@ -49,10 +55,16 @@ func FromEnv() (*MongoStore, error) {
 	return New(uri, db)
 }
 
-// Note: no EnsureIndexes method exists on purpose. Three fixed rows keyed
-// by _id need no secondary index, and an uncalled no-op hook would bit-rot
-// silently (signature drift, no callers, no test). The OAuth follow-up adds
-// the real index method alongside the first query that needs one.
+// EnsureIndexes creates the states TTL (pending attempts die on their own;
+// the relay-style sweep other stores need does not exist here by design).
+// The connectors collection needs none: three fixed rows keyed by _id.
+func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
+	_, err := s.states.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
+		Keys:    bson.D{{Key: "expiresAt", Value: 1}},
+		Options: options.Index().SetName("oauth_states_ttl").SetExpireAfterSeconds(0),
+	})
+	return err
+}
 
 // Token columns live in this collection alongside the display fields but
 // are never projected into API reads (see displayProjection). The field
@@ -515,4 +527,109 @@ func (s *MongoStore) readBack(id string) (Connector, error) {
 	ctx, cancel := quickCtx()
 	defer cancel()
 	return s.Get(ctx, id)
+}
+
+// SetTokens persists an encrypted grant. Ciphertext-opaque: the store never
+// sees plaintext (see TokenRow) and enforces only the renewal invariant —
+// an empty refresh cipher is rejected, because a stored grant without one
+// strands the row at the first access-token expiry.
+func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) error {
+	id = NormalizedID(id)
+	if !Known(id) {
+		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
+	}
+	if strings.TrimSpace(tok.RefreshCipher) == "" {
+		return NewStoreError("connector grant needs a refresh token", false)
+	}
+	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}}, bson.D{
+		{Key: "$set", Value: bson.D{
+			{Key: refreshTokenField, Value: tok.RefreshCipher},
+			{Key: accessTokenField, Value: tok.AccessCipher},
+			{Key: "accessExpiry", Value: tok.AccessExpiryUnixMilli},
+		}},
+	}, options.Update().SetUpsert(true))
+	if err != nil {
+		s.logf("connectors: token write %s failed: %v", id, err)
+		return NewStoreError("connector token write failed", true)
+	}
+	return nil
+}
+
+// GetTokens reads the ciphertext grant. Unknown ids and grant-less rows are
+// both NotFound: the caller reconnects either way, and distinguishing them
+// would oracle stored-grant existence.
+func (s *MongoStore) GetTokens(ctx context.Context, id string) (TokenRow, error) {
+	id = NormalizedID(id)
+	if !Known(id) {
+		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
+	}
+	var row struct {
+		Refresh string `bson:"refreshToken"`
+		Access  string `bson:"accessToken"`
+		Expiry  int64  `bson:"accessExpiry"`
+	}
+	err := s.coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}},
+		options.FindOne().SetProjection(bson.D{
+			{Key: refreshTokenField, Value: 1},
+			{Key: accessTokenField, Value: 1},
+			{Key: "accessExpiry", Value: 1},
+		})).Decode(&row)
+	if err != nil {
+		if err == mongoDrv.ErrNoDocuments {
+			return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
+		}
+		s.logf("connectors: token read %s failed: %v", id, err)
+		return TokenRow{}, NewStoreError("connector token read failed", true)
+	}
+	if strings.TrimSpace(row.Refresh) == "" {
+		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
+	}
+	return TokenRow{RefreshCipher: row.Refresh, AccessCipher: row.Access, AccessExpiryUnixMilli: row.Expiry}, nil
+}
+
+// CreateState records a pending OAuth attempt. States are single-use by
+// contract (see ConsumeState); an id collision is a caller bug (400), never
+// an overwrite.
+func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
+	if strings.TrimSpace(st.State) == "" {
+		return NewStoreError("oauth state needs an id", false)
+	}
+	if !Known(st.Connector) {
+		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
+	}
+	if st.ExpiresAt.IsZero() {
+		st.ExpiresAt = time.Now().Add(StateTTL)
+	}
+	_, err := s.states.InsertOne(ctx, st)
+	if err != nil {
+		if mongoDrv.IsDuplicateKeyError(err) {
+			return NewStoreError("oauth state already exists", false)
+		}
+		s.logf("connectors: state create failed: %v", err)
+		return NewStoreError("oauth state create failed", true)
+	}
+	return nil
+}
+
+// ConsumeState atomically takes and deletes a pending attempt
+// (FindOneAndDelete): a code can never be exchanged twice, even across two
+// racing callbacks. Unknown, already-consumed, and expired states are the
+// same NotFound — the app message is "try connect again" in all three, and
+// distinguishing them would oracle live state ids. Expiry is enforced
+// eagerly here AND lazily by the TTL index: the index reaps what this check
+// already refused.
+func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState, error) {
+	var st OAuthState
+	err := s.states.FindOneAndDelete(ctx, bson.D{{Key: "_id", Value: state}}).Decode(&st)
+	if err != nil {
+		if err == mongoDrv.ErrNoDocuments {
+			return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+		}
+		s.logf("connectors: state consume failed: %v", err)
+		return OAuthState{}, NewStoreError("oauth state consume failed", true)
+	}
+	if !st.ExpiresAt.IsZero() && !time.Now().Before(st.ExpiresAt) {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
+	return st, nil
 }

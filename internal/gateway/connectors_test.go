@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -173,5 +175,126 @@ func TestConnectorsCollectionWrongMethod(t *testing.T) {
 		if allow := rec.Header().Get("Allow"); allow != "GET" {
 			t.Fatalf("POST %s Allow = %q, want GET", p, allow)
 		}
+	}
+}
+
+func oauthTestServer(t *testing.T, failExchange bool) (*connectors.OAuthConfig, func()) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if failExchange {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"access_token":"access-1","refresh_token":"refresh-1","expires_in":3600,"token_type":"Bearer"}`))
+	}))
+	var key [32]byte
+	copy(key[:], "test-envelope-key-0123456789ab")
+	cfg := &connectors.OAuthConfig{
+		ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb",
+		Key: key, AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t",
+	}
+	return cfg, srv.Close
+}
+
+func oauthServer(t *testing.T, cfg *connectors.OAuthConfig) *Server {
+	t.Helper()
+	return newTestServer(t, &fakeAgent{}, Config{ConnectorStore: connectors.NewMemoryStore(), ConnectorOAuth: cfg})
+}
+
+func TestConnectorsConnectReturnsAuthURL(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("connect: %d %s", rec.Code, rec.Body)
+	}
+	got := decodeBody(t, rec)
+	url, _ := got["auth_url"].(string)
+	for _, want := range []string{"gmail.readonly", "code_challenge=", "state="} {
+		if !strings.Contains(url, want) {
+			t.Errorf("auth_url missing %q:\n%s", want, url)
+		}
+	}
+}
+
+func TestConnectorsCallbackFullFlow(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := connectors.NewMemoryStore()
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+
+	// Start the flow to mint a real state.
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	authURL, _ := decodeBody(t, rec)["auth_url"].(string)
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := u.Query().Get("state")
+	if state == "" {
+		t.Fatalf("no state in %s", authURL)
+	}
+	// Exchange through the callback.
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=code1&state="+state, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("callback: %d %s", rec.Code, rec.Body)
+	}
+	got := decodeBody(t, rec)["connector"].(map[string]any)
+	if got["status"] != "connected" {
+		t.Fatalf("status = %v, want connected", got["status"])
+	}
+	if _, has := got["refresh_token"]; has {
+		t.Error("wire leaks refresh token")
+	}
+	// Tokens stored encrypted: ciphertext present, plaintext absent.
+	tok, err := store.GetTokens(context.Background(), "gmail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.RefreshCipher == "" || tok.RefreshCipher == "refresh-1" {
+		t.Errorf("refresh not sealed: %q", tok.RefreshCipher)
+	}
+	open, err := connectors.DecryptToken(cfg.Key, tok.RefreshCipher)
+	if err != nil || open != "refresh-1" {
+		t.Fatalf("decrypt = %q, %v", open, err)
+	}
+	// Replaying the same state fails: single-use.
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=code1&state="+state, "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("replay: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+}
+
+func TestConnectorsCallbackRejects(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	// Unknown state.
+	if rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nope", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown state: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	// Missing params.
+	if rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing state: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	// Per-connector callback paths are gone: the single registered endpoint
+	// serves all three. A leftover per-id path 404s as unknown.
+	if rec := do(t, srv, http.MethodGet, "/api/connectors/gmail/callback?code=x&state=y", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("per-id callback: %d, want 404 (%s)", rec.Code, rec.Body)
+	}
+	// Exchange failure surfaces without storing.
+	cfgFail, closeFail := oauthTestServer(t, true)
+	defer closeFail()
+	srvFail := oauthServer(t, cfgFail)
+	rec := do(t, srvFail, http.MethodPost, "/api/connectors/gmail/connect", "")
+	uf, err := url.Parse(decodeBody(t, rec)["auth_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, srvFail, http.MethodGet, "/api/connectors/callback?code=bad&state="+uf.Query().Get("state"), ""); rec.Code != http.StatusBadGateway {
+		t.Fatalf("bad exchange: %d, want 502 (%s)", rec.Code, rec.Body)
 	}
 }
