@@ -325,7 +325,7 @@ connecting/disconnecting independently from the app:
 
 - Gmail: search/read + draft (sends refused with "create a draft instead").
 - Calendar: list/upcoming + draft event (creates/invites refused the same way).
-- Drive: read/list + save agent-produced file (deletes gate as a backstop).
+- Drive: read/list + save agent-produced file (deletes gate as a backstop). Ungated-save scope is create-only: if the wired server's save can overwrite an existing file, that is a destructive write and the follow-up must gate it.
 
 The refusal is enforced in the relay before the approval check, audited as
 `connector_draft_only`, and parks no approval card. Token placement: OAuth
