@@ -104,8 +104,8 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 		s.logf("connectors: list cursor failed: %v", err)
 		return nil, NewStoreError("connector list failed", true)
 	}
-	out := make([]Connector, 0, len(ListIDs))
-	for _, id := range ListIDs {
+	out := make([]Connector, 0, len(listIDs))
+	for _, id := range listIDs {
 		if c, ok := byID[id]; ok {
 			c = backfillDisplay(c, id)
 			out = append(out, c)
@@ -147,16 +147,6 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	if st == StatusDisconnected {
 		lastErr = ""
 	}
-	set := bson.D{
-		{Key: "displayName", Value: DisplayName(id)},
-		{Key: "scopes", Value: ScopesFor(id)},
-		{Key: "status", Value: string(st)},
-		{Key: "lastError", Value: lastErr},
-		{Key: "updatedAt", Value: now},
-	}
-	if st == StatusConnected {
-		set = append(set, bson.E{Key: "connectedAt", Value: now})
-	}
 	// One write, never two: when marking disconnected the token $unset rides
 	// in the same UpdateOne as the status $set (mirroring Disconnect). A
 	// split $set-then-$unset could land the first and lose the second (Atlas
@@ -165,15 +155,8 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	// case that matters. Disconnect stays the documented off-path; this is
 	// the belt-and-braces for any caller that marks disconnected via
 	// SetStatus.
-	update := bson.D{{Key: "$set", Value: set}}
-	if st == StatusDisconnected {
-		update = append(update, bson.E{Key: "$unset", Value: bson.D{
-			{Key: refreshTokenField, Value: ""},
-			{Key: accessTokenField, Value: ""},
-		}})
-	}
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
-		update, options.Update().SetUpsert(true))
+		statusUpdateDoc(id, st, lastErr, now), options.Update().SetUpsert(true))
 	if err != nil {
 		s.logf("connectors: write %s failed: %v", id, err)
 		return Connector{}, NewStoreError("connector write failed", true)
@@ -187,7 +170,47 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	now := time.Now().UnixMilli()
-	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}}, bson.D{
+	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
+		disconnectUpdateDoc(id, now), options.Update().SetUpsert(true))
+	if err != nil {
+		s.logf("connectors: disconnect %s failed: %v", id, err)
+		return Connector{}, NewStoreError("connector disconnect failed", true)
+	}
+	s.logf("connectors: %s disconnected (tokens cleared)", id)
+	return s.readBack(id)
+}
+
+// statusUpdateDoc builds the single UpdateOne body for SetStatus: $set with
+// the display fields plus status, $unset of the token columns on the
+// disconnected path. One document, one write — a future edit must not split
+// it again (see the atomicity note on SetStatus). lastErr must already be
+// normalised (cleared on the disconnected path).
+func statusUpdateDoc(id string, st Status, lastErr string, now int64) bson.D {
+	set := bson.D{
+		{Key: "displayName", Value: DisplayName(id)},
+		{Key: "scopes", Value: ScopesFor(id)},
+		{Key: "status", Value: string(st)},
+		{Key: "lastError", Value: lastErr},
+		{Key: "updatedAt", Value: now},
+	}
+	if st == StatusConnected {
+		set = append(set, bson.E{Key: "connectedAt", Value: now})
+	}
+	update := bson.D{{Key: "$set", Value: set}}
+	if st == StatusDisconnected {
+		update = append(update, bson.E{Key: "$unset", Value: bson.D{
+			{Key: refreshTokenField, Value: ""},
+			{Key: accessTokenField, Value: ""},
+		}})
+	}
+	return update
+}
+
+// disconnectUpdateDoc builds the single UpdateOne body for Disconnect. Same
+// atomicity contract as statusUpdateDoc: tokens die in the same write that
+// flips the status. History (chat, saved files) is untouched by design.
+func disconnectUpdateDoc(id string, now int64) bson.D {
+	return bson.D{
 		{Key: "$set", Value: bson.D{
 			{Key: "displayName", Value: DisplayName(id)},
 			{Key: "scopes", Value: ScopesFor(id)},
@@ -195,19 +218,11 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 			{Key: "lastError", Value: ""},
 			{Key: "updatedAt", Value: now},
 		}},
-		// Tokens die here: future access stops at the next read. History
-		// (chat, saved files) is untouched by design.
 		{Key: "$unset", Value: bson.D{
 			{Key: refreshTokenField, Value: ""},
 			{Key: accessTokenField, Value: ""},
 		}},
-	}, options.Update().SetUpsert(true))
-	if err != nil {
-		s.logf("connectors: disconnect %s failed: %v", id, err)
-		return Connector{}, NewStoreError("connector disconnect failed", true)
 	}
-	s.logf("connectors: %s disconnected (tokens cleared)", id)
-	return s.readBack(id)
 }
 
 // backfillDisplay repairs a present-but-thin document the way List's

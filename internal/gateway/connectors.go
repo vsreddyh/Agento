@@ -43,7 +43,11 @@ func connectorWire(c connectors.Connector) map[string]any {
 	if c.LastError != "" {
 		out["last_error"] = c.LastError
 	}
-	if c.ConnectedAt != 0 {
+	// Emitted only while connected: the stored value is last-connected-at
+	// and is retained across disconnect/expire, so emitting it on an
+	// off-state row would read as "connected since X". Absence of
+	// updated_at means never touched (see DefaultRow).
+	if c.Status == connectors.StatusConnected && c.ConnectedAt != 0 {
 		out["connected_at"] = c.ConnectedAt
 	}
 	if c.UpdatedAt != 0 {

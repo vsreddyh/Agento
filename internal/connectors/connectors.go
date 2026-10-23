@@ -36,10 +36,15 @@ const (
 	Drive    = "drive"
 )
 
-// ListIDs is the fixed v1 set, in display order. Do not mutate: List
-// synthesizes the API shape by iterating this slice, so an in-place edit
-// silently changes what every client sees. Treat as read-only.
-var ListIDs = []string{Gmail, Calendar, Drive}
+// listIDs is the fixed v1 set, in display order. Unexported so no importer
+// can mutate the API shape: ListIDs() returns a fresh copy on every call.
+var listIDs = [3]string{Gmail, Calendar, Drive}
+
+// ListIDs returns the fixed v1 connector ids in display order. A copy, so
+// callers cannot mutate the package set.
+func ListIDs() []string {
+	return append([]string(nil), listIDs[:]...)
+}
 
 // DisplayName names a connector for the app. Unknown ids echo back: the
 // gateway 404s them first, so this is a display fallback, not a lookup.

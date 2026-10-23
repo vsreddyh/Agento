@@ -3,6 +3,8 @@ package connectors
 import (
 	"context"
 	"testing"
+
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 func TestListSynthesisesDisconnected(t *testing.T) {
@@ -134,5 +136,59 @@ func TestSetStatusDisconnectedClearsError(t *testing.T) {
 	}
 	if got.LastError != "" {
 		t.Errorf("LastError = %q, want cleared on disconnect", got.LastError)
+	}
+}
+
+// The atomic-write invariant: the disconnected update carries the token
+// $unset in the SAME document as the status $set, so no edit can split them
+// into two writes again. No database needed.
+func TestStatusUpdateDocAtomic(t *testing.T) {
+	doc := statusUpdateDoc("gmail", StatusDisconnected, "", 123)
+	var unset bson.D
+	for _, e := range doc {
+		if e.Key == "$unset" {
+			unset, _ = e.Value.(bson.D)
+		}
+	}
+	if len(unset) == 0 {
+		t.Fatal("disconnected update has no $unset")
+	}
+	keys := map[string]bool{}
+	for _, e := range unset {
+		keys[e.Key] = true
+	}
+	if !keys[refreshTokenField] || !keys[accessTokenField] {
+		t.Errorf("$unset = %v, want both token columns", unset)
+	}
+	if doc := statusUpdateDoc("gmail", StatusConnected, "", 123); len(doc) != 1 {
+		t.Errorf("connected update should be $set only, got %d ops", len(doc))
+	}
+	if doc := disconnectUpdateDoc("gmail", 123); len(doc) != 2 {
+		t.Errorf("disconnect update should be $set+$unset, got %d ops", len(doc))
+	}
+}
+
+// Memory writes self-heal display fields like Mongo's $set does.
+func TestMemoryWriteRefreshesDisplay(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	got, err := s.SetStatus(ctx, "gmail", StatusConnected, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DisplayName != DisplayName("gmail") || len(got.Scopes) == 0 {
+		t.Errorf("write did not refresh display fields: %+v", got)
+	}
+}
+
+// ListIDs returns a copy: mutating it must not change the package set.
+func TestListIDsReturnsCopy(t *testing.T) {
+	a := ListIDs()
+	a[0] = "mutated"
+	if b := ListIDs(); b[0] == "mutated" {
+		t.Error("ListIDs mutation leaked into the package set")
+	}
+	if len(ListIDs()) != 3 {
+		t.Errorf("ListIDs = %v, want 3", ListIDs())
 	}
 }

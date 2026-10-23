@@ -103,3 +103,12 @@ func TestConnectorsExpiredCarriesReconnectHint(t *testing.T) {
 		}
 	}
 }
+
+func TestConnectorsWireGatesConnectedAt(t *testing.T) {
+	if got := connectorWire(connectors.Connector{ID: "gmail", Status: connectors.StatusConnected, ConnectedAt: 77}); got["connected_at"] != int64(77) {
+		t.Errorf("connected row should emit connected_at, got %v", got)
+	}
+	if got := connectorWire(connectors.Connector{ID: "gmail", Status: connectors.StatusDisconnected, ConnectedAt: 77}); got["connected_at"] != nil {
+		t.Errorf("disconnected row must omit connected_at, got %v", got)
+	}
+}
