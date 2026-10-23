@@ -126,10 +126,10 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 		c.LastError = ""
 	}
 	c.UpdatedAt = now
-	// First-connect, not last-write: re-marking an already-connected row
-	// must not move the timestamp.
-	if st == StatusConnected && c.ConnectedAt == 0 {
-		c.ConnectedAt = now
+	// First-ever connect, shared with Mongo via resolveConnectedAt (same
+	// helper, same semantic on both backends).
+	if st == StatusConnected {
+		c.ConnectedAt = resolveConnectedAt(c, now)
 	}
 	s.rows[id] = c
 	return c, nil
@@ -149,10 +149,10 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	c.DisplayName = DisplayName(id)
 	c.Scopes = ScopesFor(id)
 	// Idempotent no-op like the Mongo backend: already disconnected returns
-	// the row untouched (updated_at stays the last transition, not the last
-	// verb), still success.
+	// without writing (updated_at stays the last transition, not the last
+	// verb), still success. No store-back of the identical value, and the
+	// read path repairs display fields on every read anyway.
 	if ok && c.Status == StatusDisconnected {
-		s.rows[id] = c
 		return backfillDisplay(c, id), nil
 	}
 	c.Status = StatusDisconnected

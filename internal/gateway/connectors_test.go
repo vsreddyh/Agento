@@ -121,3 +121,11 @@ func TestConnectorsMalformedVerbPathIs404(t *testing.T) {
 		t.Fatalf("disconnect/extra: %d, want 404 (%s)", rec.Code, rec.Body)
 	}
 }
+
+func TestConnectorsVerbFoldsCase(t *testing.T) {
+	srv := connectorsServer(t)
+	// Verbs fold like ids: mixed-case still lands on the verb.
+	if rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/Disconnect", ""); rec.Code != http.StatusOK {
+		t.Fatalf("mixed-case verb: %d, want 200 (%s)", rec.Code, rec.Body)
+	}
+}

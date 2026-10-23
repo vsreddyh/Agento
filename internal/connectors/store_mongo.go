@@ -197,9 +197,7 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 			s.logf("connectors: pre-read %s failed: %v", id, gerr)
 			return Connector{}, NewStoreError("connector read failed", true)
 		}
-		if cur.ConnectedAt != 0 {
-			connectedAt = cur.ConnectedAt
-		}
+		connectedAt = resolveConnectedAt(cur, now)
 	}
 	// One write, never two: when marking disconnected the token $unset rides
 	// in the same UpdateOne as the status $set (mirroring Disconnect). A
@@ -224,18 +222,25 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	now := time.Now().UnixMilli()
-	// Log only on transition: the upsert is idempotent by design, so a
-	// repeat disconnect would otherwise read as "tokens cleared" when
-	// nothing changed. Best-effort pre-read; on read failure the write
-	// still lands but the line says the pre-read was unavailable rather
-	// than claiming a transition that may not have happened (fail-loud
-	// over fail-silent, honestly labeled).
+	// Log only on transition, and define transition against the STORED row,
+	// not Get's synthesised view: Get returns DefaultRow(disconnected) for
+	// a missing doc, which would read a never-touched id as "already off"
+	// and skip the write — losing the explicit-off signal (updated_at set)
+	// and diverging from memory (which writes when the row is absent).
+	// ErrNoDocuments therefore means transition.
 	transition := true
 	preReadOK := true
 	pctx, pcancel := quickCtx()
-	if cur, gerr := s.Get(pctx, id); gerr == nil {
-		transition = cur.Status != StatusDisconnected
-	} else {
+	var probe struct {
+		Status Status `bson:"status"`
+	}
+	switch err := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
+		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}})).Decode(&probe); {
+	case err == nil:
+		transition = probe.Status != StatusDisconnected
+	case err == mongoDrv.ErrNoDocuments:
+		transition = true
+	default:
 		preReadOK = false
 	}
 	pcancel()
@@ -262,6 +267,17 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 		}
 	}
 	return s.readBack(id)
+}
+
+// resolveConnectedAt is the first-ever-connect rule both backends share:
+// a nonzero stored stamp survives re-marks and disconnect→reconnect cycles,
+// zero takes now. Pure, so the Mongo read-then-write sequence and the memory
+// write pin the same semantic with one no-DB test.
+func resolveConnectedAt(cur Connector, now int64) int64 {
+	if cur.ConnectedAt != 0 {
+		return cur.ConnectedAt
+	}
+	return now
 }
 
 // statusUpdateDoc builds the single UpdateOne body for SetStatus: $set with
@@ -344,6 +360,12 @@ func backfillDisplay(c Connector, id string) Connector {
 // deliberately — one cheap idempotent read at 3 rows. Do not copy this for
 // non-idempotent work (the OAuth follow-up's token writes stay on the
 // request ctx).
+//
+// Budget composition, stated so the follow-up doesn't copy the stacking:
+// worst case per verb is 5s pre-read + 5s write (verb ctx) + 5s readBack,
+// sequential (~15s) with no overall gateway deadline. All three are cheap
+// indexed reads/writes at 3 rows; heavier OAuth writes and the real token
+// exchange need one verb-level bound instead of stacked per-call budgets.
 func quickCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 5*time.Second)
 }

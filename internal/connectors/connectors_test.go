@@ -299,3 +299,14 @@ func TestDisconnectRepeatLeavesTimestamps(t *testing.T) {
 		t.Errorf("UpdatedAt moved %d -> %d on repeat disconnect", first.UpdatedAt, second.UpdatedAt)
 	}
 }
+
+// resolveConnectedAt pins first-ever-connect for both backends with no DB:
+// nonzero survives, zero takes now.
+func TestResolveConnectedAt(t *testing.T) {
+	if got := resolveConnectedAt(Connector{ConnectedAt: 42}, 99); got != 42 {
+		t.Errorf("got %d, want 42", got)
+	}
+	if got := resolveConnectedAt(Connector{}, 99); got != 99 {
+		t.Errorf("got %d, want 99", got)
+	}
+}
