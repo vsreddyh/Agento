@@ -1,5 +1,7 @@
 package com.vishnu.agento
 
+import java.util.Locale
+
 /**
  * Reasoning-effort options per model.
  *
@@ -15,11 +17,28 @@ package com.vishnu.agento
  * exist). Sibling mimo rows follow the same shape but were NOT live-probed;
  * if one differs, the server's 400 names its real levels and the row gets
  * corrected then. The app sends "none" for off (the server aliases it).
+ *
+ * Measured 2026-10-23 against Pi's own `get_available_thinking_levels` with
+ * each model applied (Pi's ladder wins over the provider catalog): the
+ * DeepSeek V4 rows below are now live-probed, not extrapolated. All four
+ * used to offer medium/xhigh, which neither provider copy speaks, and
+ * v4.1-flash also offered off, which it does not support. The retired
+ * `deepseek-flash` row named no live model and is gone.
+ *
+ * The two provider copies are not identical: opencode-go advertises off on
+ * v4-flash, v4-flash-vision and v4-pro, while opencode does not. This table
+ * is keyed on the model alone (provider prefixes are stripped), so a row
+ * lists the INTERSECTION of the provider copies — every level offered is
+ * one both copies accept. Offering off would be a guaranteed 400 on the
+ * opencode copy, where the same pick is valid on opencode-go.
+ *
  * Unknown models fall back to [FALLBACK].
  */
 object EffortCatalog {
 
-    /** Server default when no override is sent (matches gateway default). */
+    /** Preferred level when a model offers it. There is no server default to
+     * match: the gateway refuses a turn with no `reasoning_effort` (#361), so
+     * this is a picker/request default the client resolves itself. */
     const val DEFAULT = "medium"
 
     /** Full-ladder fallback for models with no specific entry. "ultra" is
@@ -61,12 +80,15 @@ object EffortCatalog {
         "glm-5-1" to TOGGLE,
         "glm-5-turbo" to TOGGLE,
         "glm-5" to TOGGLE,
-        // DeepSeek V4 family.
-        "deepseek-v4-1-flash" to listOf("none", "low", "high", "xhigh", "max"),
-        "deepseek-v4-flash-vision" to listOf("none", "low", "high", "max"),
-        "deepseek-v4-flash" to listOf("low", "medium", "high", "xhigh"),
-        "deepseek-v4-pro" to listOf("low", "medium", "high", "xhigh"),
-        "deepseek-flash" to listOf("low", "medium", "high", "xhigh"),
+        // DeepSeek V4 family (live-probed 2026-10-23). Ladders are the
+        // intersection of the opencode and opencode-go copies — see the
+        // object KDoc for the off disagreement. The vision prefix must stay
+        // above plain v4-flash: prefix matching would otherwise claim
+        // "deepseek-v4-flash-vision-exp" for the v4-flash row.
+        "deepseek-v4-1-flash" to listOf("low", "high", "max"),
+        "deepseek-v4-flash-vision" to listOf("low", "high", "max"),
+        "deepseek-v4-flash" to listOf("low", "high", "max"),
+        "deepseek-v4-pro" to listOf("high", "max"),
         // Qwen3: plus tiers toggle; max tiers graded.
         "qwen3-7" to listOf("none", "low", "medium", "high", "max"),
         "qwen3-8" to listOf("none", "low", "medium", "high", "max"),
@@ -81,7 +103,7 @@ object EffortCatalog {
 
     /** Normalizes a model name for catalog lookup. */
     fun normalize(model: String): String {
-        var m = model.trim().lowercase().replace('_', '-').replace('.', '-')
+        var m = model.trim().lowercase(Locale.ROOT).replace('_', '-').replace('.', '-')
         // Strip a provider prefix ("xiaomi/mimo-..." or "opencode-go/...").
         val slash = m.lastIndexOf('/')
         if (slash >= 0) m = m.substring(slash + 1)
@@ -112,7 +134,26 @@ object EffortCatalog {
         return opts.firstOrNull() ?: DEFAULT
     }
 
+    /**
+     * The level actually used for [model]: [stored] when it is one this model
+     * offers, else [defaultFor] — never blank, never invalid. Both are
+     * single-sourced here: the display paths and the request share this value,
+     * so the drawer, the picker and the wire agree, and a stale pick saved for
+     * another model cannot 400 the turn. Case is folded once, with
+     * [Locale.ROOT] so the result is locale-independent.
+     *
+     * The gateway requires an explicit `reasoning_effort` and refuses a turn
+     * without one (#361), so "unset" is a picker/settings concept, not a
+     * request concept. Resolving here (not in prefs) keeps "blank means the
+     * user never chose" readable while the request still carries the level the
+     * picker would have shown.
+     */
+    fun effectiveFor(model: String, stored: String): String {
+        val pick = stored.trim().lowercase(Locale.ROOT)
+        return pick.takeIf { it in optionsFor(model) } ?: defaultFor(model)
+    }
+
     /** Display label for an effort value ("none" reads as off). */
     fun labelFor(effort: String): String =
-        if (effort.trim().lowercase() == "none") "none (off)" else effort
+        if (effort.trim().lowercase(Locale.ROOT) == "none") "none (off)" else effort
 }
