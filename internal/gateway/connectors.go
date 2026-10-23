@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"agento/internal/approvals"
 	"agento/internal/connectors"
@@ -25,6 +26,13 @@ import (
 //
 // An expired row is the reconnect prompt: the app banners it and offers the
 // connect flow, never a password field.
+
+// hasControl reports whether s contains any control byte. NUL, \n, \r and
+// friends are never valid in an id or verb; rejecting the whole class (not
+// just NUL) keeps echoed 404s and log lines break-free.
+func hasControl(s string) bool {
+	return strings.ContainsFunc(s, unicode.IsControl)
+}
 
 // maxConnectorIDLen bounds the id segment. Ids are short fixed strings;
 // anything longer matches nothing. Same no-oracle 404 contract as runs.
@@ -125,11 +133,12 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	id, action, _ := strings.Cut(path, "/")
 	// Verbs fold like ids: "Gmail/Disconnect" from a hand test lands on the
 	// verb instead of 404ing as an unknown path. Trimmed like the id — a
-	// padded verb is client noise, not a different resource. NUL-checked
-	// like the id too: a control byte in the verb gets the same bare 404
-	// (no echo) as one in the id, rather than an echoed unknown-path.
+	// padded verb is client noise, not a different resource. Control bytes
+	// (NUL, \n, \r, ...) in either segment get the same bare echoless 404:
+	// JSON-escaping keeps the app safe, but line-oriented log tailing must
+	// never see an injected break — and no valid id or verb contains one.
 	action = strings.ToLower(strings.TrimSpace(action))
-	if id == "" || strings.ContainsRune(id, 0) || strings.ContainsRune(action, 0) {
+	if id == "" || hasControl(id) || hasControl(action) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")
 		return
@@ -195,5 +204,5 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		return
 	}
 	apiError(w, http.StatusNotFound, "invalid_request_error", "",
-		"unknown path "+bounded(approvals.ScrubError(r.URL.Path)))
+		"unknown path "+bounded(approvals.ScrubError(rest)))
 }

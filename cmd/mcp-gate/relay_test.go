@@ -667,3 +667,26 @@ func TestDraftOnlyNotificationIsAudited(t *testing.T) {
 		t.Fatalf("audit = %+v, want one denied row", audit)
 	}
 }
+
+// Operator-controlled casing traverses the relay path: a mixed-case send
+// still refuses inline, and the audit row stores the folded spelling so two
+// casings don't become two tool names.
+func TestDraftOnlySendFoldsCaseAtRelay(t *testing.T) {
+	store := testStore()
+	r := testRelay(store)
+	r.server = "gmail"
+	r.out = &bufWriter{}
+	r.childIn = &bufWriter{}
+
+	line, _, _ := callLine("7", "Send_Message", `{"to":"a@b.c"}`)
+	if err := r.pumpPiToChild(strings.NewReader(string(line) + "\n")); err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	if got := r.childIn.(*bufWriter).String(); got != "" {
+		t.Fatalf("mixed-case send reached the child: %q", got)
+	}
+	audit := waitForAudit(t, store, 1)
+	if len(audit) != 1 || audit[0].Tool != "send_message" {
+		t.Fatalf("audit = %+v, want folded send_message", audit)
+	}
+}

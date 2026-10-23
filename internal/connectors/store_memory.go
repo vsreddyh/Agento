@@ -131,9 +131,11 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 		s.rows[id] = c
 		return backfillDisplay(c, id), nil
 	}
-	// Same self-heal as the Mongo backend: display fields always rewrite
-	// from the current constants, so a future scope/name change cannot leave
-	// stale values on existing rows.
+	// Same self-heal as the Mongo backend: display fields rewrite from the
+	// current constants on every write (transition and no-op alike), so a
+	// future scope/name change cannot leave stale values on existing rows.
+	// Reads repair per response via backfillDisplay without storing — GETs
+	// stay read-only; the next write persists the repair.
 	c.DisplayName = DisplayName(id)
 	c.Scopes = ScopesFor(id)
 	c.Status = st
@@ -161,11 +163,12 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	}
 	c.DisplayName = DisplayName(id)
 	c.Scopes = ScopesFor(id)
-	// Idempotent no-op like the Mongo backend: already disconnected returns
-	// without moving updated_at (stays the last transition), still success —
-	// but the repaired display fields persist, so a scope change lands even
-	// on rows that never transition again.
+	// Idempotent no-op like the Mongo backend: already disconnected refreshes
+	// display AND clears lastError without moving updated_at (stays the last
+	// transition), still success — so a scope change lands and a corrupt
+	// error clears even on rows that never transition again.
 	if ok && c.Status == StatusDisconnected {
+		c.LastError = ""
 		s.rows[id] = c
 		return backfillDisplay(c, id), nil
 	}

@@ -177,6 +177,13 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
 		options.FindOne().SetProjection(bson.D{{Key: "status", Value: 1}, {Key: "lastError", Value: 1}, {Key: "connectedAt", Value: 1}})).Decode(&cur)
 	pcancel()
+	if probeErr != nil && !errors.Is(probeErr, mongoDrv.ErrNoDocuments) {
+		// Fail-loud like Disconnect's (pre-read unavailable) label: the
+		// write below still lands, but triage can tell it ran without a
+		// confirming pre-read. Absent doc is a normal first write, not an
+		// error — only unexpected failures log.
+		s.logf("connectors: SetStatus pre-read %s failed: %v", id, probeErr)
+	}
 	if probeErr == nil && cur.Status == st && cur.LastError == lastErr {
 		return s.readBack(id)
 	}
@@ -235,13 +242,15 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	transition, preReadOK := disconnectTransition(probeErr, probe.Status)
 	// Idempotent no-op: already disconnected means updated_at is the last
 	// transition, not the last verb — but the self-heal still runs: display
-	// fields refresh without moving updated_at, so a scope change lands even
-	// on rows that never transition again.
+	// fields refresh AND lastError clears without moving updated_at, so a
+	// scope change lands and a corrupt error clears even on rows that never
+	// transition again.
 	if !transition {
 		if _, derr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
 			bson.D{{Key: "$set", Value: bson.D{
 				{Key: "displayName", Value: DisplayName(id)},
 				{Key: "scopes", Value: ScopesFor(id)},
+				{Key: "lastError", Value: ""},
 			}}}); derr != nil {
 			s.logf("connectors: display refresh %s failed: %v", id, derr)
 			return Connector{}, NewStoreError("connector disconnect failed", true)
