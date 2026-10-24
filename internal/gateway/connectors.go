@@ -325,6 +325,9 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 			"could not start the connect flow")
 		return
 	}
+	// Capability-bearing response (auth_url completes the grant): never
+	// heuristically cacheable by proxy or browser.
+	w.Header().Set("Cache-Control", "no-store")
 	// Persist first, build the URL second: a down store fails fast with no
 	// dead attempt minted, and the empty-auth_url guard below stays the
 	// only post-store branch.
@@ -395,6 +398,18 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	defer cancel()
 	st, err := s.connectors.ConsumeState(ctx, state)
 	if err != nil {
+		// Timeout/client-gone split first (same contract as list and the
+		// verbs below): a deadline answers 502 with the timeout wording,
+		// a gone client logs and returns without writing to a dead conn.
+		if ctx.Err() == context.DeadlineExceeded {
+			apiError(w, http.StatusBadGateway, "upstream_error", "",
+				"the connector store did not answer in time")
+			return
+		}
+		if ctx.Err() != nil {
+			s.cfg.Logf("connectors: callback aborted, client gone: %v", ctx.Err())
+			return
+		}
 		// Unknown, consumed, or expired: same answer, "try connect again".
 		// The store already refuses to distinguish; the gateway must not
 		// add an oracle on top by varying the message. Upstream store
@@ -480,6 +495,19 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	c, err := s.connectors.SetStatus(ctx, id, connectors.StatusConnected, "")
 	if err != nil {
 		storeTimeoutOrGone(w, s, ctx, err, "callback status")
+		return
+	}
+	// Never cacheable: the URL that led here is a single-use capability,
+	// and the response must not sit in proxy/browser caches. A browser tab
+	// (Accept: text/html) gets a close-this-tab page; API clients (the app
+	// polls GET /api/connectors instead of reading this body) get the
+	// existing JSON shape unchanged.
+	w.Header().Set("Cache-Control", "no-store")
+	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connected</title></head>` +
+			`<body><p>Connected. You can close this tab and return to the Agento app.</p></body></html>`))
 		return
 	}
 	writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "connector": connectorWire(c)})
