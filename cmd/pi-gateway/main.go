@@ -439,7 +439,11 @@ func run() error {
 			logger.Printf("connectors: OAuth unavailable (%v); connect answers 501", err)
 		} else {
 			connectorOAuth = cfg
-			logger.Printf("connectors: OAuth configured for gmail, calendar, drive")
+			// The redirect URL is not a secret — log it so the operator can
+			// compare byte-for-byte against the Cloud console registration.
+			// A mismatch dies in the browser (redirect_uri_mismatch), not
+			// here, so this line is the triage pointer.
+			logger.Printf("connectors: OAuth configured for gmail, calendar, drive (callback %s)", cfg.RedirectURL)
 		}
 	} else {
 		logger.Printf("connectors: OAuth unavailable (no durable store); connect answers 501")

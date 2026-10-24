@@ -823,3 +823,15 @@ func TestDurableContract(t *testing.T) {
 		t.Error("mongo store must be durable")
 	}
 }
+
+// AuthURL fails closed on empty state/verifier: a consent URL minted that
+// way could only die later at ConsumeState, after user consent.
+func TestAuthURLRejectsEmptyParts(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", "", "v"); got != "" {
+		t.Errorf("empty state URL = %q, want empty", got)
+	}
+	if got := AuthURL(cfg, "gmail", "s", ""); got != "" {
+		t.Errorf("empty verifier URL = %q, want empty", got)
+	}
+}

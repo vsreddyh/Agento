@@ -381,7 +381,15 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		// Unknown, consumed, or expired: same answer, "try connect again".
 		// The store already refuses to distinguish; the gateway must not
-		// add an oracle on top by varying the message.
+		// add an oracle on top by varying the message. Upstream store
+		// failures are the exception: those 502 via the domain mapper
+		// (transient, retryable) instead of burning the user's live state
+		// with a "start over" that would supersede it.
+		var se *connectors.StoreError
+		if errors.As(err, &se) && se.Upstream {
+			connectorsError(w, err)
+			return
+		}
 		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
 			callbackStateReject)
 		return
@@ -403,7 +411,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// representation of "missing" that the refresher must also recognise.
 	// The TokenRow contract names literal "" as the missing form.
 	var accessSealed string
-	if tok.AccessToken != "" {
+	if strings.TrimSpace(tok.AccessToken) != "" {
 		accessSealed, err = connectors.EncryptToken(cfg.Key, tok.AccessToken)
 		if err != nil {
 			apiError(w, http.StatusBadGateway, "upstream_error", "",

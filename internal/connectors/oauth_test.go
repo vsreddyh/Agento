@@ -59,3 +59,35 @@ func TestExchangeAgainstStub(t *testing.T) {
 		t.Fatal("unknown connector should fail")
 	}
 }
+
+// Redirect validation fails closed: typo'd host/scheme or a missing
+// callback suffix must break startup config, not die in the browser.
+func TestOAuthConfigValidatesRedirect(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	for _, tc := range []struct {
+		name string
+		url  string
+		ok   bool
+	}{
+		{"good", "https://host:8080/p/api/connectors/callback", true},
+		{"http ok", "http://localhost:8643/api/connectors/callback", true},
+		{"wrong suffix", "https://host/p/api/connectors/gmail/callback", false},
+		{"no scheme", "host/api/connectors/callback", false},
+		{"ftp", "ftp://host/api/connectors/callback", false},
+		{"missing", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GOOGLE_REDIRECT_URL", tc.url)
+			_, err := OAuthConfigFromEnv()
+			if tc.ok && err != nil {
+				t.Fatalf("valid redirect rejected: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatal("invalid redirect accepted")
+			}
+		})
+	}
+}
