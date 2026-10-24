@@ -60,6 +60,17 @@ type MemoryStore struct {
 	rows   map[string]Connector
 	tokens map[string]TokenRow
 	states map[string]OAuthState
+	// now is the clock for state expiry (ConsumeState boundary). Nil means
+	// time.Now; tests pin the exact boundary tick without sleeping.
+	now func() time.Time
+}
+
+// timeNow resolves the store clock.
+func (s *MemoryStore) timeNow() time.Time {
+	if s.now == nil {
+		return time.Now()
+	}
+	return s.now()
 }
 
 // NewMemoryStore builds a store with no rows (List synthesises disconnected).
@@ -299,7 +310,7 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	// on the write path that creates them. Keeps an abandoned-connect spam
 	// from growing the map without bound; same lazy-expiry contract as the
 	// Mongo TTL, enforced at write time instead of by the database.
-	now := time.Now()
+	now := s.timeNow()
 	for state, existing := range s.states {
 		if !existing.ExpiresAt.IsZero() && !now.Before(existing.ExpiresAt) {
 			delete(s.states, state)
@@ -323,7 +334,10 @@ func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState,
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	delete(s.states, state)
-	if !st.ExpiresAt.IsZero() && !time.Now().Before(st.ExpiresAt) {
+	// Boundary: expiresAt itself counts as expired (matches the Mongo TTL,
+	// which reaps at expiry, not after). Clock is injectable so tests pin
+	// this tick without sleeping.
+	if !st.ExpiresAt.IsZero() && !s.timeNow().Before(st.ExpiresAt) {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	return st, nil

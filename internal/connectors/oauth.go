@@ -169,12 +169,16 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 
 // Exchange swaps a code (+ PKCE verifier) for tokens against the configured
 // token endpoint. cfg must be non-nil (gateway's ConnectorOAuth nil-check
-// is the enforcement point; see AuthURL's contract note). HTTP errors
+// is the enforcement point; see AuthURL's contract note) — a nil cfg fails
+// closed here rather than panicking in the server process. HTTP errors
 // surface as a generic 502 ("grant exchange failed") with the provider's
 // error_description only in the log — oauth2 errors echo the token
 // endpoint verbatim, and the client needs a retry signal, not provider
 // internals. logf may be nil (tests).
 func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, logf func(string, ...any)) (*oauth2.Token, error) {
+	if cfg == nil {
+		return nil, NewStoreError("oauth client is not configured", false)
+	}
 	if !Known(id) {
 		return nil, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
