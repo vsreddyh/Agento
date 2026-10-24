@@ -265,32 +265,33 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	// error clears even on rows that never transition again. Pure no-op when
 	// there is nothing to heal: no store touch at all.
 	//
-	// backfillDisplay runs AFTER the unlock below (scrub regexes must not
-	// run under the write lock — same copy-out pattern as List).
+	// One critical section: the whole read-decide-write happens under a
+	// single Lock. Splitting it (unlock to run backfillDisplay, re-lock to
+	// write) opens a lost-update window against a concurrent SetStatus —
+	// the scrub runs AFTER the unlock, on a copy, instead.
 	unchanged := ok && c.Status == StatusDisconnected &&
 		displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, "")
 	repair := ok && c.Status == StatusDisconnected && !unchanged
+	transition := !unchanged && !repair
 	if repair {
 		c.DisplayName = DisplayName(id)
 		c.Scopes = ScopesFor(id)
 		c.LastError = ""
 		s.rows[id] = c
 	}
-	s.mu.Unlock()
-	if unchanged || repair {
-		return backfillDisplay(c, id), nil
+	if transition {
+		c.DisplayName = DisplayName(id)
+		c.Scopes = ScopesFor(id)
+		c.Status = StatusDisconnected
+		c.LastError = ""
+		c.UpdatedAt = time.Now().UnixMilli()
+		// Token columns cleared at the top of this function (all paths),
+		// mirroring the Mongo $unset — see above.
+		s.rows[id] = c
 	}
-	c.DisplayName = DisplayName(id)
-	c.Scopes = ScopesFor(id)
-	c.Status = StatusDisconnected
-	c.LastError = ""
-	c.UpdatedAt = time.Now().UnixMilli()
-	// Token columns cleared at the top of this function (all paths),
-	// mirroring the Mongo $unset — see above.
-	s.mu.Lock()
-	s.rows[id] = c
+	out := c
 	s.mu.Unlock()
-	return backfillDisplay(c, id), nil
+	return backfillDisplay(out, id), nil
 }
 
 // SetTokens stores an encrypted grant. Ciphertext-opaque: the store never

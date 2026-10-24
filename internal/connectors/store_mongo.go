@@ -280,11 +280,15 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	now := time.Now().UnixMilli()
 	// Pending attempts die on every disconnect path, like the tokens: a
 	// browser completing an old consent after this disconnect must fail at
-	// ConsumeState, not silently reconnect without fresh intent. Runs on all
-	// paths (including the pure no-op below) and best-effort — a scrub
-	// failure is logged, never fatal, since the state rows carry their own
-	// TTL backstop.
-	if _, serr := s.states.DeleteMany(ctx, bson.D{{Key: "connector", Value: id}}); serr != nil {
+	// ConsumeState, not silently reconnect without fresh intent. Runs on
+	// all paths (including the pure no-op below) on its own detached
+	// budget — same quickCtx rationale as readBack: a slow Atlas scrub
+	// must not consume the verb budget and turn the write into a 502,
+	// and its result is advisory anyway (TTL is the backstop).
+	srubCtx, scrubCancel := quickCtx()
+	_, serr := s.states.DeleteMany(srubCtx, bson.D{{Key: "connector", Value: id}})
+	scrubCancel()
+	if serr != nil {
 		s.logf("connectors: state scrub %s failed: %v", id, serr)
 	}
 	transition, preReadOK := disconnectTransition(probeErr, probe.Status)

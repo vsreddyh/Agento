@@ -398,3 +398,38 @@ func TestConnectorsCallbackWhitespaceAccessStaysEmpty(t *testing.T) {
 		t.Fatalf("status = %+v, %v", c, err)
 	}
 }
+
+func TestConnectorsCallbackServesHTMLToBrowsers(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	u, err := url.Parse(decodeBody(t, rec)["auth_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state="+u.Query().Get("state"), nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Accept", "text/html")
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, req)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("html callback: %d (%s)", rec2.Code, rec2.Body)
+	}
+	if ct := rec2.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("content-type = %q, want text/html", ct)
+	}
+	if cc := rec2.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("cache-control = %q, want no-store", cc)
+	}
+}
+
+func TestConnectorsConnectSetsNoStore(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("cache-control = %q, want no-store", cc)
+	}
+}
