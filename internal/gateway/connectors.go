@@ -389,11 +389,17 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			"could not store the grant")
 		return
 	}
-	accessSealed, err := connectors.EncryptToken(cfg.Key, tok.AccessToken)
-	if err != nil {
-		apiError(w, http.StatusBadGateway, "upstream_error", "",
-			"could not store the grant")
-		return
+	// Empty access tokens stay empty: sealing "" would create a second
+	// representation of "missing" that the refresher must also recognise.
+	// The TokenRow contract names literal "" as the missing form.
+	var accessSealed string
+	if tok.AccessToken != "" {
+		accessSealed, err = connectors.EncryptToken(cfg.Key, tok.AccessToken)
+		if err != nil {
+			apiError(w, http.StatusBadGateway, "upstream_error", "",
+				"could not store the grant")
+			return
+		}
 	}
 	var expiry int64
 	if !tok.Expiry.IsZero() {
