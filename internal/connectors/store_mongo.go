@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"agento/internal/approvals"
@@ -24,6 +25,8 @@ import (
 // rewrite the past.
 type MongoStore struct {
 	coll *mongoDrv.Collection
+	// states holds pending OAuth attempts (see StatesCollection).
+	states *mongoDrv.Collection
 	// Logf receives operational notes. Nil discards them.
 	Logf func(string, ...any)
 }
@@ -40,8 +43,15 @@ func New(uri, dbName string) (*MongoStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &MongoStore{coll: db.Collection(Collection)}, nil
+	return &MongoStore{
+		coll:   db.Collection(Collection),
+		states: db.Collection(StatesCollection),
+	}, nil
 }
+
+// Durable reports true: Mongo outlives the process, so grants stored
+// here survive restarts and the gateway may enable OAuth on top.
+func (s *MongoStore) Durable() bool { return true }
 
 // FromEnv connects from the shared MONGODB_URI/MONGODB_DB pair.
 func FromEnv() (*MongoStore, error) {
@@ -49,10 +59,16 @@ func FromEnv() (*MongoStore, error) {
 	return New(uri, db)
 }
 
-// Note: no EnsureIndexes method exists on purpose. Three fixed rows keyed
-// by _id need no secondary index, and an uncalled no-op hook would bit-rot
-// silently (signature drift, no callers, no test). The OAuth follow-up adds
-// the real index method alongside the first query that needs one.
+// EnsureIndexes creates the states TTL (pending attempts die on their own;
+// the relay-style sweep other stores need does not exist here by design).
+// The connectors collection needs none: three fixed rows keyed by _id.
+func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
+	_, err := s.states.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
+		Keys:    bson.D{{Key: "expiresAt", Value: 1}},
+		Options: options.Index().SetName("oauth_states_ttl").SetExpireAfterSeconds(0),
+	})
+	return err
+}
 
 // Token columns live in this collection alongside the display fields but
 // are never projected into API reads (see displayProjection). The field
@@ -187,7 +203,11 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 		s.logf("connectors: SetStatus pre-read %s failed: %v", id, probeErr)
 	}
 	if probeErr == nil && cur.Status == st && cur.LastError == lastErr {
-		if displayFresh(cur, id, lastErr) {
+		// Pure no-op only when there is also no grant to clear: a
+		// disconnected row that somehow still holds tokens must take the
+		// repair write below (which unsets them), never a skipped write
+		// that would keep serving the grant.
+		if displayFresh(cur, id, lastErr) && (st != StatusDisconnected || strings.TrimSpace(cur.Refresh) == "") {
 			// Pure no-op: nothing to heal, no write at all.
 			return s.readBack(id)
 		}
@@ -258,6 +278,19 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	// not the pre-read start — a slow Atlas read would otherwise backdate
 	// updatedAt by up to 5s on the one verb v1 actually serves.
 	now := time.Now().UnixMilli()
+	// Pending attempts die on every disconnect path, like the tokens: a
+	// browser completing an old consent after this disconnect must fail at
+	// ConsumeState, not silently reconnect without fresh intent. Runs on
+	// all paths (including the pure no-op below) on its own detached
+	// budget — same quickCtx rationale as readBack: a slow Atlas scrub
+	// must not consume the verb budget and turn the write into a 502,
+	// and its result is advisory anyway (TTL is the backstop).
+	srubCtx, scrubCancel := quickCtx()
+	_, serr := s.states.DeleteMany(srubCtx, bson.D{{Key: "connector", Value: id}})
+	scrubCancel()
+	if serr != nil {
+		s.logf("connectors: state scrub %s failed: %v", id, serr)
+	}
 	transition, preReadOK := disconnectTransition(probeErr, probe.Status)
 	// Idempotent no-op: already disconnected means updated_at is the last
 	// transition, not the last verb. Pure no-op (display fresh, error
@@ -265,7 +298,11 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	// the repair shape — display + clear, no updated_at bump, tokens
 	// unset in the same write.
 	if !transition {
-		if displayFresh(probe, id, "") {
+		// Pure no-op only with no grant to clear: a disconnected row that
+		// somehow still holds tokens takes the repair write below (which
+		// unsets them) instead of a skipped write that would keep serving
+		// the grant.
+		if displayFresh(probe, id, "") && strings.TrimSpace(probe.Refresh) == "" {
 			return s.readBack(id)
 		}
 		if _, derr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
@@ -307,10 +344,13 @@ func resolveConnectedAt(stamp, now int64) int64 {
 
 // probeProjection selects the transition-decision fields: status (+lastError
 // where compared, +connectedAt where the stamp resolves, +display for the
-// no-op heal-vs-skip). A fresh copy per call, like displayProjection: the
-// no-op path decides heal-vs-skip off these keys, so dropping one (e.g.
-// scopes) silently turns every repeat verb into a heal-write. Never the
-// token columns.
+// no-op heal-vs-skip, +refresh presence for the token-parity check). A fresh
+// copy per call, like displayProjection: the no-op path decides heal-vs-skip
+// off these keys, so dropping one (e.g. scopes) silently turns every repeat
+// verb into a heal-write. refreshToken is the one deliberate exception to
+// "never the token columns": only its presence is read (never returned),
+// and the no-op paths need it to avoid stranding a grant behind a skipped
+// write.
 func probeProjection() bson.D {
 	return bson.D{
 		{Key: "_id", Value: 0},
@@ -319,17 +359,19 @@ func probeProjection() bson.D {
 		{Key: "connectedAt", Value: 1},
 		{Key: "displayName", Value: 1},
 		{Key: "scopes", Value: 1},
+		{Key: "refreshToken", Value: 1},
 	}
 }
 
-// probeDoc is the minimal read for transition decisions. Never the token
-// columns.
+// probeDoc is the minimal read for transition decisions. refreshToken is
+// presence-only (never returned, never logged); see probeProjection.
 type probeDoc struct {
 	Status      Status   `bson:"status"`
 	LastError   string   `bson:"lastError"`
 	ConnectedAt int64    `bson:"connectedAt"`
 	DisplayName string   `bson:"displayName"`
 	Scopes      []string `bson:"scopes"`
+	Refresh     string   `bson:"refreshToken"`
 }
 
 // displayFresh is the probeDoc-shaped entry to displayFieldsFresh for the
@@ -358,6 +400,18 @@ func displayFieldsFresh(id, displayName string, scopes []string, lastErr, wantEr
 	return true
 }
 
+// tokenUnset clears every token-shaped column in one place. All three
+// disconnect paths (repair, status, full) must unset ALL of them —
+// forgetting accessExpiry leaves stale PII-adjacent data with no tokens,
+// and forgetting a future column breaks the parity silently. One list.
+func tokenUnset() bson.D {
+	return bson.D{
+		{Key: refreshTokenField, Value: ""},
+		{Key: accessTokenField, Value: ""},
+		{Key: "accessExpiry", Value: ""},
+	}
+}
+
 // repairUpdateDoc builds the repair-only write: display + error refresh with
 // NO updatedAt/status/connectedAt keys, so a repair can never move the
 // last-transition timestamp. Pinned by test — a future edit adding
@@ -376,10 +430,7 @@ func repairUpdateDoc(id, lastErr string, unsetTokens bool) bson.D {
 		{Key: "lastError", Value: lastErr},
 	}}}
 	if unsetTokens {
-		update = append(update, bson.E{Key: "$unset", Value: bson.D{
-			{Key: refreshTokenField, Value: ""},
-			{Key: accessTokenField, Value: ""},
-		}})
+		update = append(update, bson.E{Key: "$unset", Value: tokenUnset()})
 	}
 	return update
 }
@@ -420,10 +471,7 @@ func statusUpdateDoc(id string, st Status, lastErr string, now, connectedAt int6
 	}
 	update := bson.D{{Key: "$set", Value: set}}
 	if st == StatusDisconnected {
-		update = append(update, bson.E{Key: "$unset", Value: bson.D{
-			{Key: refreshTokenField, Value: ""},
-			{Key: accessTokenField, Value: ""},
-		}})
+		update = append(update, bson.E{Key: "$unset", Value: tokenUnset()})
 	}
 	return update
 }
@@ -440,10 +488,7 @@ func disconnectUpdateDoc(id string, now int64) bson.D {
 			{Key: "lastError", Value: ""},
 			{Key: "updatedAt", Value: now},
 		}},
-		{Key: "$unset", Value: bson.D{
-			{Key: refreshTokenField, Value: ""},
-			{Key: accessTokenField, Value: ""},
-		}},
+		{Key: "$unset", Value: tokenUnset()},
 	}
 }
 
@@ -515,4 +560,172 @@ func (s *MongoStore) readBack(id string) (Connector, error) {
 	ctx, cancel := quickCtx()
 	defer cancel()
 	return s.Get(ctx, id)
+}
+
+// SetTokens persists an encrypted grant. Ciphertext-opaque: the store never
+// sees plaintext (see TokenRow) and enforces only the renewal invariant —
+// an empty refresh cipher is rejected, because a stored grant without one
+// strands the row at the first access-token expiry.
+func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) error {
+	id = NormalizedID(id)
+	if !Known(id) {
+		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
+	}
+	if strings.TrimSpace(tok.RefreshCipher) == "" {
+		return NewStoreError("connector grant needs a refresh token", false)
+	}
+	// Whitespace-only access is neither a sealed grant nor literal "": the
+	// refresher keys missing off "", so a padded value would create a
+	// second missing representation that reads as present. Reject it here
+	// (same gate as refresh) rather than letting it through to storage.
+	if tok.AccessCipher != "" && strings.TrimSpace(tok.AccessCipher) == "" {
+		return NewStoreError("connector grant access token is blank", false)
+	}
+	// Display defaults on insert only: a token write must never invent
+	// status (backfill synthesises disconnected for a status-less doc
+	// on read), and without these a crash between SetTokens and
+	// SetStatus would leave a display-less row. updatedAt rides along so
+	// the crash-window row reads as explicit-off (something happened here)
+	// rather than never-touched. Reads project only the display shape, so
+	// these columns are inert until the transition write lands the real row.
+	now := time.Now().UnixMilli()
+	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}}, bson.D{
+		{Key: "$set", Value: bson.D{
+			{Key: refreshTokenField, Value: tok.RefreshCipher},
+			{Key: accessTokenField, Value: tok.AccessCipher},
+			{Key: "accessExpiry", Value: tok.AccessExpiryUnixMilli},
+		}},
+		{Key: "$setOnInsert", Value: bson.D{
+			{Key: "displayName", Value: DisplayName(id)},
+			{Key: "scopes", Value: ScopesFor(id)},
+			{Key: "updatedAt", Value: now},
+		}},
+	}, options.Update().SetUpsert(true))
+	if err != nil {
+		s.logf("connectors: token write %s failed: %v", id, err)
+		return NewStoreError("connector token write failed", true)
+	}
+	return nil
+}
+
+// GetTokens reads the ciphertext grant. Unknown ids and grant-less rows are
+// both NotFound: the caller reconnects either way, and distinguishing them
+// would oracle stored-grant existence.
+func (s *MongoStore) GetTokens(ctx context.Context, id string) (TokenRow, error) {
+	id = NormalizedID(id)
+	if !Known(id) {
+		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
+	}
+	var row struct {
+		Refresh string `bson:"refreshToken"`
+		Access  string `bson:"accessToken"`
+		Expiry  int64  `bson:"accessExpiry"`
+	}
+	err := s.coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}},
+		options.FindOne().SetProjection(bson.D{
+			{Key: refreshTokenField, Value: 1},
+			{Key: accessTokenField, Value: 1},
+			{Key: "accessExpiry", Value: 1},
+		})).Decode(&row)
+	if err != nil {
+		if err == mongoDrv.ErrNoDocuments {
+			return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
+		}
+		s.logf("connectors: token read %s failed: %v", id, err)
+		return TokenRow{}, NewStoreError("connector token read failed", true)
+	}
+	if strings.TrimSpace(row.Refresh) == "" {
+		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
+	}
+	return TokenRow{RefreshCipher: row.Refresh, AccessCipher: row.Access, AccessExpiryUnixMilli: row.Expiry}, nil
+}
+
+// CreateState records a pending OAuth attempt. States are single-use by
+// contract (see ConsumeState); an id collision is a caller bug (400), never
+// an overwrite.
+func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
+	// Normalised like every other verb: SetTokens/GetTokens/Disconnect all
+	// fold case+spacing first, and a non-normalised stored row would miss
+	// both the Known check here and the Disconnect scrub comparison later.
+	st.Connector = NormalizedID(st.Connector)
+	// Trimmed before storing: the callback trims query params before
+	// ConsumeState, so a padded value stored verbatim would never match a
+	// lookup — and a padded verifier would break Exchange at Google after
+	// the user already consented. Normalise here, not at read time.
+	st.State = strings.TrimSpace(st.State)
+	st.Verifier = strings.TrimSpace(st.Verifier)
+	if st.State == "" {
+		return NewStoreError("oauth state needs an id", false)
+	}
+	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
+		return NewStoreError("oauth state or verifier too long", false)
+	}
+	if !Known(st.Connector) {
+		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
+	}
+	if strings.TrimSpace(st.Verifier) == "" {
+		// Fail fast at creation, not after the user completed consent: a
+		// verifier-less attempt can never survive Exchange.
+		return NewStoreError("oauth state needs a verifier", false)
+	}
+	if st.ExpiresAt.IsZero() {
+		st.ExpiresAt = time.Now().Add(StateTTL)
+	}
+	// One pending attempt per connector (mirrors the memory cap): a new tap
+	// supersedes the old one, bounding live rows to one per connector
+	// regardless of tap spam — not "3 max", which would silently break
+	// when a fourth connector lands. The TTL still reaps whatever the next
+	// tap doesn't supersede.
+	// Non-atomic by design (delete-then-insert): two concurrent taps for the
+	// same connector may briefly leave two live rows, and both are valid —
+	// either browser tab can complete its own consent. The bound holds for
+	// sequential taps (the only rate that matters: one bearer holder, one
+	// browser); no unique index, because failing a legitimate concurrent
+	// tap with a duplicate-key error would be worse than an extra row the
+	// next tap supersedes. And if the insert itself fails after the delete,
+	// the old tab is dead too — re-tap is the recovery, not the old code.
+	if _, serr := s.states.DeleteMany(ctx, bson.D{{Key: "connector", Value: st.Connector}}); serr != nil {
+		s.logf("connectors: state supersede %s failed: %v", st.Connector, serr)
+		return NewStoreError("oauth state create failed", true)
+	}
+	_, err := s.states.InsertOne(ctx, st)
+	if err != nil {
+		if mongoDrv.IsDuplicateKeyError(err) {
+			return NewStoreError("oauth state already exists", false)
+		}
+		s.logf("connectors: state create failed: %v", err)
+		return NewStoreError("oauth state create failed", true)
+	}
+	return nil
+}
+
+// ConsumeState atomically takes and deletes a pending attempt
+// (FindOneAndDelete): a code can never be exchanged twice, even across two
+// racing callbacks. Unknown, already-consumed, and expired states are the
+// same NotFound — the app message is "try connect again" in all three, and
+// distinguishing them would oracle live state ids. Expiry is enforced
+// eagerly here AND lazily by the TTL index: the index reaps what this check
+// already refused.
+func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState, error) {
+	// Trimmed like the write path and the gateway: padded input resolves
+	// instead of 404ing on whitespace no writer could have stored.
+	// Length-gated like the gateway: oversized input answers the same
+	// NotFound as unknown, never reaching Mongo as a filter.
+	state = strings.TrimSpace(state)
+	if len(state) > MaxStateFieldLen {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
+	var st OAuthState
+	err := s.states.FindOneAndDelete(ctx, bson.D{{Key: "_id", Value: state}}).Decode(&st)
+	if err != nil {
+		if err == mongoDrv.ErrNoDocuments {
+			return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+		}
+		s.logf("connectors: state consume failed: %v", err)
+		return OAuthState{}, NewStoreError("oauth state consume failed", true)
+	}
+	if !st.ExpiresAt.IsZero() && !time.Now().Before(st.ExpiresAt) {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
+	return st, nil
 }

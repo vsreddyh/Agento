@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	mongoDrv "go.mongodb.org/mongo-driver/mongo"
@@ -535,8 +536,8 @@ func TestProbeProjectionShape(t *testing.T) {
 			t.Errorf("probe projection missing %q", k)
 		}
 	}
-	if len(seen) != 6 {
-		t.Errorf("probe projection has %d keys %v, want exactly 6", len(seen), seen)
+	if len(seen) != 7 {
+		t.Errorf("probe projection has %d keys %v, want exactly 7", len(seen), seen)
 	}
 	for _, e := range probeProjection() {
 		if e.Key == "_id" && e.Value != 0 {
@@ -555,8 +556,466 @@ func TestProbeProjectionWithinDisplay(t *testing.T) {
 		display[e.Key] = true
 	}
 	for _, e := range probeProjection() {
+		// refreshToken is the documented exception: presence-only probe
+		// input for the token-parity check, deliberately absent from the
+		// display shape (see probeProjection).
+		if e.Key == refreshTokenField {
+			continue
+		}
 		if !display[e.Key] {
 			t.Errorf("probe key %q not in display projection", e.Key)
 		}
+	}
+}
+
+// Envelope round-trips, and every tamper class fails closed.
+func TestTokenEnvelope(t *testing.T) {
+	key := [32]byte{1, 2, 3}
+	sealed, err := EncryptToken(key, "refresh-token-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sealed == "refresh-token-value" {
+		t.Fatal("sealed must not equal plaintext")
+	}
+	open, err := DecryptToken(key, sealed)
+	if err != nil || open != "refresh-token-value" {
+		t.Fatalf("round trip = %q, %v", open, err)
+	}
+	// Two seals of the same value differ (random nonce).
+	second, err := EncryptToken(key, "refresh-token-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == sealed {
+		t.Error("deterministic seal: nonce reuse")
+	}
+	// Wrong key, tampered tail, truncated, non-base64: all fail.
+	var other [32]byte
+	other[0] = 9
+	if _, err := DecryptToken(other, sealed); err == nil {
+		t.Error("wrong key opened")
+	}
+	bad := sealed[:len(sealed)-2] + "AA"
+	if _, err := DecryptToken(key, bad); err == nil {
+		t.Error("tampered seal opened")
+	}
+	if _, err := DecryptToken(key, "!!!not-base64!!!"); err == nil {
+		t.Error("non-base64 opened")
+	}
+	if _, err := EncryptToken([32]byte{}, "x"); err == nil {
+		t.Error("zero-key seal allowed")
+	}
+	if _, err := DecryptToken([32]byte{}, sealed); err == nil {
+		t.Error("zero-key open allowed")
+	}
+}
+
+// States are single-use and expiring (memory backend).
+func TestOAuthStateLifecycle(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ConsumeState(ctx, "s1")
+	if err != nil || got.Connector != "gmail" || got.Verifier != "v" {
+		t.Fatalf("consume = %+v, %v", got, err)
+	}
+	// Double consume fails: a code can never be exchanged twice.
+	if _, err := s.ConsumeState(ctx, "s1"); err == nil {
+		t.Fatal("second consume should fail")
+	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
+		t.Fatalf("second consume should be NotFound, got %v", err)
+	}
+	// Expired consumes as NotFound.
+	if err := s.CreateState(ctx, OAuthState{State: "s2", Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeState(ctx, "s2"); err == nil {
+		t.Fatal("expired consume should fail")
+	}
+	// Unknown connector rejected at create.
+	if err := s.CreateState(ctx, OAuthState{State: "s3", Connector: "slack", Verifier: "v"}); err == nil {
+		t.Fatal("unknown connector state should fail")
+	}
+}
+
+// Token grant lifecycle (memory backend): renewability enforced, unknown
+// and grant-less both NotFound.
+func TestTokenGrantLifecycle(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if _, err := s.GetTokens(ctx, "gmail"); err == nil {
+		t.Fatal("grant-less get should fail")
+	}
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "", AccessCipher: "a"}); err == nil {
+		t.Fatal("empty refresh cipher should fail")
+	}
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a", AccessExpiryUnixMilli: 1}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetTokens(ctx, "gmail")
+	if err != nil || got.RefreshCipher != "r" {
+		t.Fatalf("get = %+v, %v", got, err)
+	}
+	if _, err := s.GetTokens(ctx, "slack"); err == nil {
+		t.Fatal("unknown get should fail")
+	}
+}
+
+// Auth URL carries the connector scopes, PKCE challenge, and offline access.
+func TestAuthURLShape(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	u := AuthURL(cfg, Gmail, "STATE", "verifier-value")
+	for _, want := range []string{"client_id=cid", "state=STATE", "code_challenge=", "code_challenge_method=S256", "access_type=offline", "prompt=consent", "gmail.readonly", "gmail.compose"} {
+		if !strings.Contains(u, want) {
+			t.Errorf("auth URL missing %q:\n%s", want, u)
+		}
+	}
+	if scopes := GoogleScopes("slack"); scopes != nil {
+		t.Errorf("unknown scopes = %v, want nil", scopes)
+	}
+}
+
+// Disconnect clears grants on every path (parity with the Mongo $unset),
+// including the pure no-op: a disconnected row must never serve a grant.
+func TestDisconnectClearsTokens(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTokens(ctx, "gmail"); err == nil {
+		t.Fatal("grant survived disconnect")
+	}
+	// Repeat disconnect keeps it cleared.
+	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTokens(ctx, "gmail"); err == nil {
+		t.Fatal("grant survived repeat disconnect")
+	}
+}
+
+// Disconnect scrubs pending attempts for that connector: a browser
+// completing an old consent afterwards must fail at ConsumeState.
+func TestDisconnectScrubsStates(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeState(ctx, "s1"); err == nil {
+		t.Fatal("state survived disconnect")
+	}
+}
+
+// CreateState normalises like every other verb: a padded/cased connector
+// stores folded, so the Disconnect scrub comparison later sees the same id.
+func TestCreateStateNormalisesConnector(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "  GMail ", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.ConsumeState(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Connector != "gmail" {
+		t.Errorf("stored connector = %q, want folded gmail", st.Connector)
+	}
+}
+
+// Exact-boundary expiry is pinned without sleeping: expiresAt itself counts
+// as expired (matches the Mongo TTL, which reaps at expiry, not after).
+func TestConsumeStateBoundaryTick(t *testing.T) {
+	s := NewMemoryStore()
+	fixed := time.Now().Truncate(time.Second)
+	s.now = func() time.Time { return fixed }
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "edge", Connector: "gmail", Verifier: "v", ExpiresAt: fixed}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeState(ctx, "edge"); err == nil {
+		t.Fatal("expiresAt==now should count as expired")
+	}
+	if err := s.CreateState(ctx, OAuthState{State: "live", Connector: "gmail", Verifier: "v", ExpiresAt: fixed.Add(time.Nanosecond)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeState(ctx, "live"); err != nil {
+		t.Fatalf("expiresAt 1ns out should be live: %v", err)
+	}
+}
+
+// Folding matches every store verb: padded/cased ids work the same in
+// Exchange, AuthURL, and the stores — same logical id, same answer.
+func TestOAuthHelpersFoldIDs(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	u := AuthURL(cfg, " GMail ", "s", "v")
+	if !strings.Contains(u, "gmail.readonly") {
+		t.Errorf("unfolded id lost scopes:\n%s", u)
+	}
+	if _, err := Exchange(context.Background(), cfg, " GMail ", "code", "v", nil); err == nil {
+		t.Fatal("expected exchange attempt (folded id must pass the Known check to reach HTTP)")
+	} else if se, ok := err.(*StoreError); ok && se.NotFound {
+		t.Fatal("folded id should not 404 as unknown")
+	}
+}
+
+// Same state string twice is a caller bug: 400, not silent overwrite.
+func TestCreateStateDuplicateFails(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	st := OAuthState{State: "dup", Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}
+	if err := s.CreateState(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateState(ctx, st); err == nil {
+		t.Fatal("duplicate state should fail")
+	}
+	// ...but a *new* state for the same connector supersedes the old one.
+	if err := s.CreateState(ctx, OAuthState{State: "dup2", Connector: "gmail", Verifier: "v2", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeState(ctx, "dup"); err == nil {
+		t.Fatal("superseded state should be gone")
+	}
+}
+
+// Empty plaintext is unsealable by contract: sealed-empty would be a second
+// representation of "missing" alongside literal "".
+func TestEncryptTokenRefusesEmpty(t *testing.T) {
+	if _, err := EncryptToken([32]byte{1}, ""); err == nil {
+		t.Fatal("sealing empty token should fail")
+	}
+}
+
+// Unknown ids fail closed at the helper, not just the gateway.
+func TestAuthURLUnknownIDFailsClosed(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "slack", "s", "v"); got != "" {
+		t.Errorf("unknown id auth URL = %q, want empty", got)
+	}
+	if got := AuthURL(nil, "gmail", "s", "v"); got != "" {
+		t.Errorf("nil cfg auth URL = %q, want empty", got)
+	}
+}
+
+// Verifier-less attempts fail at creation, not after user consent.
+func TestCreateStateRejectsEmptyVerifier(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "nv", Connector: "gmail", Verifier: ""}); err == nil {
+		t.Fatal("empty verifier should fail")
+	}
+}
+
+// Durability contract: memory is not durable (OAuth stays off), Mongo is
+// (zero value still reports true — durability is a backend property, not
+// row state).
+func TestDurableContract(t *testing.T) {
+	if NewMemoryStore().Durable() {
+		t.Error("memory store must not be durable")
+	}
+	if !(&MongoStore{}).Durable() {
+		t.Error("mongo store must be durable")
+	}
+}
+
+// AuthURL fails closed on empty state/verifier: a consent URL minted that
+// way could only die later at ConsumeState, after user consent.
+func TestAuthURLRejectsEmptyParts(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", "", "v"); got != "" {
+		t.Errorf("empty state URL = %q, want empty", got)
+	}
+	if got := AuthURL(cfg, "gmail", "s", ""); got != "" {
+		t.Errorf("empty verifier URL = %q, want empty", got)
+	}
+}
+
+// Whitespace-only plaintext is as unsealable as empty: same missing-value
+// class, refused at the same gate.
+func TestEncryptTokenRefusesWhitespace(t *testing.T) {
+	if _, err := EncryptToken([32]byte{1}, "   "); err == nil {
+		t.Fatal("whitespace-only seal should fail")
+	}
+}
+
+// SetStatus(disconnected) clears grants like Disconnect does (belt and
+// braces): the off state never serves a previous grant, whichever verb
+// wrote it.
+func TestSetStatusDisconnectedClearsTokens(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetStatus(ctx, "gmail", StatusDisconnected, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTokens(ctx, "gmail"); err == nil {
+		t.Fatal("grant survived SetStatus(disconnected)")
+	}
+}
+
+// Padded inputs normalise instead of failing: the callback trims query
+// params, so stored/built values must match the trimmed form.
+func TestAuthURLTrimsInputs(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	got := AuthURL(cfg, " GMail ", " s ", " v ")
+	if got == "" {
+		t.Fatal("padded known id should build")
+	}
+	if !strings.Contains(got, "state=s&") && !strings.Contains(got, "state=s") {
+		t.Errorf("state not trimmed in URL:\n%s", got)
+	}
+}
+
+// Whitespace-only access cipher is rejected like whitespace refresh: one
+// missing representation (""), enforced at the store.
+func TestSetTokensRejectsWhitespaceAccess(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "   "}); err == nil {
+		t.Fatal("whitespace access cipher should fail")
+	}
+}
+
+// Overlong state is a deterministic reject at the store, not a Mongo filter.
+func TestConsumeStateRejectsOversized(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if _, err := s.ConsumeState(ctx, strings.Repeat("x", MaxStateFieldLen+1)); err == nil {
+		t.Fatal("oversized state should fail")
+	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
+		t.Fatalf("oversized should be NotFound, got %v", err)
+	}
+	if err := s.CreateState(ctx, OAuthState{State: strings.Repeat("y", MaxStateFieldLen+1), Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err == nil {
+		t.Fatal("oversized create should fail")
+	}
+}
+
+// AuthURL trims and length-gates: padded inputs build a working URL,
+// overlong ones fail closed.
+func TestAuthURLTrimsAndCaps(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", " s ", " v "); got == "" {
+		t.Fatal("padded inputs should build")
+	} else if strings.Contains(got, " ") {
+		t.Errorf("URL contains a space:\n%s", got)
+	}
+	if got := AuthURL(cfg, "gmail", strings.Repeat("s", MaxStateFieldLen+1), "v"); got != "" {
+		t.Fatal("oversized state should fail closed")
+	}
+}
+
+// AuthURL needs a usable client, not just a non-nil one: empty client id or
+// redirect builds no URL.
+func TestAuthURLRejectsEmptyClient(t *testing.T) {
+	if got := AuthURL(&OAuthConfig{ClientID: "", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}, "gmail", "s", "v"); got != "" {
+		t.Errorf("empty client id URL = %q, want empty", got)
+	}
+	if got := AuthURL(&OAuthConfig{ClientID: "cid", RedirectURL: "", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}, "gmail", "s", "v"); got != "" {
+		t.Errorf("empty redirect URL = %q, want empty", got)
+	}
+}
+
+// Displayed scopes and granted scopes must correspond: the app shows
+// ScopesFor at connect time, but Google enforces GoogleScopes. A widening
+// that updates one table without the other ships a consent screen that
+// misstates the grant (or a grant the UI never disclosed).
+func TestDisplayScopesMatchGrantedScopes(t *testing.T) {
+	// gmail.read displayed => readonly granted; gmail.draft displayed =>
+	// compose granted (draft-only: create drafts, never send).
+	has := func(hay []string, needle string) bool {
+		for _, s := range hay {
+			if s == needle {
+				return true
+			}
+		}
+		return false
+	}
+	granted := map[string][]string{}
+	for _, id := range []string{Gmail, Calendar, Drive} {
+		granted[id] = GoogleScopes(id)
+		if len(granted[id]) == 0 {
+			t.Fatalf("%s has no granted scopes", id)
+		}
+	}
+	if !has(granted[Gmail], "https://www.googleapis.com/auth/gmail.readonly") ||
+		!has(granted[Gmail], "https://www.googleapis.com/auth/gmail.compose") {
+		t.Errorf("gmail grant = %v, want readonly+compose", granted[Gmail])
+	}
+	if !has(granted[Calendar], "https://www.googleapis.com/auth/calendar.readonly") {
+		t.Errorf("calendar grant = %v, want readonly", granted[Calendar])
+	}
+	if !has(granted[Drive], "https://www.googleapis.com/auth/drive.readonly") ||
+		!has(granted[Drive], "https://www.googleapis.com/auth/drive.file") {
+		t.Errorf("drive grant = %v, want readonly+file", granted[Drive])
+	}
+	// No full-access scopes anywhere in v1 (exact match — readonly and
+	// drive.file are the bounded ones).
+	tooBroad := map[string]bool{
+		"https://www.googleapis.com/auth/gmail.send":      true,
+		"https://www.googleapis.com/auth/gmail.modify":    true,
+		"https://www.googleapis.com/auth/gmail":           true,
+		"https://www.googleapis.com/auth/calendar":        true,
+		"https://www.googleapis.com/auth/calendar.events": true,
+		"https://www.googleapis.com/auth/drive":           true,
+		"https://www.googleapis.com/auth/drive.appdata":   true,
+	}
+	for id, scopes := range granted {
+		for _, s := range scopes {
+			if tooBroad[s] {
+				t.Errorf("%s grant %q is broader than v1 allows", id, s)
+			}
+		}
+	}
+}
+
+// No-op disconnect on an already-disconnected row still clears tokens: a
+// corrupt row (status says off, grant says on) must not keep serving after
+// a verb that promises "no future access".
+func TestDisconnectNoOpClearsTokens(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if _, err := s.SetStatus(ctx, "gmail", StatusDisconnected, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTokens(ctx, "gmail"); err == nil {
+		t.Fatal("grant survived no-op disconnect")
+	}
+}
+
+// AuthURL with an overlong state fails closed instead of minting a URL
+// Google would 414.
+func TestAuthURLRejectsOversizedState(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", strings.Repeat("s", MaxStateFieldLen+1), "v"); got != "" {
+		t.Errorf("oversized state URL = %q, want empty", got[:60])
+	}
+}
+
+// DecryptToken("") errors by design: "" is the documented missing-token
+// sentinel and must be checked by the caller before decrypting, not
+// collapsed into a successful empty decrypt.
+func TestDecryptTokenRejectsEmpty(t *testing.T) {
+	if _, err := DecryptToken([32]byte{1}, ""); err == nil {
+		t.Fatal("empty sealed input should fail")
 	}
 }

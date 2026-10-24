@@ -153,6 +153,13 @@ type Config struct {
 	// process. main sets a Mongo store when the database is reachable.
 	ConnectorStore connectors.Store
 
+	// ConnectorOAuth is the server-side Google OAuth client. Nil means
+	// unconfigured: connect answers 501 exactly like the v1 foundation,
+	// and no token can be stored. main sets it from
+	// GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URL plus the
+	// envelope key; any piece missing leaves it nil.
+	ConnectorOAuth *connectors.OAuthConfig
+
 	// Logf receives operational messages. Nil discards them.
 	Logf func(format string, args ...any)
 }
@@ -515,7 +522,31 @@ func (s *Server) splitProfile(urlPath string) (profile, rest string) {
 func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	profile, rest := s.splitProfile(r.URL.Path)
 
-	// Every route except healthz sits behind the bearer token.
+	// Every route except healthz sits behind the bearer token — with one
+	// exception: the Google OAuth callback. A Google-redirected browser GET
+	// carries no Authorization header (the proxy injects nothing), and the
+	// state query param is itself the 128-bit single-use 10-minute
+	// capability. Unknown/consumed/expired states answer identically, and
+	// the handler leaks no codes, verifiers, or tokens, so no bearer is
+	// needed to knock. Everything else stays gated.
+	//
+	// No oracle by construction: the callback bypasses profile routing
+	// entirely (connectors are global, like approvals — no per-profile
+	// state exists to leak), so unknown-profile and known-profile callers
+	// take the identical path through handleConnectorCallback, including
+	// method, param-presence, and unconfigured checks. There is no branch
+	// left to distinguish them on.
+	//
+	// Residual, accepted signal: unconfigured + callback answers 501 while
+	// configured answers 400/405 on the same path — config existence is
+	// visible without a bearer. Low-value (any authenticated connect call
+	// reveals it anyway), so documented as intentional rather than
+	// mirrored: lying with a 400 here would misdirect triage about server
+	// setup.
+	if rest == "api/connectors/callback" {
+		s.handleConnectors(w, r, rest)
+		return
+	}
 	if err := s.authenticate(r); err != nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="agento"`)
 		apiError(w, http.StatusUnauthorized, "authentication_error", "",

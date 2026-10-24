@@ -44,6 +44,14 @@ state explicit. Harmless at three rows; creating rows is accepted.
 
 ### Token placement
 
+The PKCE verifier rests **plaintext** in `oauth_states` by necessity — the token
+exchange must present the exact verifier, so it cannot be hashed at rest, and a
+hash would add no security against anyone who can already read the row's sibling
+columns. The mitigation is lifetime, not secrecy: 10-minute TTL, single-use
+consume-on-read, and no API surface returns it (only the server that created it
+ever reads it back). Treat a leaked verifier like a leaked pending state: it can
+only complete a consent the user is already finishing.
+
 OAuth refresh tokens live **server-side in Mongo** (`connectors`
 collection, sibling to `approvals`/`runs`/`memory`), never in the app and
 never pasted in chat. Reads project only the display shape
@@ -53,15 +61,19 @@ selected into API responses. Without Mongo both sides fall back to memory
 that cannot meet — same contract as approvals: the list still answers, but
 nothing survives a restart and no token can be stored.
 
-Encryption: v1 stores no tokens (connect 501s), so the only cover is Atlas
-at-rest encryption — there is NO field-level envelope in this PR. The OAuth
-follow-up must add envelope encryption before the first token write; real
-refresh tokens must never land under cover of this sentence without it.
+Encryption: envelope is implemented (AES-256-GCM, random nonce per
+value, base64(nonce||ciphertext) in Mongo). The key lives in
+CONNECTORS_ENCRYPTION_KEY (64 hex chars, server-side only); without it the
+OAuth config refuses to build and connect 501s — tokens can never land
+unencrypted by omission. Atlas at-rest is the second layer, not the cover
+story.
 
 Write confirmation: the confirming read-after-write runs on a fresh budget,
 but if it fails after a landed write the verb still 502s while the state
 landed. That is retry-safe (a second verb succeeds idempotently), not a
 divergence — worth stating so triage doesn't read it as one.
+
+Anonymous callback load is accepted, not overlooked: the unauthenticated `GET /api/connectors/callback` lets any bearer-less caller spend one indexed `FindOneAndDelete` on an attacker-chosen id. 128-bit single-use states make exchange-on-guess infeasible, so this is DB-load-only, never a grant risk — and the per-IP throttle the scheduler never needed would add more unauthenticated surface than it removes at this cardinality. Revisit if callback traffic ever stops looking like taps.
 
 Disconnect stops future access (token columns `$unset`) with no audit row: the 90-day audit trail covers relayed tool calls, not connector lifecycle, so `updated_at` + container logs (`disconnected (tokens cleared)`, transition-only) are the intended "who turned it off and when" trail in v1. The OAuth follow-up — which writes real grants on these same verbs — must add grant lifecycle to the audit trail rather than copy this gap. Already-fetched
 data — chat history, saved files — is NOT wiped: disconnect stops the tap,
@@ -81,25 +93,35 @@ retention pass must not add a TTL to this collection.
   document exists (a fresh deploy lists three disconnected connectors, not
   an empty list).
 - `POST /api/connectors/{id}/disconnect` — clears tokens server-side.
-- `POST /api/connectors/{id}/connect` — v1 answers **501**: OAuth lands in
-  the follow-up. The app treats it as "needs setup", never as a prompt to
-  paste a secret. Expired rows carry a `reconnect` hint with the same
-  no-secrets wording — but no v1 writer sets expired (only Disconnect and the
-  501 connect exist; SetStatus has no route), so the hint path is wired and
-  covered but dormant until the OAuth follow-up drives it.
-- `@-mention` in-chat attach and the real OAuth exchange are follow-ups, not
-  this PR. The relay refusal and the list/disconnect shapes are what they
-  build on.
+- `POST /api/connectors/{id}/connect` — mints a one-time state+PKCE pair,
+  records the pending attempt (10-minute TTL), and returns the Google
+  consent `auth_url`. Without full OAuth config answers **501** like the v1
+  foundation. The app opens the URL in a browser and polls; it never sees a
+  code, verifier, or token.
+- `GET /api/connectors/callback?code=&state=` — single registered redirect
+  URI for all three connectors (the connector travels inside the state row,
+  not the path). Consumes the state (single-use: no code exchanged twice),
+  exchanges server-side, seals tokens with the envelope key, flips the row
+  to connected. Tokens land before the status flips — a
+  connected-with-no-tokens row is never servable.
+- `@-mention` in-chat attach, connector MCP servers, and the app Connect
+  screen are follow-ups, not this PR. The relay refusal, list/disconnect
+  shapes, and now the grant pipeline are what they build on.
 
 ### What this does and does not fix
 
 - Fixed: per-connector status/scopes, independent disconnect, send paths
-  that cannot run, a documented token home, and an expired state that
-  prompts a reconnect instead of a password in chat.
-- NOT fixed: no real Google OAuth yet (connect 501s), no connector MCP
-  servers wired in `pi/mcp.json`, no app Connect screen, no per-user auth
-  (single PASSWORD still authenticates everything), Pi built-in tools still
-  ungated by the relay.
+  that cannot run, a documented token home, an expired state that prompts a
+  reconnect instead of a password in chat, and now the real OAuth grant
+  pipeline (connect URL → single callback → exchange → sealed tokens →
+  connected), with PKCE, single-use states, and tokens-before-status
+  ordering.
+- NOT fixed: no connector MCP servers wired in `pi/mcp.json` yet (the agent
+  still cannot read mail/calendar/Drive — the grant pipeline lands first so
+  servers never touch an unsealed secret), no app Connect screen (Settings
+  opens the auth_url from the API today), no per-user auth (single PASSWORD
+  still authenticates everything), Pi built-in tools still ungated by the
+  relay.
 
 ## Consequences
 

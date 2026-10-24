@@ -12,20 +12,28 @@ import (
 	"agento/internal/connectors"
 )
 
-// This file is the connectors surface (#316, v1 foundation).
+// This file is the connectors surface (#316: foundation + OAuth grants).
 //
 // Connectors are deployment-wide (unlike memory/teach): one status per
 // connector id, no profile split. The app sees status + scopes only —
-// refresh tokens live server-side in Mongo and never appear here.
+// refresh tokens live server-side in Mongo, sealed, and never appear here.
 //
-//	GET  /api/connectors              list the three v1 rows
-//	POST /api/connectors/{id}/disconnect   stop future access (tokens cleared)
-//	POST /api/connectors/{id}/connect      v1: 501 until OAuth lands; the app
-//	                                     treats it as "needs setup", never as
-//	                                     a prompt to paste a secret in chat
+//	GET  /api/connectors              list the three v1 rows (disconnected
+//	                                 synthesised on fresh deploys)
+//	POST /api/connectors/{id}/disconnect   stop future access (tokens + all
+//	                                 pending states cleared server-side)
+//	POST /api/connectors/{id}/connect      mints state+verifier, returns the
+//	                                 Google consent auth_url (501 when OAuth
+//	                                 unconfigured — never a secrets prompt)
+//	GET  /api/connectors/callback?code=&state=  single registered redirect;
+//	                                 consumes the state once, exchanges
+//	                                 server-side, seals tokens, flips to
+//	                                 connected
 //
-// An expired row is the reconnect prompt: the app banners it and offers the
-// connect flow, never a password field.
+// Callback is the one route that skips the bearer gate (see route()): a
+// Google-redirected browser carries no Authorization header, and the state
+// is the capability. An expired row is the reconnect prompt: the app
+// banners it and offers the connect flow, never a password field.
 
 // hasControl reports whether s contains any control byte. NUL, \n, \r and
 // friends are never valid in an id or verb; rejecting the whole class (not
@@ -97,6 +105,15 @@ func connectorCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
 
+// connectorCallbackCtx bounds one full OAuth callback: state consume +
+// Google exchange + two sealed writes + status flip, all sequential against
+// live Google. The 5s verb budget cannot hold that (Google P99 alone can
+// exceed it, and the failure would strand an already-consumed state),
+// so the callback gets 30s. Single endpoint, no per-connector fan-out.
+func connectorCallbackCtx(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.Context(), 30*time.Second)
+}
+
 // storeTimeoutOrGone maps a store failure onto the timeout contract both
 // verbs share: store didn't answer (deadline) → 502; client went away first
 // (any other ctx error) → logged distinctly so triage doesn't read a hangup
@@ -141,6 +158,13 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 	writeJSONResponse(w, http.StatusOK, map[string]any{"connectors": out})
 }
 
+// callbackStateReject is the single answer for every dead OAuth attempt —
+// unknown, consumed, expired, or oversized state. One string so no branch
+// can drift into an oracle that distinguishes them. (Profile routing is
+// bypassed entirely for the callback — see route() — so there is no
+// profile branch left to mirror.)
+const callbackStateReject = "that connect attempt expired or was already used; start over from connect"
+
 // handleConnectors serves /api/connectors. Global like approvals, not
 // per-profile like memory.
 //
@@ -161,6 +185,19 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	if !strings.HasPrefix(rest, "api/connectors/") {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown path "+bounded(approvals.ScrubError(rest)))
+		return
+	}
+	// Single callback for all three connectors: Google requires the EXACT
+	// registered redirect URI, so one stable spelling (rather than one per
+	// connector id) means one URI to register. The connector travels inside
+	// the signed-by-opaque state row, not the path — the handler resolves it
+	// from ConsumeState and rejects cross-wired states. Checked before the
+	// id/action split below so "callback" can never read as a connector id.
+	if rest == "api/connectors/callback" {
+		if !requireMethod(w, r, http.MethodGet, "/api/connectors/callback") {
+			return
+		}
+		s.handleConnectorCallback(w, r)
 		return
 	}
 	path := strings.TrimPrefix(rest, "api/connectors/")
@@ -242,13 +279,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		if !requireMethod(w, r, http.MethodPost, "/api/connectors/{id}/connect") {
 			return
 		}
-		// v1 foundation: OAuth is not wired yet, so connect cannot succeed.
-		// 501 (not 400): the request is fine, the server side is not built.
-		// The app treats this as "needs setup" and keeps the row
-		// disconnected — it must never fall back to asking for a secret in
-		// chat.
-		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
-			"connect for "+bounded(approvals.ScrubError(norm))+" is not configured on this server yet; OAuth lands in a follow-up — never paste a token in chat")
+		s.handleConnectorConnect(w, r, norm)
 		return
 	case "":
 		w.Header().Set("Allow", "POST")
@@ -264,4 +295,225 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// with every other route in this server.
 	apiError(w, http.StatusNotFound, "invalid_request_error", "",
 		"unknown path "+bounded(approvals.ScrubError(path)))
+}
+
+// handleConnectorConnect starts one OAuth attempt: mints state+verifier,
+// records the pending attempt, and returns the Google consent URL the app
+// opens in a browser. The app never sees the verifier, the code, or any
+// token — it opens a URL and polls GET /api/connectors.
+//
+// Unconfigured (nil ConnectorOAuth) answers 501 exactly like the v1
+// foundation: the request is fine, the server side isn't built, and the app
+// must never fall back to asking for a secret in chat.
+func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, id string) {
+	if s.cfg.ConnectorOAuth == nil {
+		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
+			"connect for "+bounded(approvals.ScrubError(id))+" is not configured on this server yet — never paste a token in chat")
+		return
+	}
+	// Defensive: the router already Known-checks, and CreateState +
+	// Exchange check again — this keeps the handler correct for direct
+	// callers without depending on any of those layers.
+	if !connectors.Known(id) {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown connector "+bounded(approvals.ScrubError(id)))
+		return
+	}
+	state, verifier, err := connectors.NewState()
+	if err != nil {
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"could not start the connect flow")
+		return
+	}
+	// Capability-bearing response (auth_url completes the grant): never
+	// heuristically cacheable by proxy or browser.
+	w.Header().Set("Cache-Control", "no-store")
+	// Persist first, build the URL second: a down store fails fast with no
+	// dead attempt minted, and the empty-auth_url guard below stays the
+	// only post-store branch.
+	ctx, cancel := connectorCtx(r)
+	defer cancel()
+	// No ExpiresAt: the store owns the default (memory injectable clock,
+	// Mongo TTL-indexed). Passing wall-clock time here would bypass the
+	// injectable default and pin a boundary no test covers — single clock
+	// owner, set at the store.
+	if err := s.connectors.CreateState(ctx, connectors.OAuthState{
+		State:     state,
+		Connector: id,
+		Verifier:  verifier,
+	}); err != nil {
+		connectorsError(w, err)
+		return
+	}
+	// Fail-closed builder: empty means a helper refused (nil cfg, unknown
+	// id — both pre-checked above, so this is defense in depth, not a live
+	// branch). Never hand the app a 200 with an empty auth_url it would
+	// open as nothing with no error to triage.
+	authURL := connectors.AuthURL(s.cfg.ConnectorOAuth, id, state, verifier)
+	if authURL == "" {
+		s.cfg.Logf("connectors: auth URL build failed for %s", id)
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"could not start the connect flow")
+		return
+	}
+	writeJSONResponse(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"auth_url": authURL,
+	})
+}
+
+// handleConnectorCallback finishes one OAuth attempt: the browser lands here
+// from Google with ?code=&state= on the single registered redirect URI. The
+// connector id travels inside the state row (resolved via ConsumeState), not
+// the path — there is exactly one callback spelling to register, and a
+// state minted for gmail can never land anywhere else. The state is consumed
+// (single-use: a code can never be exchanged twice), the code is exchanged
+// server-side, the tokens are sealed with the envelope key, and the
+// connector flips to connected. Store and exchange errors surface as 502;
+// bad states answer 400 with "try connect again" semantics — codes,
+// verifiers, and token errors never reach the response body verbatim.
+func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request) {
+	// First line, before every branch: every answer on this path carries a
+	// single-use capability URL (?code=&state=), so nothing here may sit in
+	// a heuristic cache — success JSON and 400s alike.
+	w.Header().Set("Cache-Control", "no-store")
+	if s.cfg.ConnectorOAuth == nil {
+		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
+			"connect is not configured on this server yet — never paste a token in chat")
+		return
+	}
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	if code == "" || state == "" {
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+			"callback needs ?code= and ?state=; start over from connect")
+		return
+	}
+	// Length-gated before the store/Google calls (shared
+	// connectors.MaxStateFieldLen — the store enforces the same bound, so
+	// the gateway cap is the fast path, not the only enforcement): states
+	// are ~22-char base64url, codes a few hundred chars in practice. A
+	// multi-MB value would become an oversized DB filter / outbound token
+	// request. Same 400 shape as every other callback failure, so no
+	// oracle is added.
+	if len(code) > connectors.MaxStateFieldLen || len(state) > connectors.MaxStateFieldLen {
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+			callbackStateReject)
+		return
+	}
+	ctx, cancel := connectorCallbackCtx(r)
+	defer cancel()
+	st, err := s.connectors.ConsumeState(ctx, state)
+	if err != nil {
+		// Timeout/client-gone split first (same contract as list and the
+		// verbs below): a deadline answers 502 with the timeout wording,
+		// a gone client logs and returns without writing to a dead conn.
+		if ctx.Err() == context.DeadlineExceeded {
+			apiError(w, http.StatusBadGateway, "upstream_error", "",
+				"the connector store did not answer in time")
+			return
+		}
+		if ctx.Err() != nil {
+			s.cfg.Logf("connectors: callback aborted, client gone: %v", ctx.Err())
+			return
+		}
+		// Unknown, consumed, or expired: same answer, "try connect again".
+		// The store already refuses to distinguish; the gateway must not
+		// add an oracle on top by varying the message. Upstream store
+		// failures are the exception: those 502 via the domain mapper
+		// (transient, retryable) instead of burning the user's live state
+		// with a "start over" that would supersede it.
+		var se *connectors.StoreError
+		if errors.As(err, &se) && se.Upstream {
+			connectorsError(w, err)
+			return
+		}
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+			callbackStateReject)
+		return
+	}
+	id := st.Connector
+	tok, err := connectors.Exchange(ctx, s.cfg.ConnectorOAuth, id, code, st.Verifier, s.cfg.Logf)
+	if err != nil {
+		var se *connectors.StoreError
+		if errors.As(err, &se) && se.NotFound {
+			// Unknown connector id inside a consumed state (hand-inserted
+			// row — CreateState rejects unknown ids, so no live flow gets
+			// here): same dead-attempt 400 as every other failure on this
+			// unauthenticated path, never a 404 oracle on id validity.
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+				callbackStateReject)
+			return
+		}
+		connectorsError(w, err)
+		return
+	}
+	cfg := s.cfg.ConnectorOAuth
+	// Trimmed copies are what get sealed: a padded value would otherwise
+	// pass the non-empty checks and seal with padding the refresher cannot
+	// use (same class as the whitespace cases fixed earlier — check and
+	// stored bytes must be the same string).
+	refreshToken := strings.TrimSpace(tok.RefreshToken)
+	accessToken := strings.TrimSpace(tok.AccessToken)
+	refreshSealed, err := connectors.EncryptToken(cfg.Key, refreshToken)
+	if err != nil {
+		// Logged, not answered in detail: seal failures are server-side
+		// (rand, zero key) and carry nothing the client can act on.
+		s.cfg.Logf("connectors: token seal failed for %s: %v", id, err)
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"could not store the grant")
+		return
+	}
+	// Empty access tokens stay empty: sealing "" would create a second
+	// representation of "missing" that the refresher must also recognise.
+	// The TokenRow contract names literal "" as the missing form.
+	var accessSealed string
+	if accessToken != "" {
+		accessSealed, err = connectors.EncryptToken(cfg.Key, accessToken)
+		if err != nil {
+			s.cfg.Logf("connectors: token seal failed for %s: %v", id, err)
+			apiError(w, http.StatusBadGateway, "upstream_error", "",
+				"could not store the grant")
+			return
+		}
+	}
+	var expiry int64
+	if !tok.Expiry.IsZero() {
+		expiry = tok.Expiry.UnixMilli()
+	}
+	if err := s.connectors.SetTokens(ctx, id, connectors.TokenRow{
+		RefreshCipher:         refreshSealed,
+		AccessCipher:          accessSealed,
+		AccessExpiryUnixMilli: expiry,
+	}); err != nil {
+		// Same timeout/client-gone split as list/disconnect.
+		storeTimeoutOrGone(w, s, ctx, err, "callback tokens")
+		return
+	}
+	// Status last, tokens first: a connected row without tokens is the one
+	// servable-but-useless state this stack refuses to invent (see
+	// statusUpdateDoc's atomicity note). SetStatus(connected) carries no
+	// error text by contract.
+	// Triage note: if the process dies between SetTokens and SetStatus, the
+	// row holds ciphertext with status still disconnected — not a leak
+	// (ciphertext only, unreadable without the envelope key), and the next
+	// connect overwrites it. No compensating delete: it could race a
+	// concurrent legitimate connect.
+	c, err := s.connectors.SetStatus(ctx, id, connectors.StatusConnected, "")
+	if err != nil {
+		storeTimeoutOrGone(w, s, ctx, err, "callback status")
+		return
+	}
+	// A browser tab (Accept: text/html) gets a close-this-tab page; API
+	// clients (the app polls GET /api/connectors instead of reading this
+	// body) get the existing JSON shape unchanged. no-store was already set
+	// at the top of the handler for every branch on this path.
+	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connected</title></head>` +
+			`<body><p>Connected. You can close this tab and return to the Agento app.</p></body></html>`))
+		return
+	}
+	writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "connector": connectorWire(c)})
 }
