@@ -35,7 +35,7 @@ func TestExchangeAgainstStub(t *testing.T) {
 	mkcfg := func() *OAuthConfig {
 		return &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
 	}
-	tok, err := Exchange(context.Background(), mkcfg(), Gmail, "code1", "verifier1")
+	tok, err := Exchange(context.Background(), mkcfg(), Gmail, "code1", "verifier1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,10 +48,10 @@ func TestExchangeAgainstStub(t *testing.T) {
 	if tok.Expiry.IsZero() || time.Until(tok.Expiry) > time.Hour {
 		t.Errorf("expiry = %v", tok.Expiry)
 	}
-	if _, err := Exchange(context.Background(), mkcfg(), Gmail, "no-refresh", "v"); err == nil {
+	if _, err := Exchange(context.Background(), mkcfg(), Gmail, "no-refresh", "v", nil); err == nil {
 		t.Fatal("missing refresh token should fail")
 	}
-	if _, err := Exchange(context.Background(), mkcfg(), "slack", "code1", "v"); err == nil {
+	if _, err := Exchange(context.Background(), mkcfg(), "slack", "code1", "v", nil); err == nil {
 		t.Fatal("unknown connector should fail")
 	}
 }
