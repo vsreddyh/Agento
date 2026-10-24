@@ -112,6 +112,12 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL must be an absolute http(s) URL")
 	}
+	if parsed.User != nil {
+		// Userinfo would be logged verbatim in the startup line below and
+		// never match Google's exact-redirect comparison — fail closed
+		// rather than storing credentials in the service log.
+		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL must not contain userinfo (user:pass@)")
+	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		// Google compares the full redirect_uri exactly: a registered query
 		// or fragment would never match what the gateway sends (bare path),
@@ -183,11 +189,15 @@ const MaxStateFieldLen = 2048
 // and a reconnect that yields no refresh token would silently downgrade the
 // row to access-token-only with no renewal path.
 //
-// Fail-closed builder: nil cfg, unknown id, or empty inputs return "" —
-// cheaper than a panic and cheaper than a consent URL that can only die
-// later at ConsumeState. The gateway route, CreateState, and Exchange all
-// re-check (defense in depth for direct callers), but this helper needs no
-// trusted caller.
+// Fail-closed builder: nil cfg, unknown id, or empty/overlong inputs
+// return "" — cheaper than a panic and cheaper than a consent URL that can
+// only die later at ConsumeState. cfg itself must come from
+// OAuthConfigFromEnv, which is the single place that validates the
+// redirect shape (absolute http(s), no userinfo/query/fragment, correct
+// path suffix); a hand-built cfg with a non-matching redirect mints a URL
+// Google will reject at consent time. The gateway route, CreateState, and
+// Exchange all re-check inputs (defense in depth for direct callers), but
+// this helper needs no trusted caller.
 func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	if cfg == nil || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.RedirectURL) == "" {
 		return ""

@@ -1010,3 +1010,12 @@ func TestAuthURLRejectsOversizedState(t *testing.T) {
 		t.Errorf("oversized state URL = %q, want empty", got[:60])
 	}
 }
+
+// DecryptToken("") errors by design: "" is the documented missing-token
+// sentinel and must be checked by the caller before decrypting, not
+// collapsed into a successful empty decrypt.
+func TestDecryptTokenRejectsEmpty(t *testing.T) {
+	if _, err := DecryptToken([32]byte{1}, ""); err == nil {
+		t.Fatal("empty sealed input should fail")
+	}
+}
