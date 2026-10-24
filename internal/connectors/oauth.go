@@ -112,6 +112,13 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL must be an absolute http(s) URL")
 	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		// Google compares the full redirect_uri exactly: a registered query
+		// or fragment would never match what the gateway sends (bare path),
+		// so fail here with a pointer at the registration, not in the
+		// browser with redirect_uri_mismatch.
+		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL must have no query or fragment; register the bare callback URL")
+	}
 	if !strings.HasSuffix(strings.TrimSuffix(parsed.Path, "/"), "/api/connectors/callback") {
 		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL path must end in /api/connectors/callback (the single registered endpoint)")
 	}
@@ -176,26 +183,28 @@ const MaxStateFieldLen = 2048
 // and a reconnect that yields no refresh token would silently downgrade the
 // row to access-token-only with no renewal path.
 //
-// Caller must Known-check the id first: unknown ids yield a scope-less URL
-// the token endpoint would still answer. A nil cfg fails closed with "" —
-// cheaper than a panic in a server process. The gateway route, CreateState,
-// and Exchange all check; this helper trusts its caller by contract so the
-// check lives in exactly the layers that own the failure modes.
+// Fail-closed builder: nil cfg, unknown id, or empty inputs return "" —
+// cheaper than a panic and cheaper than a consent URL that can only die
+// later at ConsumeState. The gateway route, CreateState, and Exchange all
+// re-check (defense in depth for direct callers), but this helper needs no
+// trusted caller.
 func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	if cfg == nil {
 		return ""
 	}
-	// Folded and trimmed like every store verb — and unknown, empty, or
-	// padded inputs fail closed or normalise here: an empty state/verifier
-	// would mint a consent URL that can only die later at ConsumeState,
-	// after the user completed consent, and padded values would mint a
-	// challenge the trimmed callback lookup can never reproduce. The
-	// gateway mints via NewState, so this guards direct callers (same
-	// exported-helper class as the CreateState verifier check).
+	// Folded and trimmed like every store verb — unknown or empty inputs
+	// fail closed, and overlong inputs fail closed too (same
+	// MaxStateFieldLen bound the stores enforce): a multi-KB state or
+	// verifier would mint a consent URL Google 414s, with only log spam to
+	// show for it. The gateway mints fixed-size values via NewState, so
+	// this guards direct callers.
 	id = NormalizedID(id)
 	state = strings.TrimSpace(state)
 	verifier = strings.TrimSpace(verifier)
 	if !Known(id) || state == "" || verifier == "" {
+		return ""
+	}
+	if len(state) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(verifier))
@@ -220,10 +229,14 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if cfg == nil {
 		return nil, NewStoreError("oauth client is not configured", false)
 	}
-	// Bounded before the token endpoint: codes/verifiers are short by
-	// construction, and a multi-MB value would become an oversized
-	// outbound request. Deterministic input reject (400), not a flaky
-	// upstream — same shape as the missing-refresh branch below.
+	// Bounded before the token endpoint, on trimmed values: codes/verifiers
+	// are short by construction, and a multi-MB value would become an
+	// oversized outbound request. Trimmed first so padding can't push a
+	// real credential over the cap (or slip whitespace through to Google).
+	// Deterministic input reject (400), not a flaky upstream — same shape
+	// as the missing-refresh branch below.
+	code = strings.TrimSpace(code)
+	verifier = strings.TrimSpace(verifier)
 	if len(code) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
 		return nil, NewStoreError("oauth code or verifier too long", false)
 	}

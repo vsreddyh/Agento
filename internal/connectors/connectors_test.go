@@ -889,3 +889,31 @@ func TestSetTokensRejectsWhitespaceAccess(t *testing.T) {
 		t.Fatal("whitespace access cipher should fail")
 	}
 }
+
+// Overlong state is a deterministic reject at the store, not a Mongo filter.
+func TestConsumeStateRejectsOversized(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if _, err := s.ConsumeState(ctx, strings.Repeat("x", MaxStateFieldLen+1)); err == nil {
+		t.Fatal("oversized state should fail")
+	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
+		t.Fatalf("oversized should be NotFound, got %v", err)
+	}
+	if err := s.CreateState(ctx, OAuthState{State: strings.Repeat("y", MaxStateFieldLen+1), Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err == nil {
+		t.Fatal("oversized create should fail")
+	}
+}
+
+// AuthURL trims and length-gates: padded inputs build a working URL,
+// overlong ones fail closed.
+func TestAuthURLTrimsAndCaps(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", " s ", " v "); got == "" {
+		t.Fatal("padded inputs should build")
+	} else if strings.Contains(got, " ") {
+		t.Errorf("URL contains a space:\n%s", got)
+	}
+	if got := AuthURL(cfg, "gmail", strings.Repeat("s", MaxStateFieldLen+1), "v"); got != "" {
+		t.Fatal("oversized state should fail closed")
+	}
+}
