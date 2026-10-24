@@ -671,3 +671,42 @@ func TestAuthURLShape(t *testing.T) {
 		t.Errorf("unknown scopes = %v, want nil", scopes)
 	}
 }
+
+// Disconnect clears grants on every path (parity with the Mongo $unset),
+// including the pure no-op: a disconnected row must never serve a grant.
+func TestDisconnectClearsTokens(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTokens(ctx, "gmail"); err == nil {
+		t.Fatal("grant survived disconnect")
+	}
+	// Repeat disconnect keeps it cleared.
+	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTokens(ctx, "gmail"); err == nil {
+		t.Fatal("grant survived repeat disconnect")
+	}
+}
+
+// Disconnect scrubs pending attempts for that connector: a browser
+// completing an old consent afterwards must fail at ConsumeState.
+func TestDisconnectScrubsStates(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeState(ctx, "s1"); err == nil {
+		t.Fatal("state survived disconnect")
+	}
+}

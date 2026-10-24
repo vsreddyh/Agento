@@ -12,20 +12,28 @@ import (
 	"agento/internal/connectors"
 )
 
-// This file is the connectors surface (#316, v1 foundation).
+// This file is the connectors surface (#316: foundation + OAuth grants).
 //
 // Connectors are deployment-wide (unlike memory/teach): one status per
 // connector id, no profile split. The app sees status + scopes only —
-// refresh tokens live server-side in Mongo and never appear here.
+// refresh tokens live server-side in Mongo, sealed, and never appear here.
 //
-//	GET  /api/connectors              list the three v1 rows
-//	POST /api/connectors/{id}/disconnect   stop future access (tokens cleared)
-//	POST /api/connectors/{id}/connect      v1: 501 until OAuth lands; the app
-//	                                     treats it as "needs setup", never as
-//	                                     a prompt to paste a secret in chat
+//	GET  /api/connectors              list the three v1 rows (disconnected
+//	                                 synthesised on fresh deploys)
+//	POST /api/connectors/{id}/disconnect   stop future access (tokens + all
+//	                                 pending states cleared server-side)
+//	POST /api/connectors/{id}/connect      mints state+verifier, returns the
+//	                                 Google consent auth_url (501 when OAuth
+//	                                 unconfigured — never a secrets prompt)
+//	GET  /api/connectors/callback?code=&state=  single registered redirect;
+//	                                 consumes the state once, exchanges
+//	                                 server-side, seals tokens, flips to
+//	                                 connected
 //
-// An expired row is the reconnect prompt: the app banners it and offers the
-// connect flow, never a password field.
+// Callback is the one route that skips the bearer gate (see route()): a
+// Google-redirected browser carries no Authorization header, and the state
+// is the capability. An expired row is the reconnect prompt: the app
+// banners it and offers the connect flow, never a password field.
 
 // hasControl reports whether s contains any control byte. NUL, \n, \r and
 // friends are never valid in an id or verb; rejecting the whole class (not
@@ -149,6 +157,12 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSONResponse(w, http.StatusOK, map[string]any{"connectors": out})
 }
+
+// callbackStateReject is the single answer for every dead OAuth attempt —
+// unknown, consumed, or expired state, plus unknown profile on the
+// callback path (see route()). One string so no branch can drift into an
+// oracle that distinguishes them.
+const callbackStateReject = "that connect attempt expired or was already used; start over from connect"
 
 // handleConnectors serves /api/connectors. Global like approvals, not
 // per-profile like memory.
@@ -356,13 +370,14 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		// Unknown, consumed, or expired: same answer, "try connect again".
 		// The store already refuses to distinguish; the gateway must not
-		// add an oracle on top by varying the message.
+		// add an oracle on top by varying the message. Same string as the
+		// unknown-profile callback reject in route().
 		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
-			"that connect attempt expired or was already used; start over from connect")
+			callbackStateReject)
 		return
 	}
 	id := st.Connector
-	tok, err := connectors.Exchange(ctx, s.cfg.ConnectorOAuth, id, code, st.Verifier)
+	tok, err := connectors.Exchange(ctx, s.cfg.ConnectorOAuth, id, code, st.Verifier, s.cfg.Logf)
 	if err != nil {
 		connectorsError(w, err)
 		return
@@ -396,6 +411,11 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// servable-but-useless state this stack refuses to invent (see
 	// statusUpdateDoc's atomicity note). SetStatus(connected) carries no
 	// error text by contract.
+	// Triage note: if the process dies between SetTokens and SetStatus, the
+	// row holds ciphertext with status still disconnected — not a leak
+	// (ciphertext only, unreadable without the envelope key), and the next
+	// connect overwrites it. No compensating delete: it could race a
+	// concurrent legitimate connect.
 	c, err := s.connectors.SetStatus(ctx, id, connectors.StatusConnected, "")
 	if err != nil {
 		connectorsError(w, err)

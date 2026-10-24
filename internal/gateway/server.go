@@ -535,13 +535,23 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// capability. Unknown/consumed/expired states answer identically, and
 	// the handler leaks no codes, verifiers, or tokens, so no bearer is
 	// needed to knock. Everything else stays gated.
-	if rest != "api/connectors/callback" {
-		if err := s.authenticate(r); err != nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="agento"`)
-			apiError(w, http.StatusUnauthorized, "authentication_error", "",
-				"missing or invalid Authorization bearer token")
+	//
+	// No oracle: the exemption resolves the handler first, and an unknown
+	// profile on the callback path answers the SAME 400 state-reject as a
+	// bad state on a known profile. Without this, valid-profile+bad-state
+	// (400) vs unknown-profile (404) would distinguish profile existence
+	// to an unauthenticated caller.
+	if rest == "api/connectors/callback" {
+		if _, ok := s.handlers[profile]; !ok {
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+				callbackStateReject)
 			return
 		}
+	} else if err := s.authenticate(r); err != nil {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="agento"`)
+		apiError(w, http.StatusUnauthorized, "authentication_error", "",
+			"missing or invalid Authorization bearer token")
+		return
 	}
 
 	handler, ok := s.handlers[profile]

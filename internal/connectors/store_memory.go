@@ -200,6 +200,19 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Tokens die on every disconnect path — including the pure no-op below.
+	// Disconnect means "no future access", and a stored grant on a
+	// disconnected row (hand-edit, bug) must not survive it. Same $unset
+	// the Mongo backend applies; updated_at untouched by the delete itself.
+	delete(s.tokens, id)
+	// Pending attempts die with it: a browser completing an old consent
+	// after this disconnect must fail at ConsumeState ("try connect again"),
+	// not silently reconnect without fresh intent (see the Mongo twin).
+	for state, st := range s.states {
+		if st.Connector == id {
+			delete(s.states, state)
+		}
+	}
 	c, ok := s.rows[id]
 	if !ok {
 		c = DefaultRow(id)
@@ -225,10 +238,8 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	c.Status = StatusDisconnected
 	c.LastError = ""
 	c.UpdatedAt = time.Now().UnixMilli()
-	// No token field in this shape to clear; the Mongo backend clears its
-	// token columns here (see refreshTokenField/accessTokenField). Documented
-	// so the two backends cannot diverge silently: a future field must be
-	// cleared in both.
+	// Token columns cleared at the top of this function (all paths),
+	// mirroring the Mongo $unset — see above.
 	s.rows[id] = c
 	return backfillDisplay(c, id), nil
 }
