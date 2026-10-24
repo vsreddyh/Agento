@@ -298,6 +298,13 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	if strings.TrimSpace(tok.RefreshCipher) == "" {
 		return NewStoreError("connector grant needs a refresh token", false)
 	}
+	// Whitespace-only access is neither a sealed grant nor literal "": the
+	// refresher keys missing off "", so a padded value would create a
+	// second missing representation that reads as present. Reject it here
+	// (same gate as refresh) rather than letting it through to storage.
+	if tok.AccessCipher != "" && strings.TrimSpace(tok.AccessCipher) == "" {
+		return NewStoreError("connector grant access token is blank", false)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tokens[id] = tok
@@ -327,7 +334,13 @@ func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) 
 // would mint an immortal row in a store with no sweeper.
 func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	st.Connector = NormalizedID(st.Connector)
-	if strings.TrimSpace(st.State) == "" {
+	// Trimmed before storing: the callback trims query params before
+	// ConsumeState, so a padded value stored verbatim would never match a
+	// lookup — and a padded verifier would break Exchange at Google after
+	// the user already consented. Normalise here, not at read time.
+	st.State = strings.TrimSpace(st.State)
+	st.Verifier = strings.TrimSpace(st.Verifier)
+	if st.State == "" {
 		return NewStoreError("oauth state needs an id", false)
 	}
 	if !Known(st.Connector) {
