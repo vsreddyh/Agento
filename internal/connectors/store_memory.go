@@ -316,6 +316,13 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 			delete(s.states, state)
 		}
 	}
+	// Duplicate check BEFORE the supersede below: reusing the same state
+	// string for the same connector (caller bug — states are 128-bit rand)
+	// must 400 like the Mongo duplicate-key path, not silently overwrite
+	// after deleting the row it collides with.
+	if _, exists := s.states[st.State]; exists {
+		return NewStoreError("oauth state already exists", false)
+	}
 	// One pending attempt per connector: a new tap supersedes the old one
 	// (its browser tab fails at ConsumeState with "try connect again").
 	// Bounds live rows to 3 max regardless of tap spam — the sweep above
@@ -325,9 +332,6 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 		if existing.Connector == st.Connector {
 			delete(s.states, state)
 		}
-	}
-	if _, exists := s.states[st.State]; exists {
-		return NewStoreError("oauth state already exists", false)
 	}
 	s.states[st.State] = st
 	return nil

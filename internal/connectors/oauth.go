@@ -158,6 +158,10 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	if cfg == nil {
 		return ""
 	}
+	// Folded like every store verb: SetTokens/GetTokens/CreateState/
+	// Disconnect all NormalizedID first, and an unfolded helper would
+	// 404/exchange-fail where the store succeeds for the same logical id.
+	id = NormalizedID(id)
 	sum := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
 	return cfg.oauth2(GoogleScopes(id)).AuthCodeURL(state,
@@ -180,6 +184,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if cfg == nil {
 		return nil, NewStoreError("oauth client is not configured", false)
 	}
+	// Folded like AuthURL above and every store verb: same logical id,
+	// same answer, wherever the caller normalised.
+	id = NormalizedID(id)
 	if !Known(id) {
 		return nil, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
