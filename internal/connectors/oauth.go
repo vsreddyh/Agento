@@ -149,10 +149,13 @@ func NewState() (state, verifier string, err error) {
 // and a reconnect that yields no refresh token would silently downgrade the
 // row to access-token-only with no renewal path.
 //
-// Caller must Known-check the id first: unknown ids yield a scope-less URL
-// the token endpoint would still answer. The gateway route, CreateState,
-// and Exchange all check; this helper trusts its caller by contract so the
-// check lives in exactly the layers that own the failure modes.
+// Caller must Known-check the id and non-nil-check cfg first: unknown ids
+// yield a scope-less URL the token endpoint would still answer. The gateway
+// route, CreateState, and Exchange all check; this helper trusts its caller
+// by contract so the check lives in exactly the layers that own the
+// failure modes. (Same contract as Exchange below, which also assumes
+// non-nil cfg — the gateway's ConnectorOAuth nil-check is the enforcement
+// point for both.)
 func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
@@ -165,10 +168,12 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 }
 
 // Exchange swaps a code (+ PKCE verifier) for tokens against the configured
-// token endpoint. HTTP errors surface as a generic 502 ("grant exchange
-// failed") with the provider's error_description only in the log —
-// oauth2 errors echo the token endpoint verbatim, and the client needs a
-// retry signal, not provider internals. logf may be nil (tests).
+// token endpoint. cfg must be non-nil (gateway's ConnectorOAuth nil-check
+// is the enforcement point; see AuthURL's contract note). HTTP errors
+// surface as a generic 502 ("grant exchange failed") with the provider's
+// error_description only in the log — oauth2 errors echo the token
+// endpoint verbatim, and the client needs a retry signal, not provider
+// internals. logf may be nil (tests).
 func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, logf func(string, ...any)) (*oauth2.Token, error) {
 	if !Known(id) {
 		return nil, &StoreError{Msg: "unknown connector " + id, NotFound: true}

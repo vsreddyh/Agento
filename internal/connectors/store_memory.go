@@ -283,6 +283,7 @@ func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) 
 // explicit expiry only for tests; without this, a forgotten expiry field
 // would mint an immortal row in a store with no sweeper.
 func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
+	st.Connector = NormalizedID(st.Connector)
 	if strings.TrimSpace(st.State) == "" {
 		return NewStoreError("oauth state needs an id", false)
 	}
@@ -294,6 +295,16 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Opportunistic sweep: no TTL thread exists here, so reap expired rows
+	// on the write path that creates them. Keeps an abandoned-connect spam
+	// from growing the map without bound; same lazy-expiry contract as the
+	// Mongo TTL, enforced at write time instead of by the database.
+	now := time.Now()
+	for state, existing := range s.states {
+		if !existing.ExpiresAt.IsZero() && !now.Before(existing.ExpiresAt) {
+			delete(s.states, state)
+		}
+	}
 	if _, exists := s.states[st.State]; exists {
 		return NewStoreError("oauth state already exists", false)
 	}

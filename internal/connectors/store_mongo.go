@@ -379,6 +379,18 @@ func displayFieldsFresh(id, displayName string, scopes []string, lastErr, wantEr
 	return true
 }
 
+// tokenUnset clears every token-shaped column in one place. All three
+// disconnect paths (repair, status, full) must unset ALL of them —
+// forgetting accessExpiry leaves stale PII-adjacent data with no tokens,
+// and forgetting a future column breaks the parity silently. One list.
+func tokenUnset() bson.D {
+	return bson.D{
+		{Key: refreshTokenField, Value: ""},
+		{Key: accessTokenField, Value: ""},
+		{Key: "accessExpiry", Value: ""},
+	}
+}
+
 // repairUpdateDoc builds the repair-only write: display + error refresh with
 // NO updatedAt/status/connectedAt keys, so a repair can never move the
 // last-transition timestamp. Pinned by test — a future edit adding
@@ -397,10 +409,7 @@ func repairUpdateDoc(id, lastErr string, unsetTokens bool) bson.D {
 		{Key: "lastError", Value: lastErr},
 	}}}
 	if unsetTokens {
-		update = append(update, bson.E{Key: "$unset", Value: bson.D{
-			{Key: refreshTokenField, Value: ""},
-			{Key: accessTokenField, Value: ""},
-		}})
+		update = append(update, bson.E{Key: "$unset", Value: tokenUnset()})
 	}
 	return update
 }
@@ -441,10 +450,7 @@ func statusUpdateDoc(id string, st Status, lastErr string, now, connectedAt int6
 	}
 	update := bson.D{{Key: "$set", Value: set}}
 	if st == StatusDisconnected {
-		update = append(update, bson.E{Key: "$unset", Value: bson.D{
-			{Key: refreshTokenField, Value: ""},
-			{Key: accessTokenField, Value: ""},
-		}})
+		update = append(update, bson.E{Key: "$unset", Value: tokenUnset()})
 	}
 	return update
 }
@@ -461,10 +467,7 @@ func disconnectUpdateDoc(id string, now int64) bson.D {
 			{Key: "lastError", Value: ""},
 			{Key: "updatedAt", Value: now},
 		}},
-		{Key: "$unset", Value: bson.D{
-			{Key: refreshTokenField, Value: ""},
-			{Key: accessTokenField, Value: ""},
-		}},
+		{Key: "$unset", Value: tokenUnset()},
 	}
 }
 
@@ -600,6 +603,10 @@ func (s *MongoStore) GetTokens(ctx context.Context, id string) (TokenRow, error)
 // contract (see ConsumeState); an id collision is a caller bug (400), never
 // an overwrite.
 func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
+	// Normalised like every other verb: SetTokens/GetTokens/Disconnect all
+	// fold case+spacing first, and a non-normalised stored row would miss
+	// both the Known check here and the Disconnect scrub comparison later.
+	st.Connector = NormalizedID(st.Connector)
 	if strings.TrimSpace(st.State) == "" {
 		return NewStoreError("oauth state needs an id", false)
 	}

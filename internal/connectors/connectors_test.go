@@ -710,3 +710,20 @@ func TestDisconnectScrubsStates(t *testing.T) {
 		t.Fatal("state survived disconnect")
 	}
 }
+
+// CreateState normalises like every other verb: a padded/cased connector
+// stores folded, so the Disconnect scrub comparison later sees the same id.
+func TestCreateStateNormalisesConnector(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "  GMail ", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.ConsumeState(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Connector != "gmail" {
+		t.Errorf("stored connector = %q, want folded gmail", st.Connector)
+	}
+}
