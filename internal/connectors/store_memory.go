@@ -242,6 +242,9 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	s.mu.Lock()
+	// No early returns between this Lock and the Unlock below — a future
+	// `return` inserted here deadlocks. Keep the single-exit shape: compute
+	// everything, copy out, unlock once, then backfill outside the lock.
 	// Tokens die on every disconnect path — including the pure no-op below.
 	// Disconnect means "no future access", and a stored grant on a
 	// disconnected row (hand-edit, bug) must not survive it. Same $unset

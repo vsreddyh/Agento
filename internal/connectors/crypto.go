@@ -79,6 +79,12 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 // DecryptToken opens one EncryptToken value. Any tamper, truncation, or
 // wrong-key attempt is an error — callers treat it as "token unusable,
 // reconnect", never as plaintext.
+//
+// Do not call with "": it errors ("truncated"), by design — "" is the
+// documented missing-token sentinel and must be checked by the caller
+// (if tok == "" → renew) before decrypting. An early "" → "" return
+// would collapse "missing" into "decrypted to empty" and hide the branch
+// the refresher keys off.
 func DecryptToken(key [32]byte, sealed string) (string, error) {
 	if key == ([32]byte{}) {
 		return "", errors.New("connectors: refusing to open a token under a zero key")

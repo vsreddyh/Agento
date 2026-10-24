@@ -94,3 +94,14 @@ func TestOAuthConfigValidatesRedirect(t *testing.T) {
 		})
 	}
 }
+
+func TestOAuthConfigRejectsUserinfo(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://user:pass@host/p/api/connectors/callback")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("userinfo in redirect URL should fail")
+	}
+}

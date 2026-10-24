@@ -373,6 +373,10 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 // bad states answer 400 with "try connect again" semantics — codes,
 // verifiers, and token errors never reach the response body verbatim.
 func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request) {
+	// First line, before every branch: every answer on this path carries a
+	// single-use capability URL (?code=&state=), so nothing here may sit in
+	// a heuristic cache — success JSON and 400s alike.
+	w.Header().Set("Cache-Control", "no-store")
 	if s.cfg.ConnectorOAuth == nil {
 		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
 			"connect is not configured on this server yet — never paste a token in chat")
@@ -500,12 +504,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		storeTimeoutOrGone(w, s, ctx, err, "callback status")
 		return
 	}
-	// Never cacheable: the URL that led here is a single-use capability,
-	// and the response must not sit in proxy/browser caches. A browser tab
-	// (Accept: text/html) gets a close-this-tab page; API clients (the app
-	// polls GET /api/connectors instead of reading this body) get the
-	// existing JSON shape unchanged.
-	w.Header().Set("Cache-Control", "no-store")
+	// A browser tab (Accept: text/html) gets a close-this-tab page; API
+	// clients (the app polls GET /api/connectors instead of reading this
+	// body) get the existing JSON shape unchanged. no-store was already set
+	// at the top of the handler for every branch on this path.
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
