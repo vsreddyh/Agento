@@ -189,6 +189,10 @@ type TokenRow struct {
 	// one, so a stored grant always renews.
 	RefreshCipher string `bson:"refreshToken" json:"-"`
 	// AccessCipher is base64(nonce||ciphertext) of the short-lived access token.
+	// May be empty: the refresher tolerates a missing access token (first
+	// use, or an offline-only rotation) and renews from the refresh token.
+	// The refresh cipher above must never be empty — same rule the store
+	// enforces — or the row strands at the first access-token expiry.
 	AccessCipher string `bson:"accessToken" json:"-"`
 	// AccessExpiryUnixMilli is when the access token stops working; the
 	// refresher renews before this, not after it fails.

@@ -298,3 +298,28 @@ func TestConnectorsCallbackRejects(t *testing.T) {
 		t.Fatalf("bad exchange: %d, want 502 (%s)", rec.Code, rec.Body)
 	}
 }
+
+func TestConnectorsCallbackNeedsNoBearer(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	// Memory store + OAuth configured, but the request carries NO bearer:
+	// this is the Google-redirected browser shape (no Authorization
+	// header), and it must still complete — the state is the capability.
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: connectors.NewMemoryStore(), ConnectorOAuth: cfg})
+	r := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state=nope", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bearerless callback: %d, want 400 state-reject (%s)", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "bearer") || strings.Contains(strings.ToLower(rec.Body.String()), "unauthorized") {
+		t.Fatalf("bearerless callback answered auth instead of state: %s", rec.Body)
+	}
+	// And the gated routes still 401 without a bearer.
+	r2 := httptest.NewRequest(http.MethodGet, "/api/connectors", nil)
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, r2)
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("bearerless list: %d, want 401 (%s)", rec2.Code, rec2.Body)
+	}
+}

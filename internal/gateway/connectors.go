@@ -97,6 +97,15 @@ func connectorCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
 
+// connectorCallbackCtx bounds one full OAuth callback: state consume +
+// Google exchange + two sealed writes + status flip, all sequential against
+// live Google. The 5s verb budget cannot hold that (Google P99 alone can
+// exceed it, and the failure would strand an already-consumed state),
+// so the callback gets 30s. Single endpoint, no per-connector fan-out.
+func connectorCallbackCtx(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.Context(), 30*time.Second)
+}
+
 // storeTimeoutOrGone maps a store failure onto the timeout contract both
 // verbs share: store didn't answer (deadline) → 502; client went away first
 // (any other ctx error) → logged distinctly so triage doesn't read a hangup
@@ -287,6 +296,14 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 			"connect for "+bounded(approvals.ScrubError(id))+" is not configured on this server yet — never paste a token in chat")
 		return
 	}
+	// Defensive: the router already Known-checks, and CreateState +
+	// Exchange check again — this keeps the handler correct for direct
+	// callers without depending on any of those layers.
+	if !connectors.Known(id) {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown connector "+bounded(approvals.ScrubError(id)))
+		return
+	}
 	state, verifier, err := connectors.NewState()
 	if err != nil {
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
@@ -317,9 +334,9 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 // state minted for gmail can never land anywhere else. The state is consumed
 // (single-use: a code can never be exchanged twice), the code is exchanged
 // server-side, the tokens are sealed with the envelope key, and the
-// connector flips to connected. Every failure answers 4xx with "try connect
-// again" semantics — codes, verifiers, and token errors never reach the
-// response body verbatim.
+// connector flips to connected. Store and exchange errors surface as 502;
+// bad states answer 400 with "try connect again" semantics — codes,
+// verifiers, and token errors never reach the response body verbatim.
 func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.ConnectorOAuth == nil {
 		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
@@ -333,7 +350,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			"callback needs ?code= and ?state=; start over from connect")
 		return
 	}
-	ctx, cancel := connectorCtx(r)
+	ctx, cancel := connectorCallbackCtx(r)
 	defer cancel()
 	st, err := s.connectors.ConsumeState(ctx, state)
 	if err != nil {
