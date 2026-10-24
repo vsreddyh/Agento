@@ -333,11 +333,14 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// only post-store branch.
 	ctx, cancel := connectorCtx(r)
 	defer cancel()
+	// No ExpiresAt: the store owns the default (memory injectable clock,
+	// Mongo TTL-indexed). Passing wall-clock time here would bypass the
+	// injectable default and pin a boundary no test covers — single clock
+	// owner, set at the store.
 	if err := s.connectors.CreateState(ctx, connectors.OAuthState{
 		State:     state,
 		Connector: id,
 		Verifier:  verifier,
-		ExpiresAt: time.Now().Add(connectors.StateTTL),
 	}); err != nil {
 		connectorsError(w, err)
 		return
@@ -503,7 +506,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// polls GET /api/connectors instead of reading this body) get the
 	// existing JSON shape unchanged.
 	w.Header().Set("Cache-Control", "no-store")
-	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connected</title></head>` +
