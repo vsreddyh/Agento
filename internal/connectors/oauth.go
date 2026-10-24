@@ -202,7 +202,10 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		// No refresh token means no renewal path: storing this row as
 		// connected would strand it at the first access-token expiry.
 		// Fail the connect loudly instead of a slow-burn disconnect.
-		return nil, NewStoreError("oauth exchange returned no refresh token; reconnect and approve offline access", true)
+		// Deterministic provider answer (not a flaky upstream), so 400 —
+		// retrying the same consumed code cannot change the outcome, and
+		// triage must read this as misconfigured consent, not an outage.
+		return nil, NewStoreError("grant exchange returned no refresh token; reconnect and approve offline access", false)
 	}
 	return tok, nil
 }

@@ -47,9 +47,15 @@ func KeyFromEnv() ([32]byte, error) {
 // EncryptToken seals one token value. A zero key refuses rather than
 // encrypting under nothing — callers pass the key they loaded, and a
 // missing key must fail the write, not produce a row nobody can open.
+// Empty plaintext is refused too: a sealed "" would be a second
+// representation of "missing" that the refresher and every reader would
+// have to recognise alongside literal "". Callers pass empty through as "".
 func EncryptToken(key [32]byte, plaintext string) (string, error) {
 	if key == ([32]byte{}) {
 		return "", errors.New("connectors: refusing to seal a token under a zero key")
+	}
+	if plaintext == "" {
+		return "", errors.New("connectors: refusing to seal an empty token; pass through empty instead")
 	}
 	block, err := aes.NewCipher(key[:])
 	if err != nil {

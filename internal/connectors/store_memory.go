@@ -61,11 +61,15 @@ type MemoryStore struct {
 	tokens map[string]TokenRow
 	states map[string]OAuthState
 	// now is the clock for state expiry (ConsumeState boundary). Nil means
-	// time.Now; tests pin the exact boundary tick without sleeping.
+	// time.Now; tests pin the exact boundary tick without sleeping. Mongo
+	// has no equivalent hook (wall-clock inline, untestable without live
+	// Atlas) — same !Before rule, so behavior matches; only the pin
+	// differs, and DB tests need Atlas anyway.
 	now func() time.Time
 }
 
-// timeNow resolves the store clock.
+// timeNow resolves the store clock. Tests pin the exact expiry boundary
+// tick through this (expiresAt==now counts as expired).
 func (s *MemoryStore) timeNow() time.Time {
 	if s.now == nil {
 		return time.Now()
@@ -325,9 +329,10 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	}
 	// One pending attempt per connector: a new tap supersedes the old one
 	// (its browser tab fails at ConsumeState with "try connect again").
-	// Bounds live rows to 3 max regardless of tap spam — the sweep above
-	// only reaps expired rows, so without this a bearer holder could mint
-	// unlimited live states inside the 10-minute window.
+	// Bounds live rows to one per connector regardless of tap spam — not a
+	// hardcoded count, so a fourth connector doesn't invalidate it. The
+	// sweep above only reaps expired rows, so without this a bearer holder
+	// could mint unlimited live states inside the 10-minute window.
 	for state, existing := range s.states {
 		if existing.Connector == st.Connector {
 			delete(s.states, state)
