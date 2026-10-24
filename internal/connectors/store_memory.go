@@ -36,6 +36,13 @@ type Store interface {
 	// the token fields cleared server-side (see store_mongo.go). Unknown
 	// ids are NotFound; already-disconnected is a no-op success.
 	Disconnect(ctx context.Context, id string) (Connector, error)
+	// Durable reports whether state survives a process restart (Mongo) or
+	// not (memory). The gateway enables OAuth only on a durable store: an
+	// in-memory grant store would strand connected rows at the next
+	// restart (status says connected, tokens are gone), so connect 501s
+	// without one. A method, not a concrete type-assert at the call site —
+	// a future wrapper/decorator must consciously choose its answer.
+	Durable() bool
 	// SetTokens persists an encrypted grant (see TokenRow: the store holds
 	// ciphertext opaquely and needs no key). Unknown ids are NotFound;
 	// empty refresh cipher is rejected (a stored grant must always renew).
@@ -76,6 +83,11 @@ func (s *MemoryStore) timeNow() time.Time {
 	}
 	return s.now()
 }
+
+// Durable reports false: rows die with the process, so the gateway keeps
+// OAuth disabled on this backend rather than strand connected rows at the
+// next restart.
+func (s *MemoryStore) Durable() bool { return false }
 
 // NewMemoryStore builds a store with no rows (List synthesises disconnected).
 func NewMemoryStore() *MemoryStore {
@@ -304,6 +316,11 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	}
 	if !Known(st.Connector) {
 		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
+	}
+	if strings.TrimSpace(st.Verifier) == "" {
+		// Fail fast at creation, not after the user completed consent: a
+		// verifier-less attempt can never survive Exchange.
+		return NewStoreError("oauth state needs a verifier", false)
 	}
 	if st.ExpiresAt.IsZero() {
 		st.ExpiresAt = s.timeNow().Add(StateTTL)

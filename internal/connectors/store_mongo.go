@@ -49,6 +49,10 @@ func New(uri, dbName string) (*MongoStore, error) {
 	}, nil
 }
 
+// Durable reports true: Mongo outlives the process, so grants stored
+// here survive restarts and the gateway may enable OAuth on top.
+func (s *MongoStore) Durable() bool { return true }
+
 // FromEnv connects from the shared MONGODB_URI/MONGODB_DB pair.
 func FromEnv() (*MongoStore, error) {
 	uri, db := mongostore.Env()
@@ -622,6 +626,11 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 	}
 	if !Known(st.Connector) {
 		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
+	}
+	if strings.TrimSpace(st.Verifier) == "" {
+		// Fail fast at creation, not after the user completed consent: a
+		// verifier-less attempt can never survive Exchange.
+		return NewStoreError("oauth state needs a verifier", false)
 	}
 	if st.ExpiresAt.IsZero() {
 		st.ExpiresAt = time.Now().Add(StateTTL)

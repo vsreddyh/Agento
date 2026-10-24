@@ -429,11 +429,12 @@ func run() error {
 	// Google OAuth client (#316, second layer). ANY piece missing (client
 	// id, secret, redirect URL, envelope key) leaves this nil and connect
 	// answers 501 exactly like the v1 foundation — a half-open flow would
-	// strand the user mid-consent. Deliberately independent of the store
-	// fallback above: OAuth without Mongo would store grants in memory
-	// that dies with the process, so a memory store ALSO forces nil here.
+	// strand the user mid-consent. The store gate uses the Store.Durable()
+	// contract, not a concrete type-assert: OAuth without durability would
+	// store grants in memory that dies with the process, so a non-durable
+	// store forces nil here too.
 	var connectorOAuth *connectors.OAuthConfig
-	if _, isMem := connectorStore.(*connectors.MemoryStore); !isMem {
+	if connectorStore.Durable() {
 		if cfg, err := connectors.OAuthConfigFromEnv(); err != nil {
 			logger.Printf("connectors: OAuth unavailable (%v); connect answers 501", err)
 		} else {
