@@ -559,6 +559,16 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 			{Key: accessTokenField, Value: tok.AccessCipher},
 			{Key: "accessExpiry", Value: tok.AccessExpiryUnixMilli},
 		}},
+		// Display defaults on insert only: a token write must never invent
+		// status (backfill synthesises disconnected for a status-less doc
+		// on read), and without these a crash between SetTokens and
+		// SetStatus would leave a display-less row. Reads project only the
+		// display shape, so these columns are inert until the transition
+		// write lands the real row.
+		{Key: "$setOnInsert", Value: bson.D{
+			{Key: "displayName", Value: DisplayName(id)},
+			{Key: "scopes", Value: ScopesFor(id)},
+		}},
 	}, options.Update().SetUpsert(true))
 	if err != nil {
 		s.logf("connectors: token write %s failed: %v", id, err)

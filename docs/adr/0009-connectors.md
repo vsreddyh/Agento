@@ -44,6 +44,14 @@ state explicit. Harmless at three rows; creating rows is accepted.
 
 ### Token placement
 
+The PKCE verifier rests **plaintext** in `oauth_states` by necessity — the token
+exchange must present the exact verifier, so it cannot be hashed at rest, and a
+hash would add no security against anyone who can already read the row's sibling
+columns. The mitigation is lifetime, not secrecy: 10-minute TTL, single-use
+consume-on-read, and no API surface returns it (only the server that created it
+ever reads it back). Treat a leaked verifier like a leaked pending state: it can
+only complete a consent the user is already finishing.
+
 OAuth refresh tokens live **server-side in Mongo** (`connectors`
 collection, sibling to `approvals`/`runs`/`memory`), never in the app and
 never pasted in chat. Reads project only the display shape

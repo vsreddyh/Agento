@@ -727,3 +727,24 @@ func TestCreateStateNormalisesConnector(t *testing.T) {
 		t.Errorf("stored connector = %q, want folded gmail", st.Connector)
 	}
 }
+
+// Exact-boundary expiry is pinned without sleeping: expiresAt itself counts
+// as expired (matches the Mongo TTL, which reaps at expiry, not after).
+func TestConsumeStateBoundaryTick(t *testing.T) {
+	s := NewMemoryStore()
+	fixed := time.Now().Truncate(time.Second)
+	s.now = func() time.Time { return fixed }
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "edge", Connector: "gmail", Verifier: "v", ExpiresAt: fixed}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeState(ctx, "edge"); err == nil {
+		t.Fatal("expiresAt==now should count as expired")
+	}
+	if err := s.CreateState(ctx, OAuthState{State: "live", Connector: "gmail", Verifier: "v", ExpiresAt: fixed.Add(time.Nanosecond)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeState(ctx, "live"); err != nil {
+		t.Fatalf("expiresAt 1ns out should be live: %v", err)
+	}
+}

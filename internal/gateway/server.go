@@ -536,18 +536,17 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// the handler leaks no codes, verifiers, or tokens, so no bearer is
 	// needed to knock. Everything else stays gated.
 	//
-	// No oracle: the exemption resolves the handler first, and an unknown
-	// profile on the callback path answers the SAME 400 state-reject as a
-	// bad state on a known profile. Without this, valid-profile+bad-state
-	// (400) vs unknown-profile (404) would distinguish profile existence
-	// to an unauthenticated caller.
+	// No oracle by construction: the callback bypasses profile routing
+	// entirely (connectors are global, like approvals — no per-profile
+	// state exists to leak), so unknown-profile and known-profile callers
+	// take the identical path through handleConnectorCallback, including
+	// method, param-presence, and unconfigured checks. There is no branch
+	// left to distinguish them on.
 	if rest == "api/connectors/callback" {
-		if _, ok := s.handlers[profile]; !ok {
-			apiError(w, http.StatusBadRequest, "invalid_request_error", "",
-				callbackStateReject)
-			return
-		}
-	} else if err := s.authenticate(r); err != nil {
+		s.handleConnectors(w, r, rest)
+		return
+	}
+	if err := s.authenticate(r); err != nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="agento"`)
 		apiError(w, http.StatusUnauthorized, "authentication_error", "",
 			"missing or invalid Authorization bearer token")
