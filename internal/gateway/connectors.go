@@ -325,17 +325,9 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 			"could not start the connect flow")
 		return
 	}
-	// Fail-closed builder: empty means a helper refused (nil cfg, unknown
-	// id — both pre-checked above, so this is defense in depth, not a live
-	// branch). Never hand the app a 200 with an empty auth_url it would
-	// open as nothing with no error to triage.
-	authURL := connectors.AuthURL(s.cfg.ConnectorOAuth, id, state, verifier)
-	if authURL == "" {
-		s.cfg.Logf("connectors: auth URL build failed for %s", id)
-		apiError(w, http.StatusBadGateway, "upstream_error", "",
-			"could not start the connect flow")
-		return
-	}
+	// Persist first, build the URL second: a down store fails fast with no
+	// dead attempt minted, and the empty-auth_url guard below stays the
+	// only post-store branch.
 	ctx, cancel := connectorCtx(r)
 	defer cancel()
 	if err := s.connectors.CreateState(ctx, connectors.OAuthState{
@@ -345,6 +337,17 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		ExpiresAt: time.Now().Add(connectors.StateTTL),
 	}); err != nil {
 		connectorsError(w, err)
+		return
+	}
+	// Fail-closed builder: empty means a helper refused (nil cfg, unknown
+	// id — both pre-checked above, so this is defense in depth, not a live
+	// branch). Never hand the app a 200 with an empty auth_url it would
+	// open as nothing with no error to triage.
+	authURL := connectors.AuthURL(s.cfg.ConnectorOAuth, id, state, verifier)
+	if authURL == "" {
+		s.cfg.Logf("connectors: auth URL build failed for %s", id)
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"could not start the connect flow")
 		return
 	}
 	writeJSONResponse(w, http.StatusOK, map[string]any{
@@ -410,6 +413,16 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	id := st.Connector
 	tok, err := connectors.Exchange(ctx, s.cfg.ConnectorOAuth, id, code, st.Verifier, s.cfg.Logf)
 	if err != nil {
+		var se *connectors.StoreError
+		if errors.As(err, &se) && se.NotFound {
+			// Unknown connector id inside a consumed state (hand-inserted
+			// row — CreateState rejects unknown ids, so no live flow gets
+			// here): same dead-attempt 400 as every other failure on this
+			// unauthenticated path, never a 404 oracle on id validity.
+			apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+				callbackStateReject)
+			return
+		}
 		connectorsError(w, err)
 		return
 	}
@@ -451,7 +464,8 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		AccessCipher:          accessSealed,
 		AccessExpiryUnixMilli: expiry,
 	}); err != nil {
-		connectorsError(w, err)
+		// Same timeout/client-gone split as list/disconnect.
+		storeTimeoutOrGone(w, s, ctx, err, "callback tokens")
 		return
 	}
 	// Status last, tokens first: a connected row without tokens is the one
@@ -465,7 +479,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// concurrent legitimate connect.
 	c, err := s.connectors.SetStatus(ctx, id, connectors.StatusConnected, "")
 	if err != nil {
-		connectorsError(w, err)
+		storeTimeoutOrGone(w, s, ctx, err, "callback status")
 		return
 	}
 	writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "connector": connectorWire(c)})

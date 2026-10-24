@@ -928,3 +928,56 @@ func TestAuthURLRejectsEmptyClient(t *testing.T) {
 		t.Errorf("empty redirect URL = %q, want empty", got)
 	}
 }
+
+// Displayed scopes and granted scopes must correspond: the app shows
+// ScopesFor at connect time, but Google enforces GoogleScopes. A widening
+// that updates one table without the other ships a consent screen that
+// misstates the grant (or a grant the UI never disclosed).
+func TestDisplayScopesMatchGrantedScopes(t *testing.T) {
+	// gmail.read displayed => readonly granted; gmail.draft displayed =>
+	// compose granted (draft-only: create drafts, never send).
+	has := func(hay []string, needle string) bool {
+		for _, s := range hay {
+			if s == needle {
+				return true
+			}
+		}
+		return false
+	}
+	granted := map[string][]string{}
+	for _, id := range []string{Gmail, Calendar, Drive} {
+		granted[id] = GoogleScopes(id)
+		if len(granted[id]) == 0 {
+			t.Fatalf("%s has no granted scopes", id)
+		}
+	}
+	if !has(granted[Gmail], "https://www.googleapis.com/auth/gmail.readonly") ||
+		!has(granted[Gmail], "https://www.googleapis.com/auth/gmail.compose") {
+		t.Errorf("gmail grant = %v, want readonly+compose", granted[Gmail])
+	}
+	if !has(granted[Calendar], "https://www.googleapis.com/auth/calendar.readonly") {
+		t.Errorf("calendar grant = %v, want readonly", granted[Calendar])
+	}
+	if !has(granted[Drive], "https://www.googleapis.com/auth/drive.readonly") ||
+		!has(granted[Drive], "https://www.googleapis.com/auth/drive.file") {
+		t.Errorf("drive grant = %v, want readonly+file", granted[Drive])
+	}
+	// No full-access scopes anywhere in v1 (exact match — readonly and
+	// drive.file are the bounded ones).
+	tooBroad := map[string]bool{
+		"https://www.googleapis.com/auth/gmail.send":      true,
+		"https://www.googleapis.com/auth/gmail.modify":    true,
+		"https://www.googleapis.com/auth/gmail":           true,
+		"https://www.googleapis.com/auth/calendar":        true,
+		"https://www.googleapis.com/auth/calendar.events": true,
+		"https://www.googleapis.com/auth/drive":           true,
+		"https://www.googleapis.com/auth/drive.appdata":   true,
+	}
+	for id, scopes := range granted {
+		for _, s := range scopes {
+			if tooBroad[s] {
+				t.Errorf("%s grant %q is broader than v1 allows", id, s)
+			}
+		}
+	}
+}
