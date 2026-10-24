@@ -270,6 +270,15 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	// not the pre-read start — a slow Atlas read would otherwise backdate
 	// updatedAt by up to 5s on the one verb v1 actually serves.
 	now := time.Now().UnixMilli()
+	// Pending attempts die on every disconnect path, like the tokens: a
+	// browser completing an old consent after this disconnect must fail at
+	// ConsumeState, not silently reconnect without fresh intent. Runs on all
+	// paths (including the pure no-op below) and best-effort — a scrub
+	// failure is logged, never fatal, since the state rows carry their own
+	// TTL backstop.
+	if _, serr := s.states.DeleteMany(ctx, bson.D{{Key: "connector", Value: id}}); serr != nil {
+		s.logf("connectors: state scrub %s failed: %v", id, serr)
+	}
 	transition, preReadOK := disconnectTransition(probeErr, probe.Status)
 	// Idempotent no-op: already disconnected means updated_at is the last
 	// transition, not the last verb. Pure no-op (display fresh, error

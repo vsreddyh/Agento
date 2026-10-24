@@ -323,3 +323,24 @@ func TestConnectorsCallbackNeedsNoBearer(t *testing.T) {
 		t.Fatalf("bearerless list: %d, want 401 (%s)", rec2.Code, rec2.Body)
 	}
 }
+
+func TestConnectorsCallbackNoProfileOracle(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: connectors.NewMemoryStore(), ConnectorOAuth: cfg})
+	// Unknown profile + callback path answers the SAME 400 as a bad state
+	// on a known profile — no existence oracle for unauthenticated callers.
+	bad := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nope", "")
+	unknown := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/nosuchprofile/api/connectors/callback?code=x&state=nope", nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, r)
+		return rec
+	}()
+	if bad.Code != http.StatusBadRequest || unknown.Code != http.StatusBadRequest {
+		t.Fatalf("bad=%d unknown=%d, want 400/400 (%s) (%s)", bad.Code, unknown.Code, bad.Body, unknown.Body)
+	}
+	if bad.Body.String() != unknown.Body.String() {
+		t.Fatalf("oracle: bodies differ:\n%s\n%s", bad.Body, unknown.Body)
+	}
+}
