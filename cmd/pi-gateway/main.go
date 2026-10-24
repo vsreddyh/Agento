@@ -414,10 +414,14 @@ func run() error {
 		store.Logf = logger.Printf
 		// The states TTL: pending OAuth attempts reap themselves. Kept
 		// explicit (not a no-op): without this index consumed-but-unread
-		// rows would linger past their window.
+		// rows would linger past their window. A failure here is loud on
+		// purpose — without the TTL, abandoned states accumulate with no
+		// sweeper (memory relies on the CreateState opportunistic sweep,
+		// Mongo relies on THIS index), so triage must hear about it at
+		// every startup, not once in a scrolled-past line.
 		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
 		if err := store.EnsureIndexes(indexCtx); err != nil {
-			logger.Printf("connectors: index setup failed: %v", err)
+			logger.Printf("connectors: WARNING index setup failed, oauth states will not reap: %v", err)
 		}
 		cancelIndex()
 	}
