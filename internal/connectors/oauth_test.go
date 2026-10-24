@@ -105,3 +105,21 @@ func TestOAuthConfigRejectsUserinfo(t *testing.T) {
 		t.Fatal("userinfo in redirect URL should fail")
 	}
 }
+
+// The validated shape and the sent shape must be the same string: Google
+// exact-matches redirect_uri, so a stored trailing slash against a
+// no-slash registration (or vice versa) dies with redirect_uri_mismatch.
+func TestOAuthConfigCanonicalisesRedirect(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host:8080/p/api/connectors/callback/")
+	cfg, err := OAuthConfigFromEnv()
+	if err != nil {
+		t.Fatalf("valid redirect rejected: %v", err)
+	}
+	if want := "https://host:8080/p/api/connectors/callback"; cfg.RedirectURL != want {
+		t.Fatalf("RedirectURL = %q, want canonical %q", cfg.RedirectURL, want)
+	}
+}

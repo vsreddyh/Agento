@@ -443,7 +443,7 @@ func run() error {
 			// compare byte-for-byte against the Cloud console registration.
 			// A mismatch dies in the browser (redirect_uri_mismatch), not
 			// here, so this line is the triage pointer.
-			logger.Printf("connectors: OAuth configured for gmail, calendar, drive (callback %s)", cfg.RedirectURL)
+			logger.Printf("connectors: OAuth configured for gmail, calendar (callback %s)", cfg.RedirectURL)
 		}
 	} else {
 		logger.Printf("connectors: OAuth unavailable (no durable store); connect answers 501")

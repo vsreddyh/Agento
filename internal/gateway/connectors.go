@@ -18,7 +18,7 @@ import (
 // connector id, no profile split. The app sees status + scopes only —
 // refresh tokens live server-side in Mongo, sealed, and never appear here.
 //
-//	GET  /api/connectors              list the three v1 rows (disconnected
+//	GET  /api/connectors              list the two v1 rows (disconnected
 //	                                 synthesised on fresh deploys)
 //	POST /api/connectors/{id}/disconnect   stop future access (tokens + all
 //	                                 pending states cleared server-side)
@@ -138,7 +138,7 @@ func storeTimeoutOrGone(w http.ResponseWriter, s *Server, ctx context.Context, e
 }
 
 // serveConnectorsList answers GET /api/connectors (and the trailing-slash
-// alias): the three v1 rows, disconnected synthesised on fresh deploys.
+// alias): the two v1 rows, disconnected synthesised on fresh deploys.
 // One helper so the two spellings cannot drift apart.
 func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet, "/api/connectors") {
@@ -165,6 +165,24 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 // profile branch left to mirror.)
 const callbackStateReject = "that connect attempt expired or was already used; start over from connect"
 
+// callbackDeadAttempt answers a dead OAuth attempt (unknown, consumed, or
+// expired state) with the same 400 meaning as every other failure on this
+// unauthenticated path — one string, never an oracle on id validity. A
+// browser tab gets the close-this-tab page (the operator just consented
+// and needs guidance, not JSON); API clients get the existing JSON shape
+// unchanged. no-store is already set at the top of the handler.
+func callbackDeadAttempt(w http.ResponseWriter, r *http.Request) {
+	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connect expired</title></head>` +
+			`<body><p>This connect attempt expired or was already used. Close this tab and tap connect again in the Agento app.</p></body></html>`))
+		return
+	}
+	apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+		callbackStateReject)
+}
+
 // handleConnectors serves /api/connectors. Global like approvals, not
 // per-profile like memory.
 //
@@ -187,7 +205,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			"unknown path "+bounded(approvals.ScrubError(rest)))
 		return
 	}
-	// Single callback for all three connectors: Google requires the EXACT
+	// Single callback for both connectors: Google requires the EXACT
 	// registered redirect URI, so one stable spelling (rather than one per
 	// connector id) means one URI to register. The connector travels inside
 	// the signed-by-opaque state row, not the path — the handler resolves it
@@ -306,6 +324,10 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 // foundation: the request is fine, the server side isn't built, and the app
 // must never fall back to asking for a secret in chat.
 func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, id string) {
+	// First line, before every branch — same ordering trap as the
+	// callback: the success answer carries the capability (auth_url), and
+	// a future branch must not miss the header.
+	w.Header().Set("Cache-Control", "no-store")
 	if s.cfg.ConnectorOAuth == nil {
 		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
 			"connect for "+bounded(approvals.ScrubError(id))+" is not configured on this server yet — never paste a token in chat")
@@ -326,8 +348,8 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	// Capability-bearing response (auth_url completes the grant): never
-	// heuristically cacheable by proxy or browser.
-	w.Header().Set("Cache-Control", "no-store")
+	// heuristically cacheable by proxy or browser. Header set at the top
+	// of this handler so every branch carries it.
 	// Persist first, build the URL second: a down store fails fast with no
 	// dead attempt minted, and the empty-auth_url guard below stays the
 	// only post-store branch.
@@ -417,32 +439,45 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			s.cfg.Logf("connectors: callback aborted, client gone: %v", ctx.Err())
 			return
 		}
-		// Unknown, consumed, or expired: same answer, "try connect again".
-		// The store already refuses to distinguish; the gateway must not
-		// add an oracle on top by varying the message. Upstream store
-		// failures are the exception: those 502 via the domain mapper
-		// (transient, retryable) instead of burning the user's live state
-		// with a "start over" that would supersede it.
+		// Unknown, consumed, or expired: same dead-attempt answer, "try
+		// connect again". The store already refuses to distinguish; the
+		// gateway must not add an oracle on top by varying the message.
+		// Upstream store failures are the exception: those 502 via the
+		// domain mapper (transient, retryable) instead of burning the
+		// user's live state with a "start over" that would supersede it.
+		// Browser tabs get the close-this-tab page, API clients the JSON
+		// shape — same 400 meaning either way.
 		var se *connectors.StoreError
 		if errors.As(err, &se) && se.Upstream {
 			connectorsError(w, err)
 			return
 		}
-		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
-			callbackStateReject)
+		callbackDeadAttempt(w, r)
 		return
 	}
 	id := st.Connector
 	tok, err := connectors.Exchange(ctx, s.cfg.ConnectorOAuth, id, code, st.Verifier, s.cfg.Logf)
 	if err != nil {
+		// Same timeout/client-gone split as ConsumeState above: a
+		// deadline mid-exchange answers 502 with the timeout wording, a
+		// gone browser logs without writing to a dead conn. Only then
+		// the domain map below.
+		if ctx.Err() == context.DeadlineExceeded {
+			apiError(w, http.StatusBadGateway, "upstream_error", "",
+				"the connector store did not answer in time")
+			return
+		}
+		if ctx.Err() != nil {
+			s.cfg.Logf("connectors: callback aborted, client gone: %v", ctx.Err())
+			return
+		}
 		var se *connectors.StoreError
 		if errors.As(err, &se) && se.NotFound {
 			// Unknown connector id inside a consumed state (hand-inserted
 			// row — CreateState rejects unknown ids, so no live flow gets
 			// here): same dead-attempt 400 as every other failure on this
 			// unauthenticated path, never a 404 oracle on id validity.
-			apiError(w, http.StatusBadRequest, "invalid_request_error", "",
-				callbackStateReject)
+			callbackDeadAttempt(w, r)
 			return
 		}
 		connectorsError(w, err)

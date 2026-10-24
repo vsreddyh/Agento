@@ -1,11 +1,10 @@
 // Package connectors is the first-connectors foundation behind #316.
 //
-// v1 covers three connectors only: Gmail (search/read + draft), Calendar
-// (list/upcoming + draft event) and Drive (read/list + save agent-produced
-// file). Each connects/disconnects independently from the app, with explicit
-// read vs draft/write scopes. Disconnect stops future access; already-fetched
-// copies already in chat history or saved files are not retroactively
-// deleted (cf. Dots delete-the-Dot semantics: stopping the tap, not wiping
+// v1 covers two connectors only: Gmail (search/read + draft) and Calendar
+// (list/upcoming + draft event). Each connects/disconnects independently
+// from the app, with explicit read vs draft/write scopes.
+// Disconnect stops future access; already-fetched copies already in chat
+// history are not retroactively deleted (cf. Dots delete-the-Dot semantics: stopping the tap, not wiping
 // history).
 //
 // Token placement (acceptance: docs state it): OAuth refresh tokens live
@@ -25,20 +24,19 @@ import (
 )
 
 // Collection holds one document per connector id. Fixed ids, so the table
-// has at most three rows — no TTL, no per-profile split (connectors are
+// has at most two rows — no TTL, no per-profile split (connectors are
 // deployment-wide like approvals, unlike memory/teach).
 const Collection = "connectors"
 
-// Known connector ids (v1 scope: these three, nothing else).
+// Known connector ids (v1 scope: these two, nothing else).
 const (
 	Gmail    = "gmail"
 	Calendar = "calendar"
-	Drive    = "drive"
 )
 
 // listIDs is the fixed v1 set, in display order. Unexported so no importer
 // can mutate the API shape: ListIDs() returns a fresh copy on every call.
-var listIDs = [3]string{Gmail, Calendar, Drive}
+var listIDs = [2]string{Gmail, Calendar}
 
 // ListIDs returns the fixed v1 connector ids in display order. A copy, so
 // callers cannot mutate the package set.
@@ -54,8 +52,6 @@ func DisplayName(id string) string {
 		return "Gmail"
 	case Calendar:
 		return "Calendar"
-	case Drive:
-		return "Drive"
 	default:
 		return id
 	}
@@ -70,8 +66,6 @@ func ScopesFor(id string) []string {
 		return []string{"gmail.read", "gmail.draft"}
 	case Calendar:
 		return []string{"calendar.read", "calendar.draft"}
-	case Drive:
-		return []string{"drive.read", "drive.write"}
 	default:
 		return nil
 	}
@@ -80,7 +74,7 @@ func ScopesFor(id string) []string {
 // Known reports whether id is a v1 connector.
 func Known(id string) bool {
 	switch id {
-	case Gmail, Calendar, Drive:
+	case Gmail, Calendar:
 		return true
 	}
 	return false
