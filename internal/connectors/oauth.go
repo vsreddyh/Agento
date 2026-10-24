@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -98,6 +99,19 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	if clientID == "" || clientSecret == "" || redirectURL == "" {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URL must all be set for OAuth")
 	}
+	// Fail closed on a misregistered redirect: Google matches the callback
+	// URL exactly, so a typo'd host/port/scheme or a missing
+	// /api/connectors/callback suffix dies in the *browser* with
+	// redirect_uri_mismatch and nothing in the server log pointing at it.
+	// Validate the shape here; the operator compares the logged value
+	// against the Cloud console registration.
+	parsed, err := url.Parse(redirectURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL must be an absolute http(s) URL")
+	}
+	if !strings.HasSuffix(parsed.Path, "/api/connectors/callback") {
+		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL path must end in /api/connectors/callback (the single registered endpoint)")
+	}
 	key, err := KeyFromEnv()
 	if err != nil {
 		return nil, err
@@ -158,12 +172,14 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	if cfg == nil {
 		return ""
 	}
-	// Folded like every store verb — and unknown ids fail closed here too:
-	// GoogleScopes(nil) would build a scope-less consent URL that still
-	// exchanges, so refuse before building rather than relying solely on
-	// the gateway guard.
+	// Folded like every store verb — and unknown or empty inputs fail
+	// closed here: an empty state/verifier would mint a consent URL that
+	// can only die later at ConsumeState, after the user completed
+	// consent. The gateway mints via NewState, so this guards direct
+	// callers (same exported-helper class as the CreateState verifier
+	// check).
 	id = NormalizedID(id)
-	if !Known(id) {
+	if !Known(id) || strings.TrimSpace(state) == "" || strings.TrimSpace(verifier) == "" {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(verifier))
