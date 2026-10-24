@@ -14,7 +14,10 @@ import (
 // Envelope encryption for OAuth tokens (ADR-0009: field-level envelope is
 // REQUIRED before the first token write — Atlas at-rest alone is not the
 // cover story). AES-256-GCM with a random 96-bit nonce per value; the wire
-// shape is base64(nonce || ciphertext).
+// shape is base64url(nonce || ciphertext) — RawURLEncoding everywhere, same
+// as states and PKCE values, so no decoder ever has to guess and a future
+// log/debug surface can't break on +/=. (No live rows exist from before
+// this encoding, so there is nothing to migrate.)
 //
 // The key lives in CONNECTORS_ENCRYPTION_KEY (64 hex chars = 32 bytes,
 // generated with `openssl rand -hex 32`), server-side only, same secrecy as
@@ -70,7 +73,7 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 		return "", err
 	}
 	sealed := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-	return base64.StdEncoding.EncodeToString(sealed), nil
+	return base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
 // DecryptToken opens one EncryptToken value. Any tamper, truncation, or
@@ -80,7 +83,7 @@ func DecryptToken(key [32]byte, sealed string) (string, error) {
 	if key == ([32]byte{}) {
 		return "", errors.New("connectors: refusing to open a token under a zero key")
 	}
-	raw, err := base64.StdEncoding.DecodeString(sealed)
+	raw, err := base64.RawURLEncoding.DecodeString(sealed)
 	if err != nil {
 		return "", errors.New("connectors: token is not valid base64")
 	}

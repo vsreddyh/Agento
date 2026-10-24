@@ -981,3 +981,32 @@ func TestDisplayScopesMatchGrantedScopes(t *testing.T) {
 		}
 	}
 }
+
+// No-op disconnect on an already-disconnected row still clears tokens: a
+// corrupt row (status says off, grant says on) must not keep serving after
+// a verb that promises "no future access".
+func TestDisconnectNoOpClearsTokens(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if _, err := s.SetStatus(ctx, "gmail", StatusDisconnected, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTokens(ctx, "gmail"); err == nil {
+		t.Fatal("grant survived no-op disconnect")
+	}
+}
+
+// AuthURL with an overlong state fails closed instead of minting a URL
+// Google would 414.
+func TestAuthURLRejectsOversizedState(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", strings.Repeat("s", MaxStateFieldLen+1), "v"); got != "" {
+		t.Errorf("oversized state URL = %q, want empty", got[:60])
+	}
+}

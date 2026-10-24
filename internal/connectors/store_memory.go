@@ -242,7 +242,6 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	// Tokens die on every disconnect path — including the pure no-op below.
 	// Disconnect means "no future access", and a stored grant on a
 	// disconnected row (hand-edit, bug) must not survive it. Same $unset
@@ -265,15 +264,20 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	// transition), still success — so a scope change lands and a corrupt
 	// error clears even on rows that never transition again. Pure no-op when
 	// there is nothing to heal: no store touch at all.
-	if ok && c.Status == StatusDisconnected &&
-		displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, "") {
-		return backfillDisplay(c, id), nil
-	}
-	if ok && c.Status == StatusDisconnected {
+	//
+	// backfillDisplay runs AFTER the unlock below (scrub regexes must not
+	// run under the write lock — same copy-out pattern as List).
+	unchanged := ok && c.Status == StatusDisconnected &&
+		displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, "")
+	repair := ok && c.Status == StatusDisconnected && !unchanged
+	if repair {
 		c.DisplayName = DisplayName(id)
 		c.Scopes = ScopesFor(id)
 		c.LastError = ""
 		s.rows[id] = c
+	}
+	s.mu.Unlock()
+	if unchanged || repair {
 		return backfillDisplay(c, id), nil
 	}
 	c.DisplayName = DisplayName(id)
@@ -283,7 +287,9 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	c.UpdatedAt = time.Now().UnixMilli()
 	// Token columns cleared at the top of this function (all paths),
 	// mirroring the Mongo $unset — see above.
+	s.mu.Lock()
 	s.rows[id] = c
+	s.mu.Unlock()
 	return backfillDisplay(c, id), nil
 }
 

@@ -577,21 +577,24 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	if tok.AccessCipher != "" && strings.TrimSpace(tok.AccessCipher) == "" {
 		return NewStoreError("connector grant access token is blank", false)
 	}
+	// Display defaults on insert only: a token write must never invent
+	// status (backfill synthesises disconnected for a status-less doc
+	// on read), and without these a crash between SetTokens and
+	// SetStatus would leave a display-less row. updatedAt rides along so
+	// the crash-window row reads as explicit-off (something happened here)
+	// rather than never-touched. Reads project only the display shape, so
+	// these columns are inert until the transition write lands the real row.
+	now := time.Now().UnixMilli()
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}}, bson.D{
 		{Key: "$set", Value: bson.D{
 			{Key: refreshTokenField, Value: tok.RefreshCipher},
 			{Key: accessTokenField, Value: tok.AccessCipher},
 			{Key: "accessExpiry", Value: tok.AccessExpiryUnixMilli},
 		}},
-		// Display defaults on insert only: a token write must never invent
-		// status (backfill synthesises disconnected for a status-less doc
-		// on read), and without these a crash between SetTokens and
-		// SetStatus would leave a display-less row. Reads project only the
-		// display shape, so these columns are inert until the transition
-		// write lands the real row.
 		{Key: "$setOnInsert", Value: bson.D{
 			{Key: "displayName", Value: DisplayName(id)},
 			{Key: "scopes", Value: ScopesFor(id)},
+			{Key: "updatedAt", Value: now},
 		}},
 	}, options.Update().SetUpsert(true))
 	if err != nil {
