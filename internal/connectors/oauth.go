@@ -149,14 +149,15 @@ func NewState() (state, verifier string, err error) {
 // and a reconnect that yields no refresh token would silently downgrade the
 // row to access-token-only with no renewal path.
 //
-// Caller must Known-check the id and non-nil-check cfg first: unknown ids
-// yield a scope-less URL the token endpoint would still answer. The gateway
-// route, CreateState, and Exchange all check; this helper trusts its caller
-// by contract so the check lives in exactly the layers that own the
-// failure modes. (Same contract as Exchange below, which also assumes
-// non-nil cfg — the gateway's ConnectorOAuth nil-check is the enforcement
-// point for both.)
+// Caller must Known-check the id first: unknown ids yield a scope-less URL
+// the token endpoint would still answer. A nil cfg fails closed with "" —
+// cheaper than a panic in a server process. The gateway route, CreateState,
+// and Exchange all check; this helper trusts its caller by contract so the
+// check lives in exactly the layers that own the failure modes.
 func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
+	if cfg == nil {
+		return ""
+	}
 	sum := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
 	return cfg.oauth2(GoogleScopes(id)).AuthCodeURL(state,
