@@ -360,3 +360,41 @@ func TestConnectorsCallbackRejectsOversizedInput(t *testing.T) {
 		t.Fatalf("oversized should use the dead-attempt message: %s", rec.Body)
 	}
 }
+
+func TestConnectorsCallbackWhitespaceAccessStaysEmpty(t *testing.T) {
+	// A whitespace-only access token must land as literal "", not a sealed
+	// blob — same missing-value contract as the empty case.
+	var key [32]byte
+	copy(key[:], "test-envelope-key-0123456789ab")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"   ","refresh_token":"r123","expires_in":3600,"token_type":"Bearer"}`))
+	}))
+	defer srv.Close()
+	cfg := &connectors.OAuthConfig{
+		ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb",
+		Key: key, AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t",
+	}
+	store := connectors.NewMemoryStore()
+	gsrv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	rec := do(t, gsrv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	u, err := url.Parse(decodeBody(t, rec)["auth_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = do(t, gsrv, http.MethodGet, "/api/connectors/callback?code=x&state="+u.Query().Get("state"), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("callback: %d %s", rec.Code, rec.Body)
+	}
+	got, err := store.GetTokens(context.Background(), "gmail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AccessCipher != "" {
+		t.Errorf("whitespace access token was sealed: %q", got.AccessCipher)
+	}
+	c, err := store.Get(context.Background(), "gmail")
+	if err != nil || c.Status != connectors.StatusConnected {
+		t.Fatalf("status = %+v, %v", c, err)
+	}
+}

@@ -181,23 +181,32 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// code assigned c.Status first, so every same-error flip early-returned
 	// a mutated-but-unpersisted copy (caller saw the new status, the store
 	// kept the old). Three tiers like Mongo: pure no-op (display fresh,
-	// error matches — no store touch), repair-only (display/error refresh,
-	// no updated_at bump), full transition write. A missing doc always
-	// takes the full write.
+	// error matches, no grant to clear — no store touch), repair-only
+	// (display/error refresh, no updated_at bump), full transition write.
+	// A missing doc always takes the full write.
 	// updated_at means last STATUS transition, not last failure reason: an
 	// expired error-text change (aged out → revoked) heals the text without
 	// moving the timestamp — triage reads failure recency from last_error
 	// content, not from updated_at.
-	if ok && c.Status == st && displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, wantErr) {
+	hasGrant := func() bool {
+		tok, ok := s.tokens[id]
+		return ok && strings.TrimSpace(tok.RefreshCipher) != ""
+	}
+	if ok && c.Status == st && displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, wantErr) &&
+		(st != StatusDisconnected || !hasGrant()) {
 		return backfillDisplay(c, id), nil
 	}
 	if ok && c.Status == st {
 		// Repair-only: heal display + error text, leave every timestamp
 		// (and, for connected, the stamp) exactly where the last
-		// transition put it.
+		// transition put it. Tokens die here too on the disconnecting
+		// path — same $unset the Mongo repair carries.
 		c.DisplayName = DisplayName(id)
 		c.Scopes = ScopesFor(id)
 		c.LastError = wantErr
+		if st == StatusDisconnected {
+			delete(s.tokens, id)
+		}
 		s.rows[id] = c
 		return backfillDisplay(c, id), nil
 	}
@@ -211,6 +220,13 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	c.Status = st
 	c.LastError = wantErr
 	c.UpdatedAt = now
+	// Tokens die on the disconnecting path here too, not just in
+	// Disconnect: SetStatus(disconnected) is the belt-and-braces off-ramp,
+	// and leaving a grant behind would keep serving access the audit calls
+	// disconnected.
+	if st == StatusDisconnected {
+		delete(s.tokens, id)
+	}
 	// First-ever connect, shared with Mongo via resolveConnectedAt (same
 	// helper, same semantic on both backends).
 	if st == StatusConnected {
@@ -363,6 +379,11 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 // states are the same NotFound: expiry is lazy (no sweeper at 3 rows/hour),
 // and the caller message is "try connect again" either way.
 func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState, error) {
+	// Length-gated like the gateway: oversized input answers the same
+	// NotFound as unknown, never reaching the map.
+	if len(state) > MaxStateFieldLen {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, ok := s.states[state]

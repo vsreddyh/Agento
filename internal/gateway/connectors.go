@@ -365,12 +365,14 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			"callback needs ?code= and ?state=; start over from connect")
 		return
 	}
-	// Length-gated before the store/Google calls: states are ~22-char
-	// base64url, codes a few hundred chars in practice. A multi-MB value
-	// would become an oversized DB filter / outbound token request. Same
-	// 400 shape as every other callback failure, so no oracle is added.
-	const maxCallbackFieldLen = 2048
-	if len(code) > maxCallbackFieldLen || len(state) > maxCallbackFieldLen {
+	// Length-gated before the store/Google calls (shared
+	// connectors.MaxStateFieldLen — the store enforces the same bound, so
+	// the gateway cap is the fast path, not the only enforcement): states
+	// are ~22-char base64url, codes a few hundred chars in practice. A
+	// multi-MB value would become an oversized DB filter / outbound token
+	// request. Same 400 shape as every other callback failure, so no
+	// oracle is added.
+	if len(code) > connectors.MaxStateFieldLen || len(state) > connectors.MaxStateFieldLen {
 		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
 			callbackStateReject)
 		return
@@ -403,6 +405,9 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	cfg := s.cfg.ConnectorOAuth
 	refreshSealed, err := connectors.EncryptToken(cfg.Key, tok.RefreshToken)
 	if err != nil {
+		// Logged, not answered in detail: seal failures are server-side
+		// (rand, zero key) and carry nothing the client can act on.
+		s.cfg.Logf("connectors: token seal failed for %s: %v", id, err)
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not store the grant")
 		return
@@ -414,6 +419,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	if strings.TrimSpace(tok.AccessToken) != "" {
 		accessSealed, err = connectors.EncryptToken(cfg.Key, tok.AccessToken)
 		if err != nil {
+			s.cfg.Logf("connectors: token seal failed for %s: %v", id, err)
 			apiError(w, http.StatusBadGateway, "upstream_error", "",
 				"could not store the grant")
 			return

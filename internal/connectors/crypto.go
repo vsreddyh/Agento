@@ -54,7 +54,7 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 	if key == ([32]byte{}) {
 		return "", errors.New("connectors: refusing to seal a token under a zero key")
 	}
-	if plaintext == "" {
+	if strings.TrimSpace(plaintext) == "" {
 		return "", errors.New("connectors: refusing to seal an empty token; pass through empty instead")
 	}
 	block, err := aes.NewCipher(key[:])
