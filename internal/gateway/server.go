@@ -542,6 +542,13 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// take the identical path through handleConnectorCallback, including
 	// method, param-presence, and unconfigured checks. There is no branch
 	// left to distinguish them on.
+	//
+	// Residual, accepted signal: unconfigured + callback answers 501 while
+	// configured answers 400/405 on the same path — config existence is
+	// visible without a bearer. Low-value (any authenticated connect call
+	// reveals it anyway), so documented as intentional rather than
+	// mirrored: lying with a 400 here would misdirect triage about server
+	// setup.
 	if rest == "api/connectors/callback" {
 		s.handleConnectors(w, r, rest)
 		return

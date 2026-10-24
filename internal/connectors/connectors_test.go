@@ -748,3 +748,38 @@ func TestConsumeStateBoundaryTick(t *testing.T) {
 		t.Fatalf("expiresAt 1ns out should be live: %v", err)
 	}
 }
+
+// Folding matches every store verb: padded/cased ids work the same in
+// Exchange, AuthURL, and the stores — same logical id, same answer.
+func TestOAuthHelpersFoldIDs(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	u := AuthURL(cfg, " GMail ", "s", "v")
+	if !strings.Contains(u, "gmail.readonly") {
+		t.Errorf("unfolded id lost scopes:\n%s", u)
+	}
+	if _, err := Exchange(context.Background(), cfg, " GMail ", "code", "v", nil); err == nil {
+		t.Fatal("expected exchange attempt (folded id must pass the Known check to reach HTTP)")
+	} else if se, ok := err.(*StoreError); ok && se.NotFound {
+		t.Fatal("folded id should not 404 as unknown")
+	}
+}
+
+// Same state string twice is a caller bug: 400, not silent overwrite.
+func TestCreateStateDuplicateFails(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	st := OAuthState{State: "dup", Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}
+	if err := s.CreateState(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateState(ctx, st); err == nil {
+		t.Fatal("duplicate state should fail")
+	}
+	// ...but a *new* state for the same connector supersedes the old one.
+	if err := s.CreateState(ctx, OAuthState{State: "dup2", Connector: "gmail", Verifier: "v2", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeState(ctx, "dup"); err == nil {
+		t.Fatal("superseded state should be gone")
+	}
+}
