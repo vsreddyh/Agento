@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -22,16 +21,12 @@ func TestExchangeAgainstStub(t *testing.T) {
 		if r.Form.Get("code_verifier") == "" {
 			t.Error("missing PKCE verifier")
 		}
-		refresh := `"refresh_token": "r123"`
-		if strings.Contains(r.URL.RawQuery, "no-refresh") {
-			refresh = ""
-		} else if r.Form.Get("code") == "no-refresh" {
-			refresh = ""
-		}
 		w.Header().Set("Content-Type", "application/json")
 		body := `"access_token": "a123", "expires_in": 3600, "token_type": "Bearer"`
-		if refresh != "" {
-			body += ", " + refresh
+		// Refresh keyed off the code, not the query string: this is a POST
+		// form endpoint, so RawQuery never carries it.
+		if r.Form.Get("code") != "no-refresh" {
+			body += `, "refresh_token": "r123"`
 		}
 		fmt.Fprintf(w, "{%s}", body)
 	}))

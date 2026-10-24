@@ -267,13 +267,19 @@ func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) 
 	return tok, nil
 }
 
-// CreateState records a pending OAuth attempt.
+// CreateState records a pending OAuth attempt. Zero ExpiresAt defaults to
+// now+StateTTL like the Mongo backend (TTL index) — callers pass an
+// explicit expiry only for tests; without this, a forgotten expiry field
+// would mint an immortal row in a store with no sweeper.
 func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	if strings.TrimSpace(st.State) == "" {
 		return NewStoreError("oauth state needs an id", false)
 	}
 	if !Known(st.Connector) {
 		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
+	}
+	if st.ExpiresAt.IsZero() {
+		st.ExpiresAt = time.Now().Add(StateTTL)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

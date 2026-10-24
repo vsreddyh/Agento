@@ -528,12 +528,20 @@ func (s *Server) splitProfile(urlPath string) (profile, rest string) {
 func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	profile, rest := s.splitProfile(r.URL.Path)
 
-	// Every route except healthz sits behind the bearer token.
-	if err := s.authenticate(r); err != nil {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="agento"`)
-		apiError(w, http.StatusUnauthorized, "authentication_error", "",
-			"missing or invalid Authorization bearer token")
-		return
+	// Every route except healthz sits behind the bearer token — with one
+	// exception: the Google OAuth callback. A Google-redirected browser GET
+	// carries no Authorization header (the proxy injects nothing), and the
+	// state query param is itself the 128-bit single-use 10-minute
+	// capability. Unknown/consumed/expired states answer identically, and
+	// the handler leaks no codes, verifiers, or tokens, so no bearer is
+	// needed to knock. Everything else stays gated.
+	if rest != "api/connectors/callback" {
+		if err := s.authenticate(r); err != nil {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="agento"`)
+			apiError(w, http.StatusUnauthorized, "authentication_error", "",
+				"missing or invalid Authorization bearer token")
+			return
+		}
 	}
 
 	handler, ok := s.handlers[profile]
