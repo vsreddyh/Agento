@@ -74,6 +74,7 @@ func TestOAuthConfigValidatesRedirect(t *testing.T) {
 	}{
 		{"good", "https://host:8080/p/api/connectors/callback", true},
 		{"http ok", "http://localhost:8643/api/connectors/callback", true},
+		{"trailing slash ok", "https://host:8080/p/api/connectors/callback/", true},
 		{"wrong suffix", "https://host/p/api/connectors/gmail/callback", false},
 		{"no scheme", "host/api/connectors/callback", false},
 		{"ftp", "ftp://host/api/connectors/callback", false},

@@ -866,3 +866,26 @@ func TestSetStatusDisconnectedClearsTokens(t *testing.T) {
 		t.Fatal("grant survived SetStatus(disconnected)")
 	}
 }
+
+// Padded inputs normalise instead of failing: the callback trims query
+// params, so stored/built values must match the trimmed form.
+func TestAuthURLTrimsInputs(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	got := AuthURL(cfg, " GMail ", " s ", " v ")
+	if got == "" {
+		t.Fatal("padded known id should build")
+	}
+	if !strings.Contains(got, "state=s&") && !strings.Contains(got, "state=s") {
+		t.Errorf("state not trimmed in URL:\n%s", got)
+	}
+}
+
+// Whitespace-only access cipher is rejected like whitespace refresh: one
+// missing representation (""), enforced at the store.
+func TestSetTokensRejectsWhitespaceAccess(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "   "}); err == nil {
+		t.Fatal("whitespace access cipher should fail")
+	}
+}

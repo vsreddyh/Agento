@@ -104,12 +104,15 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	// /api/connectors/callback suffix dies in the *browser* with
 	// redirect_uri_mismatch and nothing in the server log pointing at it.
 	// Validate the shape here; the operator compares the logged value
-	// against the Cloud console registration.
+	// against the Cloud console registration. Trailing slashes are trimmed
+	// first: splitProfile Cleans the path server-side, so .../callback/
+	// would serve fine — rejecting it here would 501 a working config
+	// over punctuation.
 	parsed, err := url.Parse(redirectURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL must be an absolute http(s) URL")
 	}
-	if !strings.HasSuffix(parsed.Path, "/api/connectors/callback") {
+	if !strings.HasSuffix(strings.TrimSuffix(parsed.Path, "/"), "/api/connectors/callback") {
 		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL path must end in /api/connectors/callback (the single registered endpoint)")
 	}
 	key, err := KeyFromEnv()
@@ -182,14 +185,17 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	if cfg == nil {
 		return ""
 	}
-	// Folded like every store verb — and unknown or empty inputs fail
-	// closed here: an empty state/verifier would mint a consent URL that
-	// can only die later at ConsumeState, after the user completed
-	// consent. The gateway mints via NewState, so this guards direct
-	// callers (same exported-helper class as the CreateState verifier
-	// check).
+	// Folded and trimmed like every store verb — and unknown, empty, or
+	// padded inputs fail closed or normalise here: an empty state/verifier
+	// would mint a consent URL that can only die later at ConsumeState,
+	// after the user completed consent, and padded values would mint a
+	// challenge the trimmed callback lookup can never reproduce. The
+	// gateway mints via NewState, so this guards direct callers (same
+	// exported-helper class as the CreateState verifier check).
 	id = NormalizedID(id)
-	if !Known(id) || strings.TrimSpace(state) == "" || strings.TrimSpace(verifier) == "" {
+	state = strings.TrimSpace(state)
+	verifier = strings.TrimSpace(verifier)
+	if !Known(id) || state == "" || verifier == "" {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(verifier))
@@ -213,6 +219,13 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, logf func(string, ...any)) (*oauth2.Token, error) {
 	if cfg == nil {
 		return nil, NewStoreError("oauth client is not configured", false)
+	}
+	// Bounded before the token endpoint: codes/verifiers are short by
+	// construction, and a multi-MB value would become an oversized
+	// outbound request. Deterministic input reject (400), not a flaky
+	// upstream — same shape as the missing-refresh branch below.
+	if len(code) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
+		return nil, NewStoreError("oauth code or verifier too long", false)
 	}
 	// Folded like AuthURL above and every store verb: same logical id,
 	// same answer, wherever the caller normalised.
