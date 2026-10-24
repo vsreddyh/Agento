@@ -158,10 +158,14 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	if cfg == nil {
 		return ""
 	}
-	// Folded like every store verb: SetTokens/GetTokens/CreateState/
-	// Disconnect all NormalizedID first, and an unfolded helper would
-	// 404/exchange-fail where the store succeeds for the same logical id.
+	// Folded like every store verb — and unknown ids fail closed here too:
+	// GoogleScopes(nil) would build a scope-less consent URL that still
+	// exchanges, so refuse before building rather than relying solely on
+	// the gateway guard.
 	id = NormalizedID(id)
+	if !Known(id) {
+		return ""
+	}
 	sum := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
 	return cfg.oauth2(GoogleScopes(id)).AuthCodeURL(state,
@@ -198,13 +202,15 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		}
 		return nil, NewStoreError("grant exchange failed", true)
 	}
-	if tok.RefreshToken == "" {
+	if strings.TrimSpace(tok.RefreshToken) == "" {
 		// No refresh token means no renewal path: storing this row as
 		// connected would strand it at the first access-token expiry.
 		// Fail the connect loudly instead of a slow-burn disconnect.
 		// Deterministic provider answer (not a flaky upstream), so 400 —
 		// retrying the same consumed code cannot change the outcome, and
 		// triage must read this as misconfigured consent, not an outage.
+		// Trimmed like SetTokens: same definition of "missing" on both
+		// sides of the store boundary.
 		return nil, NewStoreError("grant exchange returned no refresh token; reconnect and approve offline access", false)
 	}
 	return tok, nil
@@ -220,13 +226,15 @@ type TokenRow struct {
 	// one, so a stored grant always renews.
 	RefreshCipher string `bson:"refreshToken" json:"-"`
 	// AccessCipher is base64(nonce||ciphertext) of the short-lived access token.
-	// May be empty: the refresher tolerates a missing access token (first
-	// use, or an offline-only rotation) and renews from the refresh token.
-	// The refresh cipher above must never be empty — same rule the store
-	// enforces — or the row strands at the first access-token expiry.
+	// May be empty ("" literal, never a sealed empty — EncryptToken refuses
+	// those): the refresher treats empty as "renew now". The refresh cipher
+	// above must never be empty — same rule the store enforces — or the row
+	// strands at the first access-token expiry.
 	AccessCipher string `bson:"accessToken" json:"-"`
 	// AccessExpiryUnixMilli is when the access token stops working; the
-	// refresher renews before this, not after it fails.
+	// refresher renews before this, not after it fails. Zero means unknown
+	// (provider omitted expires_in) — treat as already expired (renew
+	// immediately), never as "never expires". Unknown is fail-closed.
 	AccessExpiryUnixMilli int64 `bson:"accessExpiry" json:"-"`
 }
 

@@ -791,3 +791,35 @@ func TestEncryptTokenRefusesEmpty(t *testing.T) {
 		t.Fatal("sealing empty token should fail")
 	}
 }
+
+// Unknown ids fail closed at the helper, not just the gateway.
+func TestAuthURLUnknownIDFailsClosed(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "slack", "s", "v"); got != "" {
+		t.Errorf("unknown id auth URL = %q, want empty", got)
+	}
+	if got := AuthURL(nil, "gmail", "s", "v"); got != "" {
+		t.Errorf("nil cfg auth URL = %q, want empty", got)
+	}
+}
+
+// Verifier-less attempts fail at creation, not after user consent.
+func TestCreateStateRejectsEmptyVerifier(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "nv", Connector: "gmail", Verifier: ""}); err == nil {
+		t.Fatal("empty verifier should fail")
+	}
+}
+
+// Durability contract: memory is not durable (OAuth stays off), Mongo is
+// (zero value still reports true — durability is a backend property, not
+// row state).
+func TestDurableContract(t *testing.T) {
+	if NewMemoryStore().Durable() {
+		t.Error("memory store must not be durable")
+	}
+	if !(&MongoStore{}).Durable() {
+		t.Error("mongo store must be durable")
+	}
+}
