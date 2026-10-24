@@ -414,7 +414,13 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	cfg := s.cfg.ConnectorOAuth
-	refreshSealed, err := connectors.EncryptToken(cfg.Key, tok.RefreshToken)
+	// Trimmed copies are what get sealed: a padded value would otherwise
+	// pass the non-empty checks and seal with padding the refresher cannot
+	// use (same class as the whitespace cases fixed earlier — check and
+	// stored bytes must be the same string).
+	refreshToken := strings.TrimSpace(tok.RefreshToken)
+	accessToken := strings.TrimSpace(tok.AccessToken)
+	refreshSealed, err := connectors.EncryptToken(cfg.Key, refreshToken)
 	if err != nil {
 		// Logged, not answered in detail: seal failures are server-side
 		// (rand, zero key) and carry nothing the client can act on.
@@ -427,8 +433,8 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// representation of "missing" that the refresher must also recognise.
 	// The TokenRow contract names literal "" as the missing form.
 	var accessSealed string
-	if strings.TrimSpace(tok.AccessToken) != "" {
-		accessSealed, err = connectors.EncryptToken(cfg.Key, tok.AccessToken)
+	if accessToken != "" {
+		accessSealed, err = connectors.EncryptToken(cfg.Key, accessToken)
 		if err != nil {
 			s.cfg.Logf("connectors: token seal failed for %s: %v", id, err)
 			apiError(w, http.StatusBadGateway, "upstream_error", "",
