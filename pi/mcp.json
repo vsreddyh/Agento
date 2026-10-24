@@ -31,6 +31,14 @@
     "browser": {
       "command": "/usr/local/bin/mcp-gate",
       "args": ["--server", "browser", "--", "/usr/local/bin/browser"]
+    },
+    "gmail": {
+      "command": "/usr/local/bin/mcp-gate",
+      "args": ["--server", "gmail", "--", "/usr/local/bin/gmail"]
+    },
+    "calendar": {
+      "command": "/usr/local/bin/mcp-gate",
+      "args": ["--server", "calendar", "--", "/usr/local/bin/calendar"]
     }
   }
 }

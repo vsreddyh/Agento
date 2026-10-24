@@ -99,7 +99,7 @@ services:
       #
       # Not waiting on pi's *health* is also the right behaviour independently: that
       # healthcheck is a real connectivity gate (its entrypoint refuses to start if
-      # any of the eight MCP servers will not connect), so a proxy gated on it would
+      # any of the ten MCP servers will not connect), so a proxy gated on it would
       # take health-api's /api/* routes down with it — and health sync has nothing
       # to do with the agent.
       - pi
@@ -242,7 +242,7 @@ services:
       timeout: 5s
       retries: 10
       # Generous: the entrypoint runs `pi mcp list` before handing off, which
-      # connects all eight MCP servers. A short start_period reports unhealthy while
+      # connects all ten MCP servers. A short start_period reports unhealthy while
       # that is still in progress.
       start_period: 60s
     restart: unless-stopped
