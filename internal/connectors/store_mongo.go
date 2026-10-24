@@ -581,6 +581,12 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	if tok.AccessCipher != "" && strings.TrimSpace(tok.AccessCipher) == "" {
 		return NewStoreError("connector grant access token is blank", false)
 	}
+	// Bounded like every other credential input: sealed tokens are a few
+	// hundred chars, so anything past the cap 400s before it becomes an
+	// unbounded Mongo doc (same bound as the memory backend).
+	if len(tok.RefreshCipher) > MaxStateFieldLen || len(tok.AccessCipher) > MaxStateFieldLen {
+		return NewStoreError("connector grant token too long", false)
+	}
 	// Display defaults on insert only: a token write must never invent
 	// status (backfill synthesises disconnected for a status-less doc
 	// on read), and without these a crash between SetTokens and

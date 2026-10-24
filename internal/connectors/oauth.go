@@ -46,9 +46,6 @@ const (
 //   - calendar: readonly. Draft events are agent-side objects (created
 //     locally, sent nowhere) until the approval-gate flow covers writes,
 //     so the grant carries no write bit at all.
-//   - drive: readonly + file. readonly covers list/read; file covers
-//     "files this app created" — the save-agent-produced-file path —
-//     without granting the whole Drive.
 //
 // Follow-up sync obligation (same class as IsDraftOnlySend): if a wired MCP
 // server needs a broader scope, BOTH this table and the tool policy move
@@ -63,11 +60,6 @@ func GoogleScopes(id string) []string {
 	case Calendar:
 		return []string{
 			"https://www.googleapis.com/auth/calendar.readonly",
-		}
-	case Drive:
-		return []string{
-			"https://www.googleapis.com/auth/drive.readonly",
-			"https://www.googleapis.com/auth/drive.file",
 		}
 	default:
 		return nil
@@ -128,6 +120,14 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	if !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/api/connectors/callback") {
 		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL path must end in /api/connectors/callback (the single registered endpoint)")
 	}
+	// Canonicalise: store the validated shape with no trailing slash, so
+	// the exact string the gateway sends as redirect_uri (and the operator
+	// compares in the startup log) is the string validated above. Query
+	// and fragment are already rejected, so trimming the string trims the
+	// path. Without this a .../callback/ config passes validation but
+	// Google exact-matches it against a no-slash registration (or vice
+	// versa) and dies with redirect_uri_mismatch in the browser.
+	redirectURL = strings.TrimRight(redirectURL, "/")
 	key, err := KeyFromEnv()
 	if err != nil {
 		return nil, err
@@ -176,7 +176,7 @@ func NewState() (state, verifier string, err error) {
 // MaxStateFieldLen bounds state/verifier/code inputs end to end. States are
 // 128-bit base64url (~22 chars); PKCE verifiers ~86; Google codes a few
 // hundred chars. Anything past 2048 is not a real credential — it is a
-// garbage or hostile input that must 404/400 before it becomes a DB filter
+// garbage or hostile input that must 400 before it becomes a DB filter
 // or an outbound token request. Enforced at the gateway (fast path) AND the
 // store (ConsumeState/CreateState): the store is exported for direct
 // callers (future MCP servers), so the gateway cap alone would leave the

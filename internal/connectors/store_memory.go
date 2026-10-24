@@ -315,6 +315,13 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	if tok.AccessCipher != "" && strings.TrimSpace(tok.AccessCipher) == "" {
 		return NewStoreError("connector grant access token is blank", false)
 	}
+	// Bounded like every other credential input (code/state/verifier): a
+	// sealed token is a few hundred chars, so anything past the cap is a
+	// garbage or hostile value that must 400 before it becomes an
+	// unbounded stored doc. Same bound the gateway enforces on the way in.
+	if len(tok.RefreshCipher) > MaxStateFieldLen || len(tok.AccessCipher) > MaxStateFieldLen {
+		return NewStoreError("connector grant token too long", false)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tokens[id] = tok

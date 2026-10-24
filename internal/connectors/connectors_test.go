@@ -22,8 +22,8 @@ func TestListSynthesisesDisconnected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 3 {
-		t.Fatalf("list = %d, want 3", len(list))
+	if len(list) != 2 {
+		t.Fatalf("list = %d, want 2", len(list))
 	}
 	for _, c := range list {
 		if c.Status != StatusDisconnected {
@@ -82,7 +82,7 @@ func TestDraftOnlySend(t *testing.T) {
 	}
 	for _, tc := range []struct{ server, tool string }{
 		{"gmail", "create_draft"}, {"gmail", "search_gmail"},
-		{"calendar", "create_event_draft"}, {"drive", "save_file"},
+		{"calendar", "create_event_draft"},
 		{"notes", "delete_note"},
 	} {
 		if IsDraftOnlySend(tc.server, tc.tool) {
@@ -208,8 +208,8 @@ func TestListIDsReturnsCopy(t *testing.T) {
 	if b := ListIDs(); b[0] == "mutated" {
 		t.Error("ListIDs mutation leaked into the package set")
 	}
-	if len(ListIDs()) != 3 {
-		t.Errorf("ListIDs = %v, want 3", ListIDs())
+	if len(ListIDs()) != 2 {
+		t.Errorf("ListIDs = %v, want 2", ListIDs())
 	}
 }
 
@@ -890,6 +890,20 @@ func TestSetTokensRejectsWhitespaceAccess(t *testing.T) {
 	}
 }
 
+// Oversized ciphers are a deterministic reject at the store, not an
+// unbounded stored doc — same bound as code/state/verifier.
+func TestSetTokensRejectsOversizedCipher(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	big := strings.Repeat("x", MaxStateFieldLen+1)
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: big}); err == nil {
+		t.Fatal("oversized refresh cipher should fail")
+	}
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: big}); err == nil {
+		t.Fatal("oversized access cipher should fail")
+	}
+}
+
 // Overlong state is a deterministic reject at the store, not a Mongo filter.
 func TestConsumeStateRejectsOversized(t *testing.T) {
 	s := NewMemoryStore()
@@ -945,7 +959,7 @@ func TestDisplayScopesMatchGrantedScopes(t *testing.T) {
 		return false
 	}
 	granted := map[string][]string{}
-	for _, id := range []string{Gmail, Calendar, Drive} {
+	for _, id := range []string{Gmail, Calendar} {
 		granted[id] = GoogleScopes(id)
 		if len(granted[id]) == 0 {
 			t.Fatalf("%s has no granted scopes", id)
@@ -958,20 +972,14 @@ func TestDisplayScopesMatchGrantedScopes(t *testing.T) {
 	if !has(granted[Calendar], "https://www.googleapis.com/auth/calendar.readonly") {
 		t.Errorf("calendar grant = %v, want readonly", granted[Calendar])
 	}
-	if !has(granted[Drive], "https://www.googleapis.com/auth/drive.readonly") ||
-		!has(granted[Drive], "https://www.googleapis.com/auth/drive.file") {
-		t.Errorf("drive grant = %v, want readonly+file", granted[Drive])
-	}
-	// No full-access scopes anywhere in v1 (exact match — readonly and
-	// drive.file are the bounded ones).
+	// No full-access scopes anywhere in v1 (exact match — compose and the
+	// read-onlys are the bounded ones).
 	tooBroad := map[string]bool{
 		"https://www.googleapis.com/auth/gmail.send":      true,
 		"https://www.googleapis.com/auth/gmail.modify":    true,
 		"https://www.googleapis.com/auth/gmail":           true,
 		"https://www.googleapis.com/auth/calendar":        true,
 		"https://www.googleapis.com/auth/calendar.events": true,
-		"https://www.googleapis.com/auth/drive":           true,
-		"https://www.googleapis.com/auth/drive.appdata":   true,
 	}
 	for id, scopes := range granted {
 		for _, s := range scopes {

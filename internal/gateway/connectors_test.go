@@ -11,7 +11,7 @@ import (
 	"agento/internal/connectors"
 )
 
-// These tests pin the #316 v1 foundation contract: three disconnected rows,
+// These tests pin the #316 v1 foundation contract: two disconnected rows,
 // per-connector disconnect, connect 501s until OAuth lands, secrets never
 // appear, and expired rows carry the reconnect hint.
 
@@ -20,11 +20,11 @@ func connectorsServer(t *testing.T) *Server {
 	return newTestServer(t, &fakeAgent{}, Config{ConnectorStore: connectors.NewMemoryStore()})
 }
 
-func TestConnectorsListThreeDisconnected(t *testing.T) {
+func TestConnectorsListTwoDisconnected(t *testing.T) {
 	srv := connectorsServer(t)
 	got := decodeBody(t, do(t, srv, http.MethodGet, "/api/connectors", ""))
 	rows, ok := got["connectors"].([]any)
-	if !ok || len(rows) != 3 {
+	if !ok || len(rows) != 2 {
 		t.Fatalf("connectors = %v", got)
 	}
 	seen := map[string]bool{}
@@ -44,7 +44,7 @@ func TestConnectorsListThreeDisconnected(t *testing.T) {
 			t.Errorf("%v has no scopes", m["id"])
 		}
 	}
-	for _, id := range []string{"gmail", "calendar", "drive"} {
+	for _, id := range []string{"gmail", "calendar"} {
 		if !seen[id] {
 			t.Errorf("missing connector %s", id)
 		}
@@ -147,8 +147,8 @@ func TestConnectorsTrailingSlashList(t *testing.T) {
 	// Trailing-slash alias serves the same list shape.
 	got := decodeBody(t, do(t, srv, http.MethodGet, "/api/connectors/", ""))
 	rows, ok := got["connectors"].([]any)
-	if !ok || len(rows) != 3 {
-		t.Fatalf("trailing-slash list = %v, want 3 rows", got)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("trailing-slash list = %v, want 2 rows", got)
 	}
 }
 
@@ -281,7 +281,7 @@ func TestConnectorsCallbackRejects(t *testing.T) {
 		t.Fatalf("missing state: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
 	// Per-connector callback paths are gone: the single registered endpoint
-	// serves all three. A leftover per-id path 404s as unknown.
+	// serves both. A leftover per-id path 404s as unknown.
 	if rec := do(t, srv, http.MethodGet, "/api/connectors/gmail/callback?code=x&state=y", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("per-id callback: %d, want 404 (%s)", rec.Code, rec.Body)
 	}
@@ -358,6 +358,40 @@ func TestConnectorsCallbackRejectsOversizedInput(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "start over from connect") {
 		t.Fatalf("oversized should use the dead-attempt message: %s", rec.Body)
+	}
+}
+
+// A dead attempt in a browser tab answers HTML, not JSON: the operator
+// just consented and needs close-this-tab guidance, not a raw error body.
+// API clients (no text/html Accept) keep the existing JSON shape.
+func TestConnectorsCallbackDeadAttemptServesHTMLToBrowsers(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	req := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state=nope", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Accept", "text/html")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("dead-attempt html: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("content-type = %q, want text/html", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "tap connect again") {
+		t.Errorf("html body gives no retry guidance: %s", rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("cache-control = %q, want no-store", cc)
+	}
+	// Same 400 meaning without the browser header: JSON shape unchanged.
+	rec2 := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nope", "")
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("dead-attempt json: %d, want 400 (%s)", rec2.Code, rec2.Body)
+	}
+	if !strings.Contains(rec2.Body.String(), "start over from connect") {
+		t.Errorf("json dead-attempt lost its message: %s", rec2.Body)
 	}
 }
 

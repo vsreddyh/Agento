@@ -318,14 +318,13 @@ Threat note — what this does and does not fix:
 - Residual: a held call occupies its turn until expiry; an approval shows
   tool + args + time but not which conversation asked.
 
-### First connectors — Gmail, Calendar, Drive (#316, OAuth grants)
+### First connectors — Gmail, Calendar (#316, OAuth grants)
 
-Three connectors with explicit read vs draft/write scopes, each
+Two connectors with explicit read vs draft/write scopes, each
 connecting/disconnecting independently from the app:
 
 - Gmail: search/read + draft (sends refused with "create a draft instead").
 - Calendar: list/upcoming + draft event (creates/invites refused the same way).
-- Drive: read/list + save agent-produced file (deletes gate as a backstop). Ungated-save scope is create-only: if the wired server's save can overwrite an existing file, that is a destructive write and the follow-up must gate it.
 
 Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 (PKCE S256 + offline access + per-connector least-privilege scopes) for the
@@ -342,7 +341,7 @@ The refusal is enforced in the relay before the approval check, audited as
 refresh tokens live **server-side in Mongo** (`connectors` collection,
 envelope-encrypted), never in the app and never pasted in chat — the API
 returns status + scopes only, and disconnect `$unset`s the token columns.
-Already-fetched data (chat history, saved files) is not wiped on
+Already-fetched data (chat history) is not wiped on
 disconnect; disconnect stops future access. Without Mongo the list still
 answers from memory but nothing survives a restart and no token can be
 stored. An expired row carries a `reconnect` hint instead of asking for a
