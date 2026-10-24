@@ -627,15 +627,18 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 		st.ExpiresAt = time.Now().Add(StateTTL)
 	}
 	// One pending attempt per connector (mirrors the memory cap): a new tap
-	// supersedes the old one, bounding live rows to 3 max regardless of tap
-	// spam. The TTL still reaps whatever the next tap doesn't supersede.
+	// supersedes the old one, bounding live rows to one per connector
+	// regardless of tap spam — not "3 max", which would silently break
+	// when a fourth connector lands. The TTL still reaps whatever the next
+	// tap doesn't supersede.
 	// Non-atomic by design (delete-then-insert): two concurrent taps for the
 	// same connector may briefly leave two live rows, and both are valid —
 	// either browser tab can complete its own consent. The bound holds for
 	// sequential taps (the only rate that matters: one bearer holder, one
 	// browser); no unique index, because failing a legitimate concurrent
 	// tap with a duplicate-key error would be worse than an extra row the
-	// next tap supersedes.
+	// next tap supersedes. And if the insert itself fails after the delete,
+	// the old tab is dead too — re-tap is the recovery, not the old code.
 	if _, serr := s.states.DeleteMany(ctx, bson.D{{Key: "connector", Value: st.Connector}}); serr != nil {
 		s.logf("connectors: state supersede %s failed: %v", st.Connector, serr)
 		return NewStoreError("oauth state create failed", true)

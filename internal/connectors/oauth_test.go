@@ -50,6 +50,10 @@ func TestExchangeAgainstStub(t *testing.T) {
 	}
 	if _, err := Exchange(context.Background(), mkcfg(), Gmail, "no-refresh", "v", nil); err == nil {
 		t.Fatal("missing refresh token should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		// Deterministic provider answer, not a flaky upstream: 400 so triage
+		// reads misconfigured consent, not an outage.
+		t.Fatalf("no-refresh should be a non-upstream error, got %v", err)
 	}
 	if _, err := Exchange(context.Background(), mkcfg(), "slack", "code1", "v", nil); err == nil {
 		t.Fatal("unknown connector should fail")

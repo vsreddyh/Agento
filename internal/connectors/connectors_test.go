@@ -783,3 +783,11 @@ func TestCreateStateDuplicateFails(t *testing.T) {
 		t.Fatal("superseded state should be gone")
 	}
 }
+
+// Empty plaintext is unsealable by contract: sealed-empty would be a second
+// representation of "missing" alongside literal "".
+func TestEncryptTokenRefusesEmpty(t *testing.T) {
+	if _, err := EncryptToken([32]byte{1}, ""); err == nil {
+		t.Fatal("sealing empty token should fail")
+	}
+}
