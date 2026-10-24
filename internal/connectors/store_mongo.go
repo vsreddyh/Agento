@@ -650,6 +650,9 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 	if st.State == "" {
 		return NewStoreError("oauth state needs an id", false)
 	}
+	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
+		return NewStoreError("oauth state or verifier too long", false)
+	}
 	if !Known(st.Connector) {
 		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
 	}
@@ -697,8 +700,11 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 // eagerly here AND lazily by the TTL index: the index reaps what this check
 // already refused.
 func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState, error) {
+	// Trimmed like the write path and the gateway: padded input resolves
+	// instead of 404ing on whitespace no writer could have stored.
 	// Length-gated like the gateway: oversized input answers the same
 	// NotFound as unknown, never reaching Mongo as a filter.
+	state = strings.TrimSpace(state)
 	if len(state) > MaxStateFieldLen {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}

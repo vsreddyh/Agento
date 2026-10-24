@@ -343,6 +343,9 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	if st.State == "" {
 		return NewStoreError("oauth state needs an id", false)
 	}
+	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
+		return NewStoreError("oauth state or verifier too long", false)
+	}
 	if !Known(st.Connector) {
 		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
 	}
@@ -392,8 +395,11 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 // states are the same NotFound: expiry is lazy (no sweeper at 3 rows/hour),
 // and the caller message is "try connect again" either way.
 func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState, error) {
+	// Trimmed like the write path and the gateway: padded input resolves
+	// instead of 404ing on whitespace no writer could have stored.
 	// Length-gated like the gateway: oversized input answers the same
 	// NotFound as unknown, never reaching the map.
+	state = strings.TrimSpace(state)
 	if len(state) > MaxStateFieldLen {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}

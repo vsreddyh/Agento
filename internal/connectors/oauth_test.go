@@ -78,6 +78,8 @@ func TestOAuthConfigValidatesRedirect(t *testing.T) {
 		{"wrong suffix", "https://host/p/api/connectors/gmail/callback", false},
 		{"no scheme", "host/api/connectors/callback", false},
 		{"ftp", "ftp://host/api/connectors/callback", false},
+		{"query rejected", "https://host/p/api/connectors/callback?x=1", false},
+		{"fragment rejected", "https://host/p/api/connectors/callback#y", false},
 		{"missing", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
