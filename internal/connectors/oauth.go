@@ -38,17 +38,22 @@ const (
 
 // GoogleScopes maps a connector to the Google OAuth scopes its auth URL
 // requests. Least privilege per connector, and deliberately NOT the
-// full-access variants:
+// full-access variants — but exactly what the official MCP servers
+// require, since the bridge (cmd/mcp-bridge) calls THEM, not the REST
+// API directly:
 //
 //   - gmail: readonly + compose. compose creates/updates/deletes DRAFTS
 //     only — it cannot send. The exact scope the draft-only rule needs:
 //     the token is incapable of sending even if the relay check vanished.
-//   - calendar: readonly. Draft events are agent-side objects (created
-//     locally, sent nowhere) until the approval-gate flow covers writes,
-//     so the grant carries no write bit at all.
+//     Matches the official Gmail MCP server's own scope pair.
+//   - calendar: the three scopes the official Calendar MCP server
+//     requires (calendar list + freebusy + events read). The grant carries
+//     no write bit even though the official server HAS write tools —
+//     those tools are filtered at the bridge and refused at the relay, so
+//     the token cannot write even if both checks vanished.
 //
-// Follow-up sync obligation (same class as IsDraftOnlySend): if a wired MCP
-// server needs a broader scope, BOTH this table and the tool policy move
+// Sync obligation (same class as IsDraftOnlySend): if Google changes what
+// the official servers require, BOTH this table and the tool policy move
 // together, and the ADR records why.
 func GoogleScopes(id string) []string {
 	switch id {
@@ -59,7 +64,9 @@ func GoogleScopes(id string) []string {
 		}
 	case Calendar:
 		return []string{
-			"https://www.googleapis.com/auth/calendar.readonly",
+			"https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+			"https://www.googleapis.com/auth/calendar.events.freebusy",
+			"https://www.googleapis.com/auth/calendar.events.readonly",
 		}
 	default:
 		return nil

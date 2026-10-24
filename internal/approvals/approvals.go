@@ -208,25 +208,28 @@ var gatedTools = map[string]map[string]bool{
 		"browser_goto": true, "browser_read": false,
 		"browser_screenshot": false, "browser_save_evidence": false,
 	},
-	// First connectors, v1 (#316). Reads and drafts run under the normal
-	// gate; send paths are refused outright by the relay (see
-	// connectors.IsDraftOnlySend), and the true here is the backstop for a
-	// caller that bypasses that check: a send must never run free.
-	// Follow-up sync obligation (both sides): the draft allowlist here
-	// (create_draft/create_event_draft/save_file:false) depends on exact
-	// tool names exactly like the refusal list does. A renamed draft tool
-	// misses the free rule and holds for approval instead — safe, but a
-	// stall on the exact flow v1 sells ("create a draft instead"). Sync
-	// both lists with the wired servers' real names when they land.
+	// First connectors, bridged to the official Google Workspace MCP
+	// servers (#316). The bridge (cmd/mcp-bridge) exposes a read/draft
+	// subset and filters the rest, so these tables name exactly the
+	// exposed set: anything unlisted holds (fail closed). Reads and drafts
+	// run free; the true rows backstop the relay's outright refusal
+	// (connectors.IsDraftOnlySend) for any caller that bypasses it.
+	// Follow-up sync obligation (both sides): the exposed set must match
+	// the official servers' tool lists. A write tool Google adds (or
+	// renames) that the bridge newly exposes without a rule here holds
+	// for approval instead of refusing — safe, but a UX divergence worth
+	// a sync check when the official tool lists change.
 	"gmail": {
-		"search_gmail": false, "read_gmail": false,
-		"list_messages": false, "create_draft": false,
-		"send_message": true, "send_gmail": true,
+		"search_threads": false, "get_thread": false,
+		"get_message": false, "list_drafts": false,
+		"list_labels": false, "create_draft": false,
 	},
 	"calendar": {
 		"list_events": false, "get_event": false,
-		"create_event_draft": false,
-		"create_event":       true, "send_invite": true,
+		"search_events": false, "suggest_time": false,
+		"list_calendars": false, "create_event_draft": false,
+		"create_event": true, "update_event": true,
+		"delete_event": true, "respond_to_event": true,
 	},
 	"drive": {
 		"list_files": false, "read_file": false,

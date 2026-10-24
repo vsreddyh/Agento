@@ -73,26 +73,27 @@ func TestSetStatusAndDisconnect(t *testing.T) {
 
 func TestDraftOnlySend(t *testing.T) {
 	for _, tc := range []struct{ server, tool string }{
-		{"gmail", "send_message"}, {"gmail", "send_gmail"},
-		{"calendar", "create_event"}, {"calendar", "send_invite"},
+		{"calendar", "create_event"}, {"calendar", "update_event"},
+		{"calendar", "delete_event"}, {"calendar", "respond_to_event"},
 	} {
 		if !IsDraftOnlySend(tc.server, tc.tool) {
-			t.Errorf("%s/%s should be draft-only send", tc.server, tc.tool)
+			t.Errorf("%s/%s should be draft-only write", tc.server, tc.tool)
 		}
 	}
 	for _, tc := range []struct{ server, tool string }{
-		{"gmail", "create_draft"}, {"gmail", "search_gmail"},
-		{"calendar", "create_event_draft"},
+		{"gmail", "search_threads"}, {"gmail", "get_thread"},
+		{"gmail", "create_draft"},
+		{"calendar", "list_events"}, {"calendar", "create_event_draft"},
 		{"notes", "delete_note"},
 	} {
 		if IsDraftOnlySend(tc.server, tc.tool) {
-			t.Errorf("%s/%s should not be a refused send", tc.server, tc.tool)
+			t.Errorf("%s/%s should not be a refused write", tc.server, tc.tool)
 		}
 	}
 	// Case-insensitive: the --server flag is operator-controlled, and a
-	// "Gmail" mcp.json entry must not bypass the refusal.
-	if !IsDraftOnlySend("Gmail", "Send_Message") {
-		t.Error("mixed-case Gmail/Send_Message should still refuse")
+	// "Calendar" mcp.json entry must not bypass the refusal.
+	if !IsDraftOnlySend("Calendar", "Delete_Event") {
+		t.Error("mixed-case Calendar/Delete_Event should still refuse")
 	}
 	if RefusalMessage == "" {
 		t.Error("refusal message must name the draft path")
@@ -969,8 +970,17 @@ func TestDisplayScopesMatchGrantedScopes(t *testing.T) {
 		!has(granted[Gmail], "https://www.googleapis.com/auth/gmail.compose") {
 		t.Errorf("gmail grant = %v, want readonly+compose", granted[Gmail])
 	}
-	if !has(granted[Calendar], "https://www.googleapis.com/auth/calendar.readonly") {
-		t.Errorf("calendar grant = %v, want readonly", granted[Calendar])
+	// Calendar matches the official Calendar MCP server's required triple
+	// (list + freebusy + events read): fewer scopes 403 inside proxied
+	// calls, more scopes are consent without purpose.
+	for _, want := range []string{
+		"https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+		"https://www.googleapis.com/auth/calendar.events.freebusy",
+		"https://www.googleapis.com/auth/calendar.events.readonly",
+	} {
+		if !has(granted[Calendar], want) {
+			t.Errorf("calendar grant = %v, missing %s", granted[Calendar], want)
+		}
 	}
 	// No full-access scopes anywhere in v1 (exact match — compose and the
 	// read-onlys are the bounded ones).

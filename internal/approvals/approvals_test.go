@@ -96,15 +96,17 @@ func TestPolicyTableIsComplete(t *testing.T) {
 		"memory": {"save_memory", "list_memory"},
 		"browser": {"browser_goto", "browser_read", "browser_screenshot",
 			"browser_save_evidence"},
-		// First connectors v1 (#316): servers not yet wired, but the policy
-		// is classified now so a future mcp.json wiring cannot run a send
-		// free. Send rows are doubly covered: the relay refuses them
+		// First connectors (#316): the bridge exposes the official
+		// servers' read/draft subset, and the policy classifies exactly
+		// that set. Write rows are doubly covered: the relay refuses them
 		// outright (connectors.IsDraftOnlySend) and the true here backstops
 		// any caller that bypasses that check.
-		"gmail": {"search_gmail", "read_gmail", "list_messages",
-			"create_draft", "send_message", "send_gmail"},
-		"calendar": {"list_events", "get_event", "create_event_draft",
-			"create_event", "send_invite"},
+		"gmail": {"search_threads", "get_thread", "get_message",
+			"list_drafts", "list_labels", "create_draft"},
+		"calendar": {"list_events", "get_event", "search_events",
+			"suggest_time", "list_calendars", "create_event_draft",
+			"create_event", "update_event", "delete_event",
+			"respond_to_event"},
 		"drive": {"list_files", "read_file", "save_file", "delete_file"},
 	}
 	n := 0
@@ -123,8 +125,8 @@ func TestPolicyTableIsComplete(t *testing.T) {
 			t.Errorf("server %s table has %d rules for %d tools", server, len(rules), len(tools))
 		}
 	}
-	if n != 72 {
-		t.Errorf("pinned %d tools, want the 72 inventoried", n)
+	if n != 77 {
+		t.Errorf("pinned %d tools, want the 77 inventoried", n)
 	}
 }
 
@@ -439,11 +441,11 @@ func TestMarkServerInterruptedIsScoped(t *testing.T) {
 // --server flag must not change a tool's gate. Fail-closed either way, but
 // the same logical tool must gate the same way whatever the case.
 func TestNeedsApprovalCaseInsensitive(t *testing.T) {
-	if NeedsApproval("Gmail", "Search_Gmail", nil) {
-		t.Error("Gmail/Search_Gmail should run free like gmail/search_gmail")
+	if NeedsApproval("Gmail", "Search_Threads", nil) {
+		t.Error("Gmail/Search_Threads should run free like gmail/search_threads")
 	}
-	if !NeedsApproval("GMAIL", "SEND_MESSAGE", nil) {
-		t.Error("GMAIL/SEND_MESSAGE should hold like gmail/send_message")
+	if !NeedsApproval("CALENDAR", "Update_Event", nil) {
+		t.Error("CALENDAR/Update_Event should hold like calendar/update_event")
 	}
 	if !KnownServer("Gmail") {
 		t.Error("KnownServer(Gmail) should be true")

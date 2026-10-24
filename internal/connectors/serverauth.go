@@ -53,6 +53,18 @@ func ServerOAuthConfig() (*OAuthConfig, error) {
 // Settings. The store holds ciphertext only; plaintext lives in this
 // process just long enough to build the token source.
 func GrantClient(ctx context.Context, store Store, cfg *OAuthConfig, id string) (*http.Client, error) {
+	src, err := GrantTokenSource(ctx, store, cfg, id)
+	if err != nil {
+		return nil, err
+	}
+	return oauth2.NewClient(ctx, src), nil
+}
+
+// GrantTokenSource is the refresh-and-persist token source behind
+// GrantClient, exposed for callers that need the bearer token itself
+// rather than an HTTP client — the MCP bridge attaches it to proxied
+// Streamable-HTTP calls. Same reconnect-error contract as GrantClient.
+func GrantTokenSource(ctx context.Context, store Store, cfg *OAuthConfig, id string) (oauth2.TokenSource, error) {
 	if cfg == nil {
 		return nil, NewStoreError("oauth client is not configured", false)
 	}
@@ -92,7 +104,7 @@ func GrantClient(ctx context.Context, store Store, cfg *OAuthConfig, id string) 
 		refresh: refresh,
 		access:  access,
 	}
-	return oauth2.NewClient(ctx, src), nil
+	return src, nil
 }
 
 // persistingSource wraps the oauth2 token source with sealed write-back:

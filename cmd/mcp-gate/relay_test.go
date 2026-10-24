@@ -610,22 +610,22 @@ func TestUnsharedStoreFailsFast(t *testing.T) {
 	}
 }
 
-// Draft-only v1 (#316): sends never reach the server, gated or not. The
-// relay refuses inline with the draft message, audits a deny, and parks no
-// approval card.
+// Draft-only v1 (#316): the official Calendar MCP server ships real
+// writes, which never reach it, gated or not. The relay refuses inline
+// with the draft message, audits a deny, and parks no approval card.
 func TestDraftOnlySendIsRefused(t *testing.T) {
 	store := testStore()
 	r := testRelay(store)
-	r.server = "gmail"
+	r.server = "calendar"
 	r.out = &bufWriter{}
 	r.childIn = &bufWriter{}
 
-	line, _, _ := callLine("7", "send_message", `{"to":"a@b.c"}`)
+	line, _, _ := callLine("7", "delete_event", `{"id":"e1"}`)
 	if err := r.pumpPiToChild(strings.NewReader(string(line) + "\n")); err != nil {
 		t.Fatalf("pump: %v", err)
 	}
 	if got := r.childIn.(*bufWriter).String(); got != "" {
-		t.Fatalf("draft-only send reached the child: %q", got)
+		t.Fatalf("draft-only write reached the child: %q", got)
 	}
 	if out := r.out.(*bufWriter).String(); !strings.Contains(out, "draft") {
 		t.Fatalf("Pi got no draft refusal: %q", out)
@@ -668,25 +668,25 @@ func TestDraftOnlyNotificationIsAudited(t *testing.T) {
 	}
 }
 
-// Operator-controlled casing traverses the relay path: a mixed-case send
+// Operator-controlled casing traverses the relay path: a mixed-case write
 // still refuses inline, and the audit row stores the folded spelling so two
 // casings don't become two tool names.
 func TestDraftOnlySendFoldsCaseAtRelay(t *testing.T) {
 	store := testStore()
 	r := testRelay(store)
-	r.server = "gmail"
+	r.server = "calendar"
 	r.out = &bufWriter{}
 	r.childIn = &bufWriter{}
 
-	line, _, _ := callLine("7", "Send_Message", `{"to":"a@b.c"}`)
+	line, _, _ := callLine("7", "Update_Event", `{"id":"e1"}`)
 	if err := r.pumpPiToChild(strings.NewReader(string(line) + "\n")); err != nil {
 		t.Fatalf("pump: %v", err)
 	}
 	if got := r.childIn.(*bufWriter).String(); got != "" {
-		t.Fatalf("mixed-case send reached the child: %q", got)
+		t.Fatalf("mixed-case write reached the child: %q", got)
 	}
 	audit := waitForAudit(t, store, 1)
-	if len(audit) != 1 || audit[0].Tool != "send_message" {
-		t.Fatalf("audit = %+v, want folded send_message", audit)
+	if len(audit) != 1 || audit[0].Tool != "update_event" {
+		t.Fatalf("audit = %+v, want folded update_event", audit)
 	}
 }

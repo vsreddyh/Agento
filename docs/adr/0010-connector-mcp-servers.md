@@ -1,4 +1,4 @@
-# ADR-0010: Connector MCP servers (Gmail, Calendar)
+# ADR-0010: Connector bridge to the official Google Workspace MCP servers
 
 - Status: accepted (2026-10, first connectors)
 - Issue: #316 (follow-up to ADR-0009, stacked on #367)
@@ -6,59 +6,82 @@
 ## Context
 
 ADR-0009 landed the OAuth grant pipeline (connect URL → callback →
-sealed tokens → connected) but no MCP servers: the agent still could not
-read mail or calendar. The servers had to be first-party, not external:
-the grant vault (sealed `TokenRow`s in Mongo, envelope key server-side)
-is unreadable to a third-party server, which would bring its own OAuth,
-its own token storage, and its own tool names — orphaning the consent
-flow and the draft-only refusal the relay enforces by tool name.
+sealed tokens → connected) but no MCP servers. The first attempt built
+first-party Go servers against the Gmail/Calendar REST APIs — then Google
+published official remote MCP servers (`gmailmcp.googleapis.com`,
+`calendarmcp.googleapis.com`, Developer Preview), and the custom servers
+were deleted in favour of them: the official servers are the API Google
+will extend, and matching their tool names keeps the agent on documented
+ground.
 
 ## Decision
 
-Two stdio MCP servers behind mcp-gate like every other (`cmd/gmail`,
-`cmd/calendar`, wired in `pi/mcp.json`), calling the official Google
-Gmail and Calendar APIs with the stored grant:
+One stdio bridge (`cmd/mcp-bridge`, `--server gmail|calendar`) behind
+mcp-gate like every server. It speaks MCP over stdio to Pi and forwards
+tool calls to the official endpoints over Streamable HTTP with the
+vault's access token attached — so the in-app connect flow stays the
+single consent and the sealed-token vault stays the single credential
+home (option A; Pi-native OAuth would orphan the vault for a second
+token home and a headless sign-in ceremony).
 
-- gmail: `search_gmail` / `read_gmail` / `list_messages` (read-only),
-  `create_draft` (compose scope). `send_message` / `send_gmail` are
-  registered only so the relay refuses them with "create a draft instead"
-  instead of answering an unknown tool.
-- calendar: `list_events` / `get_event` (readonly),
-  `create_event_draft` (agent-side object: validated, sent nowhere — the
-  grant is readonly, so this tool works on exactly the grant the connect
-  flow mints). `create_event` / `send_invite` are registered refusals,
-  same shape as gmail sends.
+- Gmail exposes the official read/draft subset: `search_threads`,
+  `get_thread`, `get_message`, `list_drafts`, `list_labels`,
+  `create_draft`. Label writes are filtered at the bridge — the official
+  server has no send tool, so Gmail is draft-only by construction.
+- Calendar exposes `list_events`, `get_event`, `search_events`,
+  `suggest_time`, `list_calendars` plus bridge-local
+  `create_event_draft` (validated, sent nowhere). The official server's
+  real writes (`create/update/delete/respond`) are filtered at the bridge
+  AND refused at the relay, so the token cannot write even if both
+  checks vanished.
+- Tool specs are proxied from the official `tools/list` at runtime (no
+  static copies to drift); only names are filtered. A write tool Google
+  adds that the bridge newly exposes without a rule holds for approval
+  (fail-closed) until classified — the sync obligation from #367 now
+  covers Google's changelogs, not ours.
+- Auth is refresh-on-use with persist-back (`connectors.GrantTokenSource`:
+  decrypt → refresh on expiry → seal the new pair). No refresh worker.
+  401/403 from the official endpoint is a reconnect error, never provider
+  text. A failed persist-back write fails the call rather than running
+  on a grant the store no longer matches.
 
-Tool names match `approvals.gatedTools` and `connectors.IsDraftOnlySend`
-exactly: a renamed tool would miss the refusal and fall through to the
-gated backstop (fail-closed, but the wrong UX). The scope-correspondence
-obligation from #367 extends here — if a server needs a broader Google
-scope, the OAuth table, the tool policy, and this ADR move together.
+### Grant scopes match the official servers, not a hand-rolled client
 
-### Auth: refresh-on-use, persist-back
+`GoogleScopes(Calendar)` carries the official triple
+(list + freebusy + events read): fewer scopes 403 inside proxied calls,
+more scopes are consent without purpose. Gmail's pair already matches.
+The OAuth client must carry Google's "AI-powered agent" flag (separate
+client if the existing one serves non-agent features); the redirect URI
+stays ours.
 
-No background refresher. Each server builds its Google client from
-`connectors.GrantClient`: decrypt the stored grant, refresh on expiry,
-seal the new pair back into the store before serving. A failed refresh is
-a reconnect error ("reconnect in Settings"), never a secrets prompt.
-Persist-back failure fails the call rather than running on a grant the
-store no longer matches (rotation could strand the next process).
+## Operator prerequisites (human steps, VPS + Cloud console)
 
-No grant (disconnected/expired, or a fresh deploy that never connected)
-fails closed the same way: the server starts (Mongo + client creds are
-all it needs at boot) but every tool answers reconnect guidance.
-
-`ServerOAuthConfig` needs only `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`
-+ envelope key — never the redirect URL, which servers never mint.
+1. Join the Google Workspace Developer Preview Program.
+2. Enable `gmailmcp.googleapis.com` + `calendarmcp.googleapis.com`
+   (plus `gmail`/`calendar-json` APIs) in the Cloud project.
+3. Flag the OAuth client for AI-agent use (or mint a separate one and
+   rotate the four `GOOGLE_*` values together).
+4. Live verification: with a real grant connected, one `curl` with a
+   vault access token against `.../mcp/v1` (`tools/list`) must 200 —
+   Google rejecting third-party-client tokens would 401 here and send
+   the design back to Pi-native OAuth. This is unverified in CI (no
+   grant, no Preview membership); it is a merge gate done by hand.
 
 ## Consequences
 
-- `internal/gmail`, `internal/calendar` own the API clients;
-  `cmd/gmail`, `cmd/calendar` own the MCP surface. Both follow the
-  notes-server shape (typed inputs, schema tests, `fail`/`result`).
-- Reads stay ungated (`false`); sends refuse (`IsDraftOnlySend`); the
-  gated `true` rows stay as the backstop for relay bypass.
-- Calendar writes still have no path: `create_event_draft` presents, the
-  agent does not create. Actual creation waits for the approval-gate
-  flow that covers calendar writes (still a follow-up, like the app
-  Connect screen and per-grant audit rows).
+- `cmd/mcp-bridge` owns the stdio↔HTTP translation (SSE framing,
+  bearer attach, write-filter, local draft). Google owns the API
+  surface; the bridge owns the glue (~spec drift lives here).
+- `gatedTools`/`IsDraftOnlySend` name official tool names exactly;
+  `TestPolicyTableIsComplete` pins the exposed sets.
+- Google mandates prompt-injection screening for these servers: ours is
+  the relay's existing Redact/ScrubError + approval gates, documented
+  rather than outsourced to Model Armor.
+- Calendar writes still have no path; app Connect screen and per-grant
+  audit rows stay follow-ups.
+
+## What this does not fix
+
+- If Google rejects vault-minted tokens at the MCP endpoint (audience /
+  client binding), the bridge 401s on every call and the design falls
+  back to Pi-native OAuth — see the verification step above.

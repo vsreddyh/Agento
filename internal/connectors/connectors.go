@@ -124,33 +124,31 @@ func NormalizedID(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
-// IsDraftOnlySend reports whether (server, tool) is a send path that v1
-// refuses outright. Draft tools run (free or gated by the relay); send tools
+// IsDraftOnlySend reports whether (server, tool) is a write path that v1
+// refuses outright. The official Google MCP servers are read-mostly, but
+// the Calendar one ships real writes (create/update/delete/respond) —
+// those never reach the server: the relay answers Pi with RefusalMessage
+// instead. Draft tools run (free or gated by the relay); refused sends
 // never reach the server — the relay answers Pi with RefusalMessage.
 //
 // Case-insensitive on both parts: r.server comes from the operator-controlled
-// --server flag, and an exact-case match would let a "Gmail" mcp.json entry
-// bypass both this refusal and the approval backstop. Same hardening the
-// follow-up mcp.json wiring must keep (pin lowercase names).
+// --server flag, and an exact-case match would let a "Calendar" mcp.json
+// entry bypass both this refusal and the approval backstop. Same hardening
+// the follow-up mcp.json wiring must keep (pin lowercase names).
 //
-// Follow-up obligation: keep this list in sync with the wired servers' real
-// tool names. The approvals completeness test pins gatedTools, but nothing
-// pins THIS list — a renamed tool (sendMessage, send_email) misses the
+// Follow-up obligation: keep this list in sync with the official servers'
+// tool lists. A new write tool Google adds (renamed or added) misses the
 // refusal and falls through to the gated backstop (fail-closed: holds for
 // approval instead of refusing with the draft message). Safe, but a UX
-// divergence worth a sync check when the connector MCP servers land.
+// divergence worth a sync check when the official tool lists change.
 func IsDraftOnlySend(server, tool string) bool {
 	server = strings.ToLower(strings.TrimSpace(server))
 	tool = strings.ToLower(strings.TrimSpace(tool))
 	switch server {
-	case "gmail":
-		switch tool {
-		case "send_message", "send_gmail":
-			return true
-		}
 	case "calendar":
 		switch tool {
-		case "create_event", "send_invite":
+		case "create_event", "update_event", "delete_event",
+			"respond_to_event":
 			return true
 		}
 	}
@@ -158,9 +156,9 @@ func IsDraftOnlySend(server, tool string) bool {
 }
 
 // RefusalMessage is what Pi sees when a draft-only connector is asked to
-// send. It names the supported path (drafts) so the turn continues usefully
+// write. It names the supported path (drafts) so the turn continues usefully
 // instead of dying on a bare denial.
-const RefusalMessage = "sending is disabled for this connector in v1; create a draft instead and let the user send it"
+const RefusalMessage = "writing is disabled for this connector in v1; build a draft instead and let the user confirm it"
 
 // StoreError is the domain error the HTTP layer maps onto status codes.
 // upstream=true renders 502 (BadGateway) via connectorsError; false renders

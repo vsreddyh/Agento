@@ -318,15 +318,18 @@ Threat note — what this does and does not fix:
 - Residual: a held call occupies its turn until expiry; an approval shows
   tool + args + time but not which conversation asked.
 
-### First connectors — Gmail, Calendar (#316, OAuth grants + MCP servers)
+### First connectors — Gmail, Calendar (#316, OAuth grants + official MCP bridge)
 
 Two connectors with explicit read vs draft/write scopes, each
 connecting/disconnecting independently from the app:
 
-- Gmail: `search_gmail` / `read_gmail` / `list_messages` + `create_draft`
-  (sends refused with "create a draft instead").
-- Calendar: `list_events` / `get_event` + `create_event_draft` (an
-  agent-side draft, sent nowhere; creates/invites refused the same way).
+- Gmail: `search_threads` / `get_thread` / `get_message` / `list_drafts` /
+  `list_labels` + `create_draft` (the official server has no send tool —
+  draft-only by construction).
+- Calendar: `list_events` / `get_event` / `search_events` + bridge-local
+  `create_event_draft` (validated, sent nowhere; the official server's
+  create/update/delete/respond are filtered at the bridge and refused at
+  the relay).
 
 Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 (PKCE S256 + offline access + per-connector least-privilege scopes) for the
@@ -357,14 +360,18 @@ so the app can branch on its presence for the reconnect case. `connected_at`
 appears only on `connected` rows with a valid stamp (a connected row without
 one omits it fail-closed); the stored value is first-connected-at, retained
 across disconnect/expire.
-The MCP servers (`cmd/gmail`, `cmd/calendar`, wired in `pi/mcp.json`)
-call the official Google APIs with the stored grant: decrypt, refresh on
-expiry, seal the new pair back (lazy refresh-on-use, no background
-worker). No grant means every tool answers reconnect guidance, never a
-secrets prompt. `create_event_draft` builds a validated draft the agent
-presents to the user — actual creation waits for the approval-gate flow
-that covers calendar writes.
-Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.
+The bridge (`cmd/mcp-bridge`, one binary fronting both connectors in
+`pi/mcp.json`) forwards tool calls to the official Google Workspace MCP
+servers (`gmailmcp`/`calendarmcp`, Developer Preview) over Streamable
+HTTP with the vault's access token attached: decrypt, refresh on expiry,
+seal the new pair back (lazy refresh-on-use, no background worker). No
+grant means every tool answers reconnect guidance, never a secrets
+prompt. Tool specs are proxied from the official `tools/list` (no static
+copies to drift); writes are filtered at the bridge and refused at the
+relay. Operator prerequisites (Preview membership, enable the MCP
+services, AI-agent-flagged OAuth client) and the live-token verification
+are in ADR-0010 — the one merge gate no CI can cover.
+Full design: `docs/adr/0009-connectors.md`, bridge: `docs/adr/0010-connector-mcp-servers.md`.
 
 ---
 

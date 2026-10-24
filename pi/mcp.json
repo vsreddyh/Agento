@@ -34,11 +34,11 @@
     },
     "gmail": {
       "command": "/usr/local/bin/mcp-gate",
-      "args": ["--server", "gmail", "--", "/usr/local/bin/gmail"]
+      "args": ["--server", "gmail", "--", "/usr/local/bin/mcp-bridge", "--server", "gmail"]
     },
     "calendar": {
       "command": "/usr/local/bin/mcp-gate",
-      "args": ["--server", "calendar", "--", "/usr/local/bin/calendar"]
+      "args": ["--server", "calendar", "--", "/usr/local/bin/mcp-bridge", "--server", "calendar"]
     }
   }
 }
