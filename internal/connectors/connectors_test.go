@@ -800,7 +800,7 @@ func TestEncryptTokenRefusesEmpty(t *testing.T) {
 
 // Unknown ids fail closed at the helper, not just the gateway.
 func TestAuthURLUnknownIDFailsClosed(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "cid", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if got := AuthURL(cfg, "slack", "s", "v"); got != "" {
 		t.Errorf("unknown id auth URL = %q, want empty", got)
 	}
@@ -833,7 +833,7 @@ func TestDurableContract(t *testing.T) {
 // AuthURL fails closed on empty state/verifier: a consent URL minted that
 // way could only die later at ConsumeState, after user consent.
 func TestAuthURLRejectsEmptyParts(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "cid", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if got := AuthURL(cfg, "gmail", "", "v"); got != "" {
 		t.Errorf("empty state URL = %q, want empty", got)
 	}
@@ -870,7 +870,7 @@ func TestSetStatusDisconnectedClearsTokens(t *testing.T) {
 // Padded inputs normalise instead of failing: the callback trims query
 // params, so stored/built values must match the trimmed form.
 func TestAuthURLTrimsInputs(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "cid", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	got := AuthURL(cfg, " GMail ", " s ", " v ")
 	if got == "" {
 		t.Fatal("padded known id should build")
@@ -907,7 +907,7 @@ func TestConsumeStateRejectsOversized(t *testing.T) {
 // AuthURL trims and length-gates: padded inputs build a working URL,
 // overlong ones fail closed.
 func TestAuthURLTrimsAndCaps(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "cid", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if got := AuthURL(cfg, "gmail", " s ", " v "); got == "" {
 		t.Fatal("padded inputs should build")
 	} else if strings.Contains(got, " ") {
@@ -915,5 +915,16 @@ func TestAuthURLTrimsAndCaps(t *testing.T) {
 	}
 	if got := AuthURL(cfg, "gmail", strings.Repeat("s", MaxStateFieldLen+1), "v"); got != "" {
 		t.Fatal("oversized state should fail closed")
+	}
+}
+
+// AuthURL needs a usable client, not just a non-nil one: empty client id or
+// redirect builds no URL.
+func TestAuthURLRejectsEmptyClient(t *testing.T) {
+	if got := AuthURL(&OAuthConfig{ClientID: "", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}, "gmail", "s", "v"); got != "" {
+		t.Errorf("empty client id URL = %q, want empty", got)
+	}
+	if got := AuthURL(&OAuthConfig{ClientID: "cid", RedirectURL: "", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}, "gmail", "s", "v"); got != "" {
+		t.Errorf("empty redirect URL = %q, want empty", got)
 	}
 }

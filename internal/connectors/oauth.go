@@ -119,7 +119,7 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 		// browser with redirect_uri_mismatch.
 		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL must have no query or fragment; register the bare callback URL")
 	}
-	if !strings.HasSuffix(strings.TrimSuffix(parsed.Path, "/"), "/api/connectors/callback") {
+	if !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/api/connectors/callback") {
 		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL path must end in /api/connectors/callback (the single registered endpoint)")
 	}
 	key, err := KeyFromEnv()
@@ -189,7 +189,7 @@ const MaxStateFieldLen = 2048
 // re-check (defense in depth for direct callers), but this helper needs no
 // trusted caller.
 func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
-	if cfg == nil {
+	if cfg == nil || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.RedirectURL) == "" {
 		return ""
 	}
 	// Folded and trimmed like every store verb — unknown or empty inputs
@@ -237,6 +237,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// as the missing-refresh branch below.
 	code = strings.TrimSpace(code)
 	verifier = strings.TrimSpace(verifier)
+	if code == "" || verifier == "" {
+		// Deterministic caller error, not an upstream failure: nothing was
+		// sent anywhere. Same 400 shape as the length and no-refresh
+		// branches.
+		return nil, NewStoreError("oauth code or verifier is empty", false)
+	}
 	if len(code) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
 		return nil, NewStoreError("oauth code or verifier too long", false)
 	}
