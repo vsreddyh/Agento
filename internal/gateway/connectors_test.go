@@ -344,3 +344,19 @@ func TestConnectorsCallbackNoProfileOracle(t *testing.T) {
 		t.Fatalf("oracle: bodies differ:\n%s\n%s", bad.Body, unknown.Body)
 	}
 }
+
+func TestConnectorsCallbackRejectsOversizedInput(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	// Multi-KB code/state 400 with the same dead-attempt shape, never
+	// reaching the store or Google.
+	big := strings.Repeat("x", 3000)
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+big+"&state="+big, "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("oversized should use the dead-attempt message: %s", rec.Body)
+	}
+}

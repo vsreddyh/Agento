@@ -302,7 +302,7 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
 	}
 	if st.ExpiresAt.IsZero() {
-		st.ExpiresAt = time.Now().Add(StateTTL)
+		st.ExpiresAt = s.timeNow().Add(StateTTL)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -313,6 +313,16 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	now := s.timeNow()
 	for state, existing := range s.states {
 		if !existing.ExpiresAt.IsZero() && !now.Before(existing.ExpiresAt) {
+			delete(s.states, state)
+		}
+	}
+	// One pending attempt per connector: a new tap supersedes the old one
+	// (its browser tab fails at ConsumeState with "try connect again").
+	// Bounds live rows to 3 max regardless of tap spam — the sweep above
+	// only reaps expired rows, so without this a bearer holder could mint
+	// unlimited live states inside the 10-minute window.
+	for state, existing := range s.states {
+		if existing.Connector == st.Connector {
 			delete(s.states, state)
 		}
 	}

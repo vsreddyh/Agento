@@ -159,9 +159,10 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 }
 
 // callbackStateReject is the single answer for every dead OAuth attempt —
-// unknown, consumed, or expired state, plus unknown profile on the
-// callback path (see route()). One string so no branch can drift into an
-// oracle that distinguishes them.
+// unknown, consumed, expired, or oversized state. One string so no branch
+// can drift into an oracle that distinguishes them. (Profile routing is
+// bypassed entirely for the callback — see route() — so there is no
+// profile branch left to mirror.)
 const callbackStateReject = "that connect attempt expired or was already used; start over from connect"
 
 // handleConnectors serves /api/connectors. Global like approvals, not
@@ -364,14 +365,23 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			"callback needs ?code= and ?state=; start over from connect")
 		return
 	}
+	// Length-gated before the store/Google calls: states are ~22-char
+	// base64url, codes a few hundred chars in practice. A multi-MB value
+	// would become an oversized DB filter / outbound token request. Same
+	// 400 shape as every other callback failure, so no oracle is added.
+	const maxCallbackFieldLen = 2048
+	if len(code) > maxCallbackFieldLen || len(state) > maxCallbackFieldLen {
+		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+			callbackStateReject)
+		return
+	}
 	ctx, cancel := connectorCallbackCtx(r)
 	defer cancel()
 	st, err := s.connectors.ConsumeState(ctx, state)
 	if err != nil {
 		// Unknown, consumed, or expired: same answer, "try connect again".
 		// The store already refuses to distinguish; the gateway must not
-		// add an oracle on top by varying the message. Same string as the
-		// unknown-profile callback reject in route().
+		// add an oracle on top by varying the message.
 		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
 			callbackStateReject)
 		return

@@ -626,6 +626,13 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 	if st.ExpiresAt.IsZero() {
 		st.ExpiresAt = time.Now().Add(StateTTL)
 	}
+	// One pending attempt per connector (mirrors the memory cap): a new tap
+	// supersedes the old one, bounding live rows to 3 max regardless of tap
+	// spam. The TTL still reaps whatever the next tap doesn't supersede.
+	if _, serr := s.states.DeleteMany(ctx, bson.D{{Key: "connector", Value: st.Connector}}); serr != nil {
+		s.logf("connectors: state supersede %s failed: %v", st.Connector, serr)
+		return NewStoreError("oauth state create failed", true)
+	}
 	_, err := s.states.InsertOne(ctx, st)
 	if err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
