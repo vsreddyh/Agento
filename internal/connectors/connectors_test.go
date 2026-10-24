@@ -536,8 +536,8 @@ func TestProbeProjectionShape(t *testing.T) {
 			t.Errorf("probe projection missing %q", k)
 		}
 	}
-	if len(seen) != 6 {
-		t.Errorf("probe projection has %d keys %v, want exactly 6", len(seen), seen)
+	if len(seen) != 7 {
+		t.Errorf("probe projection has %d keys %v, want exactly 7", len(seen), seen)
 	}
 	for _, e := range probeProjection() {
 		if e.Key == "_id" && e.Value != 0 {
@@ -556,6 +556,12 @@ func TestProbeProjectionWithinDisplay(t *testing.T) {
 		display[e.Key] = true
 	}
 	for _, e := range probeProjection() {
+		// refreshToken is the documented exception: presence-only probe
+		// input for the token-parity check, deliberately absent from the
+		// display shape (see probeProjection).
+		if e.Key == refreshTokenField {
+			continue
+		}
 		if !display[e.Key] {
 			t.Errorf("probe key %q not in display projection", e.Key)
 		}
@@ -833,5 +839,30 @@ func TestAuthURLRejectsEmptyParts(t *testing.T) {
 	}
 	if got := AuthURL(cfg, "gmail", "s", ""); got != "" {
 		t.Errorf("empty verifier URL = %q, want empty", got)
+	}
+}
+
+// Whitespace-only plaintext is as unsealable as empty: same missing-value
+// class, refused at the same gate.
+func TestEncryptTokenRefusesWhitespace(t *testing.T) {
+	if _, err := EncryptToken([32]byte{1}, "   "); err == nil {
+		t.Fatal("whitespace-only seal should fail")
+	}
+}
+
+// SetStatus(disconnected) clears grants like Disconnect does (belt and
+// braces): the off state never serves a previous grant, whichever verb
+// wrote it.
+func TestSetStatusDisconnectedClearsTokens(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetStatus(ctx, "gmail", StatusDisconnected, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTokens(ctx, "gmail"); err == nil {
+		t.Fatal("grant survived SetStatus(disconnected)")
 	}
 }

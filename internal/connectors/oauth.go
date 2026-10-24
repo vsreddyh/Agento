@@ -157,6 +157,16 @@ func NewState() (state, verifier string, err error) {
 	return base64.RawURLEncoding.EncodeToString(rb), verifier, nil
 }
 
+// MaxStateFieldLen bounds state/verifier/code inputs end to end. States are
+// 128-bit base64url (~22 chars); PKCE verifiers ~86; Google codes a few
+// hundred chars. Anything past 2048 is not a real credential — it is a
+// garbage or hostile input that must 404/400 before it becomes a DB filter
+// or an outbound token request. Enforced at the gateway (fast path) AND the
+// store (ConsumeState/CreateState): the store is exported for direct
+// callers (future MCP servers), so the gateway cap alone would leave the
+// enforcement to one layer.
+const MaxStateFieldLen = 2048
+
 // AuthURL builds the Google consent URL for one connector attempt. Offline
 // access (a refresh token) + consent prompt every time: without
 // prompt=consent Google returns a refresh token only on the FIRST grant,

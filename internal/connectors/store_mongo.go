@@ -203,7 +203,11 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 		s.logf("connectors: SetStatus pre-read %s failed: %v", id, probeErr)
 	}
 	if probeErr == nil && cur.Status == st && cur.LastError == lastErr {
-		if displayFresh(cur, id, lastErr) {
+		// Pure no-op only when there is also no grant to clear: a
+		// disconnected row that somehow still holds tokens must take the
+		// repair write below (which unsets them), never a skipped write
+		// that would keep serving the grant.
+		if displayFresh(cur, id, lastErr) && (st != StatusDisconnected || strings.TrimSpace(cur.Refresh) == "") {
 			// Pure no-op: nothing to heal, no write at all.
 			return s.readBack(id)
 		}
@@ -290,7 +294,11 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	// the repair shape — display + clear, no updated_at bump, tokens
 	// unset in the same write.
 	if !transition {
-		if displayFresh(probe, id, "") {
+		// Pure no-op only with no grant to clear: a disconnected row that
+		// somehow still holds tokens takes the repair write below (which
+		// unsets them) instead of a skipped write that would keep serving
+		// the grant.
+		if displayFresh(probe, id, "") && strings.TrimSpace(probe.Refresh) == "" {
 			return s.readBack(id)
 		}
 		if _, derr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
@@ -332,10 +340,13 @@ func resolveConnectedAt(stamp, now int64) int64 {
 
 // probeProjection selects the transition-decision fields: status (+lastError
 // where compared, +connectedAt where the stamp resolves, +display for the
-// no-op heal-vs-skip). A fresh copy per call, like displayProjection: the
-// no-op path decides heal-vs-skip off these keys, so dropping one (e.g.
-// scopes) silently turns every repeat verb into a heal-write. Never the
-// token columns.
+// no-op heal-vs-skip, +refresh presence for the token-parity check). A fresh
+// copy per call, like displayProjection: the no-op path decides heal-vs-skip
+// off these keys, so dropping one (e.g. scopes) silently turns every repeat
+// verb into a heal-write. refreshToken is the one deliberate exception to
+// "never the token columns": only its presence is read (never returned),
+// and the no-op paths need it to avoid stranding a grant behind a skipped
+// write.
 func probeProjection() bson.D {
 	return bson.D{
 		{Key: "_id", Value: 0},
@@ -344,17 +355,19 @@ func probeProjection() bson.D {
 		{Key: "connectedAt", Value: 1},
 		{Key: "displayName", Value: 1},
 		{Key: "scopes", Value: 1},
+		{Key: "refreshToken", Value: 1},
 	}
 }
 
-// probeDoc is the minimal read for transition decisions. Never the token
-// columns.
+// probeDoc is the minimal read for transition decisions. refreshToken is
+// presence-only (never returned, never logged); see probeProjection.
 type probeDoc struct {
 	Status      Status   `bson:"status"`
 	LastError   string   `bson:"lastError"`
 	ConnectedAt int64    `bson:"connectedAt"`
 	DisplayName string   `bson:"displayName"`
 	Scopes      []string `bson:"scopes"`
+	Refresh     string   `bson:"refreshToken"`
 }
 
 // displayFresh is the probeDoc-shaped entry to displayFieldsFresh for the
@@ -671,6 +684,11 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 // eagerly here AND lazily by the TTL index: the index reaps what this check
 // already refused.
 func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState, error) {
+	// Length-gated like the gateway: oversized input answers the same
+	// NotFound as unknown, never reaching Mongo as a filter.
+	if len(state) > MaxStateFieldLen {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
 	var st OAuthState
 	err := s.states.FindOneAndDelete(ctx, bson.D{{Key: "_id", Value: state}}).Decode(&st)
 	if err != nil {
