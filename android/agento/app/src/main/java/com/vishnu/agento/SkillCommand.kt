@@ -65,11 +65,12 @@ fun insertSkillCommand(current: String, name: String): String {
 
 /**
  * Only Pi-loaded skills may be listed (#372): the inventory also carries
- * taught rows (`scope == "taught"`) that Pi never loaded, and sending
- * `/skill:<name>` for one burns a turn on literal text. Disabled rows
+ * taught rows that Pi never loaded, and sending `/skill:<name>` for one
+ * burns a turn on literal text. The scope compares case-insensitively —
+ * cheaper than debugging a capitalizing server. Disabled rows
  * (`enabled == false`) are excluded for the same reason; an unknown toggle
  * (null — older gateways do not report it) keeps the row. Pure so the
  * exclusion is pinned without a Context.
  */
 fun invocableSkills(skills: List<SkillInfo>): List<SkillInfo> =
-    skills.filter { it.scope != "taught" && it.enabled != false }
+    skills.filter { !it.scope.equals("taught", ignoreCase = true) && it.enabled != false }

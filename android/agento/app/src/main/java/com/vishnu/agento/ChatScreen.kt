@@ -1144,7 +1144,9 @@ internal fun ChatTab(
         onHistory = { showThreads = true },
         onCheckConnection = vm::checkReachability,
         onPending = vm::onPending,
-        slash = state.slash.takeIf { slashQuery(state.pending) != null },
+        slash = state.slash.takeIf {
+            slashQuery(state.pending) != null && state.pending != state.slashDismissedAt
+        },
         onPickSkill = vm::pickSkill, onDismissSlash = vm::dismissSlash, onSend = {
             // Staging empties on send: the next live sentence starts a new
             // voicing episode. Queued-while-streaming keeps staging.
@@ -3632,10 +3634,11 @@ internal fun catalogPath(api: ChatApi): String =
 /**
  * Slash skill picker card (#372): anchored above the composer while the
  * composer text holds a `/` trigger. Rows show name + description over
- * the Pi-loaded inventory only (taught drafts never reach the list —
- * see [invocableSkills]); tapping inserts `/skill:<name> ` and closes.
- * A failed fetch degrades to the error line — typing the command by hand
- * still works, and the card never blocks the composer.
+ * the Pi-loaded inventory only (taught drafts and disabled skills never
+ * reach the list — see [invocableSkills]); tapping inserts
+ * `/skill:<name> ` and closes. A failed fetch banners above the stale
+ * list rather than replacing it — hand-typed commands still work, and
+ * the card never blocks the composer.
  */
 @Composable
 internal fun SlashPickerCard(
@@ -3684,7 +3687,19 @@ internal fun SlashPickerCard(
             } else if (rows.isNotEmpty()) {
                 // Capped: the inventory is small, but the card sits over
                 // the transcript — eight rows, then the query narrows it.
-                rows.take(8).forEach { s ->
+                // The overflow line says how many are hidden, so an empty
+                // query never silently swallows half the inventory.
+                val shown = rows.take(8)
+                val hidden = rows.size - shown.size
+                if (hidden > 0) {
+                    Text(
+                        "…and $hidden more — keep typing to narrow.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+                shown.forEach { s ->
                     Surface(
                         onClick = { onPick(s.name) },
                         modifier = Modifier.fillMaxWidth(),

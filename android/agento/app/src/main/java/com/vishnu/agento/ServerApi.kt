@@ -280,7 +280,7 @@ fun parseServerSkillList(body: String): List<SkillInfo> {
  * nulls are skipped, so the first *boolean* value wins (a present but
  * non-boolean key never masks a later real one) and absence reads as
  * unknown (null) instead of Off. Shared by [ServerApi] and
- * [parseSkillList].
+ * [parseServerSkillList].
  */
 internal fun optFlag(o: JSONObject, vararg keys: String): Boolean? {
     for (k in keys) {
@@ -544,7 +544,7 @@ fun dedupMcpServers(
     return servers.filter { normalizeMcpServerKey(it.name) !in covered }
 }
 
-/** Case-insensitive search across name + description (+ tools). */
+/** Case-insensitive search across name + description. */
 fun SkillInfo.matches(query: String): Boolean {
     val q = query.trim().lowercase(Locale.ROOT)
     if (q.isEmpty()) return true

@@ -119,13 +119,15 @@ class SkillCommandTest {
             SkillInfo(name = "notes", description = "Summarise"),
             SkillInfo(name = "draft", scope = "taught", status = "draft"),
             SkillInfo(name = "active", scope = "taught", status = "active"),
+            SkillInfo(name = "weird", scope = "Taught"),
             SkillInfo(name = "off", enabled = false),
             SkillInfo(name = "unknown", enabled = null),
         )
         // A definitely-disabled row would burn a turn like a taught one;
-        // an unknown toggle (older gateways) keeps the row.
+        // an unknown toggle (older gateways) keeps the row. Scope compares
+        // case-insensitively — cheaper than debugging a capitalizing server.
         assertEquals(
-            listOf(skills[0], skills[4]),
+            listOf(skills[0], skills[5]),
             invocableSkills(skills),
         )
     }
