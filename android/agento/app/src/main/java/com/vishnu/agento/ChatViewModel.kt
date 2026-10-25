@@ -382,7 +382,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         retargetMemory()
     }
 
-    private fun onPending(v: String) {
+    fun onPending(v: String) {
         _state.value = _state.value.copy(pending = v)
         updateSlash(v)
     }
