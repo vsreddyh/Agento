@@ -59,9 +59,9 @@ import androidx.core.content.edit
 /**
  * Display settings for one task-widget placement: which slice it shows,
  * row density, row order, the due line, and whether the list scrolls.
- * Launched by the system at add time (android:configure) and from the Task
- * Manager screen afterwards. Cancelling at add time aborts the placement;
- * saving re-renders that widget via [TaskWidget].
+ * Launched by the system at add time (android:configure) and from
+ * Settings → Home-screen widget afterwards. Cancelling at add time aborts
+ * the placement; saving re-renders that widget via [TaskWidget].
  */
 class TaskWidgetConfigActivity : ComponentActivity() {
 

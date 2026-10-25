@@ -8,6 +8,17 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.15.1]
+- **Task widget taps follow one contract (#370).** Ring completes inline,
+  a row opens its detail sheet, and everything else — background, title,
+  count, view label, empty line — opens the Task Manager. Two gaps are
+  closed: the plain-rows title opened widget settings and the view label
+  cycled the view (now both open Task Manager; settings live in
+  Settings → Home-screen widget), and the scrollable title/count/empty
+  line relied on body-tap inheritance some launchers don't propagate
+  (now explicit handlers). The wiring table is unit-pinned, so the
+  contract survives without an on-device tap-through.
+
 ## [5.15.0]
 - **Task widget: rows can match the Task Manager's order (#369).** Each
   placement gains a Row order setting (Server order, Start time, Name,
