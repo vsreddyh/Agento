@@ -245,7 +245,7 @@ internal fun overdueText(elapsedMillis: Long): String {
  * AND kind, so a task's start nudge, heads-up and each overdue nag occupy
  * their own slot instead of replacing one another — and so action taps
  * dismiss exactly what they came from. Shared with [TaskReminders.cancelPosted]
- * and the trampolines: the tag must match [notify] or the alert survives
+ * and the notification receiver: the tag must match [notify] or the alert survives
  * its own action.
  */
 internal fun postedTag(taskId: String, kind: ReminderKind) = "$taskId#${kind.key}"
@@ -533,7 +533,7 @@ object TaskReminders {
     /**
      * Dismiss every posted notification for one task (all kinds, #287).
      * The post tag carries the kind ([postedTag]) while the action tap only
-     * knows the task — so a trampoline must cancel all four tags, not the
+     * knows the task — so the receiver must cancel all four tags, not the
      * bare id, or the alert survives its own action.
      */
     fun cancelPosted(context: Context, taskId: String) {
@@ -870,24 +870,28 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             if (taskDesc.isNotEmpty()) add(taskDesc)
             if (window.isNotEmpty()) add(window)
         }.joinToString("\n")
-        // Inline complete reuses the widget trampoline (no visible UI:
-        // completes, refreshes widget/alarms, finishes). Data URI + own
-        // request code: extras don't count for PendingIntent identity,
-        // so without these one task's action could complete another.
-        // Labelled "Completed" per #287 (was "Done").
-        val done = PendingIntent.getActivity(
+        // Inline complete runs in the background receiver (no visible UI:
+        // completes, refreshes widget/alarms). Data URI + own request
+        // code: extras don't count for PendingIntent identity, so without
+        // these one task's action could complete another. Deliberately NOT
+        // the widget trampoline (#368): getActivity() from a notification
+        // brings the app to the foreground on Android 12+. Labelled
+        // "Completed" per #287 (was "Done").
+        val done = PendingIntent.getBroadcast(
             appCtx, ("done:$taskId").hashCode(),
-            Intent(appCtx, TaskCompleteActivity::class.java)
+            Intent(appCtx, TaskNotifActionReceiver::class.java)
+                .setAction(TaskNotifActionReceiver.ACTION_COMPLETE)
                 .putExtra(TaskWidget.EXTRA_COMPLETE_ID, taskId)
                 .setData("agento://reminder/${Uri.encode(taskId)}/complete".toUri()),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         // Inline skip closes the occurrence without claiming the work was
-        // done (#287): same trampoline shape, POST /api/tasks/{id}/skip.
-        val skip = PendingIntent.getActivity(
+        // done (#287): same receiver shape, POST /api/tasks/{id}/skip.
+        val skip = PendingIntent.getBroadcast(
             appCtx, ("skip:$taskId").hashCode(),
-            Intent(appCtx, TaskSkipActivity::class.java)
-                .putExtra(TaskSkipActivity.EXTRA_SKIP_ID, taskId)
+            Intent(appCtx, TaskNotifActionReceiver::class.java)
+                .setAction(TaskNotifActionReceiver.ACTION_SKIP)
+                .putExtra(TaskNotifActionReceiver.EXTRA_SKIP_ID, taskId)
                 .setData("agento://reminder/${Uri.encode(taskId)}/skip".toUri()),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

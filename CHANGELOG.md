@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.14.1]
+- **Tapping Completed on a reminder no longer opens the app (#368).**
+  The notification actions were activity trampolines, which Android 12+
+  brings to the foreground even when translucent. Both actions (and Skip,
+  which shared the shape) now go straight to a background receiver with
+  the same success semantics — alerts dismiss, widget and alarms refresh,
+  and an offline tap keeps the reminder. The widget rows keep their
+  trampoline; the now-unused skip trampoline is removed.
+
 ## [5.14.0]
 - **App updates check themselves now (#366).** Tapping Check for updates
   still works, but Agento also checks once on startup (at most every 6

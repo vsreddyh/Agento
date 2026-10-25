@@ -156,8 +156,9 @@ class TaskWidget : AppWidgetProvider() {
         const val ACTION_VIEW = "com.vishnu.agento.action.TASKS_VIEW"
 
         /** Deep-link: open the detail sheet for this task id. Read by
-         * [TaskCompleteActivity] (widget rows, alarm taps) and
-         * MainActivity (its own TASKS intents). */
+         * [TaskCompleteActivity] (widget rows) and MainActivity (its own
+         * TASKS intents). Reminder notifications complete/skip through
+         * [TaskNotifActionReceiver] instead (#368) — no activity at all. */
         const val EXTRA_TASK_ID = "com.vishnu.agento.extra.TASK_ID"
 
         /** Immediate complete request, handled by [TaskCompleteActivity]. */
