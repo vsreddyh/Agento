@@ -117,6 +117,19 @@ data class ChatUiState(
     /** Memory ids with a write in flight: their buttons disable so a double
      * tap cannot fire two writes. */
     val actingMemory: Set<String> = emptySet(),
+    /** Slash skill picker (#372): query + invocable list for the composer.
+     * Visibility is gated by the text itself (ChatScreen shows it only
+     * while `slashQuery(pending)` is non-null), so thread switches, sends
+     * and queue parks hide it without touching every pending reset. */
+    val slash: SlashPickerState = SlashPickerState(),
+)
+
+/** Slash `/` skill picker state (#372). */
+data class SlashPickerState(
+    val query: String = "",
+    val skills: List<SkillInfo> = emptyList(),
+    val loading: Boolean = false,
+    val error: String = "",
 )
 
 /** Device-observed usage for one conversation thread, summed from
@@ -371,6 +384,93 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     fun onPending(v: String) {
         _state.value = _state.value.copy(pending = v)
+        updateSlash(v)
+    }
+
+    /** Slash picker cache per profile path: fetched invocable list + fetch time. */
+    private var slashCache = mutableMapOf<String, Pair<Long, List<SkillInfo>>>()
+    private var slashJob: Job? = null
+
+    /**
+     * Slash picker fetch (#372): first trigger per profile path fetches,
+     * then a 60 s cache; a failed fetch keeps the stale list behind the
+     * error so hand-typed commands still complete from a visible list.
+     * Stale-guarded on the live text and path — a send or a profile
+     * switch mid-flight must not land old rows on the new composer.
+     */
+    private fun updateSlash(text: String) {
+        val query = slashQuery(text)
+        if (query == null) {
+            slashJob?.cancel()
+            slashJob = null
+            if (_state.value.slash != SlashPickerState()) {
+                _state.value = _state.value.copy(slash = SlashPickerState())
+            }
+            return
+        }
+        val path = api.pathFor(tab)
+        val now = System.currentTimeMillis()
+        val cached = slashCache[path]
+        if (cached != null && now - cached.first < 60_000) {
+            _state.value = _state.value.copy(
+                slash = SlashPickerState(query = query, skills = cached.second),
+            )
+            return
+        }
+        if (_state.value.slash.query != query || !_state.value.slash.loading) {
+            _state.value = _state.value.copy(
+                slash = SlashPickerState(
+                    query = query,
+                    skills = cached?.second.orEmpty(),
+                    loading = true,
+                ),
+            )
+        }
+        slashJob?.cancel()
+        slashJob = viewModelScope.launch {
+            val res = serverApi.listSkills(path)
+            // Text moved on, or the profile switched, while fetching.
+            if (slashQuery(_state.value.pending) == null || api.pathFor(tab) != path) return@launch
+            val liveQuery = slashQuery(_state.value.pending) ?: query
+            res.fold(
+                onSuccess = { list ->
+                    val inv = invocableSkills(list)
+                    slashCache[path] = System.currentTimeMillis() to inv
+                    _state.value = _state.value.copy(
+                        slash = SlashPickerState(query = liveQuery, skills = inv),
+                    )
+                },
+                onFailure = {
+                    _state.value = _state.value.copy(
+                        slash = SlashPickerState(
+                            query = liveQuery,
+                            skills = cached?.second.orEmpty(),
+                            error = "Couldn't load skills",
+                        ),
+                    )
+                },
+            )
+        }
+    }
+
+    /** Picker row tap: the `/` token becomes `/skill:<name> `, the picker
+     * closes, and the keyboard stays up with the cursor at the end (a
+     * plain-String field value resets the cursor there). */
+    fun pickSkill(name: String) {
+        val cur = _state.value.pending
+        if (!cur.startsWith("/")) return
+        slashJob?.cancel()
+        slashJob = null
+        _state.value = _state.value.copy(
+            pending = insertSkillCommand(cur, name),
+            slash = SlashPickerState(),
+        )
+    }
+
+    fun dismissSlash() {
+        slashJob?.cancel()
+        slashJob = null
+        _state.value = _state.value.copy(slash = SlashPickerState())
     }
 
     /** Stages picked photos, capped at [MAX_IMAGES_PER_TURN] — excess is dropped

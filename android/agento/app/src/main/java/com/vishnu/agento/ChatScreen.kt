@@ -1143,7 +1143,9 @@ internal fun ChatTab(
         onModel = { showModel = true },
         onHistory = { showThreads = true },
         onCheckConnection = vm::checkReachability,
-        onPending = vm::onPending, onSend = {
+        onPending = vm::onPending,
+        slash = state.slash.takeIf { slashQuery(state.pending) != null },
+        onPickSkill = vm::pickSkill, onDismissSlash = vm::dismissSlash, onSend = {
             // Staging empties on send: the next live sentence starts a new
             // voicing episode. Queued-while-streaming keeps staging.
             liveStagedVoicedCount = 0
@@ -1802,6 +1804,12 @@ internal fun ChatScreen(
     onHistory: () -> Unit,
     onCheckConnection: () -> Unit,
     onPending: (String) -> Unit,
+    /** Slash skill picker (#372): the live trigger state for the composer
+     * text, gated by the text itself (ChatTab passes state.slash only
+     * while `slashQuery(state.pending)` is non-null). */
+    slash: SlashPickerState? = null,
+    onPickSkill: (String) -> Unit = {},
+    onDismissSlash: () -> Unit = {},
     onSend: () -> Unit,
     onStop: () -> Unit,
     onSteer: () -> Unit = {},
@@ -2810,6 +2818,18 @@ internal fun ChatScreen(
                             )
                         }
                     }
+                    // Slash skill picker (#372): anchored above the composer,
+                    // never clearing text or staged photos. Rows insert
+                    // `/skill:<name> ` and close; typing a complete command
+                    // or leaving the `/` prefix closes it via the text gate.
+                    val slashNow = slash
+                    if (slashNow != null) {
+                        SlashPickerCard(
+                            state = slashNow,
+                            onPick = onPickSkill,
+                            onDismiss = onDismissSlash,
+                        )
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -3241,11 +3261,29 @@ internal fun ChatScreen(
                                                     // trailing newlines would render
                                                     // as blank lines — trimmed for
                                                     // display, never for the wire.
-                                                    SelectionContainer {
-                                                        Text(
-                                                            msg.content.trimEnd().ifEmpty { "…" },
-                                                            style = MaterialTheme.typography.bodyMedium,
-                                                        )
+                                                    // A sent skill command renders as
+                                                    // a chip plus the remainder (#372):
+                                                    // still projection-only, the
+                                                    // stored string is untouched.
+                                                    val cmd = parseSkillCommand(msg.content)
+                                                    if (cmd != null) {
+                                                        SkillChip(cmd.name)
+                                                        if (cmd.args.isNotBlank()) {
+                                                            Spacer(modifier = Modifier.height(4.dp))
+                                                            SelectionContainer {
+                                                                Text(
+                                                                    cmd.args.trimEnd(),
+                                                                    style = MaterialTheme.typography.bodyMedium,
+                                                                )
+                                                            }
+                                                        }
+                                                    } else {
+                                                        SelectionContainer {
+                                                            Text(
+                                                                msg.content.trimEnd().ifEmpty { "…" },
+                                                                style = MaterialTheme.typography.bodyMedium,
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
@@ -3590,6 +3628,106 @@ internal fun OptionMenu(
 /** Providers are gateway-global; one catalog fetch covers the Chat tab. */
 internal fun catalogPath(api: ChatApi): String =
     api.pathFor("chat")
+
+/**
+ * Slash skill picker card (#372): anchored above the composer while the
+ * composer text holds a `/` trigger. Rows show name + description over
+ * the Pi-loaded inventory only (taught drafts never reach the list —
+ * see [invocableSkills]); tapping inserts `/skill:<name> ` and closes.
+ * A failed fetch degrades to the error line — typing the command by hand
+ * still works, and the card never blocks the composer.
+ */
+@Composable
+internal fun SlashPickerCard(
+    state: SlashPickerState,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val rows = remember(state.query, state.skills) {
+        state.skills.filter { it.matches(state.query) }
+    }
+    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (state.query.isEmpty()) "Skills" else "Skills matching “${state.query}”",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+            if (state.loading && rows.isEmpty()) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            if (state.error.isNotEmpty() && rows.isEmpty()) {
+                Text(
+                    "Couldn't load skills — type the command by hand.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            } else if (!state.loading && rows.isEmpty()) {
+                Text(
+                    "No matching skills.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            } else {
+                // Capped: the inventory is small, but the card sits over
+                // the transcript — eight rows, then the query narrows it.
+                rows.take(8).forEach { s ->
+                    Surface(
+                        onClick = { onPick(s.name) },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surface,
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Text(
+                                "/skill:${s.name}",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            if (s.description.isNotEmpty()) {
+                                Text(
+                                    s.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Render-time skill chip (#372): a sent `/skill:<name>` turn shows
+ * `skill: <name>` plus the remainder as normal text. Syntax-only
+ * ([parseSkillCommand]) — the render path never consults the network, and
+ * a mistyped name stays visible in the chip instead of silently passing.
+ */
+@Composable
+internal fun SkillChip(name: String) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+    ) {
+        Text(
+            "skill: $name",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
 
 /** Display name for a provider slug. The wire value stays the gateway slug
  * (`opencode-go` per the gateway config); the catalog label is preferred. */

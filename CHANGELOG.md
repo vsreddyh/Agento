@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.16.0]
+- **Chat composer: type `/` to invoke a skill (#372).** A picker lists
+  the profile's Pi-loaded skills (name + description, filtered as you
+  type); tapping one inserts `/skill:<name> ` with the cursor at the end.
+  Taught drafts Pi never loaded are excluded. Sent skill turns render as
+  a `skill: <name>` chip plus the argument text — the stored text stays
+  byte-identical, so retry/queue/fork/regenerate resend verbatim.
+
 ## [5.15.1]
 - **Task widget taps follow one contract (#370).** Ring completes inline,
   a row opens its detail sheet, and everything else — background, title,
