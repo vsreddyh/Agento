@@ -84,8 +84,10 @@ class SkillCommandTest {
         assertNull(parseSkillCommand("/skill:"))
         // Mid-sentence: plain text.
         assertNull(parseSkillCommand("run /skill:notes today"))
-        // Bad characters: plain text, stays visible as typed.
-        assertNull(parseSkillCommand("/skill:no tes"))
+        // Bad characters: plain text, stays visible as typed. (A space
+        // after a valid name is the args separator, not a bad character —
+        // `/skill:no tes` invokes skill `no` with args `tes`.)
+        assertNull(parseSkillCommand("/skill:na!me x"))
         assertNull(parseSkillCommand("/skill:notes!"))
         // Other slash forms: not skills, untouched.
         assertNull(parseSkillCommand("/notes"))
