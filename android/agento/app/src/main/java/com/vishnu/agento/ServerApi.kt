@@ -98,7 +98,7 @@ class ServerApi(context: Context) {
     suspend fun listSkills(path: String): Result<List<SkillInfo>> =
         withContext(Dispatchers.IO) {
             get(path, "v1/skills").map { body ->
-                parseSkillList(body)
+                parseServerSkillList(body)
             }
         }
 
@@ -246,7 +246,7 @@ class ServerApi(context: Context) {
  * fields (notably `scope`/`status` on taught rows), and a parse that
  * silently drops them would let the picker offer skills Pi never loaded.
  */
-fun parseSkillList(body: String): List<SkillInfo> {
+fun parseServerSkillList(body: String): List<SkillInfo> {
     val out = mutableListOf<SkillInfo>()
     val arr = rootArray(body, "skills", "data", "items")
         ?: throw RuntimeException("Unexpected response shape")

@@ -132,7 +132,7 @@ class SkillCommandTest {
               "bare"
             ]
         """.trimIndent()
-        val skills = parseSkillList(body)
+        val skills = parseServerSkillList(body)
         assertEquals(3, skills.size)
         // Sorted by name: bare, notes, scratch.
         assertEquals("bare", skills[0].name)
@@ -151,11 +151,11 @@ class SkillCommandTest {
     fun `skill list accepts wrapped and bare shapes`() {
         assertEquals(
             listOf("b", "a").sorted(),
-            parseSkillList("""{"skills": [{"name": "b"}, {"name": "a"}]}""").map { it.name },
+            parseServerSkillList("""{"skills": [{"name": "b"}, {"name": "a"}]}""").map { it.name },
         )
         assertEquals(
             listOf("x"),
-            parseSkillList("""["x", " "]""").map { it.name },
+            parseServerSkillList("""["x", " "]""").map { it.name },
         )
     }
 
