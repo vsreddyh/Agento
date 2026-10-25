@@ -24,6 +24,7 @@ class SettingsBackupTest {
     fun `widget display keys match with a widget id suffix`() {
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_view_12"))
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_density_12"))
+        assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_sort_12"))
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_due_12"))
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_scroll_12"))
     }
@@ -56,10 +57,11 @@ class SettingsBackupTest {
     @Test
     fun `string and boolean prefixes are told apart`() {
         // Import accepts each prefix only in its own type, so the split the
-        // importer relies on is pinned here: view/density are strings,
+        // importer relies on is pinned here: view/density/sort are strings,
         // due/scroll are booleans, and neither side claims the other's keys.
         assertTrue(SettingsBackup.isStringWidgetKey("task_widget_view_12"))
         assertTrue(SettingsBackup.isStringWidgetKey("task_widget_density_12"))
+        assertTrue(SettingsBackup.isStringWidgetKey("task_widget_sort_12"))
         assertFalse(SettingsBackup.isStringWidgetKey("task_widget_due_12"))
         assertFalse(SettingsBackup.isStringWidgetKey("task_widget_scroll_12"))
         assertTrue(SettingsBackup.isBooleanWidgetKey("task_widget_due_12"))

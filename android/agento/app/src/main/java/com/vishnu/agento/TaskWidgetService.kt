@@ -52,6 +52,14 @@ private class TaskFactory(
             TaskWidget.viewFor(appCtx, appWidgetId)
         }
 
+    private fun sort(): TaskWidgetSort =
+        if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
+            // No placement to read from: keep the fetch order.
+            TaskWidgetSort.Server
+        } else {
+            TaskWidget.sortFor(appCtx, appWidgetId)
+        }
+
     private fun compact(): Boolean =
         appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID &&
             TaskWidget.densityFor(appCtx, appWidgetId) == TaskWidgetDensity.Compact
@@ -73,7 +81,7 @@ private class TaskFactory(
         runCatching {
             val state = view().state
             today = LocalDate.now(IST)
-            items = TaskWidget.cachedViews[state]
+            items = (TaskWidget.cachedViews[state]
                 ?: runCatching {
                     runBlocking {
                         withTimeoutOrNull(10_000) {
@@ -81,6 +89,9 @@ private class TaskFactory(
                         }.orEmpty()
                     }
                 }.getOrDefault(emptyList())
+                // Same order as the pushed paths (#369): the factory is
+                // the only renderer on API <31, so it sorts its own copy.
+                ).sortedForWidget(sort())
         }.onFailure {
             TaskWidget.recordFactoryError("onDataSetChanged", it)
         }

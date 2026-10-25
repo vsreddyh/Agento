@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.14.2]
+- **Task widget: rows can match the Task Manager's order (#369).** Each
+  placement gains a Row order setting (Server order, Start time, Name,
+  Newest, Estimate) — the non-Server orders are the Task Manager's own
+  sort, so the two can never disagree about what "Name" means. Server
+  order stays the default, the setting lives per placement (system
+  configure screen and Settings → Home-screen widget, whose summary now
+  names a non-default order), and it rides the backup like the other
+  display keys.
+
 ## [5.14.1]
 - **Tapping Completed on a reminder no longer opens the app (#368).**
   The notification actions were activity trampolines, which Android 12+

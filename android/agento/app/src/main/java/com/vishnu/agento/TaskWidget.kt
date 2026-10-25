@@ -37,6 +37,36 @@ enum class TaskWidgetDensity(val title: String) {
 }
 
 /**
+ * Row order for one widget placement (#369). `Server` keeps the fetch
+ * order (today's behaviour); the rest mirror the Task Manager's
+ * [ServerTaskSort] titles one-for-one, so a placement can match the
+ * in-app list ordering. Stored per widget id like the other display
+ * settings, with Server as the default.
+ */
+enum class TaskWidgetSort(val title: String) {
+    Server("Server order"),
+    Start("Start time"),
+    Name("Name"),
+    Created("Newest"),
+    Estimate("Estimate"),
+}
+
+/**
+ * Orders one placement's rows. Server keeps the fetch order untouched;
+ * every other mode reuses the Task Manager's own [sortedByMode], so the
+ * widget and the in-app list can never disagree about what "Name" means.
+ * Pure and JVM-pinned.
+ */
+internal fun List<ServerTask>.sortedForWidget(sort: TaskWidgetSort): List<ServerTask> =
+    when (sort) {
+        TaskWidgetSort.Server -> this
+        TaskWidgetSort.Start -> sortedByMode(ServerTaskSort.Start)
+        TaskWidgetSort.Name -> sortedByMode(ServerTaskSort.Name)
+        TaskWidgetSort.Created -> sortedByMode(ServerTaskSort.Created)
+        TaskWidgetSort.Estimate -> sortedByMode(ServerTaskSort.Estimate)
+    }
+
+/**
  * Ids of *this* provider's placements.
  *
  * [AppWidgetManager.getAppWidgetIds] is the documented way to ask, but on
@@ -125,6 +155,7 @@ class TaskWidget : AppWidgetProvider() {
             for (id in appWidgetIds) {
                 remove("task_widget_view_$id")
                 remove("task_widget_density_$id")
+                remove("task_widget_sort_$id")
                 remove("task_widget_due_$id")
                 remove("task_widget_scroll_$id")
                 // Retired diagnostic ladder: drop its key on delete too.
@@ -232,7 +263,8 @@ class TaskWidget : AppWidgetProvider() {
                 appendLine("placements=${ids.size}")
                 for (id in ids) {
                     appendLine("id=$id view=${viewFor(ctx, id)} " +
-                        "density=${densityFor(ctx, id)} showDue=${showDueFor(ctx, id)} " +
+                        "density=${densityFor(ctx, id)} sort=${sortFor(ctx, id)} " +
+                        "showDue=${showDueFor(ctx, id)} " +
                         "scrollable=${scrollableFor(ctx, id)}")
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
@@ -402,6 +434,13 @@ class TaskWidget : AppWidgetProvider() {
             val name = prefs(context).getString("task_widget_density_$appWidgetId", null)
             return TaskWidgetDensity.entries.firstOrNull { it.name == name }
                 ?: TaskWidgetDensity.Comfortable
+        }
+
+        /** This placement's row order, defaulting to Server (fetch order). */
+        fun sortFor(context: Context, appWidgetId: Int): TaskWidgetSort {
+            val name = prefs(context).getString("task_widget_sort_$appWidgetId", null)
+            return TaskWidgetSort.entries.firstOrNull { it.name == name }
+                ?: TaskWidgetSort.Server
         }
 
         /** Whether this placement's rows show the due line. */
@@ -582,7 +621,8 @@ class TaskWidget : AppWidgetProvider() {
             val notifyIds = mutableListOf<Int>()
             for (id in ids) {
                 val view = viewFor(appCtx, id)
-                val tasks = views[view.state] ?: cachedViews[view.state]
+                val tasks = views[view.state]?.sortedForWidget(sortFor(appCtx, id))
+                    ?: cachedViews[view.state]?.sortedForWidget(sortFor(appCtx, id))
                 if (scrollableFor(appCtx, id) && tasks != null &&
                     Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                 ) {

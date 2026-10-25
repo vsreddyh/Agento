@@ -1334,7 +1334,7 @@ internal fun WidgetSettingsSection() {
 
     SectionCard(
         title = "Home-screen widget",
-        subtitle = "What the task widget shows: which tasks, how dense the rows are, and whether due dates and scrolling are on. Every placement keeps its own settings.",
+        subtitle = "What the task widget shows: which tasks, in what order, how dense the rows are, and whether due dates and scrolling are on. Every placement keeps its own settings.",
     ) {
         if (widgetIds.isEmpty()) {
             Text(
@@ -1376,6 +1376,10 @@ internal fun WidgetSettingsSection() {
                                 append(" tasks · ")
                                 append(TaskWidget.densityFor(context, id).title)
                                 append(" rows")
+                                val sort = TaskWidget.sortFor(context, id)
+                                if (sort != TaskWidgetSort.Server) {
+                                    append(" · ${sort.title}")
+                                }
                                 if (!TaskWidget.showDueFor(context, id)) append(" · no due dates")
                                 if (!TaskWidget.scrollableFor(context, id)) {
                                     append(" · up to ${TaskWidget.STATIC_ROW_LIMIT} rows")
