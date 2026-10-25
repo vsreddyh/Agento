@@ -382,7 +382,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         retargetMemory()
     }
 
-    fun onPending(v: String) {
+    private fun onPending(v: String) {
         _state.value = _state.value.copy(pending = v)
         updateSlash(v)
     }
@@ -390,6 +390,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Slash picker cache per profile path: fetched invocable list + fetch time. */
     private var slashCache = mutableMapOf<String, Pair<Long, List<SkillInfo>>>()
     private var slashJob: Job? = null
+    /** Profile path with a fetch in flight: keystrokes while it runs only
+     * re-filter, never relaunch (the blocking OkHttp call is not
+     * cooperatively cancellable, so relaunches pile up and last-wins). */
+    private var slashFetching: String? = null
+    /** Composer text at dismiss time: the card stays hidden until the text
+     * changes, so Close actually closes instead of repainting an empty
+     * card over the same `/` prefix. */
+    private var slashDismissedAt: String? = null
 
     /**
      * Slash picker fetch (#372): first trigger per profile path fetches,
@@ -400,20 +408,33 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      */
     private fun updateSlash(text: String) {
         val query = slashQuery(text)
-        if (query == null) {
+        if (query == null || text == slashDismissedAt) {
             slashJob?.cancel()
             slashJob = null
+            slashFetching = null
             if (_state.value.slash != SlashPickerState()) {
                 _state.value = _state.value.copy(slash = SlashPickerState())
             }
             return
         }
+        // Any live typing clears the dismiss lock: the text moved on.
+        slashDismissedAt = null
         val path = api.pathFor(tab)
         val now = System.currentTimeMillis()
         val cached = slashCache[path]
         if (cached != null && now - cached.first < 60_000) {
             _state.value = _state.value.copy(
                 slash = SlashPickerState(query = query, skills = cached.second),
+            )
+            return
+        }
+        if (slashFetching == path) {
+            // A fetch for this path is already in flight: re-filter only.
+            // Relaunching per keystroke piles up blocking calls that
+            // cancellation cannot abort; the in-flight one lands and the
+            // live query filters it.
+            _state.value = _state.value.copy(
+                slash = _state.value.slash.copy(query = query),
             )
             return
         }
@@ -426,12 +447,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 ),
             )
         }
+        slashFetching = path
         slashJob?.cancel()
         slashJob = viewModelScope.launch {
             val res = serverApi.listSkills(path)
             // Text moved on, or the profile switched, while fetching.
-            if (slashQuery(_state.value.pending) == null || api.pathFor(tab) != path) return@launch
+            if (slashQuery(_state.value.pending) == null || api.pathFor(tab) != path) {
+                slashFetching = null
+                return@launch
+            }
             val liveQuery = slashQuery(_state.value.pending) ?: query
+            slashFetching = null
             res.fold(
                 onSuccess = { list ->
                     val inv = invocableSkills(list)
@@ -461,6 +487,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (!cur.startsWith("/")) return
         slashJob?.cancel()
         slashJob = null
+        slashFetching = null
+        slashDismissedAt = null
         _state.value = _state.value.copy(
             pending = insertSkillCommand(cur, name),
             slash = SlashPickerState(),
@@ -470,6 +498,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun dismissSlash() {
         slashJob?.cancel()
         slashJob = null
+        slashFetching = null
+        // Locked to the current text: the visibility gate keys on it, so
+        // the card stays hidden until the user types something new.
+        slashDismissedAt = _state.value.pending
         _state.value = _state.value.copy(slash = SlashPickerState())
     }
 

@@ -3663,21 +3663,25 @@ internal fun SlashPickerCard(
             if (state.loading && rows.isEmpty()) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
-            if (state.error.isNotEmpty() && rows.isEmpty()) {
+            // A failed refresh keeps the stale list AND says so: the error
+            // is a banner above the rows, never a replacement that hides
+            // the still-usable cached list.
+            if (state.error.isNotEmpty()) {
                 Text(
-                    "Couldn't load skills — type the command by hand.",
+                    "Couldn't load skills — showing cached list. Type the command by hand if it's missing.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
-            } else if (!state.loading && rows.isEmpty()) {
+            }
+            if (!state.loading && rows.isEmpty() && state.error.isEmpty()) {
                 Text(
                     "No matching skills.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
-            } else {
+            } else if (rows.isNotEmpty()) {
                 // Capped: the inventory is small, but the card sits over
                 // the transcript — eight rows, then the query narrows it.
                 rows.take(8).forEach { s ->

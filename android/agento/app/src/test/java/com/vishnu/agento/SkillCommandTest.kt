@@ -117,8 +117,15 @@ class SkillCommandTest {
             SkillInfo(name = "notes", description = "Summarise"),
             SkillInfo(name = "draft", scope = "taught", status = "draft"),
             SkillInfo(name = "active", scope = "taught", status = "active"),
+            SkillInfo(name = "off", enabled = false),
+            SkillInfo(name = "unknown", enabled = null),
         )
-        assertEquals(listOf(skills[0]), invocableSkills(skills))
+        // A definitely-disabled row would burn a turn like a taught one;
+        // an unknown toggle (older gateways) keeps the row.
+        assertEquals(
+            listOf(skills[0], skills[4]),
+            invocableSkills(skills),
+        )
     }
 
     // ── Payload parse ────────────────────────────────────────────────────
