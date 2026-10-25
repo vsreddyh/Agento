@@ -16,7 +16,8 @@ import java.time.LocalDate
  * in render(), since service-backed collections broke on Android 16
  * (issue #137). Each factory instance belongs to one placement (the
  * widget id arrives on its service intent) and shows that placement's
- * view (Open/Done/All) in its density (Comfortable/Compact). Snapshots
+ * view (Open/Done/All) in its density (Comfortable/Compact) and row order
+ * (matching the Task Manager sort, or server order). Snapshots
  * come from [TaskWidget]'s per-state cache (same process, no IPC
  * payload) so getViewAt stays cheap; row taps and the ring button fill
  * in to the [TaskCompleteActivity] template pending intent.

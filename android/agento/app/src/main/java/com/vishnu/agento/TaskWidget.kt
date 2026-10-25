@@ -103,7 +103,7 @@ fun taskWidgetIds(context: Context): IntArray {
  * Dynamic sizing: min footprint 3x2, resizable both ways. The list is a
  * RemoteViews collection ([TaskWidgetService]) with weight 1, so it
  * takes whatever height the placement offers. Display (density, due
- * line) is per-widget via [TaskWidgetConfigActivity].
+ * line, row order) is per-widget via [TaskWidgetConfigActivity].
  */
 class TaskWidget : AppWidgetProvider() {
 
@@ -621,8 +621,12 @@ class TaskWidget : AppWidgetProvider() {
             val notifyIds = mutableListOf<Int>()
             for (id in ids) {
                 val view = viewFor(appCtx, id)
-                val tasks = views[view.state]?.sortedForWidget(sortFor(appCtx, id))
-                    ?: cachedViews[view.state]?.sortedForWidget(sortFor(appCtx, id))
+                // Read once: the push below and the error branch both need
+                // the same order, and a second prefs read could straddle a
+                // settings write.
+                val sort = sortFor(appCtx, id)
+                val tasks = views[view.state]?.sortedForWidget(sort)
+                    ?: cachedViews[view.state]?.sortedForWidget(sort)
                 if (scrollableFor(appCtx, id) && tasks != null &&
                     Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                 ) {

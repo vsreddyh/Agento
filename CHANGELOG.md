@@ -8,7 +8,7 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
-## [5.14.2]
+## [5.15.0]
 - **Task widget: rows can match the Task Manager's order (#369).** Each
   placement gains a Row order setting (Server order, Start time, Name,
   Newest, Estimate) — the non-Server orders are the Task Manager's own
