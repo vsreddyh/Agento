@@ -103,6 +103,12 @@ object SettingsBackup {
         BehaviourSettings.KEY_NOTIFY_CRON,
         BehaviourSettings.KEY_SYNC_WIFI_ONLY,
         BehaviourSettings.KEY_SYNC_PAUSED,
+        // Update checks (#366): the two user-facing switches. The interval
+        // is a long below; the last-check bookkeeping keys are deliberately
+        // NOT allowlisted — a restored "8.0.0 available" on a build that
+        // already ships it would be a lie.
+        BehaviourSettings.KEY_UPDATE_STARTUP,
+        BehaviourSettings.KEY_UPDATE_NOTIFY,
     )
 
     /**
@@ -122,6 +128,8 @@ object SettingsBackup {
         BehaviourSettings.KEY_REMINDER_LEAD_MINUTES,
         BehaviourSettings.KEY_TTS_RATE_PCT,
         BehaviourSettings.KEY_TTS_PITCH_PCT,
+        // Update poll cadence (#366: 0 = off); coerced like the rest.
+        BehaviourSettings.KEY_UPDATE_INTERVAL_HOURS,
     )).distinct()
 
     /**

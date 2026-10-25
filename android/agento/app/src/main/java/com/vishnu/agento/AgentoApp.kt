@@ -3,9 +3,12 @@ package com.vishnu.agento
 import android.app.Application
 import android.content.Context
 import android.os.Bundle
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
@@ -31,9 +34,15 @@ class AgentoApp : Application() {
         scheduleSync(this)
         scheduleTaskSync(this)
         CronSyncWorker.schedule(this)
+        scheduleUpdateChecks(this)
+        // After scheduling, so a disabled periodic poll cancels the job
+        // first and a due startup check is the only one enqueued.
+        maybeCheckForUpdatesOnStartup(this)
     }
 
     companion object {
+        const val UPDATE_WORK_NAME = "agento_update_check"
+        const val UPDATE_STARTUP_WORK_NAME = "agento_update_check_startup"
         // NOTE: Agento ships as a NEW app (applicationId com.vishnu.agento),
         // so it installs alongside the old Health Gateway build instead of
         // updating it. No state is shared across packages (separate
@@ -115,6 +124,77 @@ class AgentoApp : Application() {
             WorkManager.getInstance(appCtx).enqueueUniquePeriodicWork(
                 TASK_SYNC_WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
+                request,
+            )
+        }
+
+        /**
+         * Periodic app-update poll (#366). `0` hours (Off) cancels the job
+         * rather than enqueuing a never-allowed request: an Off pick keeps
+         * the process from waking on a schedule at all. Anything else
+         * enqueues unique periodic work with UPDATE, so a cold start, a
+         * reboot and a cadence change all land on the same one.
+         */
+        fun scheduleUpdateChecks(context: Context) {
+            val appCtx = context.applicationContext
+            val wm = WorkManager.getInstance(appCtx)
+            val hours = BehaviourSettings.updateIntervalHours(appCtx)
+            if (hours <= BehaviourSettings.UPDATE_OFF_HOURS) {
+                wm.cancelUniqueWork(UPDATE_WORK_NAME)
+                return
+            }
+            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(
+                hours, TimeUnit.HOURS
+            ).setConstraints(
+                // The check is a small public-API GET, but offline a tick
+                // just wakes the process and fails — constrained, the window
+                // passes and the run happens when the network is back.
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            ).setBackoffCriteria(
+                BackoffPolicy.EXPONENTIAL,
+                UpdateCheckWorker.BACKOFF_MS, TimeUnit.MILLISECONDS,
+            ).build()
+            wm.enqueueUniquePeriodicWork(
+                UPDATE_WORK_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request,
+            )
+        }
+
+        /**
+         * Enqueues the startup one-shot (#366) when the toggle is on and
+         * the last check is older than the debounce. Called from
+         * [onCreate]; also from the toggle's setter so flipping it on
+         * takes effect without killing the process. Requires its own
+         * connectivity constraint — like the periodic job, there is no
+         * point waking offline.
+         */
+        fun maybeCheckForUpdatesOnStartup(context: Context) {
+            val appCtx = context.applicationContext
+            val snap = UpdateCheck.snapshot(appCtx)
+            if (!UpdateCheck.startupDue(
+                    snap.checkedAt, System.currentTimeMillis(),
+                    BehaviourSettings.updateStartup(appCtx),
+                )
+            ) {
+                return
+            }
+            val request = OneTimeWorkRequestBuilder<UpdateCheckWorker>()
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .build(),
+                )
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    UpdateCheckWorker.BACKOFF_MS, TimeUnit.MILLISECONDS,
+                )
+                .build()
+            WorkManager.getInstance(appCtx).enqueueUniqueWork(
+                UPDATE_STARTUP_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
                 request,
             )
         }

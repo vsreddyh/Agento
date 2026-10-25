@@ -121,6 +121,13 @@ class MainActivity : ComponentActivity() {
     private val schedulerTargetId = mutableStateOf<String?>(null)
 
     /**
+     * Update-available notification tap (#366). Generation counter like
+     * schedulerGen so retaps renavigate; lands on Settings → About (where
+     * the App updates section lives).
+     */
+    private val updateGen = mutableIntStateOf(0)
+
+    /**
      * Chat-thread deep-link (task-instruction tap, #287). Generation counter
      * like tasksGen so retaps renavigate; ChatTab consumes the thread id
      * and clears it once the ViewModel is ready.
@@ -152,6 +159,9 @@ class MainActivity : ComponentActivity() {
             chatThreadId.value = intent.getStringExtra(InstructIntents.EXTRA_THREAD_ID)
             chatAutosend.value = intent.getBooleanExtra(InstructIntents.EXTRA_AUTOSEND, false)
         }
+        if (intent.action == UpdateCheck.ACTION_UPDATE) {
+            updateGen.intValue++
+        }
     }
 
     /** Adaptive sidebar navigation (#18, #64); theme from prefs (#28). */
@@ -181,6 +191,10 @@ class MainActivity : ComponentActivity() {
             chatGen.intValue = 1
             chatThreadId.value = intent?.getStringExtra(InstructIntents.EXTRA_THREAD_ID)
             chatAutosend.value = intent?.getBooleanExtra(InstructIntents.EXTRA_AUTOSEND, false) == true
+        }
+        // Update-available notification tap: same redelivery guard.
+        if (savedInstanceState == null && intent?.action == UpdateCheck.ACTION_UPDATE && updateGen.intValue == 0) {
+            updateGen.intValue = 1
         }
         setContent {
             val context = LocalContext.current
@@ -227,6 +241,14 @@ class MainActivity : ComponentActivity() {
                     LaunchedEffect(chatGen.intValue) {
                         if (chatGen.intValue > 0) {
                             dest = Destination.Chat
+                        }
+                    }
+                    // Update-available notification tap (#366): land on
+                    // Settings → About, where the App updates section lives.
+                    LaunchedEffect(updateGen.intValue) {
+                        if (updateGen.intValue > 0) {
+                            dest = Destination.Settings
+                            section = SettingSection.About
                         }
                     }
                     // Null section = the settings hub overview; a non-null

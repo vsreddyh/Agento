@@ -31,6 +31,8 @@ class BootReceiver : BroadcastReceiver() {
                 // an app update clears nothing here and a fresh install has
                 // no schedule at all — re-asserting is idempotent either way.
                 AgentoApp.scheduleTaskSync(context)
+                // Same for the update poll (#366): re-asserted, never doubled.
+                AgentoApp.scheduleUpdateChecks(context)
                 val pending = goAsync()
                 scope.launch {
                     try {

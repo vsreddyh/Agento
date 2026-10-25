@@ -244,6 +244,78 @@ object BehaviourSettings {
         prefs(ctx).edit { putBoolean(KEY_NOTIFY_CRON, on) }
     }
 
+    // ── App update checks (#366) ─────────────────────────────────────────
+    // Startup check is on and the periodic poll is daily, so an install
+    // that never opens this section notices releases the way every other
+    // app does; the notification stays OFF because a silent badge in
+    // Settings is the least surprising default (the issue's suggestion).
+    const val KEY_UPDATE_STARTUP = "update_check_startup"
+    const val KEY_UPDATE_INTERVAL_HOURS = "update_check_interval_hours"
+    const val KEY_UPDATE_NOTIFY = "update_check_notify"
+    const val DEFAULT_UPDATE_INTERVAL_HOURS = 24L
+    /** 0 means "off": no periodic job at all, exactly like paused sync. */
+    const val UPDATE_OFF_HOURS = 0L
+    /** 168 = weekly: GitHub's unauthenticated API allows 60 req/hr, and a
+     * device never needs more than one check per hour anyway. */
+    val UPDATE_INTERVAL_OPTIONS_HOURS =
+        listOf(UPDATE_OFF_HOURS, 1L, 2L, 4L, 6L, 12L, 24L, 168L)
+
+    fun updateStartup(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_UPDATE_STARTUP, true)
+
+    fun updateIntervalHours(ctx: Context): Long =
+        coerceImport(KEY_UPDATE_INTERVAL_HOURS,
+            prefs(ctx).getLong(KEY_UPDATE_INTERVAL_HOURS, DEFAULT_UPDATE_INTERVAL_HOURS))
+
+    fun updateNotify(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_UPDATE_NOTIFY, false)
+
+    fun setUpdateStartup(ctx: Context, on: Boolean) {
+        prefs(ctx).edit { putBoolean(KEY_UPDATE_STARTUP, on) }
+        AgentoApp.maybeCheckForUpdatesOnStartup(ctx)
+    }
+
+    fun setUpdateIntervalHours(ctx: Context, hours: Long) {
+        prefs(ctx).edit {
+            putLong(KEY_UPDATE_INTERVAL_HOURS, hours.coerceIn(UPDATE_OFF_HOURS, 168L))
+        }
+        // Re-enqueue (or cancel) now: the user just picked a cadence, so
+        // waiting for the next cold start would be indistinguishable from
+        // the setting not working.
+        AgentoApp.scheduleUpdateChecks(ctx)
+    }
+
+    fun setUpdateNotify(ctx: Context, on: Boolean) {
+        prefs(ctx).edit { putBoolean(KEY_UPDATE_NOTIFY, on) }
+    }
+
+    /** Picker label; `0` is "Off", never "every 0 hours". */
+    fun updateIntervalChoiceLabel(hours: Long): String {
+        val h = coerceImport(KEY_UPDATE_INTERVAL_HOURS, hours)
+        return when {
+            h == UPDATE_OFF_HOURS -> "Off"
+            h == 1L -> "Hourly"
+            h == 24L -> "Daily"
+            h == 168L -> "Weekly"
+            h % 24L == 0L -> "Every ${h / 24L} days"
+            else -> "Every $h hours"
+        }
+    }
+
+    /** Cadence line for the App updates card; total like its siblings. */
+    fun updateCadenceLine(hours: Long, startup: Boolean): String {
+        val h = coerceImport(KEY_UPDATE_INTERVAL_HOURS, hours)
+        val periodic = when {
+            h == UPDATE_OFF_HOURS -> "Automatic checks are off."
+            h == 1L -> "Automatic checks run every hour."
+            h == 24L -> "Automatic checks run daily."
+            h == 168L -> "Automatic checks run weekly."
+            h % 24L == 0L -> "Automatic checks run every ${h / 24L} days."
+            else -> "Automatic checks run every $h hours."
+        }
+        return if (startup) "$periodic Plus once on startup." else periodic
+    }
+
     // ── Auto-read (surfaced here; the chat bar keeps its toggle) ─────────
     const val KEY_TTS_AUTO = "tts_auto"
 
@@ -269,6 +341,9 @@ object BehaviourSettings {
         kindCron = notifyCronRaw(ctx),
         remindersOn = TaskReminders.isEnabled(ctx),
         autoRead = ttsAuto(ctx),
+        updateHours = updateIntervalHours(ctx),
+        updateStartup = updateStartup(ctx),
+        updateNotify = updateNotify(ctx),
     )
 
     /** Pure deviation count, JVM-pinned: every knob that differs from its
@@ -289,6 +364,12 @@ object BehaviourSettings {
         kindCron: Boolean,
         remindersOn: Boolean,
         autoRead: Boolean,
+        // #366 append-only: existing callers (and the pinned test helper)
+        // keep compiling, and the defaults match the getters so "nothing
+        // configured" still counts zero.
+        updateHours: Long = DEFAULT_UPDATE_INTERVAL_HOURS,
+        updateStartup: Boolean = true,
+        updateNotify: Boolean = false,
     ): Int {
         // Total like the cadence lines: coerce, so both overloads agree on
         // the same effective state (a stored 0 reads back as its floor).
@@ -319,6 +400,12 @@ object BehaviourSettings {
         // deliberate behaviour change made in this section.
         if (remindersOn) n++
         if (autoRead) n++
+        // Update checks (#366): each knob is independently meaningful, so
+        // no mootness folding here — a weekly cadence with a startup check
+        // is two deliberate picks, not one.
+        if (coerceImport(KEY_UPDATE_INTERVAL_HOURS, updateHours) != DEFAULT_UPDATE_INTERVAL_HOURS) n++
+        if (!updateStartup) n++
+        if (updateNotify) n++
         return n
     }
 
@@ -350,6 +437,9 @@ object BehaviourSettings {
         KEY_TASK_SYNC_INTERVAL_MINUTES -> value.coerceIn(15L, 24L * 60L)
         KEY_REMINDER_LEAD_MINUTES -> value.coerceIn(0L, 24L * 60L)
         KEY_TTS_RATE_PCT, KEY_TTS_PITCH_PCT -> value.coerceIn(50L, 200L)
+        // 0 is a real value here (off), unlike the cadences above whose
+        // floor is the shortest offered interval.
+        KEY_UPDATE_INTERVAL_HOURS -> value.coerceIn(UPDATE_OFF_HOURS, 168L)
         else -> maxOf(0L, value)
     }
 

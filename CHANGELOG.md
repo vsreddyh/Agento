@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.14.0]
+- **App updates check themselves now (#366).** Tapping Check for updates
+  still works, but Agento also checks once on startup (at most every 6
+  hours) and on a configurable schedule (hourly to weekly, daily by
+  default, or off). Cadence, the startup check and an opt-in per-release
+  notification live in Settings → Behaviour. Checking never downloads
+  anything — install stays a tap in Settings → About.
+
 ## [5.13.2]
 - **Chat header: the title reads again (#354).** The bar carried seven
   action icons, so Material 3 measured the actions first and the title got

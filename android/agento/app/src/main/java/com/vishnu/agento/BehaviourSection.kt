@@ -82,6 +82,15 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     var kindCron by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.notifyCronRaw(context))
     }
+    var updateStartup by remember(refreshTick) {
+        mutableStateOf(BehaviourSettings.updateStartup(context))
+    }
+    var updateHours by remember(refreshTick) {
+        mutableStateOf(BehaviourSettings.updateIntervalHours(context))
+    }
+    var updateNotify by remember(refreshTick) {
+        mutableStateOf(BehaviourSettings.updateNotify(context))
+    }
     val masterOn = ChatNotifications.isEnabled(context)
 
     // Reminder enable flow (moved from the Task Manager bell): exact alarms
@@ -435,6 +444,50 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 kindCron = it
             },
         )
+    }
+
+    SectionCard(
+        title = "App update checks",
+        subtitle = "Automatic checks for newer Agento releases. Checking " +
+            "never downloads anything — install stays a tap in " +
+            "Settings → About → App updates.",
+    ) {
+        SwitchRow(
+            text = "Check on startup",
+            sub = "Run one check at most once every 6 hours on cold start.",
+            checked = updateStartup,
+            onChange = {
+                BehaviourSettings.setUpdateStartup(context, it)
+                updateStartup = it
+            },
+        )
+        OptionMenu(
+            label = "Check periodically",
+            shown = BehaviourSettings.updateIntervalChoiceLabel(updateHours),
+            options = BehaviourSettings.UPDATE_INTERVAL_OPTIONS_HOURS.map {
+                it.toString() to BehaviourSettings.updateIntervalChoiceLabel(it)
+            },
+            onPick = {
+                it.toLongOrNull()?.let { h ->
+                    BehaviourSettings.setUpdateIntervalHours(context, h)
+                    updateHours = BehaviourSettings.updateIntervalHours(context)
+                }
+            },
+        )
+        SwitchRow(
+            text = "Notify when a release is ready",
+            sub = "Post a notification (background only, one per release) " +
+                "when a check finds a newer release. Needs notification permission.",
+            checked = updateNotify,
+            onChange = {
+                BehaviourSettings.setUpdateNotify(context, it)
+                updateNotify = it
+            },
+        )
+        HintLine(BehaviourSettings.updateCadenceLine(updateHours, updateStartup))
+        if (updateHours !in BehaviourSettings.UPDATE_INTERVAL_OPTIONS_HOURS) {
+            HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
+        }
     }
 }
 

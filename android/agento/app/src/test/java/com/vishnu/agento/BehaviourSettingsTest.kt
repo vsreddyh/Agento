@@ -270,10 +270,121 @@ class BehaviourSettingsTest {
             BehaviourSettings.KEY_REMINDER_LEAD_MINUTES,
             BehaviourSettings.KEY_TTS_RATE_PCT,
             BehaviourSettings.KEY_TTS_PITCH_PCT,
+            // Update poll cadence (#366: 0 = off) — coerced like the rest.
+            BehaviourSettings.KEY_UPDATE_INTERVAL_HOURS,
         )) {
             assertTrue("LONG_KEYS lacks $k", SettingsBackup.LONG_KEYS.contains(k))
         }
+        // Update switches (#366) back up like the reminders switch; the
+        // last-check bookkeeping must NOT enter a backup.
+        for (k in listOf(
+            BehaviourSettings.KEY_UPDATE_STARTUP,
+            BehaviourSettings.KEY_UPDATE_NOTIFY,
+        )) {
+            assertTrue("BOOLEAN_KEYS lacks $k", SettingsBackup.BOOLEAN_KEYS.contains(k))
+        }
+        for (k in listOf(
+            "update_last_check_at", "update_last_tag", "update_last_name",
+            "update_last_apk_url", "update_last_apk_size", "update_last_notes",
+            "update_last_error", "update_notified_tag",
+        )) {
+            assertFalse(
+                "backup must not persist $k",
+                SettingsBackup.STRING_KEYS.contains(k) ||
+                    SettingsBackup.BOOLEAN_KEYS.contains(k) ||
+                    SettingsBackup.LONG_KEYS.contains(k),
+            )
+        }
         // The backup format itself did not move: still version 1.
         assertEquals(1, SettingsBackup.VERSION)
+    }
+
+    @Test
+    fun `update interval labels read naturally`() {
+        assertEquals("Off", BehaviourSettings.updateIntervalChoiceLabel(0L))
+        assertEquals("Hourly", BehaviourSettings.updateIntervalChoiceLabel(1L))
+        assertEquals("Daily", BehaviourSettings.updateIntervalChoiceLabel(24L))
+        assertEquals("Weekly", BehaviourSettings.updateIntervalChoiceLabel(168L))
+        assertEquals("Every 4 hours", BehaviourSettings.updateIntervalChoiceLabel(4L))
+        assertEquals("Every 2 days", BehaviourSettings.updateIntervalChoiceLabel(48L))
+        // Total like the other labels: out-of-range reads as its clamp.
+        assertEquals("Off", BehaviourSettings.updateIntervalChoiceLabel(-2L))
+        assertEquals("Weekly", BehaviourSettings.updateIntervalChoiceLabel(999L))
+    }
+
+    @Test
+    fun `update cadence line names both knobs`() {
+        assertEquals(
+            "Automatic checks run daily. Plus once on startup.",
+            BehaviourSettings.updateCadenceLine(24L, true),
+        )
+        assertEquals(
+            "Automatic checks are off.",
+            BehaviourSettings.updateCadenceLine(0L, false),
+        )
+        assertEquals(
+            "Automatic checks run every 4 hours. Plus once on startup.",
+            BehaviourSettings.updateCadenceLine(4L, true),
+        )
+        assertEquals(
+            "Automatic checks run weekly.",
+            BehaviourSettings.updateCadenceLine(168L, false),
+        )
+        // Coerced like the getters: a floor input reads as its default.
+        assertEquals(
+            "Automatic checks run daily. Plus once on startup.",
+            BehaviourSettings.updateCadenceLine(24L, true),
+        )
+    }
+
+    @Test
+    fun `update knobs count in the hub`() {
+        fun all(
+            syncHours: Long = 1L,
+            wifiOnly: Boolean = false,
+            paused: Boolean = false,
+            taskMinutes: Long = 30L,
+            leadMinutes: Long = 5L,
+            voice: String = "",
+            ratePct: Long = 100L,
+            pitchPct: Long = 100L,
+            kindFailed: Boolean = true,
+            kindInstruct: Boolean = true,
+            kindCron: Boolean = true,
+            remindersOn: Boolean = false,
+            autoRead: Boolean = false,
+            updateHours: Long = 24L,
+            updateStartup: Boolean = true,
+            updateNotify: Boolean = false,
+        ) = BehaviourSettings.customCount(
+            syncHours, wifiOnly, paused, taskMinutes, leadMinutes, voice,
+            ratePct, pitchPct, kindFailed, kindInstruct, kindCron,
+            remindersOn, autoRead, updateHours, updateStartup, updateNotify,
+        )
+        // Defaults (daily poll, startup on, silent) count zero.
+        assertEquals(0, all())
+        assertEquals(1, all(updateHours = 0L))
+        assertEquals(1, all(updateHours = 168L))
+        assertEquals(1, all(updateStartup = false))
+        assertEquals(1, all(updateNotify = true))
+        assertEquals(2, all(updateHours = 0L, updateNotify = true))
+        // A fresh install's stored out-of-floor reads as its default.
+        assertEquals(0, all(updateHours = -5L))
+    }
+
+    @Test
+    fun `update interval import coercion keeps off`() {
+        assertEquals(
+            0L,
+            BehaviourSettings.coerceImport(BehaviourSettings.KEY_UPDATE_INTERVAL_HOURS, -3L),
+        )
+        assertEquals(
+            168L,
+            BehaviourSettings.coerceImport(BehaviourSettings.KEY_UPDATE_INTERVAL_HOURS, 999L),
+        )
+        assertEquals(
+            24L,
+            BehaviourSettings.coerceImport(BehaviourSettings.KEY_UPDATE_INTERVAL_HOURS, 24L),
+        )
     }
 }
