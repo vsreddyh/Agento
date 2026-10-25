@@ -368,8 +368,9 @@ class BehaviourSettingsTest {
         assertEquals(1, all(updateStartup = false))
         assertEquals(1, all(updateNotify = true))
         assertEquals(2, all(updateHours = 0L, updateNotify = true))
-        // A fresh install's stored out-of-floor reads as its default.
-        assertEquals(0, all(updateHours = -5L))
+        // A fresh install's stored out-of-floor reads as its clamp: -5
+        // means Off, which is a deliberate deviation from daily.
+        assertEquals(1, all(updateHours = -5L))
     }
 
     @Test
