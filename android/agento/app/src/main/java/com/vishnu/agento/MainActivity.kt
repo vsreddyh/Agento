@@ -243,18 +243,19 @@ class MainActivity : ComponentActivity() {
                             dest = Destination.Chat
                         }
                     }
+                    // Null section = the settings hub overview; a non-null
+                    // section opens that subsection directly.
+                    var section by remember { mutableStateOf<SettingSection?>(null) }
+                    var settingsOpen by remember { mutableStateOf(false) }
                     // Update-available notification tap (#366): land on
                     // Settings → About, where the App updates section lives.
+                    // After `section` is declared: the effect assigns it.
                     LaunchedEffect(updateGen.intValue) {
                         if (updateGen.intValue > 0) {
                             dest = Destination.Settings
                             section = SettingSection.About
                         }
                     }
-                    // Null section = the settings hub overview; a non-null
-                    // section opens that subsection directly.
-                    var section by remember { mutableStateOf<SettingSection?>(null) }
-                    var settingsOpen by remember { mutableStateOf(false) }
                     val drawerState = rememberDrawerState(DrawerValue.Closed)
                     val scope = rememberCoroutineScope()
                     // Resume tick for cross-screen freshness: a flip in
