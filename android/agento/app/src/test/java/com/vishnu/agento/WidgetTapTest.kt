@@ -2,6 +2,7 @@ package com.vishnu.agento
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -50,5 +51,37 @@ class WidgetTapTest {
         assertNull(widgetTapTarget(R.id.task_widget_row_due))
         assertNull(widgetTapTarget(R.id.task_widget_static_list))
         assertNull(widgetTapTarget(R.id.task_widget_list_view))
+    }
+
+    @Test
+    fun `installed id lists match the table`() {
+        // The table alone cannot catch a layout omission (the plain-rows
+        // count shipped without a handler behind a passing table test):
+        // every installed id must resolve to its layout's destination.
+        for (id in PLAIN_TAP_IDS + LIST_TAP_IDS) {
+            val expected = if (id == R.id.task_widget_refresh) {
+                WidgetTapTarget.REFRESH
+            } else {
+                WidgetTapTarget.OPEN_TASKS
+            }
+            assertEquals(
+                "installed id ${id} must map to $expected",
+                expected,
+                widgetTapTarget(id),
+            )
+        }
+        // Both layouts install the background, title, empty line and
+        // refresh — only the view label is plain-only.
+        for (id in listOf(
+            R.id.task_widget_body,
+            R.id.task_widget_title,
+            R.id.task_widget_empty,
+            R.id.task_widget_refresh,
+        )) {
+            assertTrue("both layouts install $id", id in PLAIN_TAP_IDS && id in LIST_TAP_IDS)
+        }
+        assertTrue(R.id.task_widget_view in PLAIN_TAP_IDS)
+        assertTrue(R.id.task_widget_count in PLAIN_TAP_IDS)
+        assertTrue(R.id.task_widget_count in LIST_TAP_IDS)
     }
 }

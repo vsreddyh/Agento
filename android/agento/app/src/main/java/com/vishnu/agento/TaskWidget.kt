@@ -22,6 +22,29 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
+/**
+ * Header/background ids per layout (#370): everything that opens the Task
+ * Manager, named once so render() and the test read the same lists. The
+ * view label exists only in the plain layout (the scrollable header names
+ * the view in its title instead); every other chrome id exists in both.
+ */
+internal val PLAIN_TAP_IDS = listOf(
+    R.id.task_widget_body,
+    R.id.task_widget_title,
+    R.id.task_widget_count,
+    R.id.task_widget_view,
+    R.id.task_widget_empty,
+    R.id.task_widget_refresh,
+)
+
+internal val LIST_TAP_IDS = listOf(
+    R.id.task_widget_body,
+    R.id.task_widget_title,
+    R.id.task_widget_count,
+    R.id.task_widget_empty,
+    R.id.task_widget_refresh,
+)
+
 /** Where one widget header/background tap lands (#370). Rows are not in
  * this table: the ring and the row body ride the collection template (or
  * per-row intents), which own their view ids. */
@@ -253,10 +276,14 @@ class TaskWidget : AppWidgetProvider() {
         // CONFIG_CODE are reserved for the removed header toggle/settings
         // taps: gaps in the numbering are deliberate, so a PendingIntent
         // already cached by an older build still matches its own code.
+        // Unused by construction — the suppression says why, so a lint
+        // cleanup never "reclaims" them and collides with a cached PI.
         private const val OPEN_CODE = 1001
         private const val REFRESH_CODE = 1002
+        @Suppress("unused")
         private const val VIEW_CODE = 1003
         private const val ROW_CODE = 1004
+        @Suppress("unused")
         private const val CONFIG_CODE = 1005
 
         /** Rows rendered by the non-scrolling (plain-rows) path. Shown in
@@ -775,16 +802,9 @@ class TaskWidget : AppWidgetProvider() {
             val scrollable = scrollableFor(context, appWidgetId)
             if (!scrollable) {
                 return RemoteViews(context.packageName, R.layout.task_widget_full).apply {
-                    // Header ids for this shape; the view label exists only
-                    // here (the scrollable layout names the view in its
-                    // title instead).
-                    applyTapTargets(this, openPending, refreshPending, listOf(
-                        R.id.task_widget_body,
-                        R.id.task_widget_title,
-                        R.id.task_widget_view,
-                        R.id.task_widget_empty,
-                        R.id.task_widget_refresh,
-                    ))
+                    // The view label exists only here (the scrollable
+                    // layout names the view in its title instead).
+                    applyTapTargets(this, openPending, refreshPending, PLAIN_TAP_IDS)
                     if (tasks != null) {
                         val today = java.time.LocalDate.now(IST)
                         val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
@@ -814,13 +834,7 @@ class TaskWidget : AppWidgetProvider() {
             }
             // E: the collection widget, on the same proven chrome.
             return RemoteViews(context.packageName, R.layout.task_widget_list).apply {
-                applyTapTargets(this, openPending, refreshPending, listOf(
-                    R.id.task_widget_body,
-                    R.id.task_widget_title,
-                    R.id.task_widget_count,
-                    R.id.task_widget_empty,
-                    R.id.task_widget_refresh,
-                ))
+                applyTapTargets(this, openPending, refreshPending, LIST_TAP_IDS)
                 if (tasks != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     // Service-backed collections (setRemoteAdapter) broke
                     // on Android 16 — hand the rows over directly instead
@@ -876,8 +890,9 @@ class TaskWidget : AppWidgetProvider() {
         }
 
         /** Empty/loading/error line under the list. No "tap to retry"
-         * suffix: the empty view is not tappable (the refresh button is),
-         * so promising a dead tap is worse than none. */
+         * suffix: the empty view opens the Task Manager like the rest of
+         * the background (#370), so promising a retry tap would be worse
+         * than none. */
         private fun emptyText(
             context: Context,
             tasks: List<ServerTask>?,
