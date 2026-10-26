@@ -93,7 +93,9 @@ fun slashQuery(text: String): String? {
  * Builds the composer text after tapping a picker row: the `/` token
  * becomes `/skill:<name> ` (trailing space) and anything already typed
  * after it is kept as the skill's argument text. Precondition: [current]
- * starts with `/` (callers only invoke it off an active trigger).
+ * starts with `/` (callers only invoke it off an active trigger) —
+ * enforced, so a future caller passes a bad string loudly instead of
+ * sending a silently malformed command.
  *
  * Single-line environment by construction: the composer is one field, so the
  * whitespace run that ends the slash token collapses into the one separating
@@ -103,6 +105,7 @@ fun slashQuery(text: String): String? {
  * have to revisit this join deliberately rather than inherit it.
  */
 fun insertSkillCommand(current: String, name: String): String {
+    require(current.startsWith("/")) { "insertSkillCommand needs a slash trigger, got: $current" }
     val afterToken = current.dropWhile { !it.isWhitespace() }
     return if (afterToken.isBlank()) {
         "/skill:$name "

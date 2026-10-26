@@ -233,9 +233,10 @@ class TaskWidget : AppWidgetProvider() {
 
     override fun onDeleted(context: Context, appWidgetIds: IntArray) {
         // Drop this placement's per-widget prefs so removed widgets don't
-        // leak keys forever. Every key the widget config/render writes is
-        // removed below — add a new display key to BOTH places rather than
-        // trusting a list here to stay current (#388).
+        // leak keys forever. Every key the widget writes is removed below —
+        // a new display key needs THREE matching edits, not a list trusted
+        // to stay current (#388): the write in TaskWidgetConfigActivity,
+        // the read in render(), and this removal loop.
         prefs(context).edit {
             for (id in appWidgetIds) {
                 remove("task_widget_view_$id")

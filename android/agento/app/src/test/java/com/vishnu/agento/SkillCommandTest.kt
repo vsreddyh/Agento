@@ -151,6 +151,17 @@ class SkillCommandTest {
         assertEquals("/skill:notes arg", insertSkillCommand("/no \n arg", "notes"))
     }
 
+    @Test
+    fun `insert requires a slash trigger`() {
+        // Fail-fast precondition: callers only invoke this off an active
+        // trigger (pickSkill guards), so anything else is a caller bug.
+        var failed = false
+        runCatching { insertSkillCommand("notes", "notes") }.onFailure {
+            failed = it is IllegalArgumentException
+        }
+        assertTrue(failed)
+    }
+
     // ── Taught exclusion ─────────────────────────────────────────────────
 
     @Test

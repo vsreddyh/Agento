@@ -38,7 +38,8 @@ see GitHub Releases for older notes.
   channel for new installs — no sound, no heads-up — while an existing
   channel is left exactly as it is. An ask_user dialog with no question text is
   cancelled server-side instead of carding a generic line, and the
-  empty-answer error no longer names the wire keyword (`cancelled:true`).
+  empty-answer error now uses plain language instead of naming the
+  internal cancel field the gateway speaks on the wire.
   The chat and question clients now resolve the server URL and password
   through one rule rather than two. Comment-only cleanups pin the
   intentional single-key effect in App updates, the update poll's re-arm
