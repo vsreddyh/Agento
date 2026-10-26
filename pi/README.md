@@ -13,7 +13,7 @@ state (see `.gitignore`).
 | `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all of them. |
 | `profiles/<name>/AGENTS.md` | yes | one per profile (`chat` only since #289). Each profile's own instructions and personality. |
 | `profiles/<name>/skills/` | yes | Per-profile skills. **Not discovered as laid out** — see the profile-skills finding below; loaded by an explicit `--skill` path per profile. |
-| `extensions/` | yes | Pi extensions loaded by every profile. Currently one: `subagent.ts`, the `spawn_subagent` delegation tool. See the subagent section below. |
+| `extensions/` | yes | Pi extensions loaded by every profile. Two: `subagent.ts`, the `spawn_subagent` delegation tool, and `ask_user.ts`, the `ask_user` mid-turn question tool relayed by the gateway (#373). See the sections below. |
 | `auth.json` | **no** | provider credentials. `OPENCODE_API_KEY` is injected by compose. |
 | `models-store.json` | **no** | model catalog cache Pi refreshes at startup. |
 | `sessions/` | **no** | session transcripts. |
@@ -233,6 +233,7 @@ through nginx — not `pi` itself.
 | `DELETE /api/memory/{id}` | yes — real delete, gone from the next turn | memory store |
 | `POST /api/memory/forget` | yes — delete every item for the profile | memory store |
 | `PUT /api/memory/topics/{topic}` | yes — pause/resume one topic | memory store |
+| `POST /{profile}/api/questions/{id}` | yes — answer a pending `ask_user` dialog, exactly once | `extension_ui_response` over Pi stdin |
 
 Approval gates (#313) hold sensitive tool calls in `mcp-gate`, the relay every
 `mcp.json` entry points through: money writes, deletes, rewrites and real

@@ -117,6 +117,18 @@ data class ChatUiState(
     /** Memory ids with a write in flight: their buttons disable so a double
      * tap cannot fire two writes. */
     val actingMemory: Set<String> = emptySet(),
+    /** Pending ask_user dialog for the active thread (#373): the agent is
+     * blocked waiting for a human answer. Gated by conversation id both
+     * when stored and when rendered, so a thread switch can never show
+     * another thread's card. */
+    val pendingQuestion: PendingQuestion? = null,
+    /** Last answer/cancel failure, shown on the card with a retry. */
+    val questionError: String = "",
+    /** Free-text answer draft; kept across a failed send so retry resends. */
+    val questionDraft: String = "",
+    /** An answer/cancel POST is in flight: buttons disable to prevent a
+     * double-tap second write (which the gateway would 409). */
+    val questionSending: Boolean = false,
     /** Slash skill picker (#372): query + invocable list for the composer.
      * Visibility is gated by the text itself (ChatScreen shows it only
      * while `slashQuery(pending)` is non-null), so thread switches, sends
@@ -200,6 +212,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private val memoryApi = MemoryApi(app)
     private val teachApi = TeachApi(app)
     private val serverApi = ServerApi(app)
+    private val questionsApi = QuestionsApi(app)
     private val appCtx: Application = app
 
     /** Decoded-thumbnail memory, VM-held so it survives rotation; evicted on
@@ -517,6 +530,133 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         )
     }
 
+    /**
+     * Clears a held ask_user dialog on every active-thread change (#373):
+     * the card belongs to one thread's turn (the gateway clears the slot
+     * at teardown), so a stale object would resurrect a 404 card when
+     * switching back. Same for the draft — thread B must never inherit
+     * thread A's half-typed answer.
+     */
+    private fun clearQuestionState() {
+        _state.value = _state.value.copy(
+            pendingQuestion = null, questionError = "",
+            questionDraft = "", questionSending = false,
+        )
+    }
+
+    /**
+     * ask_user answers (#373). The card clears optimistically — the turn
+     * continues in the same stream — and a failure restores the card with
+     * an error whose send buttons retry the same value.
+     */
+    fun setQuestionDraft(v: String) {
+        // Capped at the gateway bound: an overlong value is a deterministic
+        // 400, and an uncapped field lets a paste loop it forever.
+        _state.value = _state.value.copy(questionDraft = v.take(QuestionsApi.MAX_ANSWER_CHARS))
+    }
+
+    fun answerQuestion(value: String) {
+        val q = _state.value.pendingQuestion ?: return
+        if (_state.value.questionSending) return
+        val path = api.pathFor(tab)
+        // The turn/thread this POST belongs to: a Done, an error, or a
+        // thread change before the response lands must not restore the
+        // card onto a dead turn or a new thread.
+        val ownerThread = threadId
+        _state.value = _state.value.copy(
+            pendingQuestion = null, questionError = "", questionSending = true,
+        )
+        viewModelScope.launch {
+            questionsApi.answer(path, q.id, value).fold(
+                onSuccess = {
+                    // Same guard as the failure path: a thread switch (or a
+                    // newer question) while posting must not clear the new
+                    // thread's draft or flip its in-flight flag.
+                    if (ownerThread == threadId) {
+                        _state.value = _state.value.copy(questionSending = false, questionDraft = "")
+                    }
+                },
+                onFailure = { e ->
+                    restoreQuestion(
+                        q, ownerThread,
+                        e.message ?: "Couldn't send the answer",
+                        e.isFinal(),
+                    )
+                },
+            )
+        }
+    }
+
+    /** Cancels the dialog: the tool errors and the turn continues. */
+    fun cancelQuestion() {
+        val q = _state.value.pendingQuestion ?: return
+        if (_state.value.questionSending) return
+        val path = api.pathFor(tab)
+        val ownerThread = threadId
+        _state.value = _state.value.copy(
+            pendingQuestion = null, questionError = "", questionSending = true,
+        )
+        viewModelScope.launch {
+            questionsApi.cancel(path, q.id).fold(
+                onSuccess = {
+                    if (ownerThread == threadId) {
+                        _state.value = _state.value.copy(questionSending = false, questionDraft = "")
+                    }
+                },
+                onFailure = { e ->
+                    restoreQuestion(
+                        q, ownerThread,
+                        e.message ?: "Couldn't send",
+                        e.isFinal(),
+                    )
+                },
+            )
+        }
+    }
+
+    /**
+     * Restores the card after a failed answer/cancel so the same buttons
+     * retry — unless there is nothing to restore onto. A 404 means the
+     * turn (and its gateway slot) is gone and a 409 means the question is
+     * already answered elsewhere: restoring either would loop retries
+     * into a dead question, so the failure stays silent and the turn's
+     * own end is the UI. Same when the thread moved on or a newer
+     * question arrived meanwhile: the newer card intentionally hides the
+     * older failure rather than flashing a stale error.
+     */
+    private fun restoreQuestion(q: PendingQuestion, ownerThread: String, message: String, gone: Boolean) {
+        if (ownerThread != threadId) return
+        // The owner POST settled: its sending flag clears no matter which
+        // card is held — nothing else can be in flight (the send gate
+        // allows one POST at a time), so leaving it set would wedge the
+        // newer card's buttons.
+        _state.value = _state.value.copy(questionSending = false)
+        // Restore the card only when there is something to restore onto: a
+        // 404 means the turn (and its gateway slot) is gone and a 409 means
+        // the question was already answered elsewhere — restoring either
+        // would loop retries into a dead question, so the failure stays
+        // silent and the turn's own end is the UI. Same when the thread
+        // moved on (checked above) or a newer question arrived: the newer
+        // card intentionally hides the older failure rather than flashing
+        // a stale error.
+        if (!gone && _state.value.streaming && _state.value.pendingQuestion == null) {
+            _state.value = _state.value.copy(
+                pendingQuestion = q,
+                questionError = message,
+                questionSending = false,
+            )
+        }
+    }
+
+    /** Final answer outcomes: 404 (turn gone) and 409 (already answered
+     * elsewhere) both mean retrying this card is pointless — the slot is
+     * gone, so the card must go too. A 400 (value rejected) restores the
+     * card with the server's message: the slot is still held and Pi is
+     * still blocked, and the input cap keeps the identical value from
+     * recurring verbatim. */
+    private fun Throwable.isFinal(): Boolean =
+        this is QuestionHttpError && (code == 404 || code == 409)
+
     /** Stages picked photos, capped at [MAX_IMAGES_PER_TURN] — excess is dropped
      * with an Info notice (nothing failed, the cap held). Only wired photos
      * occupy cap slots; growth is a before/after diff. */
@@ -755,6 +895,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 notices = retainedNotices(),
             )
         }
+        // An import replaces the threads out from under the turn: any held
+        // question belongs to a conversation that may not even exist now.
+        clearQuestionState()
         if (hadStaged) {
             stagedDiscardedNotice()
         }
@@ -852,6 +995,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeRunId = "", busyRunId = "",
             showRuns = false, runsLoading = false,
         )
+        // The old thread's held question dies with the switch (#373).
+        clearQuestionState()
         if (hadStaged) {
             stagedDiscardedNotice()
         }
@@ -960,6 +1105,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
             )
+            // The old thread's held question dies with the open (#373).
+            clearQuestionState()
             if (hadStagedOpen) {
                 stagedDiscardedNotice()
             }
@@ -1059,6 +1206,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeRunId = "", busyRunId = "",
             showRuns = false, runsLoading = false,
         )
+        // A fresh thread holds no question (#373).
+        clearQuestionState()
         if (hadStagedNew) {
             stagedDiscardedNotice()
         }
@@ -1143,6 +1292,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
             )
+            // The deleted thread's held question dies with it (#373).
+            clearQuestionState()
             if (hadStagedDelete) {
                 stagedDiscardedNotice()
             }
@@ -2504,6 +2655,42 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             )
                         }
                     }
+                    is ChatEvent.Question -> {
+                        // ask_user relay (#373): hold the card only for the
+                        // active thread — the frame names its conversation,
+                        // and a late frame for a thread already left must
+                        // not attach to the new one. A newer frame for the
+                        // same conversation replaces (Pi blocks one dialog
+                        // at a time; the profile lock serialises turns).
+                        // The stream carries no text for this: the question
+                        // is a card, never a transcript row.
+                        val q = event.question
+                        if (questionAttaches(q, threadId)) {
+                            // A POST for a previous card may still be in
+                            // flight (optimistic clear): keep its draft —
+                            // blanking on a same-id re-emit would lose the
+                            // value a failing POST is about to restore.
+                            // A genuinely new id still starts clean, so a
+                            // half-typed answer never carries into the next
+                            // question's field.
+                            val keepDraft = _state.value.questionSending ||
+                                q.id == _state.value.pendingQuestion?.id
+                            _state.value = _state.value.copy(
+                                pendingQuestion = q,
+                                questionError = "",
+                                // Sending untouched on purpose: a POST for a
+                                // previous card may still be in flight, and
+                                // clearing here would defeat its double-tap
+                                // gate for exactly that window. A new card
+                                // implies no POST for it has started yet.
+                                questionDraft = if (keepDraft) {
+                                    _state.value.questionDraft
+                                } else {
+                                    ""
+                                },
+                            )
+                        }
+                    }
                     is ChatEvent.RateLimited -> {
                         // The profile is busy with a different turn: drop the
                         // placeholder (this prompt was never sent) and remember
@@ -2643,6 +2830,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             activeToolLabel = "",
                             activeRunId = "",
                             busyRunId = "",
+                            // The turn is over: a held card belongs to a
+                            // dialog that died with it (the gateway clears
+                            // the slot at teardown). No phantom card.
+                            pendingQuestion = null,
+                            questionError = "",
+                            questionSending = false,
+                            questionDraft = "",
                         )
                         addTokens(event.usage)
                         upsertActive(doneMessages)
@@ -2740,6 +2934,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         _state.value = _state.value.copy(
                             messages = kept, streaming = false, error = event.message,
                             activeTools = emptyList(), activeToolLabel = "",
+                            // A failed turn holds no dialog either: same
+                            // teardown, same phantom-card rule as Done.
+                            pendingQuestion = null,
+                            questionError = "",
+                            questionSending = false,
+                            questionDraft = "",
                             // Keep a possibly-live id for the sheet: the API
                             // forwards X-Agento-Run-Id ahead of errors, and a
                             // 500 after the run started leaves it executing.

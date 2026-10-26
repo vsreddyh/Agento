@@ -1147,7 +1147,9 @@ internal fun ChatTab(
         slash = state.slash.takeIf {
             slashQuery(state.pending) != null && state.pending != state.slashDismissedAt
         },
-        onPickSkill = vm::pickSkill, onDismissSlash = vm::dismissSlash, onSend = {
+        onPickSkill = vm::pickSkill, onDismissSlash = vm::dismissSlash,
+        onAnswerQuestion = vm::answerQuestion, onCancelQuestion = vm::cancelQuestion,
+        onQuestionDraft = vm::setQuestionDraft, onSend = {
             // Staging empties on send: the next live sentence starts a new
             // voicing episode. Queued-while-streaming keeps staging.
             liveStagedVoicedCount = 0
@@ -1812,6 +1814,10 @@ internal fun ChatScreen(
     slash: SlashPickerState? = null,
     onPickSkill: (String) -> Unit = {},
     onDismissSlash: () -> Unit = {},
+    /** ask_user card (#373): answer/cancel/draft for the pending dialog. */
+    onAnswerQuestion: (String) -> Unit = {},
+    onCancelQuestion: () -> Unit = {},
+    onQuestionDraft: (String) -> Unit = {},
     onSend: () -> Unit,
     onStop: () -> Unit,
     onSteer: () -> Unit = {},
@@ -2684,7 +2690,15 @@ internal fun ChatScreen(
             // keyboard on any soft-input mode that pans instead.
             Surface(tonalElevation = 2.dp, modifier = Modifier.imePadding()) {
                 Column {
-                    if (state.streaming) {
+                    // A held ask_user dialog means the stream is silent by
+                    // definition (#373): say the agent is waiting on the
+                    // user rather than spinning an indeterminate bar.
+                    // Gated like the card itself: another thread's held
+                    // dialog never stills this thread's spinner.
+                    val waitingOnUser = state.streaming &&
+                        state.pendingQuestion != null &&
+                        questionAttaches(state.pendingQuestion, state.threadId)
+                    if (state.streaming && !waitingOnUser) {
                         // Polite live region (#283): a reply being generated
                         // was otherwise silent to TalkBack — the bar is
                         // decorative and the tool line below it is optional,
@@ -2693,6 +2707,16 @@ internal fun ChatScreen(
                         LinearProgressIndicator(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
+                    if (waitingOnUser) {
+                        Text(
+                            "Waiting for your answer — the agent continues when you reply.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 2.dp)
                                 .semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
@@ -2830,6 +2854,24 @@ internal fun ChatScreen(
                             state = slashNow,
                             onPick = onPickSkill,
                             onDismiss = onDismissSlash,
+                        )
+                    }
+                    // ask_user card (#373): the agent is blocked on this
+                    // answer, so the card sits above the composer like the
+                    // picker above. Gated by conversation like the store
+                    // path: a card for a thread already left never renders
+                    // on the new one.
+                    val questionNow = state.pendingQuestion
+                        .takeIf { it != null && questionAttaches(it, state.threadId) }
+                    if (questionNow != null) {
+                        QuestionCard(
+                            question = questionNow,
+                            draft = state.questionDraft,
+                            error = state.questionError,
+                            sending = state.questionSending,
+                            onDraft = onQuestionDraft,
+                            onAnswer = onAnswerQuestion,
+                            onCancel = onCancelQuestion,
                         )
                     }
                     Row(
@@ -3745,6 +3787,89 @@ internal fun SkillChip(name: String) {
             color = MaterialTheme.colorScheme.onSecondaryContainer,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
         )
+    }
+}
+
+/**
+ * Inline ask_user card (#373): the agent's question with one button per
+ * option, or a free-text field plus Send when the dialog offers none —
+ * plus Cancel either way. Answering posts and clears the card
+ * optimistically; a failure restores it with [error], and the same
+ * buttons retry. Coexists with the queue/attachment/voice affordances:
+ * while a question is pending the stream is silent, so the composer
+ * above stays live for follow-ups.
+ */
+@Composable
+internal fun QuestionCard(
+    question: PendingQuestion,
+    draft: String,
+    error: String,
+    sending: Boolean,
+    onDraft: (String) -> Unit,
+    onAnswer: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                "Agent asks",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                question.title.ifBlank { "A question from the agent" },
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            if (question.hasOptions()) {
+                // One button per option, full width: the answer IS the
+                // button label, exactly what Pi receives as the result.
+                question.options.forEach { option ->
+                    Button(
+                        onClick = { onAnswer(option) },
+                        enabled = !sending,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(option)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+            } else {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = onDraft,
+                    placeholder = { Text(question.placeholder.ifBlank { "Type your answer…" }) },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (draft.isNotBlank() && !sending) onAnswer(draft)
+                    }),
+                    shape = RoundedCornerShape(16.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { onAnswer(draft) },
+                    enabled = draft.isNotBlank() && !sending,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (sending) "Sending…" else "Send answer")
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+            if (error.isNotEmpty()) {
+                HintLine("Couldn't send — $error. Try again.")
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+            TextButton(
+                onClick = onCancel,
+                enabled = !sending,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Cancel")
+            }
+        }
     }
 }
 

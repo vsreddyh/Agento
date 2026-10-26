@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.17.0]
+- **The agent can ask you a question mid-turn (#373).** A new `ask_user`
+  tool lets the model ask something it cannot decide itself; the question
+  appears as an inline card above the composer (one button per option, or
+  a free-text field plus Send, plus Cancel) and the turn waits for the
+  answer. The card survives an app restart (the gateway holds the pending
+  question and re-emits it on reattach), a failure to send restores the
+  card with a retry, and scheduler fires never block on a human — an
+  unattended question fails the tool fast instead.
+
 ## [5.16.0]
 - **Chat composer: type `/` to invoke a skill (#372).** A picker lists
   the profile's Pi-loaded skills (name + description, filtered as you

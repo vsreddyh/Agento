@@ -224,6 +224,11 @@ type Server struct {
 	// approvals: one status per connector id, no profile split.
 	connectors connectors.Store
 
+	// questions holds one pending ask_user dialog per profile (#373).
+	// In-memory, never persisted: the turn it belongs to dies with the
+	// process, so a stored question would outlive what it can answer.
+	questions *questionRegistry
+
 	// mcpServers is the configured MCP server set, read once at startup. Empty when
 	// there is no agent directory or no readable mcp.json, which is a valid state.
 	mcpServers []string
@@ -260,6 +265,7 @@ func New(cfg Config, agents map[string]Agent) (*Server, error) {
 		mux:      http.NewServeMux(),
 	}
 	s.runs = newRunManager(cfg.RunStore, cfg.Logf)
+	s.questions = newQuestionRegistry()
 	s.approvals = cfg.ApprovalStore
 	if s.approvals == nil {
 		s.approvals = approvals.NewMemoryStore()
@@ -575,6 +581,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// holds sensitive tool calls, the app decides them here.
 	if rest == "api/approvals" || strings.HasPrefix(rest, "api/approvals/") {
 		s.handleApprovals(w, r, rest)
+		return
+	}
+	// ask_user answers (#373). Per profile like memory: the pending slot is
+	// keyed by the resolved profile, so a tab answers its own agent.
+	if rest == "api/questions" || strings.HasPrefix(rest, "api/questions/") {
+		s.handleQuestions(w, r, rest, profile)
 		return
 	}
 	if rest == "api/audit" || strings.HasPrefix(rest, "api/audit/") {
