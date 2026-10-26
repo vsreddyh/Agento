@@ -455,6 +455,12 @@ class ChatApi(context: Context) {
             putString("app_password", password.trim())
             remove("api_base_url") // legacy: unified key is written above
             remove("server_url") // legacy: unified key is written above
+            // Legacy password fallback: the only save caller re-saves the
+            // resolved password() (which already includes this fallback),
+            // so after any save app_password holds the effective secret
+            // and a stale auth_token at rest would only be a second copy
+            // of it. Removed like the legacy URL keys above.
+            remove("auth_token")
             remove("path_$tab") // legacy: path field removed, defaults apply
             putString("provider_$tab", provider.trim())
             putString("model_$tab", model.trim())

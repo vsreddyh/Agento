@@ -485,7 +485,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // (#390): offline, the in-flight guard below only dedupes while one
         // is running, so every character past it launched another blocking
         // call. Reuse the stale rows and the error the failure already
-        // showed; the burst costs at most one request per TTL.
+        // showed; the burst costs at most one request per TTL. The rows are
+        // reused at ANY age here — deliberately, not a missed bound: past
+        // the 60 s TTL the choice is a stale list behind the error or no
+        // list at all, and a stale list still completes hand-typed commands
+        // from something visible (the #372 rule this cache exists for).
+        // The copy says "cached list", never "fresh", so no age is promised.
         val failedAt = slashFailedAt[path]
         if (failedAt != null && now - failedAt < slashFailureTtlMs) {
             _state.value = _state.value.copy(
@@ -569,9 +574,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun pickSkill(name: String) {
         val cur = _state.value.pending
         if (!cur.startsWith("/")) return
-        slashJob?.cancel()
-        slashJob = null
-        slashFetching = null
+        cancelSlashFetch()
         _state.value = _state.value.copy(
             pending = insertSkillCommand(cur, name),
             slash = SlashPickerState(),
@@ -580,9 +583,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     fun dismissSlash() {
-        slashJob?.cancel()
-        slashJob = null
-        slashFetching = null
+        cancelSlashFetch()
         // Locked to the current text: the visibility gate keys on it, so
         // the card stays hidden until the user types something new.
         _state.value = _state.value.copy(

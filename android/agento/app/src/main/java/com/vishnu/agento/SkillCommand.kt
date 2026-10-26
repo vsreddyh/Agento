@@ -105,7 +105,9 @@ fun slashQuery(text: String): String? {
  * have to revisit this join deliberately rather than inherit it.
  */
 fun insertSkillCommand(current: String, name: String): String {
-    require(current.startsWith("/")) { "insertSkillCommand needs a slash trigger, got: $current" }
+    // Fail-fast without the value: the composer text is unbounded user
+    // input and does not belong in crash logs.
+    require(current.startsWith("/")) { "insertSkillCommand needs a slash trigger" }
     val afterToken = current.dropWhile { !it.isWhitespace() }
     return if (afterToken.isBlank()) {
         "/skill:$name "
