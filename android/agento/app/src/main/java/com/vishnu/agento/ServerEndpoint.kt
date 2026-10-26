@@ -5,10 +5,12 @@ import android.content.SharedPreferences
 /**
  * One resolution rule for the gateway endpoint (#398).
  *
- * Chat, questions and every other typed client read the same two prefs in
- * the same order; keeping the chain in one place means a new fallback key —
- * or the removal of a retired one — cannot land in one client and be missed
- * by another, which is how `QuestionsApi` drifted from `ChatApi`.
+ * The chat and question clients read the same two prefs in the same order;
+ * keeping the chain in one place means a new fallback key — or the removal
+ * of a retired one — cannot land in one client and be missed by the other,
+ * which is how `QuestionsApi` drifted from `ChatApi`. Other typed clients
+ * (tasks, runs, memory, …) still carry their own copies; migrating them is
+ * a separate change, not a claim made here.
  */
 internal object ServerEndpoint {
 

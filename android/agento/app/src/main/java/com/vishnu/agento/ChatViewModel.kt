@@ -426,6 +426,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * one per character, and keeps the error banner it already showed. */
     private var slashFailedAt = mutableMapOf<String, Long>()
     private val slashFailureTtlMs = 10_000L
+    /** Rendered by the picker card; one const so the two VM sites (the
+     * failure-cache early return and the fetch failure) cannot drift from
+     * each other — and the card renders this value, not its own copy. */
+    private val slashLoadError = "Couldn't load skills"
     private var slashJob: Job? = null
     /** Id of the question an answer/cancel POST is in flight for, if any.
      * The Question-frame handler keeps a half-typed draft only for this id
@@ -484,7 +488,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 slash = SlashPickerState(
                     query = query,
                     skills = cached?.second.orEmpty(),
-                    error = "Couldn't load skills",
+                    error = slashLoadError,
                 ),
             )
             return
@@ -547,7 +551,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         slash = SlashPickerState(
                             query = liveQuery,
                             skills = cached?.second.orEmpty(),
-                            error = "Couldn't load skills",
+                            error = slashLoadError,
                         ),
                     )
                 },
@@ -2482,7 +2486,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             return
         }
         if (full.id in adoptedRunIds) return
-        if (!full.isTerminal() || full.conversationId != threadId) return
+        if (!full.isTerminal() || full.conversationId != threadId) {
+            runCatching { Log.w("ChatRuns", "adopt record skew for ${match.id}") }
+            return
+        }
         // Identity, not a stricter text match: the detail row must carry
         // the same stored prompt string the list row matched. A trim-exact
         // tail check here would break long prompts — the store keeps the
