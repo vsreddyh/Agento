@@ -315,7 +315,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * failed resend never loops. Synchronized like [adoptedRunIds] below:
      * the check runs on IO (maybeResume's entry) and the add on Main, and a
      * torn read would fire the same tail twice. */
-    private var resumedThreads: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
+    private val resumedThreads: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
     /** Finished runs already appended to their thread (#374): keyed by
      * run id, not thread — a later genuinely-live run on the same thread
      * must still resume, which a per-thread guard would block. Append-only:
@@ -323,7 +323,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * failed run re-labels on every open instead of stranding a bare tail
      * after its banner is dismissed. Synchronized: the IO read races the
      * Main add, and a torn read is a duplicate append. */
-    private var adoptedRunIds: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
+    private val adoptedRunIds: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
     private var threadId: String = ""
     private var threads: List<ChatThread> = emptyList()
     /** Bumped by threads-mutating user ops so init's async publish can tell a
@@ -445,9 +445,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * switch mid-flight must not land old rows on the new composer.
      */
     private fun updateSlash(text: String) {
-        // Any live typing clears the dismiss lock first — including the
-        // no-trigger path, so pasting the dismissed text verbatim starts
-        // fresh instead of staying hidden behind a stale lock.
+        // Any *different* text clears the dismiss lock first — including
+        // the no-trigger path, so a stale lock never outlives the composer
+        // text it was keyed on. Retyping the exact dismissed text keeps the
+        // card hidden (the `text == dismissed` early return below); any
+        // other edit starts fresh.
         if (_state.value.slashDismissedAt != null && text != _state.value.slashDismissedAt) {
             _state.value = _state.value.copy(slashDismissedAt = null)
         }
@@ -579,6 +581,19 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             slash = SlashPickerState(),
             slashDismissedAt = _state.value.pending,
         )
+    }
+
+    /**
+     * Stops the in-flight skill fetch. Every path that resets the picker
+     * alongside a composer rewrite needs this too, not just the state
+     * reset: the post-fetch guard passes when the rewritten text still
+     * holds a `/` trigger, so a fetch left running would land old rows on
+     * the new composer and warm a picker the reset just cleared.
+     */
+    private fun cancelSlashFetch() {
+        slashJob?.cancel()
+        slashJob = null
+        slashFetching = null
     }
 
     /**
@@ -1629,6 +1644,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // it would strand the queued text (or fire it twice in the narrow
         // window where the queue is non-empty and nothing is streaming).
         val retryDraft = withParkedQueue(_state.value.pending)
+        // The fetch dies with the picker: the rewritten composer may still
+        // hold a `/` trigger, which would otherwise let the in-flight fetch
+        // land old rows on the new text.
+        cancelSlashFetch()
         _state.value = _state.value.copy(
             pending = retryDraft, queued = "",
             // The parked queue is new composer state (#392): the picker's
@@ -2452,11 +2471,16 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
         val full = fetched.getOrNull() ?: return
         // Same run, checked by identity before anything else (#400): the
-        // list row that matched and the detail row must be the same record.
+        // list row that matched and the detail read must be the same record.
         // The prompt check below catches most skew, but a proxy/server bug
         // that swapped the id while keeping the prompt would APPEND under
-        // the wrong cached id — one line here closes that directly.
-        if (full.id != match.id) return
+        // the wrong cached id — one line here closes that directly. Both
+        // skew returns log like the GET failure above: an id or prompt
+        // swap is exactly the proxy skew worth diagnosing (#403).
+        if (full.id != match.id) {
+            runCatching { Log.w("ChatRuns", "adopt id skew: listed ${match.id} but got ${full.id}") }
+            return
+        }
         if (full.id in adoptedRunIds) return
         if (!full.isTerminal() || full.conversationId != threadId) return
         // Identity, not a stricter text match: the detail row must carry
@@ -2467,7 +2491,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // hold past the cap. The preview-tolerant match above is what
         // selected this run; this line only guards an id/prompt skew
         // between the two reads.
-        if (full.prompt != match.prompt) return
+        if (full.prompt != match.prompt) {
+            runCatching { Log.w("ChatRuns", "adopt prompt skew for ${match.id}") }
+            return
+        }
         withContext(Dispatchers.Main) {
             if (threadId != this@ChatViewModel.threadId || _state.value.streaming || !_state.value.ready) {
                 return@withContext
@@ -2577,6 +2604,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = api.pathFor(tab)
         // Queued text parks back with the draft: same rule as send().
         val draftParked = withParkedQueue(_state.value.pending)
+        cancelSlashFetch()
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             pending = draftParked, queued = "",
@@ -2610,6 +2638,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val path = api.pathFor(tab)
         // Queued text parks back with the draft, same rule as send().
         val draftParked = withParkedQueue(_state.value.pending)
+        cancelSlashFetch()
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             pending = draftParked, queued = "",
@@ -2678,6 +2707,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Staged composer photos sit out like every other resend: voice it via
         // noteParkedPhotos. Replace/Fork carry the EDITED turn's photos only.
         noteParkedPhotos("Replaced")
+        cancelSlashFetch()
         _state.value = _state.value.copy(
             messages = history, pending = draft, streaming = true, error = "",
             // Parked draft/queue is new composer text (#392).
@@ -2739,6 +2769,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // Staged photos do NOT park — they die with the thread being left.
         val forkDraft = withParkedQueue(_state.value.pending)
         val hadStagedFork = _state.value.pendingAttachments.wiredPhotoCount() > 0
+        cancelSlashFetch()
         _state.value = _state.value.copy(
             provider = provider, model = model, effort = effort, path = path,
             messages = forked, threads = summaries(), threadId = threadId,
@@ -3289,6 +3320,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // resets with the text it described.
                 slash = SlashPickerState(), slashDismissedAt = null,
             )
+            // The fetch dies with the picker for the same reason: the
+            // restored text may still hold a `/` trigger.
+            cancelSlashFetch()
             return
         }
         _state.value = _state.value.copy(queued = "")
@@ -3371,6 +3405,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private fun parkQueued() {
         val s = _state.value
         if (s.queued.isBlank()) return
+        // The fetch dies with the picker: the handed-back text may still
+        // hold a `/` trigger, which would otherwise let the in-flight fetch
+        // land old rows on the new composer.
+        cancelSlashFetch()
         _state.value = s.copy(
             pending = if (s.pending.isBlank()) {
                 s.queued

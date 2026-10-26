@@ -33,8 +33,8 @@ see GitHub Releases for older notes.
   live re-check goes through the same match helper as the selection, and
   the "detail carries the full reply" assumption is written down where the
   next reader will find it.
-- **Quieter, more honest chrome (#382, #383, #391, #398, #399, #405, #406,
-  #407, #408, #409, #411).** The update-available nudge moves to a quiet
+- **Quieter, more honest chrome (#382, #383, #398, #399, #405, #406,
+  #407, #408, #409).** The update-available nudge moves to a quiet
   channel for new installs — no sound, no heads-up — while an existing
   channel is left exactly as it is. An ask_user dialog with no question text is
   cancelled server-side instead of carding a generic line, and the

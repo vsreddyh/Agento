@@ -32,7 +32,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -3718,13 +3718,15 @@ internal fun SlashPickerCard(
             // A failed refresh keeps the stale list AND says so: the error
             // is a banner above the rows, never a replacement that hides
             // the still-usable cached list. With no rows there is no cached
-            // list to show, so the copy stops promising one (#391).
+            // list to show, so the copy stops promising one (#391). Renders
+            // `state.error` (today always "Couldn't load skills"), not a
+            // second hardcoded copy that could drift from what the VM set.
             if (state.error.isNotEmpty()) {
                 Text(
                     if (rows.isEmpty()) {
-                        "Couldn't load skills. Type the command by hand if you know it."
+                        "${state.error}. Type the command by hand if you know it."
                     } else {
-                        "Couldn't load skills — showing cached list. Type the command by hand if it's missing."
+                        "${state.error} — showing cached list. Type the command by hand if it's missing."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
@@ -3748,11 +3750,15 @@ internal fun SlashPickerCard(
                 // Height-capped + scrollable (#397): the header, banner and
                 // eight two-line rows could otherwise push the composer off
                 // a small screen. The overflow count sits BELOW the rows —
-                // it describes what the list is hiding, not a preamble.
+                // it describes what the list is hiding, not a preamble. The
+                // scroll position resets with the query: without the key,
+                // typing `/s`, scrolling down and typing on would open the
+                // narrowed list mid-scroll.
+                val scroller = remember(state.query) { ScrollState(0) }
                 Column(
                     modifier = Modifier
                         .heightIn(max = 260.dp)
-                        .verticalScroll(rememberScrollState()),
+                        .verticalScroll(scroller),
                 ) {
                     shown.forEach { s ->
                         Surface(

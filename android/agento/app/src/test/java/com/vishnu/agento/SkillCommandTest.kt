@@ -67,10 +67,14 @@ class SkillCommandTest {
     fun `uppercase prefix is plain text, not a query`() {
         // The send path's SKILL_COMMAND is lower-case only, so `/SKILL:notes`
         // reaches the server as literal text. The picker must close instead
-        // of offering a row that would never chip (#395).
+        // of offering a row that would never chip (#395) — including the
+        // bare uppercase prefix, which must not fall back to show-all.
         assertNull(slashQuery("/SKILL:notes"))
-        assertEquals("", slashQuery("/Skill:"))
+        assertNull(slashQuery("/Skill:"))
+        assertNull(slashQuery("/SKILL:"))
         assertNull(slashQuery("/SKILL:not "))
+        // But the exact lower-case bare prefix still lists everything.
+        assertEquals("", slashQuery("/skill:"))
         // Short form is untouched: the query still flows through unlowered
         // so the case-insensitive matcher does the folding.
         assertEquals("Notes", slashQuery("/Notes"))

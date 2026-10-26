@@ -450,7 +450,7 @@ func (s *Server) handleQuestions(w http.ResponseWriter, r *http.Request, rest, p
 	}
 	if cancelled && value != "" {
 		apiError(w, http.StatusBadRequest, "invalid_request_error", "value",
-			"value and cancelled:true are mutually exclusive")
+			"value and cancel cannot be combined")
 		return
 	}
 	if len([]rune(value)) > runs.MaxSteer {

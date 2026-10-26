@@ -60,15 +60,27 @@ fun slashQuery(text: String): String? {
     if (!text.startsWith("/")) return null
     val token = text.substring(1).takeWhile { !it.isWhitespace() }
     if (token.isEmpty()) return ""
+    // Case-folded for the prefix test only: the query itself flows through
+    // unlowered so the case-insensitive matcher does the folding. Lengths
+    // are case-fold-invariant here (ASCII command alphabet), so slicing the
+    // unfolded token by the folded prefix length is exact.
     val folded = token.lowercase()
     if (COMMAND_TOKEN.matches(folded)) return null
-    val query = if (folded.startsWith(SKILL_PREFIX)) {
-        token.substring(SKILL_PREFIX.length)
-    } else {
-        token
+    if (folded.startsWith(SKILL_PREFIX)) {
+        // Bare prefix (`/skill:`) lists everything — but only spelled
+        // exactly that way. An uppercase bare prefix (`/SKILL:`) closes
+        // like any other uppercase command: the send path's SKILL_COMMAND
+        // is lower-case only, so offering rows under it would promise a
+        // command that sends as plain text (#395).
+        if (folded.length == SKILL_PREFIX.length) {
+            return if (token == SKILL_PREFIX) "" else null
+        }
+        val query = token.substring(SKILL_PREFIX.length)
+        if (!QUERY_CHARS.matches(query)) return null
+        return query
     }
-    if (!QUERY_CHARS.matches(query)) return null
-    return query
+    if (!QUERY_CHARS.matches(token)) return null
+    return token
 }
 
 /**
@@ -77,11 +89,12 @@ fun slashQuery(text: String): String? {
  * after it is kept as the skill's argument text. Precondition: [current]
  * starts with `/` (callers only invoke it off an active trigger).
  *
- * Single-line environment by construction: the composer is one field, so a
- * newline (or any run of whitespace) between the token and the arguments
- * collapses into the one separating space — `/no\narg` becomes
- * `/skill:<name> arg`, pinned by `SkillCommandTest`. A multi-line composer
- * would have to revisit this join deliberately rather than inherit it.
+ * Single-line environment by construction: the composer is one field, so the
+ * whitespace run that ends the slash token collapses into the one separating
+ * space — `/no\narg` becomes `/skill:<name> arg`, pinned by
+ * `SkillCommandTest`. Only that boundary is collapsed: newlines inside the
+ * already-typed arguments ride through verbatim. A multi-line composer would
+ * have to revisit this join deliberately rather than inherit it.
  */
 fun insertSkillCommand(current: String, name: String): String {
     val afterToken = current.dropWhile { !it.isWhitespace() }

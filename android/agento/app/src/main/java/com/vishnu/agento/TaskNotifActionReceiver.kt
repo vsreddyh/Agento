@@ -70,10 +70,13 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
          * cut the work first, invisibly. Waiting inside that budget means the
          * timeout, when it fires, is ours and logged.
          *
-         * The work itself is not cancelled by this: [handleMutation] awaits
-         * Deferreds owned by other scopes, so a timeout stops *waiting* while
-         * the refresh keeps running without the wake lock — process death
-         * there can lose it, the same caveat the old trampoline carried.
+         * The timeout cancels the in-flight mutation POST (a cancellable
+         * OkHttp call — safe: failure keeps the alert, so the next tap
+         * retries). Only the refresh half outlives it: [handleMutation]
+         * awaits Deferreds owned by other scopes, so a timeout stops
+         * *waiting* while that work keeps running without the wake lock —
+         * process death there can lose it, the same caveat the old
+         * trampoline carried.
          */
         private const val MUTATION_TIMEOUT_MS = 12_000L
     }
@@ -105,8 +108,13 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
         // this replaces (#385): `TaskCompleteActivity` fell through to
         // opening MainActivity when neither extra was present, but a corrupt
         // or spoofed tap must not foreground the app. There is no task to
-        // mutate and no surface worth refreshing, so return silently.
-        if (id.isEmpty()) return
+        // mutate and no surface worth refreshing, so return — loudly: the
+        // action name (no id, nothing to leak) tells corrupt taps apart
+        // from version skew in the field.
+        if (id.isEmpty()) {
+            Log.w("TaskNotif", "notification $target with no id ignored")
+            return
+        }
         val appCtx = context.applicationContext
         val pending = goAsync()
         notifActionScope.launch {
@@ -115,12 +123,16 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
                     handleMutation(appCtx, id, target)
                 }
                 // Never silent (#384): a tap that ran out of broadcast budget
-                // used to vanish, leaving an alert that looked handled.
+                // used to vanish, leaving an alert that looked handled. The
+                // mutation POST is cancelled (failure keeps the alert, so
+                // the next tap retries); only the refresh half runs on
+                // without the wake lock.
                 if (finished == null) {
                     Log.w(
                         "TaskNotif",
                         "notification $target for $id timed out after " +
-                            "${MUTATION_TIMEOUT_MS}ms; the refresh continues without the wake lock",
+                            "${MUTATION_TIMEOUT_MS}ms; the mutation was cancelled " +
+                            "and the refresh continues without the wake lock",
                     )
                 }
             } finally {
