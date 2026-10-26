@@ -151,7 +151,11 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
      * Semantics unchanged from the retired trampoline: success dismisses
      * every posted alert for the task and refreshes both surfaces; failure
      * keeps the alert, so an offline tap keeps the reminder rather than
-     * silently dropping it.
+     * silently dropping it. The refresh runs either way — exactly like the
+     * trampoline, whose `awaitAll` sat outside its `if (completed)`: a
+     * failed tap may still be stale (another device already completed), and
+     * a failed refresh is cheap (the Deferreds never fail), so there is no
+     * budget worth saving by skipping it.
      */
     private suspend fun handleMutation(appCtx: Context, id: String, target: NotifAction) {
         // getOrThrow inside the runCatching: complete()/skip() return a
