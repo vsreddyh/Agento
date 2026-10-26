@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.17.1]
+- **A reply that finished while the app was closed is adopted, not lost
+  (#374).** Opening a thread whose last message is an unanswered user turn
+  now checks the conversation's runs: a still-live run reattaches as
+  before, a finished run appends its stored answer (with usage) instead of
+  leaving the thread dangling, and a failed/cancelled/interrupted run
+  labels the tail with its outcome rather than a fabricated reply. No
+  duplicate turn is ever sent; reopening twice cannot append twice.
+
 ## [5.17.0]
 - **The agent can ask you a question mid-turn (#373).** A new `ask_user`
   tool lets the model ask something it cannot decide itself; the question

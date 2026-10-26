@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Collections
 
 /** Lightweight row for the conversation switcher (no message bodies). */
 data class ThreadSummary(
@@ -313,6 +314,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Threads already offered auto-resume: fires once per thread so a
      * failed resend never loops. */
     private var resumedThreads = mutableSetOf<String>()
+    /** Finished runs already appended to their thread (#374): keyed by
+     * run id, not thread — a later genuinely-live run on the same thread
+     * must still resume, which a per-thread guard would block. Append-only:
+     * only APPEND joins (the persisted reply guards from there on), so a
+     * failed run re-labels on every open instead of stranding a bare tail
+     * after its banner is dismissed. Synchronized: the IO read races the
+     * Main add, and a torn read is a duplicate append. */
+    private var adoptedRunIds: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
     private var threadId: String = ""
     private var threads: List<ChatThread> = emptyList()
     /** Bumped by threads-mutating user ops so init's async publish can tell a
@@ -2310,14 +2319,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // prompt text only, so a text-identical tail can attach to a
             // different live run. The resend still carries the user's own
             // tail (photos included) and the newest live run wins.
-            val imageOnlyTail = last.content.isBlank() &&
-                last.attachments.wiredPhotoCount() > 0
-            // Newest match wins: two image-only tails can both be live.
-            val run = runs.filter {
-                !it.isTerminal() && it.conversationId == threadId &&
-                    (promptMatches(last.content, it.prompt) ||
-                        (imageOnlyTail && it.prompt.isBlank()))
-            }.maxByOrNull { it.updatedAt } ?: return@launch
+            val live = liveMatchFor(last, threadId, runs)
+            if (live == null) {
+                // No live run: a finished run's stored answer may still be
+                // adoptable — a reply that landed after the app died (#374).
+                maybeAdoptTerminal(threadId, last, runs)
+                return@launch
+            }
+            val run = live
             // Bounded: re-clearing only loses the once-guard for threads long
             // dead, whose resend finds no live run and no-ops.
             withContext(Dispatchers.Main) {
@@ -2362,20 +2371,124 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     /**
-     * The stored prompt is a bounded preview: exact when short, a truncated
-     * prefix when marked. Compared trim-tolerant — the server trimmed its
-     * copy too, and this check is best-effort anyway (the server reattach
-     * compares the full text and 429s on mismatch).
+     * Adopts a finished run's stored answer into a dangling user tail
+     * (#374): the reply completed after the app died, so the transcript
+     * ends on the user's own message with the answer lost from the thread.
+     * Newest terminal match first; a live match never reaches here, and a
+     * completed match with output appends it as a normal assistant message
+     * (no duplicate turn is sent). Failed/cancelled/interrupted matches
+     * label the tail instead — never a fabricated reply. Blank-output
+     * completions and no-match leave the tail alone.
+     *
+     * Idempotent two ways: the appended run id joins [adoptedRunIds]
+     * (per run, not per thread, so a later genuinely-live run on the same
+     * thread still resumes), and an already-present trailing assistant
+     * message stops a second open before any IO.
      */
-    private fun promptMatches(full: String, preview: String): Boolean {
-        if (preview.isEmpty()) return false
-        val marker = "… (truncated)"
-        val text = full.trim()
-        if (!preview.endsWith(marker)) return text == preview.trim()
-        // A literal trailing marker in a short prompt must not read as a
-        // truncation prefix: the full text has to actually exceed the core.
-        val core = preview.dropLast(marker.length)
-        return text.length > core.length && text.startsWith(core)
+    private suspend fun maybeAdoptTerminal(
+        threadId: String,
+        tail: ChatMessage,
+        runs: List<AgentRun>,
+    ) {
+        val match = terminalMatchFor(tail, threadId, runs) ?: return
+        if (match.id in adoptedRunIds) return
+        // Full record: the list carries a bounded preview for terminal
+        // runs, not the whole reply the thread is missing.
+        val full = runsApi.get(api.pathFor(tab), match.id).getOrNull() ?: return
+        if (full.id in adoptedRunIds) return
+        if (!full.isTerminal() || full.conversationId != threadId) return
+        // Identity, not a stricter text match: the detail row must carry
+        // the same stored prompt string the list row matched. A trim-exact
+        // tail check here would break long prompts — the store keeps the
+        // bounded preview (MaxPrompt), so detail and list return the same
+        // truncated string, and exact equality with the tail can never
+        // hold past the cap. The preview-tolerant match above is what
+        // selected this run; this line only guards an id/prompt skew
+        // between the two reads.
+        if (full.prompt != match.prompt) return
+        withContext(Dispatchers.Main) {
+            if (threadId != this@ChatViewModel.threadId || _state.value.streaming || !_state.value.ready) {
+                return@withContext
+            }
+            val cur = _state.value.messages
+            val curLast = cur.lastOrNull() ?: return@withContext
+            // Still the same unanswered user tail: anything else (a new
+            // turn, an adopted reply, a switch) means there is nothing to
+            // adopt into. Identity stays inline (role + exact content +
+            // photo count); the *match* delegates to the shared helper so
+            // a future tweak to the preview rule cannot strand the
+            // re-check behind the selection.
+            if (curLast.role != "user" || !messageHasContent(curLast)) return@withContext
+            if (curLast.content != tail.content ||
+                curLast.attachments.wiredPhotoCount() != tail.attachments.wiredPhotoCount()
+            ) {
+                return@withContext
+            }
+            if (terminalMatchFor(curLast, threadId, listOf(full)) == null) return@withContext
+            if (full.id in adoptedRunIds) return@withContext
+            when (adoptDecision(full)) {
+                AdoptOutcome.APPEND -> {
+                    // Cached only on append: the persisted reply is its own
+                    // idempotency guard from here on (a trailing assistant
+                    // message stops maybeResume at entry), while a failed
+                    // run re-labels on every open — a dismissed banner must
+                    // not leave a bare dangling tail behind.
+                    if (adoptedRunIds.size >= 200) adoptedRunIds.clear()
+                    adoptedRunIds.add(full.id)
+                    val u = full.usage
+                    // Reasoning capped like the live path (REASONING_CAP):
+                    // the gateway keeps up to 64k, but an adopted bubble
+                    // must persist no more than a live turn would.
+                    val adopted = cur + ChatMessage(
+                        "assistant",
+                        full.output,
+                        ChatThreads.now(),
+                        tools = full.tools.distinct().take(20),
+                        prompt = u?.prompt ?: 0L,
+                        completion = u?.completion ?: 0L,
+                        total = u?.total ?: 0L,
+                        cached = u?.cached ?: 0L,
+                        unreported = u == null,
+                        model = full.model.trim(),
+                        reasoning = full.reasoning.take(REASONING_CAP),
+                    )
+                    // Same accounting as the Done path: the bubble shows
+                    // usage, so the device totals must count the turn or
+                    // Settings under-reports adopted replies.
+                    addTokens(u)
+                    // Same header refresh as Done: the in-memory total only
+                    // moves on the next turn otherwise (backfillUsage is
+                    // correctly skipped — the record's tool names already
+                    // ride full.tools; the gateway stores no skill names,
+                    // so adopted bubbles never get skill chips).
+                    refreshServerTotals()
+                    _state.value = _state.value.copy(messages = adopted)
+                    upsertActive(adopted)
+                    persist()
+                }
+                AdoptOutcome.LABEL_FAILED -> {
+                    // failed/cancelled/interrupted: label the outcome the
+                    // way the runs sheet shows it — the stored error
+                    // included — without fabricating a reply that would
+                    // resend as history. The banner's Retry resends the
+                    // tail, which is the recovery. Never clobbers an error
+                    // already on state (e.g. connectivity): the run outcome
+                    // is information, not an override.
+                    if (_state.value.error.isBlank()) {
+                        _state.value = _state.value.copy(
+                            error = "Last reply ${full.status}" +
+                                (if (full.error.isNotBlank()) ": ${full.error}" else "") +
+                                " — see Runs for details.",
+                        )
+                    }
+                }
+                AdoptOutcome.LEAVE -> {
+                    // A completed run with blank output adopts nothing:
+                    // there is no answer to show, and the tail stays for
+                    // the user to drive.
+                }
+            }
+        }
     }
 
     /** Regenerates the last reply (#122, v1 replace semantics): drops the
@@ -3340,4 +3453,84 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         persist()
         true
     }
+}
+
+/**
+ * The stored prompt is a bounded preview: exact when short, a truncated
+ * prefix when marked. Compared trim-tolerant — the server trimmed its copy
+ * too, and this check is best-effort anyway (the server reattach compares
+ * the full text and 429s on mismatch). Top-level and pure so the match the
+ * resume and adopt paths share is pinned without a Context.
+ */
+internal fun promptMatches(full: String, preview: String): Boolean {
+    if (preview.isEmpty()) return false
+    val marker = "… (truncated)"
+    val text = full.trim()
+    if (!preview.endsWith(marker)) return text == preview.trim()
+    // A literal trailing marker in a short prompt must not read as a
+    // truncation prefix: the full text has to actually exceed the core.
+    val core = preview.dropLast(marker.length)
+    return text.length > core.length && text.startsWith(core)
+}
+
+/**
+ * Newest live run matching a dangling user tail (#374): the resume path's
+ * half of the match, sharing [promptMatches] (and the image-only rule)
+ * with [terminalMatchFor] so the two can never drift apart. Seq breaks
+ * updatedAt ties: two rows stamped in the same millisecond order by
+ * sequence, not by list order.
+ */
+internal fun liveMatchFor(
+    tail: ChatMessage,
+    threadId: String,
+    runs: List<AgentRun>,
+): AgentRun? {
+    val imageOnlyTail = tail.content.isBlank() &&
+        tail.attachments.wiredPhotoCount() > 0
+    return runs.filter {
+        !it.isTerminal() && it.conversationId == threadId &&
+            (promptMatches(tail.content, it.prompt) ||
+                (imageOnlyTail && it.prompt.isBlank()))
+    }.maxWithOrNull(compareBy({ it.updatedAt }, { it.seq }))
+}
+
+/**
+ * Newest terminal run matching a dangling user tail (#374), or null. Pure:
+ * the live-match path and the adopt path share it, so a skew between "what
+ * resumes" and "what adopts" breaks loudly here instead of stranding a
+ * thread. Image-only blank-prompt tails match blank-prompt runs, like the
+ * resume path.
+ */
+internal fun terminalMatchFor(
+    tail: ChatMessage,
+    threadId: String,
+    runs: List<AgentRun>,
+): AgentRun? {
+    val imageOnlyTail = tail.content.isBlank() &&
+        tail.attachments.wiredPhotoCount() > 0
+    return runs.filter {
+        it.isTerminal() && it.conversationId == threadId &&
+            (promptMatches(tail.content, it.prompt) ||
+                (imageOnlyTail && it.prompt.isBlank()))
+    }.maxWithOrNull(compareBy({ it.updatedAt }, { it.seq }))
+}
+
+/** What a terminal match does to the dangling tail (#374). */
+internal enum class AdoptOutcome {
+    /** Completed with output: append it as a normal assistant message. */
+    APPEND,
+    /** Completed with blank output: nothing to show, leave the tail. */
+    LEAVE,
+    /** Failed/cancelled/interrupted: label the outcome, never a reply. */
+    LABEL_FAILED,
+}
+
+/** What a terminal match does to the dangling tail (#374). Liveness is
+ * decided by [AgentRun.isTerminal] (never a status equality, per that
+ * type's own rule); the completed/failed split below is a status
+ * distinction, which is exactly what the field is for. */
+internal fun adoptDecision(run: AgentRun): AdoptOutcome {
+    if (!run.isTerminal()) return AdoptOutcome.LEAVE
+    if (run.status != "completed") return AdoptOutcome.LABEL_FAILED
+    return if (run.output.isNotBlank()) AdoptOutcome.APPEND else AdoptOutcome.LEAVE
 }
