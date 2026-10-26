@@ -417,14 +417,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     /** Slash picker cache per profile path: fetched invocable list + fetch time.
      * Capped: more profiles than this means custom setups, not forgetfulness. */
-    private var slashCache = mutableMapOf<String, Pair<Long, List<SkillInfo>>>()
+    private val slashCache = mutableMapOf<String, Pair<Long, List<SkillInfo>>>()
     private val maxSlashCacheEntries = 4
     /** Last failed fetch per profile path (#390): only success cached, so
      * offline every keystroke past the in-flight guard fired a fresh
      * blocking `listSkills` the moment the previous one landed. Holding the
      * failure for [slashFailureTtlMs] costs one request per burst instead of
      * one per character, and keeps the error banner it already showed. */
-    private var slashFailedAt = mutableMapOf<String, Long>()
+    private val slashFailedAt = mutableMapOf<String, Long>()
     private val slashFailureTtlMs = 10_000L
     /** Rendered by the picker card; one const so the two VM sites (the
      * failure-cache early return and the fetch failure) cannot drift from
@@ -2417,7 +2417,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // Marked only when the resend actually fires: an earlier mark
                 // would strand the thread if the guards above skipped it
                 // (switch-away-and-back would never retry).
-                if (resumedThreads.size >= 200) resumedThreads.clear()
+                // Evict eldest, not all: same convention as the slash caches
+                // below, so a long-lived VM never re-resumes an evicted id.
+                if (resumedThreads.size >= 200) {
+                    resumedThreads.firstOrNull()?.let { resumedThreads.remove(it) }
+                }
                 resumedThreads.add(threadId)
                 // Deliberately fresh provider/model/effort, matched on prompt
                 // only: the server reattach ignores model switches by design
@@ -2528,8 +2532,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // idempotency guard from here on (a trailing assistant
                     // message stops maybeResume at entry), while a failed
                     // run re-labels on every open — a dismissed banner must
-                    // not leave a bare dangling tail behind.
-                    if (adoptedRunIds.size >= 200) adoptedRunIds.clear()
+                    // not leave a bare dangling tail behind. Evict eldest,
+                    // not all (slash caches below do the same): clearing all
+                    // 200 would let an evicted id re-adopt.
+                    if (adoptedRunIds.size >= 200) {
+                        adoptedRunIds.firstOrNull()?.let { adoptedRunIds.remove(it) }
+                    }
                     adoptedRunIds.add(full.id)
                     val u = full.usage
                     // Reasoning capped like the live path (REASONING_CAP):

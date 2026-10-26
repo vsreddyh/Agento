@@ -3753,8 +3753,10 @@ internal fun SlashPickerCard(
                 // it describes what the list is hiding, not a preamble. The
                 // scroll position resets with the query: without the key,
                 // typing `/s`, scrolling down and typing on would open the
-                // narrowed list mid-scroll.
-                val scroller = remember(state.query) { ScrollState(0) }
+                // narrowed list mid-scroll. Rows landing under the same
+                // query reset too: a fetch arriving with more rows under
+                // identical text would otherwise keep the old offset.
+                val scroller = remember(state.query, rows.size) { ScrollState(0) }
                 Column(
                     modifier = Modifier
                         .heightIn(max = 260.dp)
