@@ -22,6 +22,75 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
+/**
+ * Header/background ids per layout (#370): everything that opens the Task
+ * Manager, named once so render() and the test read the same lists. The
+ * view label exists only in the plain layout (the scrollable header names
+ * the view in its title instead); every other chrome id exists in both.
+ */
+internal val PLAIN_TAP_IDS = listOf(
+    R.id.task_widget_body,
+    R.id.task_widget_title,
+    R.id.task_widget_count,
+    R.id.task_widget_view,
+    R.id.task_widget_empty,
+    R.id.task_widget_refresh,
+)
+
+internal val LIST_TAP_IDS = listOf(
+    R.id.task_widget_body,
+    R.id.task_widget_title,
+    R.id.task_widget_count,
+    R.id.task_widget_empty,
+    R.id.task_widget_refresh,
+)
+
+/** Where one widget header/background tap lands (#370). Rows are not in
+ * this table: the ring and the row body ride the collection template (or
+ * per-row intents), which own their view ids. */
+internal enum class WidgetTapTarget {
+    OPEN_TASKS,
+    REFRESH,
+}
+
+/**
+ * The tap contract, keyed by view id: background, title, count, view
+ * label and empty line open the Task Manager; the refresh button
+ * refreshes. Anything else (rows, the ListView itself) returns null —
+ * render() leaves those to the template/fill-ins or the body fallback.
+ * Pure and JVM-pinned, so the contract survives without an on-device
+ * tap-through.
+ */
+internal fun widgetTapTarget(viewId: Int): WidgetTapTarget? = when (viewId) {
+    R.id.task_widget_body,
+    R.id.task_widget_title,
+    R.id.task_widget_count,
+    R.id.task_widget_view,
+    R.id.task_widget_empty -> WidgetTapTarget.OPEN_TASKS
+    R.id.task_widget_refresh -> WidgetTapTarget.REFRESH
+    else -> null
+}
+
+/**
+ * Installs the contract's handlers on one layout. Ids returning null
+ * from [widgetTapTarget] are skipped — rows own theirs — so callers pass
+ * only header/background ids.
+ */
+internal fun applyTapTargets(
+    views: RemoteViews,
+    openTasks: PendingIntent,
+    refresh: PendingIntent,
+    ids: List<Int>,
+) {
+    for (id in ids) {
+        when (widgetTapTarget(id)) {
+            WidgetTapTarget.OPEN_TASKS -> views.setOnClickPendingIntent(id, openTasks)
+            WidgetTapTarget.REFRESH -> views.setOnClickPendingIntent(id, refresh)
+            null -> Unit
+        }
+    }
+}
+
 /** Which server state one widget placement shows. Stored per widget id
  * so two placements can watch different slices (Open, Done, All). */
 enum class TaskWidgetView(val state: String, val title: String) {
@@ -35,6 +104,36 @@ enum class TaskWidgetDensity(val title: String) {
     Comfortable("Comfortable"),
     Compact("Compact"),
 }
+
+/**
+ * Row order for one widget placement (#369). `Server` keeps the fetch
+ * order (today's behaviour); the rest mirror the Task Manager's
+ * [ServerTaskSort] titles one-for-one, so a placement can match the
+ * in-app list ordering. Stored per widget id like the other display
+ * settings, with Server as the default.
+ */
+enum class TaskWidgetSort(val title: String) {
+    Server("Server order"),
+    Start("Start time"),
+    Name("Name"),
+    Created("Newest"),
+    Estimate("Estimate"),
+}
+
+/**
+ * Orders one placement's rows. Server keeps the fetch order untouched;
+ * every other mode reuses the Task Manager's own [sortedByMode], so the
+ * widget and the in-app list can never disagree about what "Name" means.
+ * Pure and JVM-pinned.
+ */
+internal fun List<ServerTask>.sortedForWidget(sort: TaskWidgetSort): List<ServerTask> =
+    when (sort) {
+        TaskWidgetSort.Server -> this
+        TaskWidgetSort.Start -> sortedByMode(ServerTaskSort.Start)
+        TaskWidgetSort.Name -> sortedByMode(ServerTaskSort.Name)
+        TaskWidgetSort.Created -> sortedByMode(ServerTaskSort.Created)
+        TaskWidgetSort.Estimate -> sortedByMode(ServerTaskSort.Estimate)
+    }
 
 /**
  * Ids of *this* provider's placements.
@@ -59,9 +158,11 @@ fun taskWidgetIds(context: Context): IntArray {
 /**
  * Home-screen task manager widget (#101): header (title + count +
  * refresh) above a scrollable task list. View switching and display
- * settings live in [TaskWidgetConfigActivity], reachable from the Task
- * Manager screen — the widget's own controls never rendered on some
- * launchers (#137). Row taps deep-link
+ * settings live in [TaskWidgetConfigActivity], reachable from Settings
+ * → Home-screen widget — the widget's own controls never rendered on
+ * some launchers (#137). Tap contract (#370): the ring completes inline,
+ * a row opens its detail sheet, and everything else (background, header,
+ * empty line) opens the Task Manager. Row taps deep-link
  * into the task's detail sheet and the ring button completes inline —
  * both via the translucent [TaskCompleteActivity] trampoline, which
  * keeps widget taps BAL-safe on all API levels. Reads the same shared
@@ -73,7 +174,7 @@ fun taskWidgetIds(context: Context): IntArray {
  * Dynamic sizing: min footprint 3x2, resizable both ways. The list is a
  * RemoteViews collection ([TaskWidgetService]) with weight 1, so it
  * takes whatever height the placement offers. Display (density, due
- * line) is per-widget via [TaskWidgetConfigActivity].
+ * line, row order) is per-widget via [TaskWidgetConfigActivity].
  */
 class TaskWidget : AppWidgetProvider() {
 
@@ -98,11 +199,12 @@ class TaskWidget : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        // The header view toggle is gone (#137 — it never rendered on the
-        // affected launcher); view switching now happens in the config
-        // activity, reachable from the Task Manager screen. ACTION_VIEW is
-        // still handled so a PendingIntent fired by an already-placed older
-        // build still cycles instead of erroring.
+        // The header shortcuts are gone from fresh renders (#370): the
+        // title opened the config screen and the view label cycled the
+        // view, but the tap contract says header opens the Task Manager,
+        // and config lives in Settings → Home-screen widget. ACTION_VIEW
+        // is still handled so a PendingIntent cached by an older build
+        // still cycles instead of erroring.
         if (intent.action == ACTION_REFRESH) {
             val ids = taskWidgetIds(context)
             if (ids.isNotEmpty()) pull(context, ids)
@@ -125,6 +227,7 @@ class TaskWidget : AppWidgetProvider() {
             for (id in appWidgetIds) {
                 remove("task_widget_view_$id")
                 remove("task_widget_density_$id")
+                remove("task_widget_sort_$id")
                 remove("task_widget_due_$id")
                 remove("task_widget_scroll_$id")
                 // Retired diagnostic ladder: drop its key on delete too.
@@ -156,8 +259,9 @@ class TaskWidget : AppWidgetProvider() {
         const val ACTION_VIEW = "com.vishnu.agento.action.TASKS_VIEW"
 
         /** Deep-link: open the detail sheet for this task id. Read by
-         * [TaskCompleteActivity] (widget rows, alarm taps) and
-         * MainActivity (its own TASKS intents). */
+         * [TaskCompleteActivity] (widget rows) and MainActivity (its own
+         * TASKS intents). Reminder notifications complete/skip through
+         * [TaskNotifActionReceiver] instead (#368) — no activity at all. */
         const val EXTRA_TASK_ID = "com.vishnu.agento.extra.TASK_ID"
 
         /** Immediate complete request, handled by [TaskCompleteActivity]. */
@@ -172,10 +276,14 @@ class TaskWidget : AppWidgetProvider() {
         // CONFIG_CODE are reserved for the removed header toggle/settings
         // taps: gaps in the numbering are deliberate, so a PendingIntent
         // already cached by an older build still matches its own code.
+        // Unused by construction — the suppression says why, so a lint
+        // cleanup never "reclaims" them and collides with a cached PI.
         private const val OPEN_CODE = 1001
         private const val REFRESH_CODE = 1002
+        @Suppress("unused")
         private const val VIEW_CODE = 1003
         private const val ROW_CODE = 1004
+        @Suppress("unused")
         private const val CONFIG_CODE = 1005
 
         /** Rows rendered by the non-scrolling (plain-rows) path. Shown in
@@ -231,7 +339,8 @@ class TaskWidget : AppWidgetProvider() {
                 appendLine("placements=${ids.size}")
                 for (id in ids) {
                     appendLine("id=$id view=${viewFor(ctx, id)} " +
-                        "density=${densityFor(ctx, id)} showDue=${showDueFor(ctx, id)} " +
+                        "density=${densityFor(ctx, id)} sort=${sortFor(ctx, id)} " +
+                        "showDue=${showDueFor(ctx, id)} " +
                         "scrollable=${scrollableFor(ctx, id)}")
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
@@ -401,6 +510,13 @@ class TaskWidget : AppWidgetProvider() {
             val name = prefs(context).getString("task_widget_density_$appWidgetId", null)
             return TaskWidgetDensity.entries.firstOrNull { it.name == name }
                 ?: TaskWidgetDensity.Comfortable
+        }
+
+        /** This placement's row order, defaulting to Server (fetch order). */
+        fun sortFor(context: Context, appWidgetId: Int): TaskWidgetSort {
+            val name = prefs(context).getString("task_widget_sort_$appWidgetId", null)
+            return TaskWidgetSort.entries.firstOrNull { it.name == name }
+                ?: TaskWidgetSort.Server
         }
 
         /** Whether this placement's rows show the due line. */
@@ -581,7 +697,12 @@ class TaskWidget : AppWidgetProvider() {
             val notifyIds = mutableListOf<Int>()
             for (id in ids) {
                 val view = viewFor(appCtx, id)
-                val tasks = views[view.state] ?: cachedViews[view.state]
+                // Read once: the push below and the error branch both need
+                // the same order, and a second prefs read could straddle a
+                // settings write.
+                val sort = sortFor(appCtx, id)
+                val tasks = views[view.state]?.sortedForWidget(sort)
+                    ?: cachedViews[view.state]?.sortedForWidget(sort)
                 if (scrollableFor(appCtx, id) && tasks != null &&
                     Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                 ) {
@@ -646,24 +767,19 @@ class TaskWidget : AppWidgetProvider() {
                 context, REFRESH_CODE, refresh,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            // Header controls, both restored now that the divider View is
-            // gone and the whole widget renders again (#137). The scrollable
-            // layout deliberately has no toggle — the view is switched in
-            // the settings screen instead, which is reachable from the Task
-            // Manager.
-            val cycle = Intent(context, TaskWidget::class.java)
-                .setAction(ACTION_VIEW)
-                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-            val viewPending = PendingIntent.getBroadcast(
-                context, VIEW_CODE + appWidgetId, cycle,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-            val config = Intent(context, TaskWidgetConfigActivity::class.java)
-                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-            val configPending = PendingIntent.getActivity(
-                context, CONFIG_CODE + appWidgetId, config,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
+            // Header tap contract (#370): the ring completes inline, a row
+            // opens its detail sheet, and EVERYTHING else — background,
+            // title, count, view label, empty line — opens the Task Manager.
+            // Handlers are explicit on every id, not inherited from the
+            // body: some hosts don't propagate a parent tap to children
+            // without their own handler, which left the scrollable title
+            // dead. The refresh button keeps its own job (it is a control,
+            // not background). The view-cycle and config shortcuts are
+            // gone from fresh renders — ACTION_VIEW is still handled so a
+            // PendingIntent cached by an older build keeps working — and
+            // their codes stay reserved, never reused. The table itself
+            // lives in [widgetTapTarget], which render() consults through
+            // [applyTapTargets] — one source, pinned by WidgetTapTest.
             // Trampoline template: per-row fill-ins carry either
             // EXTRA_TASK_ID (open detail) or EXTRA_COMPLETE_ID (complete
             // inline). MUTABLE is required: fill-in extras are silently
@@ -686,10 +802,9 @@ class TaskWidget : AppWidgetProvider() {
             val scrollable = scrollableFor(context, appWidgetId)
             if (!scrollable) {
                 return RemoteViews(context.packageName, R.layout.task_widget_full).apply {
-                    setOnClickPendingIntent(R.id.task_widget_body, openPending)
-                    setOnClickPendingIntent(R.id.task_widget_title, configPending)
-                    setOnClickPendingIntent(R.id.task_widget_view, viewPending)
-                    setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
+                    // The view label exists only here (the scrollable
+                    // layout names the view in its title instead).
+                    applyTapTargets(this, openPending, refreshPending, PLAIN_TAP_IDS)
                     if (tasks != null) {
                         val today = java.time.LocalDate.now(IST)
                         val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
@@ -719,8 +834,7 @@ class TaskWidget : AppWidgetProvider() {
             }
             // E: the collection widget, on the same proven chrome.
             return RemoteViews(context.packageName, R.layout.task_widget_list).apply {
-                setOnClickPendingIntent(R.id.task_widget_body, openPending)
-                setOnClickPendingIntent(R.id.task_widget_refresh, refreshPending)
+                applyTapTargets(this, openPending, refreshPending, LIST_TAP_IDS)
                 if (tasks != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     // Service-backed collections (setRemoteAdapter) broke
                     // on Android 16 — hand the rows over directly instead
@@ -776,8 +890,9 @@ class TaskWidget : AppWidgetProvider() {
         }
 
         /** Empty/loading/error line under the list. No "tap to retry"
-         * suffix: the empty view is not tappable (the refresh button is),
-         * so promising a dead tap is worse than none. */
+         * suffix: the empty view opens the Task Manager like the rest of
+         * the background (#370), so promising a retry tap would be worse
+         * than none. */
         private fun emptyText(
             context: Context,
             tasks: List<ServerTask>?,

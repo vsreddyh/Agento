@@ -34,6 +34,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -57,10 +58,10 @@ import androidx.core.content.edit
 
 /**
  * Display settings for one task-widget placement: which slice it shows,
- * row density, the due line, and whether the list scrolls. Launched by
- * the system at add time (android:configure) and from the Task Manager
- * screen afterwards. Cancelling at add time aborts the placement;
- * saving re-renders that widget via [TaskWidget].
+ * row density, row order, the due line, and whether the list scrolls.
+ * Launched by the system at add time (android:configure) and from
+ * Settings → Home-screen widget afterwards. Cancelling at add time aborts
+ * the placement; saving re-renders that widget via [TaskWidget].
  */
 class TaskWidgetConfigActivity : ComponentActivity() {
 
@@ -85,16 +86,18 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                 WidgetSettingsScreen(
                     view = TaskWidget.viewFor(this, appWidgetId),
                     density = TaskWidget.densityFor(this, appWidgetId),
+                    sort = TaskWidget.sortFor(this, appWidgetId),
                     showDue = TaskWidget.showDueFor(this, appWidgetId),
                     scrollable = TaskWidget.scrollableFor(this, appWidgetId),
                     onCancel = {
                         setResult(RESULT_CANCELED, done)
                         finish()
                     },
-                    onSave = { v, d, due, scroll ->
+                    onSave = { v, d, s, due, scroll ->
                         prefs().edit {
                             putString("task_widget_view_$appWidgetId", v.name)
                             putString("task_widget_density_$appWidgetId", d.name)
+                            putString("task_widget_sort_$appWidgetId", s.name)
                             putBoolean("task_widget_due_$appWidgetId", due)
                             putBoolean("task_widget_scroll_$appWidgetId", scroll)
                             // Retired diagnostic ladder: drop the key here
@@ -121,16 +124,18 @@ class TaskWidgetConfigActivity : ComponentActivity() {
 private fun WidgetSettingsScreen(
     view: TaskWidgetView,
     density: TaskWidgetDensity,
+    sort: TaskWidgetSort,
     showDue: Boolean,
     scrollable: Boolean,
     onCancel: () -> Unit,
-    onSave: (TaskWidgetView, TaskWidgetDensity, Boolean, Boolean) -> Unit,
+    onSave: (TaskWidgetView, TaskWidgetDensity, TaskWidgetSort, Boolean, Boolean) -> Unit,
 ) {
     // rememberSaveable: rotating before Save must not reset the picks
     // (this screen is a system-launched configure activity, so rotation
     // is routine).
     var pickedView by rememberSaveable { mutableStateOf(view) }
     var pickedDensity by rememberSaveable { mutableStateOf(density) }
+    var pickedSort by rememberSaveable { mutableStateOf(sort) }
     var pickedDue by rememberSaveable { mutableStateOf(showDue) }
     var pickedScroll by rememberSaveable { mutableStateOf(scrollable) }
 
@@ -162,7 +167,7 @@ private fun WidgetSettingsScreen(
                 }
                 Button(
                     onClick = {
-                        onSave(pickedView, pickedDensity, pickedDue, pickedScroll)
+                        onSave(pickedView, pickedDensity, pickedSort, pickedDue, pickedScroll)
                     },
                     modifier = Modifier.weight(2f),
                 ) {
@@ -209,6 +214,24 @@ private fun WidgetSettingsScreen(
                     }
                 }
             }
+            // Five orders don't fit a segmented row: a radio list instead,
+            // same whole-row-selectable shape as the switches below. The
+            // non-Server orders mirror the Task Manager's sort menu, so a
+            // placement can match the in-app list.
+            SettingsGroup("Row order") {
+                TaskWidgetSort.entries.forEach { s ->
+                    SortRow(
+                        title = s.title,
+                        subtitle = when (s) {
+                            TaskWidgetSort.Server ->
+                                "As the server returns them — today's behaviour"
+                            else -> "Same order as “${s.title}” in the Task Manager"
+                        },
+                        selected = pickedSort == s,
+                        onClick = { pickedSort = s },
+                    )
+                }
+            }
             SettingsGroup("Options") {
                 SwitchRow(
                     title = "Show due dates",
@@ -249,6 +272,44 @@ private fun SettingsGroup(title: String, content: @Composable () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) { content() }
         }
+    }
+}
+
+/** One order option; the whole row selects, same shape as [SwitchRow]. */
+@Composable
+private fun SortRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(
+                selected = selected,
+                onClick = onClick,
+                role = Role.RadioButton,
+            )
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        // The row is the single radio control; the button is decoration,
+        // so hide it from TalkBack to avoid two radio nodes.
+        RadioButton(
+            selected = selected,
+            onClick = null,
+            modifier = Modifier.clearAndSetSemantics { },
+        )
     }
 }
 

@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Collections
 
 /** Lightweight row for the conversation switcher (no message bodies). */
 data class ThreadSummary(
@@ -117,6 +118,35 @@ data class ChatUiState(
     /** Memory ids with a write in flight: their buttons disable so a double
      * tap cannot fire two writes. */
     val actingMemory: Set<String> = emptySet(),
+    /** Pending ask_user dialog for the active thread (#373): the agent is
+     * blocked waiting for a human answer. Gated by conversation id both
+     * when stored and when rendered, so a thread switch can never show
+     * another thread's card. */
+    val pendingQuestion: PendingQuestion? = null,
+    /** Last answer/cancel failure, shown on the card with a retry. */
+    val questionError: String = "",
+    /** Free-text answer draft; kept across a failed send so retry resends. */
+    val questionDraft: String = "",
+    /** An answer/cancel POST is in flight: buttons disable to prevent a
+     * double-tap second write (which the gateway would 409). */
+    val questionSending: Boolean = false,
+    /** Slash skill picker (#372): query + invocable list for the composer.
+     * Visibility is gated by the text itself (ChatScreen shows it only
+     * while `slashQuery(pending)` is non-null), so thread switches, sends
+     * and queue parks hide it without touching every pending reset. */
+    val slash: SlashPickerState = SlashPickerState(),
+    /** Composer text at dismiss time: the card stays hidden until the text
+     * changes, so Close actually closes. In state (not a private var) so
+     * the visibility gate can read it. */
+    val slashDismissedAt: String? = null,
+)
+
+/** Slash `/` skill picker state (#372). */
+data class SlashPickerState(
+    val query: String = "",
+    val skills: List<SkillInfo> = emptyList(),
+    val loading: Boolean = false,
+    val error: String = "",
 )
 
 /** Device-observed usage for one conversation thread, summed from
@@ -183,6 +213,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private val memoryApi = MemoryApi(app)
     private val teachApi = TeachApi(app)
     private val serverApi = ServerApi(app)
+    private val questionsApi = QuestionsApi(app)
     private val appCtx: Application = app
 
     /** Decoded-thumbnail memory, VM-held so it survives rotation; evicted on
@@ -283,6 +314,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     /** Threads already offered auto-resume: fires once per thread so a
      * failed resend never loops. */
     private var resumedThreads = mutableSetOf<String>()
+    /** Finished runs already appended to their thread (#374): keyed by
+     * run id, not thread — a later genuinely-live run on the same thread
+     * must still resume, which a per-thread guard would block. Append-only:
+     * only APPEND joins (the persisted reply guards from there on), so a
+     * failed run re-labels on every open instead of stranding a bare tail
+     * after its banner is dismissed. Synchronized: the IO read races the
+     * Main add, and a torn read is a duplicate append. */
+    private var adoptedRunIds: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
     private var threadId: String = ""
     private var threads: List<ChatThread> = emptyList()
     /** Bumped by threads-mutating user ops so init's async publish can tell a
@@ -371,7 +410,285 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     fun onPending(v: String) {
         _state.value = _state.value.copy(pending = v)
+        updateSlash(v)
     }
+
+    /** Slash picker cache per profile path: fetched invocable list + fetch time.
+     * Capped: more profiles than this means custom setups, not forgetfulness. */
+    private var slashCache = mutableMapOf<String, Pair<Long, List<SkillInfo>>>()
+    private val maxSlashCacheEntries = 4
+    private var slashJob: Job? = null
+    /** Id of the question an answer/cancel POST is in flight for, if any.
+     * The Question-frame handler keeps a half-typed draft only for this id
+     * (or a re-emit of the held card) — a genuinely new dialog starts
+     * clean, even mid-flight. Cleared everywhere `questionSending` is. */
+    private var questionSendingId: String? = null
+    /** Profile path with a fetch in flight: keystrokes while it runs only
+     * re-filter, never relaunch (the blocking OkHttp call is not
+     * cooperatively cancellable, so relaunches pile up and last-wins). */
+    private var slashFetching: String? = null
+
+    /**
+     * Slash picker fetch (#372): first trigger per profile path fetches,
+     * then a 60 s cache; a failed fetch keeps the stale list behind the
+     * error so hand-typed commands still complete from a visible list.
+     * Stale-guarded on the live text and path — a send or a profile
+     * switch mid-flight must not land old rows on the new composer.
+     */
+    private fun updateSlash(text: String) {
+        // Any live typing clears the dismiss lock first — including the
+        // no-trigger path, so pasting the dismissed text verbatim starts
+        // fresh instead of staying hidden behind a stale lock.
+        if (_state.value.slashDismissedAt != null && text != _state.value.slashDismissedAt) {
+            _state.value = _state.value.copy(slashDismissedAt = null)
+        }
+        val dismissed = _state.value.slashDismissedAt
+        val query = slashQuery(text)
+        if (query == null || text == dismissed) {
+            slashJob?.cancel()
+            slashJob = null
+            slashFetching = null
+            if (_state.value.slash != SlashPickerState()) {
+                _state.value = _state.value.copy(slash = SlashPickerState())
+            }
+            return
+        }
+        val path = api.pathFor(tab)
+        val now = System.currentTimeMillis()
+        val cached = slashCache[path]
+        if (cached != null && now - cached.first < 60_000) {
+            _state.value = _state.value.copy(
+                slash = SlashPickerState(query = query, skills = cached.second),
+            )
+            return
+        }
+        if (slashFetching == path) {
+            // A fetch for this path is already in flight: re-filter only.
+            // Relaunching per keystroke piles up blocking calls that
+            // cancellation cannot abort; the in-flight one lands and the
+            // live query filters it.
+            _state.value = _state.value.copy(
+                slash = _state.value.slash.copy(query = query),
+            )
+            return
+        }
+        if (_state.value.slash.query != query || !_state.value.slash.loading) {
+            _state.value = _state.value.copy(
+                slash = SlashPickerState(
+                    query = query,
+                    skills = cached?.second.orEmpty(),
+                    loading = true,
+                ),
+            )
+        }
+        slashFetching = path
+        slashJob?.cancel()
+        slashJob = viewModelScope.launch {
+            val res = serverApi.listSkills(path)
+            // Text moved on, or the profile switched, while fetching.
+            if (slashQuery(_state.value.pending) == null || api.pathFor(tab) != path) {
+                slashFetching = null
+                return@launch
+            }
+            val liveQuery = slashQuery(_state.value.pending) ?: query
+            slashFetching = null
+            res.fold(
+                onSuccess = { list ->
+                    val inv = invocableSkills(list)
+                    if (slashCache.size >= maxSlashCacheEntries) {
+                        slashCache.keys.firstOrNull()?.let { slashCache.remove(it) }
+                    }
+                    slashCache[path] = System.currentTimeMillis() to inv
+                    _state.value = _state.value.copy(
+                        slash = SlashPickerState(query = liveQuery, skills = inv),
+                    )
+                },
+                onFailure = {
+                    _state.value = _state.value.copy(
+                        slash = SlashPickerState(
+                            query = liveQuery,
+                            skills = cached?.second.orEmpty(),
+                            error = "Couldn't load skills",
+                        ),
+                    )
+                },
+            )
+        }
+    }
+
+    /** Picker row tap: the `/` token becomes `/skill:<name> `, the picker
+     * closes, and the keyboard stays up with the cursor at the end (a
+     * plain-String field value resets the cursor there). */
+    fun pickSkill(name: String) {
+        val cur = _state.value.pending
+        if (!cur.startsWith("/")) return
+        slashJob?.cancel()
+        slashJob = null
+        slashFetching = null
+        _state.value = _state.value.copy(
+            pending = insertSkillCommand(cur, name),
+            slash = SlashPickerState(),
+            slashDismissedAt = null,
+        )
+    }
+
+    fun dismissSlash() {
+        slashJob?.cancel()
+        slashJob = null
+        slashFetching = null
+        // Locked to the current text: the visibility gate keys on it, so
+        // the card stays hidden until the user types something new.
+        _state.value = _state.value.copy(
+            slash = SlashPickerState(),
+            slashDismissedAt = _state.value.pending,
+        )
+    }
+
+    /**
+     * Clears a held ask_user dialog on every active-thread change (#373):
+     * the card belongs to one thread's turn (the gateway clears the slot
+     * at teardown), so a stale object would resurrect a 404 card when
+     * switching back. Same for the draft — thread B must never inherit
+     * thread A's half-typed answer.
+     */
+    private fun clearQuestionState() {
+        questionSendingId = null
+        _state.value = _state.value.copy(
+            pendingQuestion = null, questionError = "",
+            questionDraft = "", questionSending = false,
+        )
+    }
+
+    /**
+     * ask_user answers (#373). The card clears optimistically — the turn
+     * continues in the same stream — and a failure restores the card with
+     * an error whose send buttons retry the same value.
+     */
+    fun setQuestionDraft(v: String) {
+        // Capped at the gateway bound: an overlong value is a deterministic
+        // 400, and an uncapped field lets a paste loop it forever.
+        _state.value = _state.value.copy(questionDraft = v.take(QuestionsApi.MAX_ANSWER_CHARS))
+    }
+
+    fun answerQuestion(value: String) {
+        val q = _state.value.pendingQuestion ?: return
+        if (_state.value.questionSending) return
+        val path = api.pathFor(tab)
+        // The turn/thread this POST belongs to: a Done, an error, or a
+        // thread change before the response lands must not restore the
+        // card onto a dead turn or a new thread.
+        val ownerThread = threadId
+        _state.value = _state.value.copy(
+            pendingQuestion = null, questionError = "", questionSending = true,
+        )
+        questionSendingId = q.id
+        viewModelScope.launch {
+            questionsApi.answer(path, q.id, value).fold(
+                onSuccess = {
+                    // Same guard as the failure path: a thread switch (or a
+                    // newer question) while posting must not clear the new
+                    // thread's draft or flip its in-flight flag.
+                    if (ownerThread == threadId) {
+                        questionSendingId = null
+                        // Clear the draft only when nothing newer is held:
+                        // a re-emitted same-id card keeps its text, and a
+                        // newer card keeps its own draft.
+                        val held = _state.value.pendingQuestion
+                        _state.value = _state.value.copy(
+                            questionSending = false,
+                            questionDraft = if (held == null || held.id == q.id) "" else _state.value.questionDraft,
+                        )
+                    }
+                },
+                onFailure = { e ->
+                    restoreQuestion(
+                        q, ownerThread,
+                        e.message ?: "Couldn't send the answer",
+                        e.isFinal(),
+                    )
+                },
+            )
+        }
+    }
+
+    /** Cancels the dialog: the tool errors and the turn continues. */
+    fun cancelQuestion() {
+        val q = _state.value.pendingQuestion ?: return
+        if (_state.value.questionSending) return
+        val path = api.pathFor(tab)
+        val ownerThread = threadId
+        _state.value = _state.value.copy(
+            pendingQuestion = null, questionError = "", questionSending = true,
+        )
+        questionSendingId = q.id
+        viewModelScope.launch {
+            questionsApi.cancel(path, q.id).fold(
+                onSuccess = {
+                    if (ownerThread == threadId) {
+                        questionSendingId = null
+                        val held = _state.value.pendingQuestion
+                        _state.value = _state.value.copy(
+                            questionSending = false,
+                            questionDraft = if (held == null || held.id == q.id) "" else _state.value.questionDraft,
+                        )
+                    }
+                },
+                onFailure = { e ->
+                    restoreQuestion(
+                        q, ownerThread,
+                        e.message ?: "Couldn't send",
+                        e.isFinal(),
+                    )
+                },
+            )
+        }
+    }
+
+    /**
+     * Restores the card after a failed answer/cancel so the same buttons
+     * retry — unless there is nothing to restore onto. A 404 means the
+     * turn (and its gateway slot) is gone and a 409 means the question is
+     * already answered elsewhere: restoring either would loop retries
+     * into a dead question, so the failure stays silent and the turn's
+     * own end is the UI. Same when the thread moved on or a newer
+     * question arrived meanwhile: the newer card intentionally hides the
+     * older failure rather than flashing a stale error.
+     */
+    private fun restoreQuestion(q: PendingQuestion, ownerThread: String, message: String, gone: Boolean) {
+        if (ownerThread != threadId) return
+        // The owner POST settled: its sending flag clears no matter which
+        // card is held — nothing else can be in flight (the send gate
+        // allows one POST at a time), so leaving it set would wedge the
+        // newer card's buttons. The in-flight id clears only for its own
+        // generation: a newer question's POST (overwrite path) owns the
+        // field now, and the old failure must not blank it.
+        _state.value = _state.value.copy(questionSending = false)
+        if (questionSendingId == q.id) questionSendingId = null
+        // Restore the card only when there is something to restore onto: a
+        // 404 means the turn (and its gateway slot) is gone and a 409 means
+        // the question was already answered elsewhere — restoring either
+        // would loop retries into a dead question, so the failure stays
+        // silent and the turn's own end is the UI. Same when the thread
+        // moved on (checked above) or a newer question arrived: the newer
+        // card intentionally hides the older failure rather than flashing
+        // a stale error.
+        if (!gone && _state.value.streaming && _state.value.pendingQuestion == null) {
+            _state.value = _state.value.copy(
+                pendingQuestion = q,
+                questionError = message,
+                questionSending = false,
+            )
+        }
+    }
+
+    /** Final answer outcomes: 404 (turn gone) and 409 (already answered
+     * elsewhere) both mean retrying this card is pointless — the slot is
+     * gone, so the card must go too. A 400 (value rejected) restores the
+     * card with the server's message: the slot is still held and Pi is
+     * still blocked, and the input cap keeps the identical value from
+     * recurring verbatim. */
+    private fun Throwable.isFinal(): Boolean =
+        this is QuestionHttpError && (code == 404 || code == 409)
 
     /** Stages picked photos, capped at [MAX_IMAGES_PER_TURN] — excess is dropped
      * with an Info notice (nothing failed, the cap held). Only wired photos
@@ -417,9 +734,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun appendPending(text: String) {
         if (text.isBlank()) return
         val cur = _state.value.pending
-        _state.value = _state.value.copy(
-            pending = if (cur.isBlank()) text else joinPending(cur, text),
-        )
+        // Funnel through the shared trigger path (#372 review): voice and
+        // typing set pending the same way, so a dictated `/trigger` fetches
+        // and filters exactly like a typed one instead of stranding the
+        // card on "No matching skills" with a stale dismiss lock.
+        onPending(if (cur.isBlank()) text else joinPending(cur, text))
     }
 
     /** Toast-host notice: appended to the queue, so a repeated identical notice
@@ -609,6 +928,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 notices = retainedNotices(),
             )
         }
+        // An import replaces the threads out from under the turn: any held
+        // question belongs to a conversation that may not even exist now.
+        clearQuestionState()
         if (hadStaged) {
             stagedDiscardedNotice()
         }
@@ -688,6 +1010,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             threadId = id,
             error = "",
             pending = "",
+            // Slash-picker dismiss lock dies with the composer text it was
+            // keyed on (#372 review): a stale lock would hide the picker
+            // for a fresh identical invocation after send/switch, and the
+            // warm rows with it, keeping state and UI in agreement.
+            slash = SlashPickerState(),
+            slashDismissedAt = null,
             // The notice queue drops Infos with them (Errors survive).
             pendingAttachments = emptyList(),
             notices = retainedNotices(),
@@ -700,6 +1028,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeRunId = "", busyRunId = "",
             showRuns = false, runsLoading = false,
         )
+        // The old thread's held question dies with the switch (#373).
+        clearQuestionState()
         if (hadStaged) {
             stagedDiscardedNotice()
         }
@@ -793,6 +1123,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 threadId = id,
                 error = "",
                 pending = "",
+                // Same dismiss-lock drop as switchThread above (#372 review):
+                // the lock keys on exact composer text, which dies here.
+                slash = SlashPickerState(),
+                slashDismissedAt = null,
                 // Staged photos die with the text draft: a parked photo firing into
                 // the wrong thread is a silent mis-send.
                 pendingAttachments = emptyList(),
@@ -804,6 +1138,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
             )
+            // The old thread's held question dies with the open (#373).
+            clearQuestionState()
             if (hadStagedOpen) {
                 stagedDiscardedNotice()
             }
@@ -889,6 +1225,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val hadStagedNew = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = parked,
+            // Fresh composer, fresh picker (#372 review): the dismiss lock
+            // keys on exact text from the old thread, which dies here.
+            slash = SlashPickerState(), slashDismissedAt = null,
             // Staged photos die with the draft like every other thread change: a
             // New with a parked photo must not fire it into the fresh thread.
             pendingAttachments = emptyList(),
@@ -900,6 +1239,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             activeRunId = "", busyRunId = "",
             showRuns = false, runsLoading = false,
         )
+        // A fresh thread holds no question (#373).
+        clearQuestionState()
         if (hadStagedNew) {
             stagedDiscardedNotice()
         }
@@ -974,6 +1315,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = kept,
+                // Same dismiss-lock drop as every other thread change
+                // (#372 review): the lock keys on the old thread's text.
+                slash = SlashPickerState(), slashDismissedAt = null,
                 // Same staged-photos-die-with-the-draft rule as the other thread changes.
                 pendingAttachments = emptyList(),
                 notices = retainedNotices(),
@@ -981,6 +1325,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 activeRunId = "", busyRunId = "",
                 showRuns = false, runsLoading = false,
             )
+            // The deleted thread's held question dies with it (#373).
+            clearQuestionState()
             if (hadStagedDelete) {
                 stagedDiscardedNotice()
             }
@@ -1177,6 +1523,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 livePending.isBlank() -> queued
                 else -> joinPending(livePending, queued)
             },
+            // The handed-back text is new composer state (#372 review): a
+            // stale dismiss lock or warm rows would linger until the next
+            // keystroke, so both reset with the text.
+            slash = SlashPickerState(), slashDismissedAt = null,
         )
         // Persist the stopped partial so the interrupted flag (and the
         // text/trace so far) survives a thread switch or restart.
@@ -1267,7 +1617,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (text.isNotEmpty()) {
                 if (_state.value.queued.isBlank()) {
                     // Queued verbatim like the direct send: the turn keeps indentation.
-                    _state.value = _state.value.copy(pending = "", queued = rawText)
+                    // The dismiss lock drops with the parked text (#372 review):
+                    // the queued fire sends directly, so a lock kept here
+                    // would outlive the composer text it was keyed on.
+                    _state.value = _state.value.copy(
+                        pending = "", queued = rawText,
+                        slash = SlashPickerState(), slashDismissedAt = null,
+                    )
                     // Same narrowing note: the queued fire is text-only, so staged photos park.
                     val parkedQueuedCount = pendingAttachmentCount()
                     if (parkedQueuedCount > 0) {
@@ -1317,6 +1673,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             messages = history, pending = draftAfterSend, pendingAttachments = emptyList(),
             streaming = true, error = "",
+            // The sent text leaves the composer: its dismiss lock goes with
+            // it (#372 review), or retyping the same trigger next turn
+            // would stay hidden behind the stale lock.
+            slash = SlashPickerState(), slashDismissedAt = null,
         )
         doSend(history, path, provider, model, effort)
     }
@@ -1375,6 +1735,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             } else {
                                 curPending
                             },
+                            // The stripped remainder is new composer state
+                            // (#372 review): reset the picker with it.
+                            slash = SlashPickerState(), slashDismissedAt = null,
                         )
                         // Parked-photos voice lives here, not pre-launch: the
                         // Conflict branch calls send(), which voices its own notice.
@@ -1956,14 +2319,14 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // prompt text only, so a text-identical tail can attach to a
             // different live run. The resend still carries the user's own
             // tail (photos included) and the newest live run wins.
-            val imageOnlyTail = last.content.isBlank() &&
-                last.attachments.wiredPhotoCount() > 0
-            // Newest match wins: two image-only tails can both be live.
-            val run = runs.filter {
-                !it.isTerminal() && it.conversationId == threadId &&
-                    (promptMatches(last.content, it.prompt) ||
-                        (imageOnlyTail && it.prompt.isBlank()))
-            }.maxByOrNull { it.updatedAt } ?: return@launch
+            val live = liveMatchFor(last, threadId, runs)
+            if (live == null) {
+                // No live run: a finished run's stored answer may still be
+                // adoptable — a reply that landed after the app died (#374).
+                maybeAdoptTerminal(threadId, last, runs)
+                return@launch
+            }
+            val run = live
             // Bounded: re-clearing only loses the once-guard for threads long
             // dead, whose resend finds no live run and no-ops.
             withContext(Dispatchers.Main) {
@@ -2008,20 +2371,124 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     }
 
     /**
-     * The stored prompt is a bounded preview: exact when short, a truncated
-     * prefix when marked. Compared trim-tolerant — the server trimmed its
-     * copy too, and this check is best-effort anyway (the server reattach
-     * compares the full text and 429s on mismatch).
+     * Adopts a finished run's stored answer into a dangling user tail
+     * (#374): the reply completed after the app died, so the transcript
+     * ends on the user's own message with the answer lost from the thread.
+     * Newest terminal match first; a live match never reaches here, and a
+     * completed match with output appends it as a normal assistant message
+     * (no duplicate turn is sent). Failed/cancelled/interrupted matches
+     * label the tail instead — never a fabricated reply. Blank-output
+     * completions and no-match leave the tail alone.
+     *
+     * Idempotent two ways: the appended run id joins [adoptedRunIds]
+     * (per run, not per thread, so a later genuinely-live run on the same
+     * thread still resumes), and an already-present trailing assistant
+     * message stops a second open before any IO.
      */
-    private fun promptMatches(full: String, preview: String): Boolean {
-        if (preview.isEmpty()) return false
-        val marker = "… (truncated)"
-        val text = full.trim()
-        if (!preview.endsWith(marker)) return text == preview.trim()
-        // A literal trailing marker in a short prompt must not read as a
-        // truncation prefix: the full text has to actually exceed the core.
-        val core = preview.dropLast(marker.length)
-        return text.length > core.length && text.startsWith(core)
+    private suspend fun maybeAdoptTerminal(
+        threadId: String,
+        tail: ChatMessage,
+        runs: List<AgentRun>,
+    ) {
+        val match = terminalMatchFor(tail, threadId, runs) ?: return
+        if (match.id in adoptedRunIds) return
+        // Full record: the list carries a bounded preview for terminal
+        // runs, not the whole reply the thread is missing.
+        val full = runsApi.get(api.pathFor(tab), match.id).getOrNull() ?: return
+        if (full.id in adoptedRunIds) return
+        if (!full.isTerminal() || full.conversationId != threadId) return
+        // Identity, not a stricter text match: the detail row must carry
+        // the same stored prompt string the list row matched. A trim-exact
+        // tail check here would break long prompts — the store keeps the
+        // bounded preview (MaxPrompt), so detail and list return the same
+        // truncated string, and exact equality with the tail can never
+        // hold past the cap. The preview-tolerant match above is what
+        // selected this run; this line only guards an id/prompt skew
+        // between the two reads.
+        if (full.prompt != match.prompt) return
+        withContext(Dispatchers.Main) {
+            if (threadId != this@ChatViewModel.threadId || _state.value.streaming || !_state.value.ready) {
+                return@withContext
+            }
+            val cur = _state.value.messages
+            val curLast = cur.lastOrNull() ?: return@withContext
+            // Still the same unanswered user tail: anything else (a new
+            // turn, an adopted reply, a switch) means there is nothing to
+            // adopt into. Identity stays inline (role + exact content +
+            // photo count); the *match* delegates to the shared helper so
+            // a future tweak to the preview rule cannot strand the
+            // re-check behind the selection.
+            if (curLast.role != "user" || !messageHasContent(curLast)) return@withContext
+            if (curLast.content != tail.content ||
+                curLast.attachments.wiredPhotoCount() != tail.attachments.wiredPhotoCount()
+            ) {
+                return@withContext
+            }
+            if (terminalMatchFor(curLast, threadId, listOf(full)) == null) return@withContext
+            if (full.id in adoptedRunIds) return@withContext
+            when (adoptDecision(full)) {
+                AdoptOutcome.APPEND -> {
+                    // Cached only on append: the persisted reply is its own
+                    // idempotency guard from here on (a trailing assistant
+                    // message stops maybeResume at entry), while a failed
+                    // run re-labels on every open — a dismissed banner must
+                    // not leave a bare dangling tail behind.
+                    if (adoptedRunIds.size >= 200) adoptedRunIds.clear()
+                    adoptedRunIds.add(full.id)
+                    val u = full.usage
+                    // Reasoning capped like the live path (REASONING_CAP):
+                    // the gateway keeps up to 64k, but an adopted bubble
+                    // must persist no more than a live turn would.
+                    val adopted = cur + ChatMessage(
+                        "assistant",
+                        full.output,
+                        ChatThreads.now(),
+                        tools = full.tools.distinct().take(20),
+                        prompt = u?.prompt ?: 0L,
+                        completion = u?.completion ?: 0L,
+                        total = u?.total ?: 0L,
+                        cached = u?.cached ?: 0L,
+                        unreported = u == null,
+                        model = full.model.trim(),
+                        reasoning = full.reasoning.take(REASONING_CAP),
+                    )
+                    // Same accounting as the Done path: the bubble shows
+                    // usage, so the device totals must count the turn or
+                    // Settings under-reports adopted replies.
+                    addTokens(u)
+                    // Same header refresh as Done: the in-memory total only
+                    // moves on the next turn otherwise (backfillUsage is
+                    // correctly skipped — the record's tool names already
+                    // ride full.tools; the gateway stores no skill names,
+                    // so adopted bubbles never get skill chips).
+                    refreshServerTotals()
+                    _state.value = _state.value.copy(messages = adopted)
+                    upsertActive(adopted)
+                    persist()
+                }
+                AdoptOutcome.LABEL_FAILED -> {
+                    // failed/cancelled/interrupted: label the outcome the
+                    // way the runs sheet shows it — the stored error
+                    // included — without fabricating a reply that would
+                    // resend as history. The banner's Retry resends the
+                    // tail, which is the recovery. Never clobbers an error
+                    // already on state (e.g. connectivity): the run outcome
+                    // is information, not an override.
+                    if (_state.value.error.isBlank()) {
+                        _state.value = _state.value.copy(
+                            error = "Last reply ${full.status}" +
+                                (if (full.error.isNotBlank()) ": ${full.error}" else "") +
+                                " — see Runs for details.",
+                        )
+                    }
+                }
+                AdoptOutcome.LEAVE -> {
+                    // A completed run with blank output adopts nothing:
+                    // there is no answer to show, and the tail stays for
+                    // the user to drive.
+                }
+            }
+        }
     }
 
     /** Regenerates the last reply (#122, v1 replace semantics): drops the
@@ -2325,6 +2792,42 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             )
                         }
                     }
+                    is ChatEvent.Question -> {
+                        // ask_user relay (#373): hold the card only for the
+                        // active thread — the frame names its conversation,
+                        // and a late frame for a thread already left must
+                        // not attach to the new one. A newer frame for the
+                        // same conversation replaces (Pi blocks one dialog
+                        // at a time; the profile lock serialises turns).
+                        // The stream carries no text for this: the question
+                        // is a card, never a transcript row.
+                        val q = event.question
+                        if (questionAttaches(q, threadId)) {
+                            // A POST for a previous card may still be in
+                            // flight (optimistic clear): keep its draft —
+                            // blanking on a same-id re-emit would lose the
+                            // value a failing POST is about to restore. A
+                            // genuinely new id still starts clean, even
+                            // mid-flight: the in-flight id pins whose draft
+                            // is kept, so a new question never inherits it.
+                            val keepDraft = q.id == questionSendingId ||
+                                q.id == _state.value.pendingQuestion?.id
+                            _state.value = _state.value.copy(
+                                pendingQuestion = q,
+                                questionError = "",
+                                // Sending untouched on purpose: a POST for a
+                                // previous card may still be in flight, and
+                                // clearing here would defeat its double-tap
+                                // gate for exactly that window. A new card
+                                // implies no POST for it has started yet.
+                                questionDraft = if (keepDraft) {
+                                    _state.value.questionDraft
+                                } else {
+                                    ""
+                                },
+                            )
+                        }
+                    }
                     is ChatEvent.RateLimited -> {
                         // The profile is busy with a different turn: drop the
                         // placeholder (this prompt was never sent) and remember
@@ -2464,7 +2967,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             activeToolLabel = "",
                             activeRunId = "",
                             busyRunId = "",
+                            // The turn is over: a held card belongs to a
+                            // dialog that died with it (the gateway clears
+                            // the slot at teardown). No phantom card.
+                            pendingQuestion = null,
+                            questionError = "",
+                            questionSending = false,
+                            questionDraft = "",
                         )
+                    questionSendingId = null
                         addTokens(event.usage)
                         upsertActive(doneMessages)
                         persist()
@@ -2561,13 +3072,20 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         _state.value = _state.value.copy(
                             messages = kept, streaming = false, error = event.message,
                             activeTools = emptyList(), activeToolLabel = "",
+                            // A failed turn holds no dialog either: same
+                            // teardown, same phantom-card rule as Done.
+                            pendingQuestion = null,
+                            questionError = "",
+                            questionSending = false,
+                            questionDraft = "",
                             // Keep a possibly-live id for the sheet: the API
                             // forwards X-Agento-Run-Id ahead of errors, and a
                             // 500 after the run started leaves it executing.
                             // Dead ids are harmless — cancelling one 409s.
                             busyRunId = _state.value.activeRunId.ifBlank { _state.value.busyRunId },
                             activeRunId = "",
-                        )
+                            )
+                        questionSendingId = null
                         // A queued send never auto-fires after a failure (no failure
                         // cascades): hand it back to the composer instead.
                         parkQueued()
@@ -2935,4 +3453,84 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         persist()
         true
     }
+}
+
+/**
+ * The stored prompt is a bounded preview: exact when short, a truncated
+ * prefix when marked. Compared trim-tolerant — the server trimmed its copy
+ * too, and this check is best-effort anyway (the server reattach compares
+ * the full text and 429s on mismatch). Top-level and pure so the match the
+ * resume and adopt paths share is pinned without a Context.
+ */
+internal fun promptMatches(full: String, preview: String): Boolean {
+    if (preview.isEmpty()) return false
+    val marker = "… (truncated)"
+    val text = full.trim()
+    if (!preview.endsWith(marker)) return text == preview.trim()
+    // A literal trailing marker in a short prompt must not read as a
+    // truncation prefix: the full text has to actually exceed the core.
+    val core = preview.dropLast(marker.length)
+    return text.length > core.length && text.startsWith(core)
+}
+
+/**
+ * Newest live run matching a dangling user tail (#374): the resume path's
+ * half of the match, sharing [promptMatches] (and the image-only rule)
+ * with [terminalMatchFor] so the two can never drift apart. Seq breaks
+ * updatedAt ties: two rows stamped in the same millisecond order by
+ * sequence, not by list order.
+ */
+internal fun liveMatchFor(
+    tail: ChatMessage,
+    threadId: String,
+    runs: List<AgentRun>,
+): AgentRun? {
+    val imageOnlyTail = tail.content.isBlank() &&
+        tail.attachments.wiredPhotoCount() > 0
+    return runs.filter {
+        !it.isTerminal() && it.conversationId == threadId &&
+            (promptMatches(tail.content, it.prompt) ||
+                (imageOnlyTail && it.prompt.isBlank()))
+    }.maxWithOrNull(compareBy({ it.updatedAt }, { it.seq }))
+}
+
+/**
+ * Newest terminal run matching a dangling user tail (#374), or null. Pure:
+ * the live-match path and the adopt path share it, so a skew between "what
+ * resumes" and "what adopts" breaks loudly here instead of stranding a
+ * thread. Image-only blank-prompt tails match blank-prompt runs, like the
+ * resume path.
+ */
+internal fun terminalMatchFor(
+    tail: ChatMessage,
+    threadId: String,
+    runs: List<AgentRun>,
+): AgentRun? {
+    val imageOnlyTail = tail.content.isBlank() &&
+        tail.attachments.wiredPhotoCount() > 0
+    return runs.filter {
+        it.isTerminal() && it.conversationId == threadId &&
+            (promptMatches(tail.content, it.prompt) ||
+                (imageOnlyTail && it.prompt.isBlank()))
+    }.maxWithOrNull(compareBy({ it.updatedAt }, { it.seq }))
+}
+
+/** What a terminal match does to the dangling tail (#374). */
+internal enum class AdoptOutcome {
+    /** Completed with output: append it as a normal assistant message. */
+    APPEND,
+    /** Completed with blank output: nothing to show, leave the tail. */
+    LEAVE,
+    /** Failed/cancelled/interrupted: label the outcome, never a reply. */
+    LABEL_FAILED,
+}
+
+/** What a terminal match does to the dangling tail (#374). Liveness is
+ * decided by [AgentRun.isTerminal] (never a status equality, per that
+ * type's own rule); the completed/failed split below is a status
+ * distinction, which is exactly what the field is for. */
+internal fun adoptDecision(run: AgentRun): AdoptOutcome {
+    if (!run.isTerminal()) return AdoptOutcome.LEAVE
+    if (run.status != "completed") return AdoptOutcome.LABEL_FAILED
+    return if (run.output.isNotBlank()) AdoptOutcome.APPEND else AdoptOutcome.LEAVE
 }

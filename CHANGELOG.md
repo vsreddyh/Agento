@@ -8,6 +8,71 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.17.1]
+- **A reply that finished while the app was closed is adopted, not lost
+  (#374).** Opening a thread whose last message is an unanswered user turn
+  now checks the conversation's runs: a still-live run reattaches as
+  before, a finished run appends its stored answer (with usage) instead of
+  leaving the thread dangling, and a failed/cancelled/interrupted run
+  labels the tail with its outcome rather than a fabricated reply. No
+  duplicate turn is ever sent; reopening twice cannot append twice.
+
+## [5.17.0]
+- **The agent can ask you a question mid-turn (#373).** A new `ask_user`
+  tool lets the model ask something it cannot decide itself; the question
+  appears as an inline card above the composer (one button per option, or
+  a free-text field plus Send, plus Cancel) and the turn waits for the
+  answer. The card survives an app restart (the gateway holds the pending
+  question and re-emits it on reattach), a failure to send restores the
+  card with a retry, and scheduler fires never block on a human — an
+  unattended question fails the tool fast instead.
+
+## [5.16.0]
+- **Chat composer: type `/` to invoke a skill (#372).** A picker lists
+  the profile's Pi-loaded skills (name + description, filtered as you
+  type); tapping one inserts `/skill:<name> ` with the cursor at the end.
+  Taught drafts Pi never loaded are excluded. Sent skill turns render as
+  a `skill: <name>` chip plus the argument text — the stored text stays
+  byte-identical, so retry/queue/fork/regenerate resend verbatim.
+
+## [5.15.1]
+- **Task widget taps follow one contract (#370).** Ring completes inline,
+  a row opens its detail sheet, and everything else — background, title,
+  count, view label, empty line — opens the Task Manager. Two gaps are
+  closed: the plain-rows title opened widget settings and the view label
+  cycled the view (now both open Task Manager; settings live in
+  Settings → Home-screen widget), and the scrollable title/count/empty
+  line relied on body-tap inheritance some launchers don't propagate
+  (now explicit handlers). The wiring table is unit-pinned, so the
+  contract survives without an on-device tap-through.
+
+## [5.15.0]
+- **Task widget: rows can match the Task Manager's order (#369).** Each
+  placement gains a Row order setting (Server order, Start time, Name,
+  Newest, Estimate) — the non-Server orders are the Task Manager's own
+  sort, so the two can never disagree about what "Name" means. Server
+  order stays the default, the setting lives per placement (system
+  configure screen and Settings → Home-screen widget, whose summary now
+  names a non-default order), and it rides the backup like the other
+  display keys.
+
+## [5.14.1]
+- **Tapping Completed on a reminder no longer opens the app (#368).**
+  The notification actions were activity trampolines, which Android 12+
+  brings to the foreground even when translucent. Both actions (and Skip,
+  which shared the shape) now go straight to a background receiver with
+  the same success semantics — alerts dismiss, widget and alarms refresh,
+  and an offline tap keeps the reminder. The widget rows keep their
+  trampoline; the now-unused skip trampoline is removed.
+
+## [5.14.0]
+- **App updates check themselves now (#366).** Tapping Check for updates
+  still works, but Agento also checks once on startup (at most every 6
+  hours) and on a configurable schedule (hourly to weekly, daily by
+  default, or off). Cadence, the startup check and an opt-in per-release
+  notification live in Settings → Behaviour. Checking never downloads
+  anything — install stays a tap in Settings → About.
+
 ## [5.13.2]
 - **Chat header: the title reads again (#354).** The bar carried seven
   action icons, so Material 3 measured the actions first and the title got

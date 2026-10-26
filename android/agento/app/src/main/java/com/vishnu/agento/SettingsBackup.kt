@@ -103,6 +103,12 @@ object SettingsBackup {
         BehaviourSettings.KEY_NOTIFY_CRON,
         BehaviourSettings.KEY_SYNC_WIFI_ONLY,
         BehaviourSettings.KEY_SYNC_PAUSED,
+        // Update checks (#366): the two user-facing switches. The interval
+        // is a long below; the last-check bookkeeping keys are deliberately
+        // NOT allowlisted — a restored "8.0.0 available" on a build that
+        // already ships it would be a lie.
+        BehaviourSettings.KEY_UPDATE_STARTUP,
+        BehaviourSettings.KEY_UPDATE_NOTIFY,
     )
 
     /**
@@ -122,6 +128,8 @@ object SettingsBackup {
         BehaviourSettings.KEY_REMINDER_LEAD_MINUTES,
         BehaviourSettings.KEY_TTS_RATE_PCT,
         BehaviourSettings.KEY_TTS_PITCH_PCT,
+        // Update poll cadence (#366: 0 = off); coerced like the rest.
+        BehaviourSettings.KEY_UPDATE_INTERVAL_HOURS,
     )).distinct()
 
     /**
@@ -170,17 +178,20 @@ object SettingsBackup {
     private val STRING_WIDGET_PREFIXES = listOf(
         "task_widget_view_",
         "task_widget_density_",
+        // Row order (#369): a string like view/density, same numeric-id
+        // shape, same import coercion (unknown names read back Server).
+        "task_widget_sort_",
     )
     private val BOOLEAN_WIDGET_PREFIXES = listOf(
         "task_widget_due_",
         "task_widget_scroll_",
     )
 
-    /** True for a per-widget display key `task_widget_{view,density,due,scroll}_<id>`. */
+    /** True for a per-widget display key `task_widget_{view,density,sort,due,scroll}_<id>`. */
     fun isWidgetDisplayKey(k: String): Boolean =
         isStringWidgetKey(k) || isBooleanWidgetKey(k)
 
-    /** True for a `task_widget_{view,density}_<numeric id>` key (string-valued). */
+    /** True for a `task_widget_{view,density,sort}_<numeric id>` key (string-valued). */
     fun isStringWidgetKey(k: String): Boolean =
         STRING_WIDGET_PREFIXES.any { hasNumericSuffix(k, it) }
 
@@ -247,7 +258,7 @@ object SettingsBackup {
             (all[k] as? String)?.let { values.put(k, it) }
         }
         // Per-widget display settings: enumerated live because the key ends in
-        // an appWidgetId, and written by type because the four fields are not
+        // an appWidgetId, and written by type because the five fields are not
         // all one type. Sorted, so two exports of the same prefs are
         // byte-identical. Read from the same `all` snapshot as every other block.
         for (k in all.keys.filter { isWidgetDisplayKey(it) }.sorted()) {
@@ -362,9 +373,9 @@ object SettingsBackup {
                     }
                 }
                 // Per-widget display settings: the export allowlist mirrored
-                // per prefix — view/density take strings only, due/scroll take
-                // booleans only. A cross-typed value in a hand-edited backup is
-                // skipped: the widget reads those keys with getBoolean.
+                // per prefix — view/density/sort take strings only, due/scroll
+                // take booleans only. A cross-typed value in a hand-edited
+                // backup is skipped: the widget reads those keys with getBoolean.
                 for (k in names) {
                     if (isStringWidgetKey(k) && values.opt(k) is String) {
                         putString(k, values.optString(k, ""))

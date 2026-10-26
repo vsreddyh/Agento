@@ -141,7 +141,69 @@ sealed interface ChatEvent {
      * client can watch or cancel instead of guessing.
      */
     data class RateLimited(val runId: String, val message: String) : ChatEvent
+    /**
+     * A mid-turn `ask_user` question (`{"agento_question": {...}}`, #373):
+     * the agent is blocked waiting for a human answer. Rendered as an
+     * inline card — never as assistant text, never counted in usage, never
+     * appended to the stored output.
+     */
+    data class Question(val question: PendingQuestion) : ChatEvent
 }
+
+/**
+ * One pending `ask_user` dialog, as carried by the `agento_question` frame.
+ * Parsing is lenient like [RunSnapshot]: missing keys read as blank, and a
+ * frame without an id is dropped (it can never be answered).
+ */
+data class PendingQuestion(
+    val id: String = "",
+    val conversationId: String = "",
+    val method: String = "",
+    val title: String = "",
+    val options: List<String> = emptyList(),
+    /** Free-text hint for the input card; blank when the dialog has none. */
+    val placeholder: String = "",
+) {
+    /** Options card when the dialog offers choices, else a free-text field.
+     * Today only `select` carries options; `confirm`/`editor` (held by the
+     * relay, never sent by ask_user.ts) render as free text by design. */
+    fun hasOptions(): Boolean = method == "select" && options.isNotEmpty()
+
+    companion object {
+        fun parse(o: JSONObject): PendingQuestion? {
+            val id = o.optString("id", "").trim()
+            if (id.isEmpty()) return null
+            val options = buildList {
+                val arr = o.optJSONArray("options")
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        add(arr.optString(i, ""))
+                    }
+                }
+            }.filter { it.isNotBlank() }
+            return PendingQuestion(
+                id = id,
+                conversationId = o.optString("conversation_id", "").trim(),
+                method = o.optString("method", "").trim(),
+                title = o.optString("title", "").trim(),
+                options = options,
+                placeholder = o.optString("placeholder", "").trim(),
+            )
+        }
+    }
+}
+
+/**
+ * Whether a question frame attaches to the active thread (#373): the frame
+ * names its conversation, and a late frame for a thread already left must
+ * not attach to the new one. Pure so the rule is pinned without a Context;
+ * the ViewModel applies it on every Question event and the card applies it
+ * again at render time.
+ */
+fun questionAttaches(question: PendingQuestion, threadId: String): Boolean =
+    question.id.isNotBlank() &&
+        question.conversationId.isNotBlank() &&
+        question.conversationId == threadId
 
 /**
  * One resumable agent run, as carried by the `agento_run` snapshot frame and
@@ -983,6 +1045,22 @@ internal fun readSseStream(
             // later frames overwrite (last wins) as usual.
             snapshot.usage?.let(onUsage)
             emit(ChatEvent.RunState(snapshot))
+            continue
+        }
+        // ask_user relay (`{"agento_question": {...}}`, #373): the agent is
+        // blocked on a human answer. Emitted, never accumulated: it is not
+        // assistant text, carries no usage, and must not enter the stored
+        // output. Parsed leniently — an id-less frame can never be answered,
+        // so it is dropped rather than shown as a dead card. Not gated on
+        // terminalSeen: a terminal run holds no question (turn teardown
+        // clears it), so any question frame here is live by construction.
+        val question = runCatching {
+            val o = JSONObject(data)
+            val q = o.optJSONObject("agento_question") ?: return@runCatching null
+            PendingQuestion.parse(q)
+        }.getOrNull()
+        if (question != null) {
+            emit(ChatEvent.Question(question))
             continue
         }
         // Gateway error frames ({"error": "..."}) are checked BEFORE the

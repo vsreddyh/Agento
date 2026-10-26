@@ -2,6 +2,7 @@ package pi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"os"
@@ -1222,5 +1223,69 @@ sleep 2
 	}
 	if !strings.Contains(err.Error(), "boot diagnostic on stderr") {
 		t.Fatalf("ErrNotReady lost the child's stderr diagnostic: %v", err)
+	}
+}
+
+// TestRespondEchoesRequestID proves the relay answers with the REQUEST's id.
+// Pi correlates an extension_ui_response by echoing its own request id; an
+// invented id (Send's empty wire id, Call's pi-N pending id) would leave the
+// blocked ask_user call waiting until the turn times out. The recorder keeps
+// the exact line so the assertion is on the wire, not on a helper's claim.
+func TestRespondEchoesRequestID(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "received")
+	script := filepath.Join(dir, "recorder")
+	body := `#!/bin/sh
+: > ` + marker + `
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> ` + marker + `
+done
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("write recorder: %v", err)
+	}
+	c, err := Start(context.Background(), Options{Bin: script})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	if err := c.Respond(
+		context.Background(),
+		"4acccc2f-dd3c-4e95-88b7-fa3cacd695aa",
+		map[string]any{"value": "Joint"},
+	); err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+
+	// One line on the wire: reads race the write, so poll rather than sleep.
+	deadline := time.Now().Add(5 * time.Second)
+	var data string
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(marker)
+		if err == nil && len(raw) > 0 {
+			data = strings.TrimSpace(string(raw))
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if data == "" {
+		t.Fatal("the response never reached the child")
+	}
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(data), &rec); err != nil {
+		t.Fatalf("wire line is not JSON: %q", data)
+	}
+	if rec["type"] != "extension_ui_response" {
+		t.Fatalf("wire type = %v, want extension_ui_response", rec["type"])
+	}
+	if rec["id"] != "4acccc2f-dd3c-4e95-88b7-fa3cacd695aa" {
+		t.Fatalf("wire id = %v, want the request's id echoed", rec["id"])
+	}
+	if rec["value"] != "Joint" {
+		t.Fatalf("wire value = %v, want Joint", rec["value"])
+	}
+	if strings.HasPrefix(data, `"id":""`) || strings.Contains(data, `"id":"pi-`) {
+		t.Fatalf("invented or empty id on the wire: %q", data)
 	}
 }

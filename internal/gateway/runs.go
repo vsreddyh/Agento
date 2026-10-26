@@ -314,6 +314,31 @@ func (lr *liveRun) isRunning() bool {
 	return !lr.finished && lr.run.Status == runs.StatusRunning
 }
 
+// runProfile reports the owning profile in one locked read, for the
+// question relay (which keys the pending slot by profile).
+func (lr *liveRun) runProfile() string {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.run.Profile
+}
+
+// runConversation reports the conversation in one locked read, for the
+// question relay (which re-emits only to the run's own conversation).
+func (lr *liveRun) runConversation() string {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.run.ConversationID
+}
+
+// subscriberCount reports how many streams are attached to the run. Zero
+// means nobody can see a question card, so the relay fails a dialog fast
+// instead of blocking the turn on it (scheduler fires never subscribe).
+func (lr *liveRun) subscriberCount() int {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return len(lr.subs)
+}
+
 // requestCancel marks the run cancelled and asks Pi to abort. The turn still
 // ends through the normal event loop, so output produced up to the abort is
 // kept and the run is closed exactly once.
@@ -1344,6 +1369,17 @@ func (s *Server) streamRun(
 		return
 	}
 
+	// A question asked while no stream was attached is re-emitted here, so
+	// a client that closed the app and reattached still gets its card
+	// (#373). Emitted directly, not republished: a republish would resend
+	// it to every already-attached tab, and the frame carries no output —
+	// the app dedups on the question id either way.
+	if qw, ok := s.pendingFor(lr.runProfile(), lr.runConversation()); ok {
+		if err := sse.write(questionFrame{Question: qw}); err != nil {
+			return
+		}
+	}
+
 	keepalive := startKeepalive(r.Context(), sse, s.cfg.KeepaliveInterval)
 	defer keepalive()
 
@@ -1579,6 +1615,14 @@ func (s *Server) executeRun(
 		s.runs.finish(lr, time.Now())
 	}()
 
+	// A held ask_user dialog dies with its turn (#373): unblock Pi so the
+	// extension unwinds instead of sitting blocked past the settle, and
+	// clear the slot so the next turn starts without a stale card. Runs
+	// before the teardown above (LIFO): the child must still be reachable.
+	defer func() {
+		s.cancelPendingQuestion(lr)
+	}()
+
 	ticker := time.NewTicker(runPersistInterval)
 	defer ticker.Stop()
 
@@ -1698,6 +1742,13 @@ func (s *Server) stepRun(lr *liveRun, model string, rec pi.Record, unlock func()
 			return false
 		}
 		lr.publishDelta(text, reasoning, newChunk(lr.completionID, model, text, reasoning))
+		return false
+
+	case "extension_ui_request":
+		// ask_user relay (#373): hold the dialog, publish the card, and
+		// keep waiting — the turn ends only when Pi settles. Answered
+		// through POST /api/questions/{id}; cleared at turn teardown.
+		s.handleExtensionUI(lr, rec)
 		return false
 
 	default:

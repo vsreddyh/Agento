@@ -18,6 +18,9 @@
 //	{"tool":"bash","label":"...","status":"start"}       tool progress
 //	{"usage":{...}}                                     token counts, last wins
 //	{"error":"..."}                                     terminal, no [DONE]
+//	{"agento_question":{...}}                           ask_user relay (#373):
+//	                                                    mid-turn question card,
+//	                                                    never stored output
 package gateway
 
 import (
@@ -43,6 +46,10 @@ type Agent interface {
 	Call(ctx context.Context, command string, payload map[string]any) (*pi.Record, error)
 	// Send writes a command without waiting for a response.
 	Send(ctx context.Context, command string, payload map[string]any) error
+	// Respond answers a Pi extension_ui_request dialog, carrying the
+	// request's id (not an invented one). Used by the ask_user relay:
+	// the extension blocks until this arrives or the turn ends.
+	Respond(ctx context.Context, id string, payload map[string]any) error
 	// Subscribe returns a stream of session events plus a cancel function.
 	Subscribe() (<-chan pi.Record, func())
 	// Stderr returns diagnostics from the agent process.

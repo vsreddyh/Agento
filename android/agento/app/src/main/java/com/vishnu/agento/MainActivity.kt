@@ -121,6 +121,13 @@ class MainActivity : ComponentActivity() {
     private val schedulerTargetId = mutableStateOf<String?>(null)
 
     /**
+     * Update-available notification tap (#366). Generation counter like
+     * schedulerGen so retaps renavigate; lands on Settings → About (where
+     * the App updates section lives).
+     */
+    private val updateGen = mutableIntStateOf(0)
+
+    /**
      * Chat-thread deep-link (task-instruction tap, #287). Generation counter
      * like tasksGen so retaps renavigate; ChatTab consumes the thread id
      * and clears it once the ViewModel is ready.
@@ -152,6 +159,9 @@ class MainActivity : ComponentActivity() {
             chatThreadId.value = intent.getStringExtra(InstructIntents.EXTRA_THREAD_ID)
             chatAutosend.value = intent.getBooleanExtra(InstructIntents.EXTRA_AUTOSEND, false)
         }
+        if (intent.action == UpdateCheck.ACTION_UPDATE) {
+            updateGen.intValue++
+        }
     }
 
     /** Adaptive sidebar navigation (#18, #64); theme from prefs (#28). */
@@ -181,6 +191,10 @@ class MainActivity : ComponentActivity() {
             chatGen.intValue = 1
             chatThreadId.value = intent?.getStringExtra(InstructIntents.EXTRA_THREAD_ID)
             chatAutosend.value = intent?.getBooleanExtra(InstructIntents.EXTRA_AUTOSEND, false) == true
+        }
+        // Update-available notification tap: same redelivery guard.
+        if (savedInstanceState == null && intent?.action == UpdateCheck.ACTION_UPDATE && updateGen.intValue == 0) {
+            updateGen.intValue = 1
         }
         setContent {
             val context = LocalContext.current
@@ -233,6 +247,15 @@ class MainActivity : ComponentActivity() {
                     // section opens that subsection directly.
                     var section by remember { mutableStateOf<SettingSection?>(null) }
                     var settingsOpen by remember { mutableStateOf(false) }
+                    // Update-available notification tap (#366): land on
+                    // Settings → About, where the App updates section lives.
+                    // After `section` is declared: the effect assigns it.
+                    LaunchedEffect(updateGen.intValue) {
+                        if (updateGen.intValue > 0) {
+                            dest = Destination.Settings
+                            section = SettingSection.About
+                        }
+                    }
                     val drawerState = rememberDrawerState(DrawerValue.Closed)
                     val scope = rememberCoroutineScope()
                     // Resume tick for cross-screen freshness: a flip in

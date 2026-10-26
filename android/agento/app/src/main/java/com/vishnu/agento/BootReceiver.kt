@@ -11,8 +11,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Re-arms both periodic jobs right after reboot or update (WorkManager
- * persists them, this avoids waiting for the next window).
+ * Re-arms all periodic jobs right after a reboot or an update (#366 adds
+ * the update poll to the sync + task pair): WorkManager persists them,
+ * this avoids waiting for the next window.
  */
 class BootReceiver : BroadcastReceiver() {
     /** Holds the broadcast until work finishes; returning early would let
@@ -31,6 +32,8 @@ class BootReceiver : BroadcastReceiver() {
                 // an app update clears nothing here and a fresh install has
                 // no schedule at all — re-asserting is idempotent either way.
                 AgentoApp.scheduleTaskSync(context)
+                // Same for the update poll (#366): re-asserted, never doubled.
+                AgentoApp.scheduleUpdateChecks(context)
                 val pending = goAsync()
                 scope.launch {
                     try {

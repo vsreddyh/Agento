@@ -1132,20 +1132,50 @@ internal fun SettingsBackupSection(
     }
 }
 
-/** Issue #6: check-then-install updater against GitHub Releases on main. */
+/** Issue #6: check-then-install updater against GitHub Releases on main.
+ *
+ * Issue #366: the manual button now funnels through [UpdateCheck.run], so
+ * this section, the startup one-shot and the periodic worker all read and
+ * write the same persisted snapshot — the status line below can never
+ * disagree with a completed automatic check.
+ */
 @Composable
 internal fun AppUpdateSection() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Re-read on resume: an automatic check can land while the user is
+    // looking at another tab, and this section must show it on return.
+    var tick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { tick++ }
 
-    val (installedName, installedCode) = remember {
+    // Keyed like the snapshot below: an in-place update + return changes
+    // what "installed" means, and a stale pair would disagree with the
+    // pending check until process restart.
+    var checkSeq by remember { mutableIntStateOf(0) }
+    val (installedName, installedCode) = remember(context, tick, checkSeq) {
         UpdateManager.currentVersion(context)
     }
+    // The persisted outcome of the latest completed check (manual or
+    // automatic). `checkSeq` re-derives it after our own manual check
+    // finishes, so the button, status line and download target always
+    // agree without refetching.
+    val snapshot = remember(context, tick, checkSeq) { UpdateCheck.snapshot(context) }
+    val pending = remember(context, tick, checkSeq) { UpdateCheck.pendingRelease(context) }
     var status by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
-    var latest by remember { mutableStateOf<AppRelease?>(null) }
     var busy by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(-1f) }
+    // A background automatic check landing while a manual result is on
+    // screen would show two answers at once: drop the manual one on
+    // resume (never mid-check — `busy` guards the in-flight case).
+    // Keyed on tick only, not checkSeq: our own completion bumps
+    // checkSeq without touching tick, so our fresh result survives.
+    LaunchedEffect(tick) {
+        if (!busy) {
+            status = ""
+            failed = false
+        }
+    }
 
     /** Returns from the "install unknown apps" toggle — install if allowed now. */
     val unknownSourcesReturn = rememberLauncherForActivityResult(
@@ -1173,20 +1203,21 @@ internal fun AppUpdateSection() {
                     status = ""
                     failed = false
                     scope.launch {
-                        UpdateManager.fetchLatest()
+                        // notify = false: the result is on screen already —
+                        // a notification would duplicate it.
+                        UpdateCheck.run(context, notify = false)
                             .onSuccess { rel ->
-                                latest = if (UpdateManager.isNewer(rel.tag, installedName, installedCode)) {
+                                if (UpdateManager.isNewer(rel.tag, installedName, installedCode)) {
                                     status = "Update available: ${rel.name}"
-                                    rel
                                 } else {
                                     status = Toasts.UP_TO_DATE
-                                    null
                                 }
+                                checkSeq++
                             }
                             .onFailure { e ->
-                                latest = null
                                 failed = true
                                 status = e.message ?: e.javaClass.simpleName
+                                checkSeq++
                             }
                         busy = false
                     }
@@ -1198,7 +1229,7 @@ internal fun AppUpdateSection() {
             }
             Button(
                 onClick = {
-                    val rel = latest ?: return@Button
+                    val rel = pending ?: return@Button
                     if (!UpdateManager.canInstallUnknownApps(context)) {
                         runCatching { unknownSourcesReturn.launch(UpdateManager.unknownSourcesIntent(context)) }
                         failed = true
@@ -1231,7 +1262,7 @@ internal fun AppUpdateSection() {
                         busy = false
                     }
                 },
-                enabled = !busy && latest != null,
+                enabled = !busy && pending != null,
                 modifier = Modifier.weight(1f),
             ) {
                 Text("Download & install")
@@ -1245,7 +1276,7 @@ internal fun AppUpdateSection() {
         } else if (busy) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
-        val rel = latest
+        val rel = pending
         if (rel != null && rel.notes.isNotBlank()) {
             // Rendered as Markdown (not raw text) so changelog headings and
             // lists never show their `#`/`-` markers in the app. Full notes:
@@ -1256,9 +1287,20 @@ internal fun AppUpdateSection() {
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        // Manual-check feedback takes precedence while fresh; the
+        // persisted status line below is the standing record.
         if (status.isNotEmpty()) {
             if (failed) ErrorCard(raw = status) else HintLine(status)
         }
+        HintLine(UpdateCheck.statusLine(snapshot, System.currentTimeMillis(), pending != null))
+        // No "Automatic checks: " prefix: the cadence line is a complete
+        // sentence in every branch, and prefixing it would stutter.
+        HintLine(
+            BehaviourSettings.updateCadenceLine(
+                BehaviourSettings.updateIntervalHours(context),
+                BehaviourSettings.updateStartup(context),
+            ),
+        )
     }
 }
 
@@ -1292,7 +1334,7 @@ internal fun WidgetSettingsSection() {
 
     SectionCard(
         title = "Home-screen widget",
-        subtitle = "What the task widget shows: which tasks, how dense the rows are, and whether due dates and scrolling are on. Every placement keeps its own settings.",
+        subtitle = "What the task widget shows: which tasks, in what order, how dense the rows are, and whether due dates and scrolling are on. Every placement keeps its own settings.",
     ) {
         if (widgetIds.isEmpty()) {
             Text(
@@ -1334,6 +1376,10 @@ internal fun WidgetSettingsSection() {
                                 append(" tasks · ")
                                 append(TaskWidget.densityFor(context, id).title)
                                 append(" rows")
+                                val sort = TaskWidget.sortFor(context, id)
+                                if (sort != TaskWidgetSort.Server) {
+                                    append(" · ${sort.title}")
+                                }
                                 if (!TaskWidget.showDueFor(context, id)) append(" · no due dates")
                                 if (!TaskWidget.scrollableFor(context, id)) {
                                     append(" · up to ${TaskWidget.STATIC_ROW_LIMIT} rows")

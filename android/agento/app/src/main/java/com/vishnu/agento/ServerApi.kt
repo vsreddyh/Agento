@@ -17,6 +17,10 @@ data class SkillInfo(
     val description: String = "",
     /** Null when the server doesn't report toggle state. */
     val enabled: Boolean? = null,
+    /** Present only on taught rows (`taught`); Pi-loaded skills carry none. */
+    val scope: String = "",
+    /** Survives only on taught rows (`draft`/`active`). */
+    val status: String = "",
 )
 
 /** One toolset from `GET {profile}/v1/toolsets` with its concrete tools. */
@@ -94,30 +98,7 @@ class ServerApi(context: Context) {
     suspend fun listSkills(path: String): Result<List<SkillInfo>> =
         withContext(Dispatchers.IO) {
             get(path, "v1/skills").map { body ->
-                val out = mutableListOf<SkillInfo>()
-                val arr = rootArray(body, "skills", "data", "items")
-                    ?: throw RuntimeException("Unexpected response shape")
-                for (i in 0 until arr.length()) {
-                    val item = arr.opt(i)
-                    if (item is String) {
-                        if (item.isNotBlank()) {
-                            out.add(SkillInfo(name = item.trim()))
-                        }
-                        continue
-                    }
-                    val o = item as? JSONObject ?: continue
-                    val name = o.optString("name", "")
-                        .ifEmpty { o.optString("id", "") }
-                        .ifEmpty { o.optString("slug", "") }
-                        .trim()
-                    if (name.isEmpty()) continue
-                    out.add(SkillInfo(
-                        name = name,
-                        description = o.optString("description", "").trim(),
-                        enabled = optFlag(o, "enabled", "active"),
-                    ))
-                }
-                out.distinctBy { it.name.lowercase(Locale.ROOT) }.sortedBy { it.name.lowercase(Locale.ROOT) }
+                parseServerSkillList(body)
             }
         }
 
@@ -257,22 +238,58 @@ class ServerApi(context: Context) {
                 parseSessionTotals(s)
             }
         }
+}
 
-    /**
-     * Strict toggle parse: only real booleans count — strings, numbers and
-     * nulls are skipped, so the first *boolean* value wins (a present but
-     * non-boolean key never masks a later real one) and absence reads as
-     * unknown (null) instead of Off.
-     */
-    private fun optFlag(o: JSONObject, vararg keys: String): Boolean? {
-        for (k in keys) {
-            if (!o.isNull(k)) {
-                val v = o.opt(k)
-                if (v is Boolean) return v
+/**
+ * Pure parse of a skills payload (#372): the same bare-array / wrapped
+ * shapes [ServerApi.listSkills] accepts. JVM-pinned — the wire gains
+ * fields (notably `scope`/`status` on taught rows), and a parse that
+ * silently drops them would let the picker offer skills Pi never loaded.
+ */
+fun parseServerSkillList(body: String): List<SkillInfo> {
+    val out = mutableListOf<SkillInfo>()
+    val arr = rootArray(body, "skills", "data", "items")
+        ?: throw RuntimeException("Unexpected response shape")
+    for (i in 0 until arr.length()) {
+        val item = arr.opt(i)
+        if (item is String) {
+            if (item.isNotBlank()) {
+                out.add(SkillInfo(name = item.trim()))
             }
+            continue
         }
-        return null
+        val o = item as? JSONObject ?: continue
+        val name = o.optString("name", "")
+            .ifEmpty { o.optString("id", "") }
+            .ifEmpty { o.optString("slug", "") }
+            .trim()
+        if (name.isEmpty()) continue
+        out.add(SkillInfo(
+            name = name,
+            description = o.optString("description", "").trim(),
+            enabled = optFlag(o, "enabled", "active"),
+            scope = o.optString("scope", "").trim(),
+            status = o.optString("status", "").trim(),
+        ))
     }
+    return out.distinctBy { it.name.lowercase(Locale.ROOT) }.sortedBy { it.name.lowercase(Locale.ROOT) }
+}
+
+/**
+ * Strict toggle parse: only real booleans count — strings, numbers and
+ * nulls are skipped, so the first *boolean* value wins (a present but
+ * non-boolean key never masks a later real one) and absence reads as
+ * unknown (null) instead of Off. Shared by [ServerApi] and
+ * [parseServerSkillList].
+ */
+internal fun optFlag(o: JSONObject, vararg keys: String): Boolean? {
+    for (k in keys) {
+        if (!o.isNull(k)) {
+            val v = o.opt(k)
+            if (v is Boolean) return v
+        }
+    }
+    return null
 }
 
 /**
@@ -527,7 +544,7 @@ fun dedupMcpServers(
     return servers.filter { normalizeMcpServerKey(it.name) !in covered }
 }
 
-/** Case-insensitive search across name + description (+ tools). */
+/** Case-insensitive search across name + description. */
 fun SkillInfo.matches(query: String): Boolean {
     val q = query.trim().lowercase(Locale.ROOT)
     if (q.isEmpty()) return true

@@ -512,6 +512,18 @@ func (c *Client) Send(ctx context.Context, command string, payload map[string]an
 	return c.writeCtx(ctx, command, "", payload)
 }
 
+// Respond writes an extension_ui_response addressed to Pi's request id.
+//
+// Unlike Send (which deletes any caller-supplied id) and Call (which invents
+// its own and registers it pending), this carries the REQUEST's id: Pi
+// correlates the response to the blocked extension call by echoing its id,
+// and an invented one would leave the extension blocked until the turn times
+// out. Used by the gateway to answer extension_ui_request dialogs
+// (ask_user); fire-and-forget UI methods never call this.
+func (c *Client) Respond(ctx context.Context, id string, payload map[string]any) error {
+	return c.write(ctx, "extension_ui_response", id, payload)
+}
+
 // ExitError reports why the child exited, or nil while it is still running.
 //
 // Deliberately honest about the live case: a health check calling this on a

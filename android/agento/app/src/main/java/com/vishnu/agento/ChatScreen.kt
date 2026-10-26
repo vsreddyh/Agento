@@ -1143,7 +1143,13 @@ internal fun ChatTab(
         onModel = { showModel = true },
         onHistory = { showThreads = true },
         onCheckConnection = vm::checkReachability,
-        onPending = vm::onPending, onSend = {
+        onPending = vm::onPending,
+        slash = state.slash.takeIf {
+            slashQuery(state.pending) != null && state.pending != state.slashDismissedAt
+        },
+        onPickSkill = vm::pickSkill, onDismissSlash = vm::dismissSlash,
+        onAnswerQuestion = vm::answerQuestion, onCancelQuestion = vm::cancelQuestion,
+        onQuestionDraft = vm::setQuestionDraft, onSend = {
             // Staging empties on send: the next live sentence starts a new
             // voicing episode. Queued-while-streaming keeps staging.
             liveStagedVoicedCount = 0
@@ -1802,6 +1808,16 @@ internal fun ChatScreen(
     onHistory: () -> Unit,
     onCheckConnection: () -> Unit,
     onPending: (String) -> Unit,
+    /** Slash skill picker (#372): the live trigger state for the composer
+     * text, gated by the text itself (ChatTab passes state.slash only
+     * while `slashQuery(state.pending)` is non-null). */
+    slash: SlashPickerState? = null,
+    onPickSkill: (String) -> Unit = {},
+    onDismissSlash: () -> Unit = {},
+    /** ask_user card (#373): answer/cancel/draft for the pending dialog. */
+    onAnswerQuestion: (String) -> Unit = {},
+    onCancelQuestion: () -> Unit = {},
+    onQuestionDraft: (String) -> Unit = {},
     onSend: () -> Unit,
     onStop: () -> Unit,
     onSteer: () -> Unit = {},
@@ -2674,7 +2690,15 @@ internal fun ChatScreen(
             // keyboard on any soft-input mode that pans instead.
             Surface(tonalElevation = 2.dp, modifier = Modifier.imePadding()) {
                 Column {
-                    if (state.streaming) {
+                    // A held ask_user dialog means the stream is silent by
+                    // definition (#373): say the agent is waiting on the
+                    // user rather than spinning an indeterminate bar.
+                    // Gated like the card itself: another thread's held
+                    // dialog never stills this thread's spinner.
+                    val waitingOnUser = state.streaming &&
+                        state.pendingQuestion != null &&
+                        questionAttaches(state.pendingQuestion, state.threadId)
+                    if (state.streaming && !waitingOnUser) {
                         // Polite live region (#283): a reply being generated
                         // was otherwise silent to TalkBack — the bar is
                         // decorative and the tool line below it is optional,
@@ -2683,6 +2707,16 @@ internal fun ChatScreen(
                         LinearProgressIndicator(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
+                    if (waitingOnUser) {
+                        Text(
+                            "Waiting for your answer — the agent continues when you reply.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 2.dp)
                                 .semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
@@ -2809,6 +2843,36 @@ internal fun ChatScreen(
                                 modifier = Modifier.padding(top = 2.dp),
                             )
                         }
+                    }
+                    // Slash skill picker (#372): anchored above the composer,
+                    // never clearing text or staged photos. Rows insert
+                    // `/skill:<name> ` and close; typing a complete command
+                    // or leaving the `/` prefix closes it via the text gate.
+                    val slashNow = slash
+                    if (slashNow != null) {
+                        SlashPickerCard(
+                            state = slashNow,
+                            onPick = onPickSkill,
+                            onDismiss = onDismissSlash,
+                        )
+                    }
+                    // ask_user card (#373): the agent is blocked on this
+                    // answer, so the card sits above the composer like the
+                    // picker above. Gated by conversation like the store
+                    // path: a card for a thread already left never renders
+                    // on the new one.
+                    val questionNow = state.pendingQuestion
+                        .takeIf { it != null && questionAttaches(it, state.threadId) }
+                    if (questionNow != null) {
+                        QuestionCard(
+                            question = questionNow,
+                            draft = state.questionDraft,
+                            error = state.questionError,
+                            sending = state.questionSending,
+                            onDraft = onQuestionDraft,
+                            onAnswer = onAnswerQuestion,
+                            onCancel = onCancelQuestion,
+                        )
                     }
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -3241,11 +3305,29 @@ internal fun ChatScreen(
                                                     // trailing newlines would render
                                                     // as blank lines — trimmed for
                                                     // display, never for the wire.
-                                                    SelectionContainer {
-                                                        Text(
-                                                            msg.content.trimEnd().ifEmpty { "…" },
-                                                            style = MaterialTheme.typography.bodyMedium,
-                                                        )
+                                                    // A sent skill command renders as
+                                                    // a chip plus the remainder (#372):
+                                                    // still projection-only, the
+                                                    // stored string is untouched.
+                                                    val cmd = parseSkillCommand(msg.content)
+                                                    if (cmd != null) {
+                                                        SkillChip(cmd.name)
+                                                        if (cmd.args.isNotBlank()) {
+                                                            Spacer(modifier = Modifier.height(4.dp))
+                                                            SelectionContainer {
+                                                                Text(
+                                                                    cmd.args.trimEnd(),
+                                                                    style = MaterialTheme.typography.bodyMedium,
+                                                                )
+                                                            }
+                                                        }
+                                                    } else {
+                                                        SelectionContainer {
+                                                            Text(
+                                                                msg.content.trimEnd().ifEmpty { "…" },
+                                                                style = MaterialTheme.typography.bodyMedium,
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
@@ -3590,6 +3672,206 @@ internal fun OptionMenu(
 /** Providers are gateway-global; one catalog fetch covers the Chat tab. */
 internal fun catalogPath(api: ChatApi): String =
     api.pathFor("chat")
+
+/**
+ * Slash skill picker card (#372): anchored above the composer while the
+ * composer text holds a `/` trigger. Rows show name + description over
+ * the Pi-loaded inventory only (taught drafts and disabled skills never
+ * reach the list — see [invocableSkills]); tapping inserts
+ * `/skill:<name> ` and closes. A failed fetch banners above the stale
+ * list rather than replacing it — hand-typed commands still work, and
+ * the card never blocks the composer.
+ */
+@Composable
+internal fun SlashPickerCard(
+    state: SlashPickerState,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val rows = remember(state.query, state.skills) {
+        state.skills.filter { it.matches(state.query) }
+    }
+    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (state.query.isEmpty()) "Skills" else "Skills matching “${state.query}”",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+            if (state.loading && rows.isEmpty()) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            // A failed refresh keeps the stale list AND says so: the error
+            // is a banner above the rows, never a replacement that hides
+            // the still-usable cached list.
+            if (state.error.isNotEmpty()) {
+                Text(
+                    "Couldn't load skills — showing cached list. Type the command by hand if it's missing.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+            if (!state.loading && rows.isEmpty() && state.error.isEmpty()) {
+                Text(
+                    "No matching skills.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            } else if (rows.isNotEmpty()) {
+                // Capped: the inventory is small, but the card sits over
+                // the transcript — eight rows, then the query narrows it.
+                // The overflow line says how many are hidden, so an empty
+                // query never silently swallows half the inventory.
+                val shown = rows.take(8)
+                val hidden = rows.size - shown.size
+                if (hidden > 0) {
+                    Text(
+                        "…and $hidden more — keep typing to narrow.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+                shown.forEach { s ->
+                    Surface(
+                        onClick = { onPick(s.name) },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surface,
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Text(
+                                "/skill:${s.name}",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            if (s.description.isNotEmpty()) {
+                                Text(
+                                    s.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Render-time skill chip (#372): a sent `/skill:<name>` turn shows
+ * `skill: <name>` plus the remainder as normal text. Syntax-only
+ * ([parseSkillCommand]) — the render path never consults the network, and
+ * a mistyped name stays visible in the chip instead of silently passing.
+ */
+@Composable
+internal fun SkillChip(name: String) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+    ) {
+        Text(
+            "skill: $name",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
+
+/**
+ * Inline ask_user card (#373): the agent's question with one button per
+ * option, or a free-text field plus Send when the dialog offers none —
+ * plus Cancel either way. Answering posts and clears the card
+ * optimistically; a failure restores it with [error], and the same
+ * buttons retry. Coexists with the queue/attachment/voice affordances:
+ * while a question is pending the stream is silent, so the composer
+ * above stays live for follow-ups.
+ */
+@Composable
+internal fun QuestionCard(
+    question: PendingQuestion,
+    draft: String,
+    error: String,
+    sending: Boolean,
+    onDraft: (String) -> Unit,
+    onAnswer: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                "Agent asks",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                question.title.ifBlank { "A question from the agent" },
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            if (question.hasOptions()) {
+                // One button per option, full width: the answer IS the
+                // button label, exactly what Pi receives as the result.
+                question.options.forEach { option ->
+                    Button(
+                        onClick = { onAnswer(option) },
+                        enabled = !sending,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(option)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+            } else {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = onDraft,
+                    placeholder = { Text(question.placeholder.ifBlank { "Type your answer…" }) },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (draft.isNotBlank() && !sending) onAnswer(draft)
+                    }),
+                    shape = RoundedCornerShape(16.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { onAnswer(draft) },
+                    enabled = draft.isNotBlank() && !sending,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (sending) "Sending…" else "Send answer")
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+            if (error.isNotEmpty()) {
+                HintLine("Couldn't send — $error. Try again.")
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+            TextButton(
+                onClick = onCancel,
+                enabled = !sending,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Cancel")
+            }
+        }
+    }
+}
 
 /** Display name for a provider slug. The wire value stays the gateway slug
  * (`opencode-go` per the gateway config); the catalog label is preferred. */

@@ -16,7 +16,8 @@ import java.time.LocalDate
  * in render(), since service-backed collections broke on Android 16
  * (issue #137). Each factory instance belongs to one placement (the
  * widget id arrives on its service intent) and shows that placement's
- * view (Open/Done/All) in its density (Comfortable/Compact). Snapshots
+ * view (Open/Done/All) in its density (Comfortable/Compact) and row order
+ * (matching the Task Manager sort, or server order). Snapshots
  * come from [TaskWidget]'s per-state cache (same process, no IPC
  * payload) so getViewAt stays cheap; row taps and the ring button fill
  * in to the [TaskCompleteActivity] template pending intent.
@@ -52,6 +53,14 @@ private class TaskFactory(
             TaskWidget.viewFor(appCtx, appWidgetId)
         }
 
+    private fun sort(): TaskWidgetSort =
+        if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
+            // No placement to read from: keep the fetch order.
+            TaskWidgetSort.Server
+        } else {
+            TaskWidget.sortFor(appCtx, appWidgetId)
+        }
+
     private fun compact(): Boolean =
         appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID &&
             TaskWidget.densityFor(appCtx, appWidgetId) == TaskWidgetDensity.Compact
@@ -73,7 +82,7 @@ private class TaskFactory(
         runCatching {
             val state = view().state
             today = LocalDate.now(IST)
-            items = TaskWidget.cachedViews[state]
+            items = (TaskWidget.cachedViews[state]
                 ?: runCatching {
                     runBlocking {
                         withTimeoutOrNull(10_000) {
@@ -81,6 +90,9 @@ private class TaskFactory(
                         }.orEmpty()
                     }
                 }.getOrDefault(emptyList())
+                // Same order as the pushed paths (#369): the factory is
+                // the only renderer on API <31, so it sorts its own copy.
+                ).sortedForWidget(sort())
         }.onFailure {
             TaskWidget.recordFactoryError("onDataSetChanged", it)
         }

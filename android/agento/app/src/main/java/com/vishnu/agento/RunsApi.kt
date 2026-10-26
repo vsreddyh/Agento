@@ -8,6 +8,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -30,6 +31,8 @@ data class AgentRun(
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
     val finishedAt: Long = 0L,
+    /** Server-reported token counts for the turn (null = unreported). */
+    val usage: TokenUsage? = null,
 ) {
     /** True for `completed|failed|cancelled|interrupted` — nothing more runs.
      * Liveness decisions everywhere use this, never a status equality. */
@@ -108,55 +111,18 @@ class RunsApi(context: Context) {
         }
     }
 
-    private fun parseRun(o: JSONObject): AgentRun? {
-        val id = o.optString("id", "").trim()
-        if (id.isEmpty()) return null
-        val tools = buildList {
-            val arr = o.optJSONArray("tools")
-            if (arr != null) {
-                for (i in 0 until arr.length()) add(arr.optString(i, ""))
-            }
-        }.filter { it.isNotBlank() }
-        return AgentRun(
-            id = id,
-            profile = o.optString("profile", "").trim(),
-            status = o.optString("status", "").trim(),
-            conversationId = o.optString("conversation_id", "").trim(),
-            prompt = o.optString("prompt", ""),
-            output = o.optString("output", ""),
-            reasoning = o.optString("reasoning", ""),
-            error = o.optString("error", "").trim(),
-            seq = o.optLong("seq", 0L),
-            model = o.optString("model", "").trim(),
-            tools = tools,
-            createdAt = o.optLong("created_at", 0L),
-            updatedAt = o.optLong("updated_at", 0L),
-            finishedAt = o.optLong("finished_at", 0L),
-        )
-    }
-
     private fun parseList(body: String): List<AgentRun> {
-        val out = mutableListOf<AgentRun>()
         val root = runCatching { JSONObject(body) }.getOrNull()
         if (root == null) {
             runCatching { Log.w("RunsApi", "unparseable runs body: ${body.take(120)}") }
-            return out
+            return emptyList()
         }
         val arr = root.optJSONArray("runs")
         if (arr == null) {
             runCatching { Log.w("RunsApi", "runs body has no runs array: ${body.take(120)}") }
-            return out
+            return emptyList()
         }
-        var dropped = 0
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val run = parseRun(o)
-            if (run == null) {
-                dropped++
-                continue
-            }
-            out.add(run)
-        }
+        val (out, dropped) = parseAgentRunArray(arr)
         if (dropped > 0) {
             runCatching { Log.w("RunsApi", "dropped $dropped id-less run row(s)") }
         }
@@ -208,4 +174,90 @@ class RunsApi(context: Context) {
             }
         }
 
+    /**
+     * Fetches one run by id (#374): the live snapshot when it is running,
+     * else the stored record. 404 (unknown id) is a failure, not a null —
+     * the caller treats any failure as "no match" and leaves the tail.
+     */
+    suspend fun get(path: String, id: String): Result<AgentRun> =
+        withContext(Dispatchers.IO) {
+            call("GET", "$path/api/runs/${encode(id)}").mapCatching {
+                if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
+                // Null (id-less row) and malformed JSON both read as
+                // "unparseable": either way there is no adoptable record,
+                // and the message says which half failed.
+                val parsed = runCatching { JSONObject(it.body) }.getOrNull()
+                    ?: throw RuntimeException("run record is not JSON: ${it.body.take(120)}")
+                parseAgentRun(parsed)
+                    ?: throw RuntimeException("run record has no id: ${it.body.take(120)}")
+            }
+        }
+
+}
+
+/** Pure parse of one run record (#374): the detail shape and every list
+ * row share it, so the adopt path reads exactly what the sheet shows.
+ * Null for id-less rows — they can never be adopted or cancelled. */
+fun parseAgentRun(o: JSONObject): AgentRun? {
+    val id = o.optString("id", "").trim()
+    if (id.isEmpty()) return null
+    val tools = buildList {
+        val arr = o.optJSONArray("tools")
+        if (arr != null) {
+            for (i in 0 until arr.length()) add(arr.optString(i, ""))
+        }
+    }.filter { it.isNotBlank() }
+    return AgentRun(
+        id = id,
+        profile = o.optString("profile", "").trim(),
+        status = o.optString("status", "").trim(),
+        conversationId = o.optString("conversation_id", "").trim(),
+        prompt = o.optString("prompt", "").trim(),
+        output = o.optString("output", ""),
+        reasoning = o.optString("reasoning", ""),
+        error = o.optString("error", "").trim(),
+        seq = o.optLong("seq", 0L),
+        model = o.optString("model", "").trim(),
+        tools = tools,
+        createdAt = o.optLong("created_at", 0L),
+        updatedAt = o.optLong("updated_at", 0L),
+        finishedAt = o.optLong("finished_at", 0L),
+        usage = runCatching { parseTokenUsage(o) }.getOrNull(),
+    )
+}
+
+/** Pure parse of the runs list body: unparseable is empty, never an error
+ * (the callers decide whether empty means "none" or "outage"). Shares the
+ * array parse with production below, so tests pin what prod runs. */
+fun parseAgentRunList(body: String): List<AgentRun> {
+    val root = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
+    val arr = root.optJSONArray("runs") ?: return emptyList()
+    return parseAgentRunArray(arr).first
+}
+
+/**
+ * Pure parse of one runs-list array: rows plus the id-less drop count the
+ * production wrapper logs. The single row parser both paths share, so a
+ * drift in null-row handling breaks the pinned tests instead of the app.
+ */
+fun parseAgentRunArray(arr: JSONArray): Pair<List<AgentRun>, Int> {
+    val out = mutableListOf<AgentRun>()
+    var dropped = 0
+    for (i in 0 until arr.length()) {
+        // Non-object rows (a bare string, a null) are the same corruption
+        // class as id-less objects: skip and count them, so the log
+        // names every shape the backup refused.
+        val o = arr.optJSONObject(i)
+        if (o == null) {
+            dropped++
+            continue
+        }
+        val run = parseAgentRun(o)
+        if (run == null) {
+            dropped++
+            continue
+        }
+        out.add(run)
+    }
+    return out to dropped
 }

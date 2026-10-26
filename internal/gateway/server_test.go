@@ -36,6 +36,10 @@ type fakeAgent struct {
 	// failCommands makes the named command return an error.
 	failCommands map[string]error
 
+	// responds records extension_ui_response writes (ask_user answers), so a
+	// test can assert the gateway echoed the REQUEST's id back to Pi.
+	responds []respondCall
+
 	// stderr is what Stderr() returns. A wedged real agent can emit megabytes.
 	stderr string
 
@@ -243,6 +247,27 @@ func (f *fakeAgent) Send(ctx context.Context, command string, payload map[string
 		}
 		f.deliver(events)
 	}
+	return nil
+}
+
+// respondCall is one extension_ui_response the gateway wrote back: the
+// request id Pi blocked on, plus the payload (value or cancelled:true).
+type respondCall struct {
+	id      string
+	payload map[string]any
+}
+
+func (f *fakeAgent) Respond(ctx context.Context, id string, payload map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.failCommands["extension_ui_response"]; err != nil {
+		return err
+	}
+	cp := make(map[string]any, len(payload))
+	for k, v := range payload {
+		cp[k] = v
+	}
+	f.responds = append(f.responds, respondCall{id: id, payload: cp})
 	return nil
 }
 
