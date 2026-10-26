@@ -832,6 +832,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             threadId = id,
             error = "",
             pending = "",
+            // Slash-picker dismiss lock dies with the composer text it was
+            // keyed on (#372 review): a stale lock would hide the picker
+            // for a fresh identical invocation after send/switch, and the
+            // warm rows with it, keeping state and UI in agreement.
+            slash = SlashPickerState(),
+            slashDismissedAt = null,
             // The notice queue drops Infos with them (Errors survive).
             pendingAttachments = emptyList(),
             notices = retainedNotices(),
@@ -937,6 +943,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 threadId = id,
                 error = "",
                 pending = "",
+                // Same dismiss-lock drop as switchThread above (#372 review):
+                // the lock keys on exact composer text, which dies here.
+                slash = SlashPickerState(),
+                slashDismissedAt = null,
                 // Staged photos die with the text draft: a parked photo firing into
                 // the wrong thread is a silent mis-send.
                 pendingAttachments = emptyList(),
@@ -1411,7 +1421,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             if (text.isNotEmpty()) {
                 if (_state.value.queued.isBlank()) {
                     // Queued verbatim like the direct send: the turn keeps indentation.
-                    _state.value = _state.value.copy(pending = "", queued = rawText)
+                    // The dismiss lock drops with the parked text (#372 review):
+                    // the queued fire sends directly, so a lock kept here
+                    // would outlive the composer text it was keyed on.
+                    _state.value = _state.value.copy(
+                        pending = "", queued = rawText,
+                        slash = SlashPickerState(), slashDismissedAt = null,
+                    )
                     // Same narrowing note: the queued fire is text-only, so staged photos park.
                     val parkedQueuedCount = pendingAttachmentCount()
                     if (parkedQueuedCount > 0) {
@@ -1461,6 +1477,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             messages = history, pending = draftAfterSend, pendingAttachments = emptyList(),
             streaming = true, error = "",
+            // The sent text leaves the composer: its dismiss lock goes with
+            // it (#372 review), or retyping the same trigger next turn
+            // would stay hidden behind the stale lock.
+            slash = SlashPickerState(), slashDismissedAt = null,
         )
         doSend(history, path, provider, model, effort)
     }
