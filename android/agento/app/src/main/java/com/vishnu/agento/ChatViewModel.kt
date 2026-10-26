@@ -284,7 +284,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * VM failure sites (the failure-cache early return and the fetch
      * failure) so neither can drift from the other — or from the card. */
     companion object {
-        const val SLASH_LOAD_ERROR = "Couldn't load skills"
+        private const val SLASH_LOAD_ERROR = "Couldn't load skills"
     }
 
     private var streamJob: Job? = null

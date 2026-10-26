@@ -631,6 +631,15 @@ func TestQuestionEndpointGuards(t *testing.T) {
 	if conflict.Code != http.StatusBadRequest {
 		t.Fatalf("value+cancelled: got %d, want 400", conflict.Code)
 	}
+	// Same render path as the empty case: the conflict message must not
+	// name the wire keyword either, or a future edit reintroduces the
+	// exact #406 leak with no test failure.
+	if strings.Contains(conflict.Body.String(), "cancelled") {
+		t.Fatalf("conflict message leaks the wire keyword: %s", conflict.Body)
+	}
+	if !strings.Contains(conflict.Body.String(), "value and cancel cannot be combined") {
+		t.Fatalf("conflict message = %s, want the friendly form", conflict.Body)
+	}
 	long := post(t, srv, "/default/api/questions/q-1", "test-token",
 		`{"value":"`+strings.Repeat("y", 60000)+`"}`)
 	if long.Code != http.StatusBadRequest {
