@@ -40,7 +40,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
+
+      # Gradle's own cache action (dependencies + daemon reuse across runs).
+      # setup-java's `cache: gradle` stays off on purpose — running both
+      # uploads the same Gradle home twice, costing more than it saves.
+      - name: Set up Gradle caching
+        uses: gradle/actions/setup-gradle@v4
 
       # Single source of truth: android/agento/VERSION (read by Gradle too —
       # no fallbacks anywhere, so tag, release, and APK can never disagree).
@@ -114,14 +119,6 @@ jobs:
       # and release signing stays on main). The verify step below enforces
       # that the built APK filename matches the resolved version.
 
-      # Unit tests (#162). A test that exists but is never run gates nothing, which is
-      # why this step is here rather than left to a developer running it locally. It
-      # runs before lint and the build so a failing rule fails fast, and on the debug
-      # variant because tests are variant-independent — the point is to gate the merge,
-      # not to gate the release artifact.
-      - name: Run unit tests
-        run: ./gradlew testDebugUnitTest --stacktrace
-
       # The task response contract is versioned on BOTH sides (#185): the
       # server's TaskContractVersion (internal/tasks/store.go) and the app's
       # TASK_CONTRACT_VERSION (TaskDomain.kt). The runtime version check warns
@@ -157,6 +154,28 @@ jobs:
           fi
           echo "Task create keys match: $(echo "$KT_KEYS" | tr '\n' ' ')"
 
+      # Tests, lint and the build share ONE Gradle invocation. Three separate
+      # `./gradlew` runs each paid a cold daemon + configuration + Kotlin
+      # compile (~70-90s each, ~4min total); one daemon does all three in one
+      # pass. A failing test still fails fast — later tasks in the same
+      # invocation don't run. Unit tests (#162) stay on the debug variant
+      # because tests are variant-independent — the point is to gate the
+      # merge, not the release artifact. Lint (#177) runs on the same variant
+      # the build uses (release-only issues must not slip through on main).
+      # Errors fail the job; both reports upload unconditionally so warnings
+      # are read, not buried.
+      - name: Run tests, lint and build APK
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            ./gradlew testDebugUnitTest lintRelease assembleRelease --stacktrace
+          else
+            ./gradlew testDebugUnitTest lintDebug assembleDebug --stacktrace
+          fi
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
       - name: Upload unit test report
         if: always()
         uses: actions/upload-artifact@v4
@@ -168,20 +187,6 @@ jobs:
           # and silently uploading nothing would hide that behind a green step.
           if-no-files-found: error
 
-      # Android lint (Compose checks, accessibility, unused resources).
-      # Errors fail the job; the report uploads unconditionally so warnings
-      # are read, not buried (#177). Runs before the build to fail fast, on
-      # the same variant the build uses (release-only issues must not slip
-      # through on main). NOTE: defaults.run.working-directory does NOT
-      # apply to uses: steps, so artifact paths are repo-root-relative.
-      - name: Run Android lint
-        run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            ./gradlew lintRelease --stacktrace
-          else
-            ./gradlew lintDebug --stacktrace
-          fi
-
       - name: Upload lint report
         if: always()
         uses: actions/upload-artifact@v4
@@ -189,17 +194,6 @@ jobs:
           name: lint-report
           path: android/agento/app/build/reports/lint-results-*
           if-no-files-found: error
-      - name: Build APK
-        run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            ./gradlew assembleRelease --stacktrace
-          else
-            ./gradlew assembleDebug --stacktrace
-          fi
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       # Fails the job if Gradle's output filename doesn't match the release
       # version — a drift here must never publish a mislabeled Release.
