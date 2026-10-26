@@ -95,9 +95,17 @@ class UpdateCheckTest {
             "Not checked yet",
             UpdateCheck.statusLine(UpdateCheck.Snapshot(0L, "", "", "", 0L, "", ""), now, false),
         )
-        // A failure shows the error, never the stale pending state.
+        // A failure names itself but never hides a pending release: the
+        // download the last success found is still installable.
         assertEquals(
-            "Last check failed: GitHub API HTTP 403",
+            "Up to date · checked just now — last check failed: GitHub API HTTP 403",
+            UpdateCheck.statusLine(
+                UpdateCheck.Snapshot(now, "agento-v5.13.2", "5.13.2", "u", 1L, "", "GitHub API HTTP 403"),
+                now, false,
+            ),
+        )
+        assertEquals(
+            "Update available: 5.14.0 · checked just now — last check failed: GitHub API HTTP 403",
             UpdateCheck.statusLine(
                 UpdateCheck.Snapshot(now, "agento-v5.14.0", "5.14.0", "u", 1L, "", "GitHub API HTTP 403"),
                 now, true,

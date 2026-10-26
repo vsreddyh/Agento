@@ -3,6 +3,7 @@ package com.vishnu.agento
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import androidx.core.content.edit
+import androidx.work.WorkManager
 
 /**
  * Device-local behaviour knobs (#355): the single inventory of user-facing
@@ -272,7 +273,14 @@ object BehaviourSettings {
 
     fun setUpdateStartup(ctx: Context, on: Boolean) {
         prefs(ctx).edit { putBoolean(KEY_UPDATE_STARTUP, on) }
-        AgentoApp.maybeCheckForUpdatesOnStartup(ctx)
+        if (on) {
+            AgentoApp.maybeCheckForUpdatesOnStartup(ctx)
+        } else {
+            // An already-enqueued one-shot (KEEP policy) would otherwise
+            // fire once after the user turned the toggle off.
+            WorkManager.getInstance(ctx.applicationContext)
+                .cancelUniqueWork(AgentoApp.UPDATE_STARTUP_WORK_NAME)
+        }
     }
 
     fun setUpdateIntervalHours(ctx: Context, hours: Long) {
@@ -306,7 +314,10 @@ object BehaviourSettings {
     fun updateCadenceLine(hours: Long, startup: Boolean): String {
         val h = coerceImport(KEY_UPDATE_INTERVAL_HOURS, hours)
         val periodic = when {
-            h == UPDATE_OFF_HOURS -> "Automatic checks are off."
+            // Off names the periodic poll, not the whole feature: the
+            // startup check below is independent ("Plus once on startup"
+            // would contradict "Automatic checks are off").
+            h == UPDATE_OFF_HOURS -> "Periodic checks are off."
             h == 1L -> "Automatic checks run every hour."
             h == 24L -> "Automatic checks run daily."
             h == 168L -> "Automatic checks run weekly."

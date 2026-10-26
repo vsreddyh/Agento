@@ -31,7 +31,16 @@ class UpdateCheckWorker(
         if (result.isSuccess) {
             Result.success()
         } else {
-            Log.w(TAG, "update check failed: ${result.exceptionOrNull()?.message}")
+            // Retry (hourly exponential) rather than fail, even on 403s:
+            // the unauthenticated GitHub quota resets hourly, and failing
+            // would defer the retry to the next periodic tick (up to a day
+            // away on the daily cadence) instead of the quota reset.
+            val msg = result.exceptionOrNull()?.message.orEmpty()
+            if (msg.contains("HTTP 403") || msg.contains("HTTP 429")) {
+                Log.w(TAG, "update check rate-limited, backing off: $msg")
+            } else {
+                Log.w(TAG, "update check failed: $msg")
+            }
             Result.retry()
         }
     } catch (e: Exception) {

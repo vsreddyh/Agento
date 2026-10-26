@@ -99,8 +99,13 @@ object UpdateCheck {
      */
     suspend fun run(ctx: Context, notify: Boolean): Result<AppRelease> {
         val appCtx = ctx.applicationContext
-        val now = System.currentTimeMillis()
         val result = UpdateManager.fetchLatest()
+        // Stamped at completion, not dispatch: the debounce window should
+        // measure between finished checks, not include fetch latency (and
+        // a failed startup check still advances the window — by design the
+        // startup path then stays quiet for 6 h while the worker's own
+        // backoff keeps retrying underneath).
+        val now = System.currentTimeMillis()
         result
             .onSuccess { rel ->
                 saveSuccess(appCtx, rel, now)
@@ -151,9 +156,10 @@ object UpdateCheck {
     ): Boolean = newer && enabled && canPost && !inForeground && tag.isNotBlank() &&
         alreadyPostedTag != tag
 
-    /** Short status line for the App updates card; pure, JVM-pinned. */
+    /** Short status line for the App updates card; pure, JVM-pinned. A
+     * failed check never hides a known pending release: the download stays
+     * available behind the error, and the line says so. */
     fun statusLine(snap: Snapshot, now: Long, pending: Boolean): String {
-        if (snap.error.isNotBlank()) return "Last check failed: ${snap.error}"
         if (snap.checkedAt <= 0L) return "Not checked yet"
         val age = (now - snap.checkedAt).coerceAtLeast(0L)
         val whenText = when {
@@ -164,10 +170,15 @@ object UpdateCheck {
                 "${TimeUnit.MILLISECONDS.toHours(age)} h ago"
             else -> "${TimeUnit.MILLISECONDS.toDays(age)} d ago"
         }
-        return if (pending) {
+        val base = if (pending) {
             "Update available: ${snap.name.ifBlank { snap.tag }} · checked $whenText"
         } else {
             "Up to date · checked $whenText"
+        }
+        return if (snap.error.isNotBlank()) {
+            "$base — last check failed: ${snap.error}"
+        } else {
+            base
         }
     }
 

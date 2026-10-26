@@ -319,7 +319,7 @@ class BehaviourSettingsTest {
             BehaviourSettings.updateCadenceLine(24L, true),
         )
         assertEquals(
-            "Automatic checks are off.",
+            "Periodic checks are off.",
             BehaviourSettings.updateCadenceLine(0L, false),
         )
         assertEquals(
@@ -330,10 +330,16 @@ class BehaviourSettingsTest {
             "Automatic checks run weekly.",
             BehaviourSettings.updateCadenceLine(168L, false),
         )
-        // Coerced like the getters: a floor input reads as its default.
+        // Coerced like the getters: out-of-range inputs read as their
+        // clamps, so these pin the clamp paths, not copies of the
+        // happy path above.
         assertEquals(
-            "Automatic checks run daily. Plus once on startup.",
-            BehaviourSettings.updateCadenceLine(24L, true),
+            "Periodic checks are off. Plus once on startup.",
+            BehaviourSettings.updateCadenceLine(-5L, true),
+        )
+        assertEquals(
+            "Automatic checks run weekly.",
+            BehaviourSettings.updateCadenceLine(999L, false),
         )
     }
 

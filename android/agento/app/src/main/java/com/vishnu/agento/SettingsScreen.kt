@@ -1148,20 +1148,34 @@ internal fun AppUpdateSection() {
     var tick by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { tick++ }
 
-    val (installedName, installedCode) = remember {
+    // Keyed like the snapshot below: an in-place update + return changes
+    // what "installed" means, and a stale pair would disagree with the
+    // pending check until process restart.
+    var checkSeq by remember { mutableIntStateOf(0) }
+    val (installedName, installedCode) = remember(context, tick, checkSeq) {
         UpdateManager.currentVersion(context)
     }
     // The persisted outcome of the latest completed check (manual or
     // automatic). `checkSeq` re-derives it after our own manual check
     // finishes, so the button, status line and download target always
     // agree without refetching.
-    var checkSeq by remember { mutableIntStateOf(0) }
     val snapshot = remember(context, tick, checkSeq) { UpdateCheck.snapshot(context) }
     val pending = remember(context, tick, checkSeq) { UpdateCheck.pendingRelease(context) }
     var status by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(-1f) }
+    // A background automatic check landing while a manual result is on
+    // screen would show two answers at once: drop the manual one on
+    // resume (never mid-check — `busy` guards the in-flight case).
+    // Keyed on tick only, not checkSeq: our own completion bumps
+    // checkSeq without touching tick, so our fresh result survives.
+    LaunchedEffect(tick) {
+        if (!busy) {
+            status = ""
+            failed = false
+        }
+    }
 
     /** Returns from the "install unknown apps" toggle — install if allowed now. */
     val unknownSourcesReturn = rememberLauncherForActivityResult(
@@ -1279,8 +1293,10 @@ internal fun AppUpdateSection() {
             if (failed) ErrorCard(raw = status) else HintLine(status)
         }
         HintLine(UpdateCheck.statusLine(snapshot, System.currentTimeMillis(), pending != null))
+        // No "Automatic checks: " prefix: the cadence line is a complete
+        // sentence in every branch, and prefixing it would stutter.
         HintLine(
-            "Automatic checks: " + BehaviourSettings.updateCadenceLine(
+            BehaviourSettings.updateCadenceLine(
                 BehaviourSettings.updateIntervalHours(context),
                 BehaviourSettings.updateStartup(context),
             ),
