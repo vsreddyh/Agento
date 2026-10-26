@@ -409,6 +409,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     private var slashCache = mutableMapOf<String, Pair<Long, List<SkillInfo>>>()
     private val maxSlashCacheEntries = 4
     private var slashJob: Job? = null
+    /** Id of the question an answer/cancel POST is in flight for, if any.
+     * The Question-frame handler keeps a half-typed draft only for this id
+     * (or a re-emit of the held card) — a genuinely new dialog starts
+     * clean, even mid-flight. Cleared everywhere `questionSending` is. */
+    private var questionSendingId: String? = null
     /** Profile path with a fetch in flight: keystrokes while it runs only
      * re-filter, never relaunch (the blocking OkHttp call is not
      * cooperatively cancellable, so relaunches pile up and last-wins). */
@@ -538,6 +543,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * thread A's half-typed answer.
      */
     private fun clearQuestionState() {
+        questionSendingId = null
         _state.value = _state.value.copy(
             pendingQuestion = null, questionError = "",
             questionDraft = "", questionSending = false,
@@ -566,6 +572,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             pendingQuestion = null, questionError = "", questionSending = true,
         )
+        questionSendingId = q.id
         viewModelScope.launch {
             questionsApi.answer(path, q.id, value).fold(
                 onSuccess = {
@@ -573,7 +580,15 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // newer question) while posting must not clear the new
                     // thread's draft or flip its in-flight flag.
                     if (ownerThread == threadId) {
-                        _state.value = _state.value.copy(questionSending = false, questionDraft = "")
+                        questionSendingId = null
+                        // Clear the draft only when nothing newer is held:
+                        // a re-emitted same-id card keeps its text, and a
+                        // newer card keeps its own draft.
+                        val held = _state.value.pendingQuestion
+                        _state.value = _state.value.copy(
+                            questionSending = false,
+                            questionDraft = if (held == null || held.id == q.id) "" else _state.value.questionDraft,
+                        )
                     }
                 },
                 onFailure = { e ->
@@ -596,11 +611,17 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             pendingQuestion = null, questionError = "", questionSending = true,
         )
+        questionSendingId = q.id
         viewModelScope.launch {
             questionsApi.cancel(path, q.id).fold(
                 onSuccess = {
                     if (ownerThread == threadId) {
-                        _state.value = _state.value.copy(questionSending = false, questionDraft = "")
+                        questionSendingId = null
+                        val held = _state.value.pendingQuestion
+                        _state.value = _state.value.copy(
+                            questionSending = false,
+                            questionDraft = if (held == null || held.id == q.id) "" else _state.value.questionDraft,
+                        )
                     }
                 },
                 onFailure = { e ->
@@ -631,6 +652,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // allows one POST at a time), so leaving it set would wedge the
         // newer card's buttons.
         _state.value = _state.value.copy(questionSending = false)
+        questionSendingId = null
         // Restore the card only when there is something to restore onto: a
         // 404 means the turn (and its gateway slot) is gone and a 409 means
         // the question was already answered elsewhere — restoring either
@@ -2838,6 +2860,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             questionSending = false,
                             questionDraft = "",
                         )
+                    questionSendingId = null
                         addTokens(event.usage)
                         upsertActive(doneMessages)
                         persist()
@@ -2946,7 +2969,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             // Dead ids are harmless — cancelling one 409s.
                             busyRunId = _state.value.activeRunId.ifBlank { _state.value.busyRunId },
                             activeRunId = "",
-                        )
+                            )
+                        questionSendingId = null
                         // A queued send never auto-fires after a failure (no failure
                         // cascades): hand it back to the composer instead.
                         parkQueued()
