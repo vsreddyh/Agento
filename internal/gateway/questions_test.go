@@ -547,6 +547,33 @@ func TestQuestionBlankTitleCancels(t *testing.T) {
 	}
 }
 
+// A blank title with a message set does NOT cancel: titleOf falls back to
+// the message (a future Pi carrying the prompt there), so only a record
+// blank in both is skew. Pins the fallback against a future "simplify to
+// req.Title == ''" edit that would cancel real prompts.
+func TestQuestionBlankTitleWithMessageHeld(t *testing.T) {
+	agent := newFakeAgent()
+	srv := newTestServer(t, agent, Config{})
+	lr := srv.runs.begin(newRunForTest("chat", "conv-m"), agent, "c", "", time.Now())
+	defer srv.runs.finish(lr, time.Now())
+	_, unsub := lr.subscribe()
+	defer unsub()
+	srv.handleExtensionUI(lr, uiRecord(t, "q-m", "input", map[string]any{
+		"title":   "   ",
+		"message": "pick one",
+	}))
+	if len(agent.responds) != 0 {
+		t.Fatalf("responds = %+v, want no writes for message-fallback question", agent.responds)
+	}
+	qw, ok := srv.pendingFor("chat", "conv-m")
+	if !ok {
+		t.Fatalf("message-fallback question not held")
+	}
+	if qw.Title != "pick one" {
+		t.Fatalf("held title = %q, want the message fallback", qw.Title)
+	}
+}
+
 // Unknown dialog methods fail fast; fire-and-forget methods are ignored.
 func TestQuestionUnknownAndFireForget(t *testing.T) {
 	agent := newFakeAgent()

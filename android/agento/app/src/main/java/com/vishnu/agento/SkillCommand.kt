@@ -64,10 +64,12 @@ fun slashQuery(text: String): String? {
     if (token.isEmpty()) return ""
     // Case-folded for the prefix test only: the query itself flows through
     // unlowered so the case-insensitive matcher does the folding.
-    // Locale.ROOT, not the default locale: the length-invariance the slice
-    // below relies on is true by construction only without locale folding
-    // (`İ`.lowercase() grows under tr). Command alphabet is ASCII anyway,
-    // so this is belt-and-braces, not a live fix.
+    // Locale.ROOT, not the default locale: slicing the unfolded token at
+    // the folded prefix length is safe because the matched prefix folds to
+    // ASCII `skill:` — only ASCII case-variants fold to those six chars —
+    // so the slice is 1:1 by construction, whatever a later non-ASCII char
+    // would fold to. Command alphabet is ASCII anyway, so this is
+    // belt-and-braces, not a live fix.
     val folded = token.lowercase(Locale.ROOT)
     if (COMMAND_TOKEN.matches(folded)) return null
     if (folded.startsWith(SKILL_PREFIX)) {

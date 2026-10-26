@@ -165,6 +165,12 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
         }.isSuccess
         if (done) {
             runCatching { TaskReminders.cancelPosted(appCtx, id) }
+        } else {
+            // Audible in logcat, not just in the kept alert (#384): without
+            // this an offline/5xx tap is indistinguishable from "nothing
+            // happened". Action + id only — same as the timeout log, no
+            // content.
+            Log.w("TaskNotif", "notification $target for $id failed; alert kept")
         }
         refreshSurfaces(appCtx)
     }

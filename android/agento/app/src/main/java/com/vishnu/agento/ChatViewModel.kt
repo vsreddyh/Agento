@@ -461,9 +461,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val dismissed = _state.value.slashDismissedAt
         val query = slashQuery(text)
         if (query == null || text == dismissed) {
-            slashJob?.cancel()
-            slashJob = null
-            slashFetching = null
+            // Same helper as the resend paths: a future edit to the cancel
+            // (e.g. logging) must land on this site too.
+            cancelSlashFetch()
             if (_state.value.slash != SlashPickerState()) {
                 _state.value = _state.value.copy(slash = SlashPickerState())
             }
