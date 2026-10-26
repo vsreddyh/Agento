@@ -169,14 +169,13 @@ jobs:
       - name: Run tests and lint (build APK on main)
         run: |
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            KEYSTORE_PASSWORD="${{ secrets.KEYSTORE_PASSWORD }}" \
+            KEY_ALIAS="${{ secrets.KEY_ALIAS }}" \
+            KEY_PASSWORD="${{ secrets.KEY_PASSWORD }}" \
             ./gradlew testDebugUnitTest lintRelease assembleRelease --stacktrace
           else
             ./gradlew testDebugUnitTest lintDebug --stacktrace
           fi
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Upload unit test report
         # NOTE: defaults.run.working-directory does NOT apply to uses: steps,
