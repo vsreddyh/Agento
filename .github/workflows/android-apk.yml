@@ -177,6 +177,8 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Upload unit test report
+        # NOTE: defaults.run.working-directory does NOT apply to uses: steps,
+        # so both artifact paths below stay repo-root-relative on purpose.
         if: always()
         uses: actions/upload-artifact@v4
         with:
