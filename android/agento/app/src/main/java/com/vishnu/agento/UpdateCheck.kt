@@ -208,20 +208,15 @@ object UpdateCheck {
      * Creates the per-release nudge channel, quietly (#383): one notification
      * per release is a nudge, not an interruption, so it is IMPORTANCE_LOW —
      * no sound, no heads-up — where DEFAULT would make it one.
+     *
+     * Existing installs keep whatever the channel was born with: importance
+     * is fixed at creation, and deleting a channel the user may have
+     * adjusted would re-arm it and undo their choice, which matters more
+     * than the quieter default.
      */
     fun ensureChannel(ctx: Context) {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val existing = nm.getNotificationChannel(CHANNEL_ID)
-        // Importance is fixed at creation, so an install that already has the
-        // channel keeps whatever it was born with. Recreate it only when the
-        // user has never touched importance: deleting a channel the user
-        // muted would re-arm it and undo their choice, which matters more
-        // than the quieter default.
-        val quieten = existing != null &&
-            !existing.hasUserSetImportance() &&
-            existing.importance != NotificationManager.IMPORTANCE_LOW
-        if (existing == null || quieten) {
-            if (existing != null) nm.deleteNotificationChannel(CHANNEL_ID)
+        if (nm.getNotificationChannel(CHANNEL_ID) == null) {
             nm.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,

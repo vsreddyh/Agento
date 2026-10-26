@@ -35,8 +35,8 @@ see GitHub Releases for older notes.
   next reader will find it.
 - **Quieter, more honest chrome (#382, #383, #391, #398, #399, #405, #406,
   #407, #408, #409, #411).** The update-available nudge moves to a quiet
-  channel — no sound, no heads-up — and a channel the user has adjusted is
-  left exactly as they set it. An ask_user dialog with no question text is
+  channel for new installs — no sound, no heads-up — while an existing
+  channel is left exactly as it is. An ask_user dialog with no question text is
   cancelled server-side instead of carding a generic line, and the
   empty-answer error no longer names the wire keyword (`cancelled:true`).
   The chat and question clients now resolve the server URL and password
