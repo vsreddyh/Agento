@@ -280,6 +280,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     )
     val state: State<ChatUiState> = _state
 
+    /** Renders in the picker card via state.error; one const shared by both
+     * VM failure sites (the failure-cache early return and the fetch
+     * failure) so neither can drift from the other — or from the card. */
+    companion object {
+        const val SLASH_LOAD_ERROR = "Couldn't load skills"
+    }
+
     private var streamJob: Job? = null
     /** A post-drop recovery poll in flight (null otherwise). Cancelled by a
      * new send or a stop: recovery must never resurrect text behind a turn
@@ -427,10 +434,6 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
      * one per character, and keeps the error banner it already showed. */
     private val slashFailedAt = mutableMapOf<String, Long>()
     private val slashFailureTtlMs = 10_000L
-    /** Rendered by the picker card; one const so the two VM sites (the
-     * failure-cache early return and the fetch failure) cannot drift from
-     * each other — and the card renders this value, not its own copy. */
-    private val slashLoadError = "Couldn't load skills"
     private var slashJob: Job? = null
     /** Id of the question an answer/cancel POST is in flight for, if any.
      * The Question-frame handler keeps a half-typed draft only for this id
@@ -489,7 +492,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 slash = SlashPickerState(
                     query = query,
                     skills = cached?.second.orEmpty(),
-                    error = slashLoadError,
+                    error = SLASH_LOAD_ERROR,
                 ),
             )
             return
@@ -552,7 +555,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         slash = SlashPickerState(
                             query = liveQuery,
                             skills = cached?.second.orEmpty(),
-                            error = slashLoadError,
+                            error = SLASH_LOAD_ERROR,
                         ),
                     )
                 },
