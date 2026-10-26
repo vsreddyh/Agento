@@ -3751,12 +3751,13 @@ internal fun SlashPickerCard(
                 // eight two-line rows could otherwise push the composer off
                 // a small screen. The overflow count sits BELOW the rows —
                 // it describes what the list is hiding, not a preamble. The
-                // scroll position resets with the query: without the key,
-                // typing `/s`, scrolling down and typing on would open the
-                // narrowed list mid-scroll. Rows landing under the same
-                // query reset too: a fetch arriving with more rows under
-                // identical text would otherwise keep the old offset.
-                val scroller = remember(state.query, rows.size) { ScrollState(0) }
+                // scroll position resets with the rows, not just the query:
+                // without the key, typing `/s`, scrolling down and typing on
+                // would open the narrowed list mid-scroll — and a fetch
+                // landing a different list of the same size under identical
+                // text would keep the old offset. Rows is content-compared
+                // (List.hashCode), so any row change resets.
+                val scroller = remember(state.query, rows) { ScrollState(0) }
                 Column(
                     modifier = Modifier
                         .heightIn(max = 260.dp)

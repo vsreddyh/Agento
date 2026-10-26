@@ -70,13 +70,12 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
          * cut the work first, invisibly. Waiting inside that budget means the
          * timeout, when it fires, is ours and logged.
          *
-         * The timeout cancels the in-flight mutation POST (a cancellable
-         * OkHttp call — safe: failure keeps the alert, so the next tap
-         * retries). Only the refresh half outlives it: [handleMutation]
-         * awaits Deferreds owned by other scopes, so a timeout stops
-         * *waiting* while that work keeps running without the wake lock —
-         * process death there can lose it, the same caveat the old
-         * trampoline carried.
+         * The timeout cancels whatever is in flight. If it fires during the
+         * mutation POST, the refresh below never starts — safe: failure
+         * keeps the alert, so the next tap retries. If it fires during the
+         * refresh, that half (Deferreds owned by other scopes) runs on
+         * without the wake lock — process death there can lose it, the same
+         * caveat the old trampoline carried.
          */
         private const val MUTATION_TIMEOUT_MS = 12_000L
     }
@@ -124,15 +123,16 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
                 }
                 // Never silent (#384): a tap that ran out of broadcast budget
                 // used to vanish, leaving an alert that looked handled. The
-                // mutation POST is cancelled (failure keeps the alert, so
-                // the next tap retries); only the refresh half runs on
-                // without the wake lock.
+                // timeout cancels whatever was in flight (a cancelled
+                // mutation keeps the alert, so the next tap retries; if the
+                // refresh was already running it continues without the wake
+                // lock).
                 if (finished == null) {
                     Log.w(
                         "TaskNotif",
                         "notification $target for $id timed out after " +
                             "${MUTATION_TIMEOUT_MS}ms; the mutation was cancelled " +
-                            "and the refresh continues without the wake lock",
+                            "and any running refresh continues without the wake lock",
                     )
                 }
             } finally {

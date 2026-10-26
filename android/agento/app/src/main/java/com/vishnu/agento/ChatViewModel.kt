@@ -2419,8 +2419,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // (switch-away-and-back would never retry).
                 // Evict eldest, not all: same convention as the slash caches
                 // below, so a long-lived VM never re-resumes an evicted id.
+                // Synchronized externally: firstOrNull iterates, and the
+                // wrapper only guards single calls.
                 if (resumedThreads.size >= 200) {
-                    resumedThreads.firstOrNull()?.let { resumedThreads.remove(it) }
+                    synchronized(resumedThreads) {
+                        resumedThreads.firstOrNull()?.let { resumedThreads.remove(it) }
+                    }
                 }
                 resumedThreads.add(threadId)
                 // Deliberately fresh provider/model/effort, matched on prompt
@@ -2534,9 +2538,13 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // run re-labels on every open — a dismissed banner must
                     // not leave a bare dangling tail behind. Evict eldest,
                     // not all (slash caches below do the same): clearing all
-                    // 200 would let an evicted id re-adopt.
+                    // 200 would let an evicted id re-adopt. Synchronized
+                    // externally: firstOrNull iterates, and the wrapper only
+                    // guards single calls.
                     if (adoptedRunIds.size >= 200) {
-                        adoptedRunIds.firstOrNull()?.let { adoptedRunIds.remove(it) }
+                        synchronized(adoptedRunIds) {
+                            adoptedRunIds.firstOrNull()?.let { adoptedRunIds.remove(it) }
+                        }
                     }
                     adoptedRunIds.add(full.id)
                     val u = full.usage
@@ -3324,6 +3332,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         if (!_state.value.ready) {
             val live = _state.value.pending
             val restore = if (raw.trim().isEmpty()) "" else raw
+            // The fetch dies with the picker, cancelled first like every
+            // other resend path: the restored text may still hold a `/`
+            // trigger, which would otherwise let the in-flight fetch land
+            // old rows on the new composer.
+            cancelSlashFetch()
             _state.value = _state.value.copy(
                 queued = "",
                 pending = when {
@@ -3335,9 +3348,6 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // resets with the text it described.
                 slash = SlashPickerState(), slashDismissedAt = null,
             )
-            // The fetch dies with the picker for the same reason: the
-            // restored text may still hold a `/` trigger.
-            cancelSlashFetch()
             return
         }
         _state.value = _state.value.copy(queued = "")
