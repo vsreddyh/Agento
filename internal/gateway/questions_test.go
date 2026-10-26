@@ -526,6 +526,54 @@ func TestQuestionBlankConversationCancels(t *testing.T) {
 	}
 }
 
+// A subscribed turn with a blank title fails fast too: ask_user always sends
+// a prompt, so an empty one is skew — carding it would render the app's
+// generic fallback line and block the turn on an answer to nothing (#399).
+func TestQuestionBlankTitleCancels(t *testing.T) {
+	agent := newFakeAgent()
+	srv := newTestServer(t, agent, Config{})
+	lr := srv.runs.begin(newRunForTest("chat", "conv-t"), agent, "c", "", time.Now())
+	defer srv.runs.finish(lr, time.Now())
+	_, unsub := lr.subscribe()
+	defer unsub()
+	srv.handleExtensionUI(lr, uiRecord(t, "q-t", "input", map[string]any{
+		"title": "   ",
+	}))
+	if len(agent.responds) != 1 || agent.responds[0].payload["cancelled"] != true {
+		t.Fatalf("responds = %+v, want one cancelled write", agent.responds)
+	}
+	if qw, ok := srv.pendingFor("chat", "conv-t"); ok {
+		t.Fatalf("blank-title question held: %+v", qw)
+	}
+}
+
+// A blank title with a message set does NOT cancel: titleOf falls back to
+// the message (a future Pi carrying the prompt there), so only a record
+// blank in both is skew. Pins the fallback against a future "simplify to
+// req.Title == ''" edit that would cancel real prompts.
+func TestQuestionBlankTitleWithMessageHeld(t *testing.T) {
+	agent := newFakeAgent()
+	srv := newTestServer(t, agent, Config{})
+	lr := srv.runs.begin(newRunForTest("chat", "conv-m"), agent, "c", "", time.Now())
+	defer srv.runs.finish(lr, time.Now())
+	_, unsub := lr.subscribe()
+	defer unsub()
+	srv.handleExtensionUI(lr, uiRecord(t, "q-m", "input", map[string]any{
+		"title":   "   ",
+		"message": "pick one",
+	}))
+	if len(agent.responds) != 0 {
+		t.Fatalf("responds = %+v, want no writes for message-fallback question", agent.responds)
+	}
+	qw, ok := srv.pendingFor("chat", "conv-m")
+	if !ok {
+		t.Fatalf("message-fallback question not held")
+	}
+	if qw.Title != "pick one" {
+		t.Fatalf("held title = %q, want the message fallback", qw.Title)
+	}
+}
+
 // Unknown dialog methods fail fast; fire-and-forget methods are ignored.
 func TestQuestionUnknownAndFireForget(t *testing.T) {
 	agent := newFakeAgent()
@@ -570,9 +618,27 @@ func TestQuestionEndpointGuards(t *testing.T) {
 	if empty.Code != http.StatusBadRequest {
 		t.Fatalf("empty value: got %d, want 400", empty.Code)
 	}
+	// The app renders the server message verbatim on the card, so the empty
+	// case must not name the wire keyword (#406): "cancelled:true" is
+	// transport, not something the reader can act on.
+	if strings.Contains(empty.Body.String(), "cancelled") {
+		t.Fatalf("empty-value message leaks the wire keyword: %s", empty.Body)
+	}
+	if !strings.Contains(empty.Body.String(), "an answer is required") {
+		t.Fatalf("empty-value message = %s, want the friendly form", empty.Body)
+	}
 	conflict := post(t, srv, "/default/api/questions/q-1", "test-token", `{"value":"x","cancelled":true}`)
 	if conflict.Code != http.StatusBadRequest {
 		t.Fatalf("value+cancelled: got %d, want 400", conflict.Code)
+	}
+	// Same render path as the empty case: the conflict message must not
+	// name the wire keyword either, or a future edit reintroduces the
+	// exact #406 leak with no test failure.
+	if strings.Contains(conflict.Body.String(), "cancelled") {
+		t.Fatalf("conflict message leaks the wire keyword: %s", conflict.Body)
+	}
+	if !strings.Contains(conflict.Body.String(), "value and cancel cannot be combined") {
+		t.Fatalf("conflict message = %s, want the friendly form", conflict.Body)
 	}
 	long := post(t, srv, "/default/api/questions/q-1", "test-token",
 		`{"value":"`+strings.Repeat("y", 60000)+`"}`)

@@ -139,7 +139,10 @@ class AgentoApp : Application() {
             val appCtx = context.applicationContext
             val wm = WorkManager.getInstance(appCtx)
             val hours = BehaviourSettings.updateIntervalHours(appCtx)
-            if (hours <= BehaviourSettings.UPDATE_OFF_HOURS) {
+            // `updateIntervalHours` already coerces the stored value into
+            // [OFF, 168], so the off case is exactly equality — a `<=` here
+            // would read as if negatives were still reachable (#408).
+            if (hours == BehaviourSettings.UPDATE_OFF_HOURS) {
                 wm.cancelUniqueWork(UPDATE_WORK_NAME)
                 return
             }

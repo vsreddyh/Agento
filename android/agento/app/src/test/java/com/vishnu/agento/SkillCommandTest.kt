@@ -56,11 +56,45 @@ class SkillCommandTest {
         // "/skill:" with no name is not a command — show everything, so a
         // user discovering the prefix sees what it takes.
         assertEquals("", slashQuery("/skill:"))
+        // A space after the bare prefix changes nothing: the trigger is the
+        // first token only (same as "/ " showing all), and anything after
+        // the space is future argument text, not a filter.
+        assertEquals("", slashQuery("/skill: foo"))
         // …but a complete `/skill:<name>` token never reopens the picker:
         // after a tap-insert (`/skill:notes `) it must stay closed while
         // arguments are typed, and a hand-typed command sends as-is.
         assertNull(slashQuery("/skill:not"))
         assertNull(slashQuery("/skill:not "))
+    }
+
+    @Test
+    fun `uppercase prefix is plain text, not a query`() {
+        // The send path's SKILL_COMMAND is lower-case only, so `/SKILL:notes`
+        // reaches the server as literal text. The picker must close instead
+        // of offering a row that would never chip (#395) — including the
+        // bare uppercase prefix, which must not fall back to show-all.
+        assertNull(slashQuery("/SKILL:notes"))
+        assertNull(slashQuery("/Skill:"))
+        assertNull(slashQuery("/SKILL:"))
+        assertNull(slashQuery("/SKILL:not "))
+        // But the exact lower-case bare prefix still lists everything.
+        assertEquals("", slashQuery("/skill:"))
+        // Short form is untouched: the query still flows through unlowered
+        // so the case-insensitive matcher does the folding.
+        assertEquals("Notes", slashQuery("/Notes"))
+    }
+
+    @Test
+    fun `invalid query characters close the picker`() {
+        // COMMAND_TOKEN/SKILL_COMMAND reject these, so the send path sends
+        // plain text — a picker saying "no matching skills" would promise a
+        // command that cannot exist (#396).
+        assertNull(slashQuery("/skill:na!me"))
+        assertNull(slashQuery("/skill:notes!"))
+        assertNull(slashQuery("/notes!"))
+        assertNull(slashQuery("/na!me"))
+        // Still-valid name characters keep filtering.
+        assertEquals("my-skill_2", slashQuery("/my-skill_2"))
     }
 
     // ── Chip parse ───────────────────────────────────────────────────────
@@ -109,6 +143,27 @@ class SkillCommandTest {
             "/skill:notes summarise today",
             insertSkillCommand("/no summarise today", "notes"),
         )
+    }
+
+    @Test
+    fun `insert collapses a newline in the token boundary`() {
+        // Single-line composer by construction: the whitespace that ends the
+        // slash token becomes the one-space separator, so a pasted newline
+        // never survives into the command (#411). Pinned so a future
+        // multi-line composer has to revisit the join deliberately.
+        assertEquals("/skill:notes arg", insertSkillCommand("/no\narg", "notes"))
+        assertEquals("/skill:notes arg", insertSkillCommand("/no \n arg", "notes"))
+    }
+
+    @Test
+    fun `insert requires a slash trigger`() {
+        // Fail-fast precondition: callers only invoke this off an active
+        // trigger (pickSkill guards), so anything else is a caller bug.
+        var failed = false
+        runCatching { insertSkillCommand("notes", "notes") }.onFailure {
+            failed = it is IllegalArgumentException
+        }
+        assertTrue(failed)
     }
 
     // ── Taught exclusion ─────────────────────────────────────────────────

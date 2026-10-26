@@ -372,26 +372,15 @@ class ChatApi(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    /** Single server URL (proxy: chat + sync on one port). One chain
-     * everywhere (`server_base_url` → `server_url` → `api_base_url`) so chat,
-     * sync, and Settings can never disagree pre-save; legacy keys fall back
-     * for pre-unification configs and are removed on save. */
-    fun baseUrl(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
-    /** Single app password (the sync token doubles as chat credential).
-     * Prefers `app_password`; falls back to the legacy `auth_token` so users
-     * who configured a sync token keep working without re-entry. The retired
-     * `api_key` is deliberately NOT read (the server no longer accepts it). */
-    fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    /** Single server URL (proxy: chat + sync on one port). The resolution
+     * chain (`server_base_url` → `server_url` → `api_base_url`) lives in
+     * [ServerEndpoint] so every client agrees (#398); [save] writes the
+     * unified key and drops the legacy two this reads. */
+    fun baseUrl(): String = ServerEndpoint.base(prefs)
+
+    /** Single app password (the sync token doubles as chat credential). See
+     * [ServerEndpoint.password] for the preference order. */
+    fun password(): String = ServerEndpoint.password(prefs)
 
     /** Profile path prefix for the Chat tab: `/p/chat`. */
     fun pathFor(tab: String): String =
@@ -466,6 +455,14 @@ class ChatApi(context: Context) {
             putString("app_password", password.trim())
             remove("api_base_url") // legacy: unified key is written above
             remove("server_url") // legacy: unified key is written above
+            // Legacy password fallback: every writer (this setter, the
+            // Settings save button, SyncClient.setConfig) resolves through
+            // password() first — which already includes this fallback — so
+            // after any save app_password holds the effective secret and a
+            // stale auth_token at rest would only be a second copy of it.
+            // Removed like the legacy URL keys above. The read fallback in
+            // ServerEndpoint stays for configs that never re-save.
+            remove("auth_token")
             remove("path_$tab") // legacy: path field removed, defaults apply
             putString("provider_$tab", provider.trim())
             putString("model_$tab", model.trim())

@@ -23,10 +23,19 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * Header/background ids per layout (#370): everything that opens the Task
- * Manager, named once so render() and the test read the same lists. The
- * view label exists only in the plain layout (the scrollable header names
- * the view in its title instead); every other chrome id exists in both.
+ * Header/background tap-contract ids per layout (#370): the chrome ids that
+ * handle a tap themselves, named once so render() and the test read the
+ * same lists. [R.id.task_widget_refresh] is in both lists because it is one
+ * of the two targets ([WidgetTapTarget.REFRESH]); every other id here opens
+ * the Task Manager. The view label exists only in the plain layout (the
+ * scrollable header names the view in its title instead); every other
+ * chrome id exists in both.
+ *
+ * The two collection containers — `task_widget_static_list` and
+ * `task_widget_list_view` — are deliberately absent: their taps ride the
+ * pending-intent template (or land on the body behind them), so listing
+ * them here would steal a row tap. Leaving them out is the contract, not an
+ * oversight; touching the template needs its own change.
  */
 internal val PLAIN_TAP_IDS = listOf(
     R.id.task_widget_body,
@@ -157,10 +166,10 @@ fun taskWidgetIds(context: Context): IntArray {
 
 /**
  * Home-screen task manager widget (#101): header (title + count +
- * refresh) above a scrollable task list. View switching and display
- * settings live in [TaskWidgetConfigActivity], reachable from Settings
- * → Home-screen widget — the widget's own controls never rendered on
- * some launchers (#137). Tap contract (#370): the ring completes inline,
+ * refresh) above a scrollable or plain-rows task list. View switching and
+ * display settings live in [TaskWidgetConfigActivity], reachable from
+ * Settings → Home-screen widget — the widget's own controls never rendered
+ * on some launchers (#137). Tap contract (#370): the ring completes inline,
  * a row opens its detail sheet, and everything else (background, header,
  * empty line) opens the Task Manager. Row taps deep-link
  * into the task's detail sheet and the ring button completes inline —
@@ -173,8 +182,10 @@ fun taskWidgetIds(context: Context): IntArray {
  *
  * Dynamic sizing: min footprint 3x2, resizable both ways. The list is a
  * RemoteViews collection ([TaskWidgetService]) with weight 1, so it
- * takes whatever height the placement offers. Display (density, due
- * line, row order) is per-widget via [TaskWidgetConfigActivity].
+ * takes whatever height the placement offers. Every display setting is
+ * per-widget via [TaskWidgetConfigActivity] — read `render()`'s per-key
+ * prefs lookups for the current set rather than trusting a list here,
+ * which is exactly how this KDoc drifted before.
  */
 class TaskWidget : AppWidgetProvider() {
 
@@ -221,8 +232,11 @@ class TaskWidget : AppWidgetProvider() {
     }
 
     override fun onDeleted(context: Context, appWidgetIds: IntArray) {
-        // Drop per-placement prefs (view/density/due) so removed widgets
-        // don't leak keys forever.
+        // Drop this placement's per-widget prefs so removed widgets don't
+        // leak keys forever. Every key the widget writes is removed below —
+        // a new display key needs THREE matching edits, not a list trusted
+        // to stay current (#388): the write in TaskWidgetConfigActivity,
+        // the read in render(), and this removal loop.
         prefs(context).edit {
             for (id in appWidgetIds) {
                 remove("task_widget_view_$id")

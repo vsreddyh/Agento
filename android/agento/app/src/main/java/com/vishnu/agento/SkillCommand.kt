@@ -1,5 +1,7 @@
 package com.vishnu.agento
 
+import java.util.Locale
+
 /** Parsed `/skill:<name> [args]` user turn (#372). */
 data class SkillInvocation(
     val name: String,
@@ -11,6 +13,14 @@ private val SKILL_COMMAND = Regex("""^/skill:([A-Za-z0-9_-]+)(?:\s+([\s\S]*))?$"
 
 /** First-token shape of an already-complete hand-typed command. */
 private val COMMAND_TOKEN = Regex("""^skill:[A-Za-z0-9_-]+$""")
+
+/** Prefix every skill command carries, lower-case only (see [slashQuery]). */
+private const val SKILL_PREFIX = "skill:"
+
+/** Name-shaped query after the prefix: exactly the characters [SKILL_COMMAND]
+ * accepts as a name, so a query can never promise a row the send path would
+ * refuse to chip. */
+private val QUERY_CHARS = Regex("""^[A-Za-z0-9_-]*$""")
 
 /**
  * Parses a sent user turn as a skill command. Syntax-only, no inventory
@@ -39,22 +49,65 @@ fun parseSkillCommand(content: String): SkillInvocation? {
  * Deliberate: only the short form filters. A `/skill:<prefix>` token is
  * final syntax, not a query — typing the command by hand sends it as-is,
  * and discovery happens through `/` plus the Skills tab.
+ *
+ * Two shapes close the picker rather than filter it, because the send path
+ * rejects both as plain text: an uppercase prefix (`/SKILL:notes` — the
+ * prefix match is case-folded here while [SKILL_COMMAND] is lower-case
+ * only, so documenting uppercase as plain text beats offering a row that
+ * never chips, #395), and a token carrying characters outside
+ * `[A-Za-z0-9_-]` (`/skill:na!me`, which would otherwise read as the
+ * promise "no matching skills", #396).
  */
 fun slashQuery(text: String): String? {
     if (!text.startsWith("/")) return null
     val token = text.substring(1).takeWhile { !it.isWhitespace() }
     if (token.isEmpty()) return ""
-    if (COMMAND_TOKEN.matches(token)) return null
-    return token.removePrefix("skill:")
+    // Case-folded for the prefix test only: the query itself flows through
+    // unlowered so the case-insensitive matcher does the folding.
+    // Locale.ROOT, not the default locale: slicing the unfolded token at
+    // the folded prefix length is safe because the matched prefix folds to
+    // ASCII `skill:` — only ASCII case-variants fold to those six chars —
+    // so the slice is 1:1 by construction, whatever a later non-ASCII char
+    // would fold to. Command alphabet is ASCII anyway, so this is
+    // belt-and-braces, not a live fix.
+    val folded = token.lowercase(Locale.ROOT)
+    if (COMMAND_TOKEN.matches(folded)) return null
+    if (folded.startsWith(SKILL_PREFIX)) {
+        // Bare prefix (`/skill:`) lists everything — but only spelled
+        // exactly that way. An uppercase bare prefix (`/SKILL:`) closes
+        // like any other uppercase command: the send path's SKILL_COMMAND
+        // is lower-case only, so offering rows under it would promise a
+        // command that sends as plain text (#395).
+        if (folded.length == SKILL_PREFIX.length) {
+            return if (token == SKILL_PREFIX) "" else null
+        }
+        val query = token.substring(SKILL_PREFIX.length)
+        if (!QUERY_CHARS.matches(query)) return null
+        return query
+    }
+    if (!QUERY_CHARS.matches(token)) return null
+    return token
 }
 
 /**
  * Builds the composer text after tapping a picker row: the `/` token
  * becomes `/skill:<name> ` (trailing space) and anything already typed
  * after it is kept as the skill's argument text. Precondition: [current]
- * starts with `/` (callers only invoke it off an active trigger).
+ * starts with `/` (callers only invoke it off an active trigger) —
+ * enforced, so a future caller passes a bad string loudly instead of
+ * sending a silently malformed command.
+ *
+ * Single-line environment by construction: the composer is one field, so the
+ * whitespace run that ends the slash token collapses into the one separating
+ * space — `/no\narg` becomes `/skill:<name> arg`, pinned by
+ * `SkillCommandTest`. Only that boundary is collapsed: newlines inside the
+ * already-typed arguments ride through verbatim. A multi-line composer would
+ * have to revisit this join deliberately rather than inherit it.
  */
 fun insertSkillCommand(current: String, name: String): String {
+    // Fail-fast without the value: the composer text is unbounded user
+    // input and does not belong in crash logs.
+    require(current.startsWith("/")) { "insertSkillCommand needs a slash trigger" }
     val afterToken = current.dropWhile { !it.isWhitespace() }
     return if (afterToken.isBlank()) {
         "/skill:$name "

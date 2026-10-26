@@ -263,6 +263,16 @@ internal fun SettingsScreen(
                                     putString("app_password", state.password.trim())
                                     remove("api_base_url")
                                     remove("server_url")
+                                    // Same migration set as every other
+                                    // writer (ChatApi.setChatConfig,
+                                    // SyncClient.setConfig): state.password
+                                    // is prefilled with the resolved
+                                    // password (MainViewModel.refresh falls
+                                    // back to auth_token), so the effective
+                                    // secret is already in app_password and
+                                    // a stale auth_token at rest would only
+                                    // be a second copy of it.
+                                    remove("auth_token")
                                 }
                                 error = ""
                                 toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
@@ -1170,6 +1180,11 @@ internal fun AppUpdateSection() {
     // resume (never mid-check — `busy` guards the in-flight case).
     // Keyed on tick only, not checkSeq: our own completion bumps
     // checkSeq without touching tick, so our fresh result survives.
+    // `busy` is deliberately NOT a key (#382): keying it would re-run this
+    // effect when an in-flight check flips it false, which is precisely the
+    // manual result the line above says must survive. The read is a
+    // one-shot snapshot of "was a check running when we resumed", not a
+    // subscription, so the stale-closure form is the intended one.
     LaunchedEffect(tick) {
         if (!busy) {
             status = ""

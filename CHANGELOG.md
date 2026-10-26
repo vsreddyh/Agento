@@ -8,6 +8,47 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.17.2]
+- **The slash menu stops promising what it cannot send (#395, #396,
+  #390, #391, #394, #397, #392, #393, #411).** `/SKILL:notes` and
+  `/skill:na!me` are plain text to the send path, so the picker now closes
+  on both — and on any token carrying characters outside the command
+  alphabet — instead of offering a row that would never chip. A failure
+  with no cached list says so honestly instead of promising a cached list
+  over zero rows; a refresh over a cached list shows its progress bar; the
+  row area is height-capped and scrolls, so a full inventory cannot push
+  the composer off a small screen; offline, a failed fetch is reused for
+  ten seconds rather than refired on every keystroke; and the resend paths
+  (retry, regenerate, continue, replace, fork, park) reset the picker along
+  with the text they rewrite.
+- **Reminder actions either complete or say why (#384, #385, #386, #387).**
+  Complete and Skip share one mutation path, the task id is read before the
+  broadcast is held, and the wait drops to 12 s — inside the wake lock the
+  system actually grants — with a warning logged when it runs out instead
+  of failing silently. A tap carrying no task id does nothing,
+  deliberately: a corrupt notification must not open the app.
+- **Adopting a reply that finished while the app was closed is stricter
+  (#400, #401, #402, #403, #404).** The run fetched by id must be the run
+  that matched, a failed detail fetch is logged instead of vanishing, the
+  live re-check goes through the same match helper as the selection, and
+  the "detail carries the full reply" assumption is written down where the
+  next reader will find it.
+- **Quieter, more honest chrome (#382, #383, #388, #389, #398, #399, #405, #406,
+  #407, #408, #409).** The update-available nudge moves to a quiet
+  channel for new installs — no sound, no heads-up — while an existing
+  channel is left exactly as it is. An ask_user dialog with no question text is
+  cancelled server-side instead of carding a generic line, and the
+  empty-answer error now uses plain language instead of naming the
+  internal cancel field the gateway speaks on the wire.
+  The chat and question clients now resolve the server URL and password
+  through one rule rather than two. Comment-only cleanups pin the
+  intentional single-key effect in App updates, the update poll's re-arm
+  asymmetry at boot, and the widget's tap contract.
+- **Known one-release skew (#410):** alerts posted by 5.14.0 carry a Skip
+  action for the since-removed skip screen, so tapping one before the next
+  alarm reposts it does nothing. The repost heals it; Complete taps from
+  that build still work.
+
 ## [5.17.1]
 - **A reply that finished while the app was closed is adopted, not lost
   (#374).** Opening a thread whose last message is an unanswered user turn

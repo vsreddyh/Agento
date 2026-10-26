@@ -60,6 +60,10 @@ class SyncClient(context: Context) {
             putString("app_password", password.trim())
             remove("server_url") // legacy: unified key is written above
             remove("auth_token") // legacy: unified key is written above
+            // Same migration set as the other writers (ChatApi.setChatConfig
+            // and the Settings save button): every legacy key the readers
+            // fall back to is dropped wherever the unified keys are written.
+            remove("api_base_url") // legacy: unified key is written above
         }
     }
 
