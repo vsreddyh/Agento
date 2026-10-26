@@ -56,6 +56,10 @@ class SkillCommandTest {
         // "/skill:" with no name is not a command — show everything, so a
         // user discovering the prefix sees what it takes.
         assertEquals("", slashQuery("/skill:"))
+        // A space after the bare prefix changes nothing: the trigger is the
+        // first token only (same as "/ " showing all), and anything after
+        // the space is future argument text, not a filter.
+        assertEquals("", slashQuery("/skill: foo"))
         // …but a complete `/skill:<name>` token never reopens the picker:
         // after a tap-insert (`/skill:notes `) it must stay closed while
         // arguments are typed, and a hand-typed command sends as-is.
